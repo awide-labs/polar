@@ -3838,6 +3838,7 @@ FlushRelationBuffers(Relation rel)
 {
 	int			i;
 	BufferDesc *bufHdr;
+	SMgrRelation srel = RelationGetSmgr(rel);
 
 	/* POLAR */
 	XLogRecPtr	oldest_apply_lsn = polar_get_oldest_apply_lsn();
@@ -3866,7 +3867,7 @@ FlushRelationBuffers(Relation rel)
 
 				PageSetChecksumInplace(localpage, bufHdr->tag.blockNum);
 
-				smgrwrite(RelationGetSmgr(rel),
+				smgrwrite(srel,
 						  bufHdr->tag.forkNum,
 						  bufHdr->tag.blockNum,
 						  localpage,
@@ -3916,7 +3917,7 @@ FlushRelationBuffers(Relation rel)
 			 * access the relation due to ddl synchronization, so it is ok to
 			 * flush the buffer directly.
 			 */
-			FlushBuffer(bufHdr, RelationGetSmgr(rel), oldest_apply_lsn, true);
+			FlushBuffer(bufHdr, srel, oldest_apply_lsn, true);
 			LockBuffer(BufferDescriptorGetBuffer(bufHdr), BUFFER_LOCK_UNLOCK);
 			UnpinBuffer(bufHdr, true);
 		}
@@ -4136,12 +4137,16 @@ void
 CreateAndCopyRelationData(RelFileNode src_rnode, RelFileNode dst_rnode,
 						  bool permanent)
 {
-	RelFileNodeBackend rnode;
 	char		relpersistence;
+	SMgrRelation src_rel;
+	SMgrRelation dst_rel;
 
 	/* Set the relpersistence. */
 	relpersistence = permanent ?
 		RELPERSISTENCE_PERMANENT : RELPERSISTENCE_UNLOGGED;
+
+	src_rel = smgropen(src_rnode, InvalidBackendId);
+	dst_rel = smgropen(dst_rnode, InvalidBackendId);
 
 	/*
 	 * Create and copy all forks of the relation.  During create database we
@@ -4159,9 +4164,9 @@ CreateAndCopyRelationData(RelFileNode src_rnode, RelFileNode dst_rnode,
 	for (ForkNumber forkNum = MAIN_FORKNUM + 1;
 		 forkNum <= MAX_FORKNUM; forkNum++)
 	{
-		if (smgrexists(smgropen(src_rnode, InvalidBackendId), forkNum))
+		if (smgrexists(src_rel, forkNum))
 		{
-			smgrcreate(smgropen(dst_rnode, InvalidBackendId), forkNum, false);
+			smgrcreate(dst_rel, forkNum, false);
 
 			/*
 			 * WAL log creation if the relation is persistent, or this is the
@@ -4175,15 +4180,6 @@ CreateAndCopyRelationData(RelFileNode src_rnode, RelFileNode dst_rnode,
 										   permanent);
 		}
 	}
-
-	/* close source and destination smgr if exists. */
-	rnode.backend = InvalidBackendId;
-
-	rnode.node = src_rnode;
-	smgrclosenode(rnode);
-
-	rnode.node = dst_rnode;
-	smgrclosenode(rnode);
 }
 
 /* ---------------------------------------------------------------------

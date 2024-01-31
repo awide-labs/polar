@@ -665,7 +665,7 @@ LocalExecuteInvalidationMessage(SharedInvalidationMessage *msg)
 
 		rnode.node = msg->sm.rnode;
 		rnode.backend = (msg->sm.backend_hi << 16) | (int) msg->sm.backend_lo;
-		smgrclosenode(rnode);
+		smgrreleaserelnode(rnode);
 	}
 	else if (msg->id == SHAREDINVALRELMAP_ID)
 	{
