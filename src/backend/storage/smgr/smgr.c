@@ -379,8 +379,6 @@ smgrdestroyall(void)
 
 /*
  * smgrreleaseall() -- Release resources used by all objects.
- *
- *	This is called for PROCSIGNAL_BARRIER_SMGRRELEASE.
  */
 void
 smgrreleaseall(void)
