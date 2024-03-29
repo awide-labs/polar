@@ -42,7 +42,7 @@ $node_publisher->safe_psql('postgres',
 
 my $publisher_connstring = $node_publisher->connstr . ' dbname=postgres';
 $node_subscriber->safe_psql('postgres',
-	    "CREATE SUBSCRIPTION tsub CONNECTION '$publisher_connstring' "
+		"CREATE SUBSCRIPTION tsub CONNECTION '$publisher_connstring' "
 	  . "PUBLICATION tpub WITH (slot_name = tpub_slot, binary = true)");
 
 # Ensure nodes are in sync with each other

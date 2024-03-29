@@ -251,7 +251,7 @@ XLogRecPtr
 XLogReleasePreviousRecord(XLogReaderState *state)
 {
 	DecodedXLogRecord *record;
-	XLogRecPtr		next_lsn;
+	XLogRecPtr	next_lsn;
 
 	if (!state->record)
 		return InvalidXLogRecPtr;

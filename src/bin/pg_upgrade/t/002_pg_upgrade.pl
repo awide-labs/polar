@@ -2,7 +2,7 @@
 use strict;
 use warnings;
 
-use Cwd qw(abs_path);
+use Cwd            qw(abs_path);
 use File::Basename qw(dirname);
 use File::Compare;
 use File::Find qw(find);
@@ -76,7 +76,7 @@ if (   (defined($ENV{olddump}) && !defined($ENV{oldinstall}))
 }
 
 # Paths to the dumps taken during the tests.
-my $tempdir    = PostgreSQL::Test::Utils::tempdir;
+my $tempdir = PostgreSQL::Test::Utils::tempdir;
 my $dump1_file = "$tempdir/dump1.sql";
 my $dump2_file = "$tempdir/dump2.sql";
 
@@ -116,9 +116,9 @@ else
 	# Create databases with names covering most ASCII bytes.  The
 	# first name exercises backslashes adjacent to double quotes, a
 	# Windows special case.
-	generate_db($oldnode, 'regression\\"\\', 1,  45,  '\\\\"\\\\\\');
-	generate_db($oldnode, 'regression',      46, 90,  '');
-	generate_db($oldnode, 'regression',      91, 127, '');
+	generate_db($oldnode, 'regression\\"\\', 1, 45, '\\\\"\\\\\\');
+	generate_db($oldnode, 'regression', 46, 90, '');
+	generate_db($oldnode, 'regression', 91, 127, '');
 
 	# Grab any regression options that may be passed down by caller.
 	my $extra_opts = $ENV{EXTRA_REGRESS_OPTS} || "";
@@ -189,9 +189,9 @@ if (defined($ENV{oldinstall}))
 		$newnode->command_ok(
 			[
 				'psql', '-X',
-				'-v',   'ON_ERROR_STOP=1',
-				'-c',   $upcmds,
-				'-d',   $oldnode->connstr($updb),
+				'-v', 'ON_ERROR_STOP=1',
+				'-c', $upcmds,
+				'-d', $oldnode->connstr($updb),
 			],
 			"ran version adaptation commands for database $updb");
 	}
@@ -255,7 +255,8 @@ if (defined($ENV{oldinstall}))
 }
 
 # Create an invalid database, will be deleted below
-$oldnode->safe_psql('postgres', qq(
+$oldnode->safe_psql(
+	'postgres', qq(
   CREATE DATABASE regression_invalid;
   UPDATE pg_database SET datconnlimit = -2 WHERE datname = 'regression_invalid';
 ));
@@ -274,13 +275,13 @@ $oldnode->stop;
 command_fails(
 	[
 		'pg_upgrade', '--no-sync',
-		'-d',         $oldnode->data_dir,
-		'-D',         $newnode->data_dir,
-		'-b',         $oldbindir . '/does/not/exist/',
-		'-B',         $newbindir,
-		'-s',         $newnode->host,
-		'-p',         $oldnode->port,
-		'-P',         $newnode->port,
+		'-d', $oldnode->data_dir,
+		'-D', $newnode->data_dir,
+		'-b', $oldbindir . '/does/not/exist/',
+		'-B', $newbindir,
+		'-s', $newnode->host,
+		'-p', $oldnode->port,
+		'-P', $newnode->port,
 		'--check'
 	],
 	'run of pg_upgrade --check for new instance with incorrect binary path');
@@ -298,7 +299,7 @@ command_checks_all(
 		'--check',
 	],
 	1,
-	[qr/invalid/], # pg_upgrade prints errors on stdout :(
+	[qr/invalid/],    # pg_upgrade prints errors on stdout :(
 	[qr//],
 	'invalid database causes failure');
 rmtree($newnode->data_dir . "/pg_upgrade_output.d");
@@ -311,10 +312,10 @@ $oldnode->stop;
 # --check command works here, cleans up pg_upgrade_output.d.
 command_ok(
 	[
-		'pg_upgrade', '--no-sync',        '-d', $oldnode->data_dir,
-		'-D',         $newnode->data_dir, '-b', $oldbindir,
-		'-B',         $newbindir,         '-s', $newnode->host,
-		'-p',         $oldnode->port,     '-P', $newnode->port,
+		'pg_upgrade', '--no-sync', '-d', $oldnode->data_dir,
+		'-D', $newnode->data_dir, '-b', $oldbindir,
+		'-B', $newbindir, '-s', $newnode->host,
+		'-p', $oldnode->port, '-P', $newnode->port,
 		'--check'
 	],
 	'run of pg_upgrade --check for new instance');
@@ -324,10 +325,10 @@ ok(!-d $newnode->data_dir . "/pg_upgrade_output.d",
 # Actual run, pg_upgrade_output.d is removed at the end.
 command_ok(
 	[
-		'pg_upgrade', '--no-sync',        '-d', $oldnode->data_dir,
-		'-D',         $newnode->data_dir, '-b', $oldbindir,
-		'-B',         $newbindir,         '-s', $newnode->host,
-		'-p',         $oldnode->port,     '-P', $newnode->port
+		'pg_upgrade', '--no-sync', '-d', $oldnode->data_dir,
+		'-D', $newnode->data_dir, '-b', $oldbindir,
+		'-B', $newbindir, '-s', $newnode->host,
+		'-p', $oldnode->port, '-P', $newnode->port
 	],
 	'run of pg_upgrade for new instance');
 ok( !-d $newnode->data_dir . "/pg_upgrade_output.d",

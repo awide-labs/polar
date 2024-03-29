@@ -265,8 +265,7 @@ $node->stop('immediate');
 my $log_size = -s $node->logfile;
 $node->start;
 ok( $node->log_contains(
-		"invalid record length at .*: wanted 24, got 0", $log_size
-	),
+		"invalid record length at .*: wanted 24, got 0", $log_size),
 	"xl_tot_len zero");
 
 # xl_tot_len is < 24 (presumably recycled garbage).
@@ -277,8 +276,7 @@ write_wal($node, $TLI, $end_lsn, build_record_header(23));
 $log_size = -s $node->logfile;
 $node->start;
 ok( $node->log_contains(
-		"invalid record length at .*: wanted 24, got 23",
-		$log_size),
+		"invalid record length at .*: wanted 24, got 23", $log_size),
 	"xl_tot_len short");
 
 # xl_tot_len in final position, not big enough to span into a new page but
@@ -290,8 +288,7 @@ write_wal($node, $TLI, $end_lsn, build_record_header(1));
 $log_size = -s $node->logfile;
 $node->start;
 ok( $node->log_contains(
-		"invalid record length at .*: wanted 24, got 1", $log_size
-	),
+		"invalid record length at .*: wanted 24, got 1", $log_size),
 	"xl_tot_len short at end-of-page");
 
 # Need more pages, but xl_prev check fails first.
@@ -370,8 +367,7 @@ write_wal(
 	build_page_header($XLP_PAGE_MAGIC, 0, 1, 0xbaaaaaad));
 $log_size = -s $node->logfile;
 $node->start;
-ok( $node->log_contains(
-		"unexpected pageaddr 0/BAAAAAAD ", $log_size),
+ok($node->log_contains("unexpected pageaddr 0/BAAAAAAD ", $log_size),
 	"xlp_pageaddr bad");
 
 # Good xl_prev, xlp_magic, xlp_pageaddr, but bogus xlp_info.
@@ -388,8 +384,7 @@ write_wal(
 		$XLP_PAGE_MAGIC, 0x1234, 1, start_of_next_page($end_lsn)));
 $log_size = -s $node->logfile;
 $node->start;
-ok($node->log_contains("invalid info bits 1234 ", $log_size),
-	"xlp_info bad");
+ok($node->log_contains("invalid info bits 1234 ", $log_size), "xlp_info bad");
 
 # Good xl_prev, xlp_magic, xlp_pageaddr, but xlp_info doesn't mention
 # continuation record.
@@ -458,8 +453,7 @@ write_wal(
 		$XLP_PAGE_MAGIC, $XLP_FIRST_IS_CONTRECORD, 1, 0xbaaaaaad));
 $log_size = -s $node->logfile;
 $node->start;
-ok( $node->log_contains(
-		"unexpected pageaddr 0/BAAAAAAD ", $log_size),
+ok($node->log_contains("unexpected pageaddr 0/BAAAAAAD ", $log_size),
 	"xlp_pageaddr bad (split record header)");
 
 # We'll also discover that xlp_rem_len doesn't add up before any

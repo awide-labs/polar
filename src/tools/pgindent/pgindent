@@ -24,12 +24,12 @@ my $devnull = File::Spec->devnull;
 my ($typedefs_file, $typedef_str, $code_base, $excludes, $indent, $build);
 
 my %options = (
-	"typedefs=s"         => \$typedefs_file,
+	"typedefs=s" => \$typedefs_file,
 	"list-of-typedefs=s" => \$typedef_str,
-	"code-base=s"        => \$code_base,
-	"excludes=s"         => \$excludes,
-	"indent=s"           => \$indent,
-	"build"              => \$build,);
+	"code-base=s" => \$code_base,
+	"excludes=s" => \$excludes,
+	"indent=s" => \$indent,
+	"build" => \$build,);
 GetOptions(%options) || die "bad command line argument\n";
 
 run_build($code_base) if ($build);
@@ -187,7 +187,7 @@ sub read_source
 
 sub write_source
 {
-	my $source          = shift;
+	my $source = shift;
 	my $source_filename = shift;
 
 	open(my $src_fh, '>', $source_filename)
@@ -215,7 +215,7 @@ sub pre_indent
 	# Prevent indenting of code in 'extern "C"' blocks.
 	# we replace the braces with comments which we'll reverse later
 	my $extern_c_start = '/* Open extern "C" */';
-	my $extern_c_stop  = '/* Close extern "C" */';
+	my $extern_c_stop = '/* Close extern "C" */';
 	$source =~
 	  s!(^#ifdef[ \t]+__cplusplus.*\nextern[ \t]+"C"[ \t]*\n)\{[ \t]*$!$1$extern_c_start!gm;
 	$source =~ s!(^#ifdef[ \t]+__cplusplus.*\n)\}[ \t]*$!$1$extern_c_stop!gm;
@@ -229,7 +229,7 @@ sub pre_indent
 
 sub post_indent
 {
-	my $source          = shift;
+	my $source = shift;
 	my $source_filename = shift;
 
 	# Restore CATALOG lines
@@ -258,7 +258,7 @@ sub post_indent
 
 sub run_indent
 {
-	my $source        = shift;
+	my $source = shift;
 	my $error_message = shift;
 
 	my $cmd = "$indent $indent_opts -U" . $filtered_typedefs_fh->filename;
@@ -287,13 +287,13 @@ sub run_indent
 # for development diagnostics
 sub diff
 {
-	my $pre   = shift;
-	my $post  = shift;
+	my $pre = shift;
+	my $post = shift;
 	my $flags = shift || "";
 
 	print STDERR "running diff\n";
 
-	my $pre_fh  = new File::Temp(TEMPLATE => "pgdiffbXXXXX");
+	my $pre_fh = new File::Temp(TEMPLATE => "pgdiffbXXXXX");
 	my $post_fh = new File::Temp(TEMPLATE => "pgdiffaXXXXX");
 
 	print $pre_fh $pre;
@@ -414,8 +414,8 @@ foreach my $source_filename (@files)
 	$otherfile =~ s/\.y$/.l/;
 	next if $otherfile ne $source_filename && -f $otherfile;
 
-	my $source        = read_source($source_filename);
-	my $orig_source   = $source;
+	my $source = read_source($source_filename);
+	my $orig_source = $source;
 	my $error_message = '';
 
 	$source = pre_indent($source);

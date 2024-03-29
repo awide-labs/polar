@@ -151,7 +151,7 @@ DoCopy(ParseState *pstate, const CopyStmt *stmt,
 		foreach(cur, attnums)
 		{
 			int			attno = lfirst_int(cur) -
-			FirstLowInvalidHeapAttributeNumber;
+				FirstLowInvalidHeapAttributeNumber;
 
 			if (is_from)
 				rte->insertedCols = bms_add_member(rte->insertedCols, attno);

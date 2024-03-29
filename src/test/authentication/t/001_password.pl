@@ -23,7 +23,7 @@ if (!$use_unix_sockets)
 # and then execute a reload to refresh it.
 sub reset_pg_hba
 {
-	my $node       = shift;
+	my $node = shift;
 	my $hba_method = shift;
 
 	unlink($node->data_dir . '/pg_hba.conf');
@@ -147,7 +147,7 @@ chmod 0600, $pgpassfile or die;
 
 reset_pg_hba($node, 'password');
 test_role($node, 'scram_role', 'password from pgpass', 0);
-test_role($node, 'md5_role',   'password from pgpass', 2);
+test_role($node, 'md5_role', 'password from pgpass', 2);
 
 append_to_file(
 	$pgpassfile, qq!

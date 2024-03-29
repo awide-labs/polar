@@ -167,7 +167,7 @@ typedef struct					/* cast_expr_hash table entry */
 	plpgsql_CastHashKey key;	/* hash key --- MUST BE FIRST */
 	Expr	   *cast_expr;		/* cast expression, or NULL if no-op cast */
 	CachedExpression *cast_cexpr;	/* cached expression backing the above */
-} plpgsql_CastExprHashEntry;
+}			plpgsql_CastExprHashEntry;
 
 typedef struct					/* cast_hash table entry */
 {

@@ -566,7 +566,7 @@ ResourceOwnerReleaseInternal(ResourceOwner owner,
 		while (ResourceArrayGetAny(&(owner->cryptohasharr), &foundres))
 		{
 			pg_cryptohash_ctx *context =
-			(pg_cryptohash_ctx *) PointerGetDatum(foundres);
+				(pg_cryptohash_ctx *) PointerGetDatum(foundres);
 
 			if (isCommit)
 				PrintCryptoHashLeakWarning(foundres);

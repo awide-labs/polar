@@ -114,8 +114,8 @@ $node_twoways->start;
 for my $db (qw(d1 d2))
 {
 	$node_twoways->safe_psql('postgres', "CREATE DATABASE $db");
-	$node_twoways->safe_psql($db,        "CREATE TABLE t (f int)");
-	$node_twoways->safe_psql($db,        "CREATE TABLE t2 (f int)");
+	$node_twoways->safe_psql($db, "CREATE TABLE t (f int)");
+	$node_twoways->safe_psql($db, "CREATE TABLE t2 (f int)");
 }
 
 my $rows = 3000;
@@ -128,7 +128,7 @@ $node_twoways->safe_psql(
 	});
 
 $node_twoways->safe_psql('d2',
-	    "CREATE SUBSCRIPTION testsub CONNECTION \$\$"
+		"CREATE SUBSCRIPTION testsub CONNECTION \$\$"
 	  . $node_twoways->connstr('d1')
 	  . "\$\$ PUBLICATION testpub WITH (create_slot=false, "
 	  . "slot_name='testslot')");
@@ -396,23 +396,22 @@ $node_subscriber->safe_psql(
 ));
 
 $node_subscriber->wait_for_subscription_sync($node_publisher, 'sub1');
-my $result = $node_subscriber->safe_psql('postgres',
-	"SELECT a, b FROM tab_default");
-is($result, qq(1|f
+my $result =
+  $node_subscriber->safe_psql('postgres', "SELECT a, b FROM tab_default");
+is( $result, qq(1|f
 2|t), 'check snapshot on subscriber');
 
 # Update all rows in the table and ensure the rows with the missing `b`
 # attribute replicate correctly.
-$node_publisher->safe_psql('postgres',
-	"UPDATE tab_default SET a = a + 1");
+$node_publisher->safe_psql('postgres', "UPDATE tab_default SET a = a + 1");
 $node_publisher->wait_for_catchup('sub1');
 
 # When the bug is present, the `1|f` row will not be updated to `2|f` because
 # the publisher incorrectly fills in `NULL` for `b` and publishes an update
 # for `1|NULL`, which doesn't exist in the subscriber.
-$result = $node_subscriber->safe_psql('postgres',
-	"SELECT a, b FROM tab_default");
-is($result, qq(2|f
+$result =
+  $node_subscriber->safe_psql('postgres', "SELECT a, b FROM tab_default");
+is( $result, qq(2|f
 3|t), 'check replicated update on subscriber');
 
 $node_publisher->stop('fast');

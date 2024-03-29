@@ -44,15 +44,15 @@ my $h = IPC::Run::start([ 'psql', '-X', '-v', 'ON_ERROR_STOP=1' ],
 # Get the PID
 $stdout = '';
 $stderr = '';
-$stdin  = "\\! echo \$PPID >$tempdir/psql.pid\n";
+$stdin = "\\! echo \$PPID >$tempdir/psql.pid\n";
 pump $h while length $stdin;
 my $count;
 my $psql_pid;
 until (
 	-s "$tempdir/psql.pid"
-	  and ($psql_pid =
-		PostgreSQL::Test::Utils::slurp_file("$tempdir/psql.pid")) =~
-	  /^\d+\n/s)
+	  and
+	  ($psql_pid = PostgreSQL::Test::Utils::slurp_file("$tempdir/psql.pid"))
+	  =~ /^\d+\n/s)
 {
 	($count++ < 100 * $PostgreSQL::Test::Utils::timeout_default)
 	  or die "pid file did not appear";

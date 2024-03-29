@@ -100,7 +100,7 @@ sub new
 	bless $self, $class;
 	if ($flavor =~ /\Aopenssl\z/i)
 	{
-		$self->{flavor}  = 'openssl';
+		$self->{flavor} = 'openssl';
 		$self->{backend} = SSL::Backend::OpenSSL->new();
 	}
 	else
@@ -121,7 +121,7 @@ string.
 
 sub sslkey
 {
-	my $self    = shift;
+	my $self = shift;
 	my $keyfile = shift;
 	my $backend = $self->{backend};
 
@@ -149,10 +149,10 @@ sub configure_test_server_for_ssl
 	my $self = shift;
 	my ($node, $serverhost, $servercidr, $authmethod, %params) = @_;
 	my $backend = $self->{backend};
-	my $pgdata  = $node->data_dir;
+	my $pgdata = $node->data_dir;
 
 	my @databases = (
-		'trustdb',   'certdb', 'certdb_dn', 'certdb_dn_re',
+		'trustdb', 'certdb', 'certdb_dn', 'certdb_dn_re',
 		'certdb_cn', 'verifydb');
 
 	# Create test users and databases
@@ -235,7 +235,7 @@ Get the name of the currently used SSL backend.
 
 sub ssl_library
 {
-	my $self    = shift;
+	my $self = shift;
 	my $backend = $self->{backend};
 
 	return $backend->get_library();
@@ -290,11 +290,11 @@ returning.
 
 sub switch_server_cert
 {
-	my $self    = shift;
-	my $node    = shift;
+	my $self = shift;
+	my $node = shift;
 	my $backend = $self->{backend};
-	my %params  = @_;
-	my $pgdata  = $node->data_dir;
+	my %params = @_;
+	my $pgdata = $node->data_dir;
 
 	open my $sslconf, '>', "$pgdata/sslconfig.conf";
 	print $sslconf "ssl=on\n";

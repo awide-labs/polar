@@ -96,21 +96,21 @@ else
 
 $ENV{PATH} = "$ldap_bin_dir:$ENV{PATH}" if $ldap_bin_dir;
 
-my $ldap_datadir  = "${PostgreSQL::Test::Utils::tmp_check}/openldap-data";
-my $slapd_certs   = "${PostgreSQL::Test::Utils::tmp_check}/slapd-certs";
-my $slapd_conf    = "${PostgreSQL::Test::Utils::tmp_check}/slapd.conf";
+my $ldap_datadir = "${PostgreSQL::Test::Utils::tmp_check}/openldap-data";
+my $slapd_certs = "${PostgreSQL::Test::Utils::tmp_check}/slapd-certs";
+my $slapd_conf = "${PostgreSQL::Test::Utils::tmp_check}/slapd.conf";
 my $slapd_pidfile = "${PostgreSQL::Test::Utils::tmp_check}/slapd.pid";
 my $slapd_logfile = "${PostgreSQL::Test::Utils::log_path}/slapd.log";
-my $ldap_conf     = "${PostgreSQL::Test::Utils::tmp_check}/ldap.conf";
-my $ldap_server   = 'localhost';
-my $ldap_port     = PostgreSQL::Test::Cluster::get_free_port();
-my $ldaps_port    = PostgreSQL::Test::Cluster::get_free_port();
-my $ldap_url      = "ldap://$ldap_server:$ldap_port";
-my $ldaps_url     = "ldaps://$ldap_server:$ldaps_port";
-my $ldap_basedn   = 'dc=example,dc=net';
-my $ldap_rootdn   = 'cn=Manager,dc=example,dc=net';
-my $ldap_rootpw   = 'secret';
-my $ldap_pwfile   = "${PostgreSQL::Test::Utils::tmp_check}/ldappassword";
+my $ldap_conf = "${PostgreSQL::Test::Utils::tmp_check}/ldap.conf";
+my $ldap_server = 'localhost';
+my $ldap_port = PostgreSQL::Test::Cluster::get_free_port();
+my $ldaps_port = PostgreSQL::Test::Cluster::get_free_port();
+my $ldap_url = "ldap://$ldap_server:$ldap_port";
+my $ldaps_url = "ldaps://$ldap_server:$ldaps_port";
+my $ldap_basedn = 'dc=example,dc=net';
+my $ldap_rootdn = 'cn=Manager,dc=example,dc=net';
+my $ldap_rootpw = 'secret';
+my $ldap_pwfile = "${PostgreSQL::Test::Utils::tmp_check}/ldappassword";
 
 note "setting up slapd";
 
@@ -146,7 +146,7 @@ append_to_file(
 });
 
 mkdir $ldap_datadir or die;
-mkdir $slapd_certs  or die;
+mkdir $slapd_certs or die;
 
 system_or_bail "openssl", "req", "-new", "-nodes", "-keyout",
   "$slapd_certs/ca.key", "-x509", "-out", "$slapd_certs/ca.crt", "-subj",
@@ -159,7 +159,7 @@ system_or_bail "openssl", "x509", "-req", "-in", "$slapd_certs/server.csr",
   "-CAcreateserial", "-out", "$slapd_certs/server.crt";
 
 # -s0 prevents log messages ending up in syslog
-system_or_bail $slapd, '-f', $slapd_conf,'-s0', '-h', "$ldap_url $ldaps_url";
+system_or_bail $slapd, '-f', $slapd_conf, '-s0', '-h', "$ldap_url $ldaps_url";
 
 END
 {
@@ -182,23 +182,23 @@ while (1)
 	  if (
 		system_log(
 			"ldapsearch", "-sbase",
-			"-H",         $ldap_url,
-			"-b",         $ldap_basedn,
-			"-D",         $ldap_rootdn,
-			"-y",         $ldap_pwfile,
-			"-n",         "'objectclass=*'") == 0);
+			"-H", $ldap_url,
+			"-b", $ldap_basedn,
+			"-D", $ldap_rootdn,
+			"-y", $ldap_pwfile,
+			"-n", "'objectclass=*'") == 0);
 	die "cannot connect to slapd" if ++$retries >= 300;
 	note "waiting for slapd to accept requests...";
 	Time::HiRes::usleep(1000000);
 }
 
-$ENV{'LDAPURI'}    = $ldap_url;
+$ENV{'LDAPURI'} = $ldap_url;
 $ENV{'LDAPBINDDN'} = $ldap_rootdn;
-$ENV{'LDAPCONF'}   = $ldap_conf;
+$ENV{'LDAPCONF'} = $ldap_conf;
 
 note "loading LDAP data";
 
-system_or_bail 'ldapadd',    '-x', '-y', $ldap_pwfile, '-f', 'authdata.ldif';
+system_or_bail 'ldapadd', '-x', '-y', $ldap_pwfile, '-f', 'authdata.ldif';
 system_or_bail 'ldappasswd', '-x', '-y', $ldap_pwfile, '-s', 'secret1',
   'uid=test1,dc=example,dc=net';
 system_or_bail 'ldappasswd', '-x', '-y', $ldap_pwfile, '-s', 'secret2',

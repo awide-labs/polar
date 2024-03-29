@@ -40,7 +40,7 @@ for my $testname (@tests)
 	$node->command_ok(
 		[
 			'libpq_pipeline', @extraargs,
-			$testname,        $node->connstr('postgres')
+			$testname, $node->connstr('postgres')
 		],
 		"libpq_pipeline $testname");
 

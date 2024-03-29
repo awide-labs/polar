@@ -18,7 +18,7 @@ $node_subscriber->init(allows_streaming => 'logical');
 $node_subscriber->start;
 
 my $publisher_connstr = $node_publisher->connstr . ' dbname=postgres';
-my $appname           = 'tap_sub';
+my $appname = 'tap_sub';
 
 # ====================================================================
 # Testcase start: FOR ALL TABLES

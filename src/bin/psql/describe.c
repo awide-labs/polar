@@ -1153,8 +1153,8 @@ permissionsList(const char *pattern)
 	return true;
 
 error_return:
-		termPQExpBuffer(&buf);
-		return false;
+	termPQExpBuffer(&buf);
+	return false;
 }
 
 

@@ -67,7 +67,7 @@ $node->issues_sql_like(
 	'reindex with verbose output');
 $node->issues_sql_like(
 	[
-		'reindexdb',    '-v',          '-t', 'test1',
+		'reindexdb', '-v', '-t', 'test1',
 		'--tablespace', $tbspace_name, 'postgres'
 	],
 	qr/statement: REINDEX \(VERBOSE, TABLESPACE $tbspace_name\) TABLE public\.test1;/,
@@ -99,8 +99,8 @@ $node->issues_sql_like(
 	'reindex with verbose output concurrently');
 $node->issues_sql_like(
 	[
-		'reindexdb', '--concurrently', '-v',          '-t',
-		'test1',     '--tablespace',   $tbspace_name, 'postgres'
+		'reindexdb', '--concurrently', '-v', '-t',
+		'test1', '--tablespace', $tbspace_name, 'postgres'
 	],
 	qr/statement: REINDEX \(VERBOSE, TABLESPACE $tbspace_name\) TABLE CONCURRENTLY public\.test1;/,
 	'reindex concurrently with verbose output and tablespace');
@@ -112,7 +112,7 @@ $node->issues_sql_like(
 # messages.
 $node->command_checks_all(
 	[
-		'reindexdb',   '-t', $toast_table, '--tablespace',
+		'reindexdb', '-t', $toast_table, '--tablespace',
 		$tbspace_name, 'postgres'
 	],
 	1,
@@ -121,8 +121,8 @@ $node->command_checks_all(
 	'reindex toast table with tablespace');
 $node->command_checks_all(
 	[
-		'reindexdb',    '--concurrently', '-t', $toast_table,
-		'--tablespace', $tbspace_name,    'postgres'
+		'reindexdb', '--concurrently', '-t', $toast_table,
+		'--tablespace', $tbspace_name, 'postgres'
 	],
 	1,
 	[],
@@ -130,7 +130,7 @@ $node->command_checks_all(
 	'reindex toast table concurrently with tablespace');
 $node->command_checks_all(
 	[
-		'reindexdb',   '-i', $toast_index, '--tablespace',
+		'reindexdb', '-i', $toast_index, '--tablespace',
 		$tbspace_name, 'postgres'
 	],
 	1,
@@ -139,8 +139,8 @@ $node->command_checks_all(
 	'reindex toast index with tablespace');
 $node->command_checks_all(
 	[
-		'reindexdb',    '--concurrently', '-i', $toast_index,
-		'--tablespace', $tbspace_name,    'postgres'
+		'reindexdb', '--concurrently', '-i', $toast_index,
+		'--tablespace', $tbspace_name, 'postgres'
 	],
 	1,
 	[],

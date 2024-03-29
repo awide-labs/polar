@@ -28,21 +28,21 @@ if ($ENV{with_gssapi} ne 'yes')
 
 my ($krb5_bin_dir, $krb5_sbin_dir);
 
-if ($^O eq 'darwin' && -d "/opt/homebrew" )
+if ($^O eq 'darwin' && -d "/opt/homebrew")
 {
 	# typical paths for Homebrew on ARM
-	$krb5_bin_dir  = '/opt/homebrew/opt/krb5/bin';
+	$krb5_bin_dir = '/opt/homebrew/opt/krb5/bin';
 	$krb5_sbin_dir = '/opt/homebrew/opt/krb5/sbin';
 }
 elsif ($^O eq 'darwin')
 {
 	# typical paths for Homebrew on Intel
-	$krb5_bin_dir  = '/usr/local/opt/krb5/bin';
+	$krb5_bin_dir = '/usr/local/opt/krb5/bin';
 	$krb5_sbin_dir = '/usr/local/opt/krb5/sbin';
 }
 elsif ($^O eq 'freebsd')
 {
-	$krb5_bin_dir  = '/usr/local/bin';
+	$krb5_bin_dir = '/usr/local/bin';
 	$krb5_sbin_dir = '/usr/local/sbin';
 }
 elsif ($^O eq 'linux')
@@ -50,40 +50,40 @@ elsif ($^O eq 'linux')
 	$krb5_sbin_dir = '/usr/sbin';
 }
 
-my $krb5_config  = 'krb5-config';
-my $kinit        = 'kinit';
-my $kdb5_util    = 'kdb5_util';
+my $krb5_config = 'krb5-config';
+my $kinit = 'kinit';
+my $kdb5_util = 'kdb5_util';
 my $kadmin_local = 'kadmin.local';
-my $krb5kdc      = 'krb5kdc';
+my $krb5kdc = 'krb5kdc';
 
 if ($krb5_bin_dir && -d $krb5_bin_dir)
 {
 	$krb5_config = $krb5_bin_dir . '/' . $krb5_config;
-	$kinit       = $krb5_bin_dir . '/' . $kinit;
+	$kinit = $krb5_bin_dir . '/' . $kinit;
 }
 if ($krb5_sbin_dir && -d $krb5_sbin_dir)
 {
-	$kdb5_util    = $krb5_sbin_dir . '/' . $kdb5_util;
+	$kdb5_util = $krb5_sbin_dir . '/' . $kdb5_util;
 	$kadmin_local = $krb5_sbin_dir . '/' . $kadmin_local;
-	$krb5kdc      = $krb5_sbin_dir . '/' . $krb5kdc;
+	$krb5kdc = $krb5_sbin_dir . '/' . $krb5kdc;
 }
 
-my $host     = 'auth-test-localhost.postgresql.example.com';
+my $host = 'auth-test-localhost.postgresql.example.com';
 my $hostaddr = '127.0.0.1';
-my $realm    = 'EXAMPLE.COM';
+my $realm = 'EXAMPLE.COM';
 
-my $krb5_conf   = "${PostgreSQL::Test::Utils::tmp_check}/krb5.conf";
-my $kdc_conf    = "${PostgreSQL::Test::Utils::tmp_check}/kdc.conf";
-my $krb5_cache  = "${PostgreSQL::Test::Utils::tmp_check}/krb5cc";
-my $krb5_log    = "${PostgreSQL::Test::Utils::log_path}/krb5libs.log";
-my $kdc_log     = "${PostgreSQL::Test::Utils::log_path}/krb5kdc.log";
-my $kdc_port    = PostgreSQL::Test::Cluster::get_free_port();
+my $krb5_conf = "${PostgreSQL::Test::Utils::tmp_check}/krb5.conf";
+my $kdc_conf = "${PostgreSQL::Test::Utils::tmp_check}/kdc.conf";
+my $krb5_cache = "${PostgreSQL::Test::Utils::tmp_check}/krb5cc";
+my $krb5_log = "${PostgreSQL::Test::Utils::log_path}/krb5libs.log";
+my $kdc_log = "${PostgreSQL::Test::Utils::log_path}/krb5kdc.log";
+my $kdc_port = PostgreSQL::Test::Cluster::get_free_port();
 my $kdc_datadir = "${PostgreSQL::Test::Utils::tmp_check}/krb5kdc";
 my $kdc_pidfile = "${PostgreSQL::Test::Utils::tmp_check}/krb5kdc.pid";
-my $keytab      = "${PostgreSQL::Test::Utils::tmp_check}/krb5.keytab";
+my $keytab = "${PostgreSQL::Test::Utils::tmp_check}/krb5.keytab";
 
-my $dbname      = 'postgres';
-my $username    = 'test1';
+my $dbname = 'postgres';
+my $username = 'test1';
 my $application = '001_auth.pl';
 
 note "setting up Kerberos";
@@ -166,9 +166,9 @@ $realm = {
 mkdir $kdc_datadir or die;
 
 # Ensure that we use test's config and cache files, not global ones.
-$ENV{'KRB5_CONFIG'}      = $krb5_conf;
+$ENV{'KRB5_CONFIG'} = $krb5_conf;
 $ENV{'KRB5_KDC_PROFILE'} = $kdc_conf;
-$ENV{'KRB5CCNAME'}       = $krb5_cache;
+$ENV{'KRB5CCNAME'} = $krb5_cache;
 
 my $service_principal = "$ENV{with_krb_srvnam}/$host";
 
@@ -187,7 +187,8 @@ END
 	# take care not to change the script's exit value
 	my $exit_code = $?;
 
-	kill 'INT', `cat $kdc_pidfile` if defined($kdc_pidfile) && -f $kdc_pidfile;
+	kill 'INT', `cat $kdc_pidfile`
+	  if defined($kdc_pidfile) && -f $kdc_pidfile;
 
 	$? = $exit_code;
 }
@@ -258,7 +259,7 @@ sub test_query
 
 	$node->connect_ok(
 		$connstr, $test_name,
-		sql             => $query,
+		sql => $query,
 		expected_stdout => $expected);
 	return;
 }

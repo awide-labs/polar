@@ -7,7 +7,7 @@ use strict;
 use warnings;
 
 my $lastlockidx = -1;
-my $continue    = "\n";
+my $continue = "\n";
 
 open my $lwlocknames, '<', $ARGV[0] or die;
 
@@ -42,7 +42,7 @@ while (<$lwlocknames>)
 	$trimmedlockname =~ s/Lock$//;
 	die "lock names must end with 'Lock'" if $trimmedlockname eq $lockname;
 
-	die "lwlocknames.txt not in order"   if $lockidx < $lastlockidx;
+	die "lwlocknames.txt not in order" if $lockidx < $lastlockidx;
 	die "lwlocknames.txt has duplicates" if $lockidx == $lastlockidx;
 
 	while ($lastlockidx < $lockidx - 1)
@@ -53,7 +53,7 @@ while (<$lwlocknames>)
 	}
 	printf $c "%s	\"%s\"", $continue, $trimmedlockname;
 	$lastlockidx = $lockidx;
-	$continue    = ",\n";
+	$continue = ",\n";
 
 	print $h "#define $lockname (&MainLWLockArray[$lockidx].lock)\n";
 }

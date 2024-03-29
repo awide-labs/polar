@@ -64,11 +64,11 @@ note "testing password-protected keys";
 
 switch_server_cert(
 	$node,
-	certfile       => 'server-cn-only',
-	cafile         => 'root+client_ca',
-	keyfile        => 'server-password',
+	certfile => 'server-cn-only',
+	cafile => 'root+client_ca',
+	keyfile => 'server-password',
 	passphrase_cmd => 'echo wrongpassword',
-	restart        => 'no');
+	restart => 'no');
 
 command_fails(
 	[ 'pg_ctl', '-D', $node->data_dir, '-l', $node->logfile, 'restart' ],
@@ -77,11 +77,11 @@ $node->_update_pid(0);
 
 switch_server_cert(
 	$node,
-	certfile       => 'server-cn-only',
-	cafile         => 'root+client_ca',
-	keyfile        => 'server-password',
+	certfile => 'server-cn-only',
+	cafile => 'root+client_ca',
+	keyfile => 'server-password',
 	passphrase_cmd => 'echo secret1',
-	restart        => 'no');
+	restart => 'no');
 
 command_ok(
 	[ 'pg_ctl', '-D', $node->data_dir, '-l', $node->logfile, 'restart' ],
@@ -461,10 +461,10 @@ $node->connect_fails(
 # pg_stat_ssl
 command_like(
 	[
-		'psql',                                '-X',
-		'-A',                                  '-F',
-		',',                                   '-P',
-		'null=_null_',                         '-d',
+		'psql', '-X',
+		'-A', '-F',
+		',', '-P',
+		'null=_null_', '-d',
 		"$common_connstr sslrootcert=invalid", '-c',
 		"SELECT * FROM pg_stat_ssl WHERE pid = pg_backend_pid()"
 	],
@@ -720,7 +720,7 @@ $node->connect_ok(
 # intermediate client_ca.crt is provided by client, and isn't in server's ssl_ca_file
 switch_server_cert($node, certfile => 'server-cn-only', cafile => 'root_ca');
 $common_connstr =
-    "$default_ssl_connstr user=ssltestuser dbname=certdb "
+	"$default_ssl_connstr user=ssltestuser dbname=certdb "
   . sslkey('client.key')
   . " sslrootcert=ssl/root+server_ca.crt hostaddr=$SERVERHOSTADDR host=localhost";
 
@@ -736,13 +736,14 @@ $node->connect_fails(
 switch_server_cert(
 	$node,
 	certfile => 'server-cn-only',
-	crldir   => 'root+client-crldir');
+	crldir => 'root+client-crldir');
 
 # revoked client cert
 $node->connect_fails(
 	"$common_connstr user=ssltestuser sslcert=ssl/client-revoked.crt "
 	  . sslkey('client-revoked.key'),
 	"certificate authorization fails with revoked client cert with server-side CRL directory",
-	expected_stderr => qr|SSL error: ssl[a-z0-9/]* alert certificate revoked|);
+	expected_stderr => qr|SSL error: ssl[a-z0-9/]* alert certificate revoked|
+);
 
 done_testing();

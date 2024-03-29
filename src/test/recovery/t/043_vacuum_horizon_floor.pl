@@ -39,7 +39,7 @@ my $psql_primaryA =
   $node_primary->background_psql($test_db, on_error_stop => 1);
 
 # Long-running Primary Session B
-my $psql_primaryB  =
+my $psql_primaryB =
   $node_primary->background_psql($test_db, on_error_stop => 1);
 
 # Because vacuum's first pass, pruning, is where we use the GlobalVisState to
@@ -66,7 +66,8 @@ my $psql_primaryB  =
 # insert and update enough rows that we force at least one round of index
 # vacuuming before getting to a dead tuple which was killed after the
 # standby is disconnected.
-$node_primary->safe_psql($test_db, qq[
+$node_primary->safe_psql(
+	$test_db, qq[
 	CREATE TABLE ${table1}(col1 int) with (autovacuum_enabled=false);
 	INSERT INTO $table1 SELECT generate_series(1, 200000);
 	CREATE INDEX on ${table1}(col1);
@@ -81,21 +82,24 @@ my $primary_lsn = $node_primary->lsn('flush');
 $node_primary->wait_for_catchup($node_replica, 'replay', $primary_lsn);
 
 # Test that the WAL receiver is up and running.
-$node_replica->poll_query_until($test_db, qq[
-	select exists (select * from pg_stat_wal_receiver);] , 't');
+$node_replica->poll_query_until(
+	$test_db, qq[
+	select exists (select * from pg_stat_wal_receiver);], 't');
 
 # Set primary_conninfo to something invalid on the replica and reload the
 # config. Once the config is reloaded, the startup process will force the WAL
 # receiver to restart and it will be unable to reconnect because of the
 # invalid connection information.
-$node_replica->safe_psql($test_db, qq[
+$node_replica->safe_psql(
+	$test_db, qq[
 		ALTER SYSTEM SET primary_conninfo = '';
 		SELECT pg_reload_conf();
 	]);
 
 # Wait until the WAL receiver has shut down and been unable to start up again.
-$node_replica->poll_query_until($test_db, qq[
-	select exists (select * from pg_stat_wal_receiver);] , 'f');
+$node_replica->poll_query_until(
+	$test_db, qq[
+	select exists (select * from pg_stat_wal_receiver);], 'f');
 
 # Now insert and update a tuple which will be visible to the vacuum on the
 # primary but which will have xmax newer than the oldest xmin on the standby
@@ -106,7 +110,7 @@ my $res = $psql_primaryA->query_safe(
 		UPDATE $table1 SET col1 = 100 WHERE col1 = 99;
 		SELECT 'after_update';
         ]
-	);
+);
 
 # Make sure the UPDATE finished
 like($res, qr/^after_update$/m, "UPDATE occurred on primary session A");
@@ -127,7 +131,7 @@ $res = $psql_primaryB->query_safe(
 	DECLARE $primary_cursor1 CURSOR FOR SELECT * FROM $table1 WHERE col1 = 1;
 	FETCH FORWARD FROM $primary_cursor1;
 	]
-	);
+);
 
 is($res, 1, qq[Cursor query returned $res. Expected value 1.]);
 
@@ -152,7 +156,8 @@ $psql_primaryA->{run}->pump_nb();
 # just waiting on the lock to start vacuuming. We don't want the standby to
 # re-establish a connection to the primary and push the horizon back until
 # we've saved initial values in GlobalVisState and calculated OldestXmin.
-$node_primary->poll_query_until($test_db,
+$node_primary->poll_query_until(
+	$test_db,
 	qq[
 	SELECT count(*) >= 1 FROM pg_stat_activity
 		WHERE pid = $vacuum_pid
@@ -161,8 +166,9 @@ $node_primary->poll_query_until($test_db,
 	't');
 
 # Ensure the WAL receiver is still not active on the replica.
-$node_replica->poll_query_until($test_db, qq[
-	select exists (select * from pg_stat_wal_receiver);] , 'f');
+$node_replica->poll_query_until(
+	$test_db, qq[
+	select exists (select * from pg_stat_wal_receiver);], 'f');
 
 # Allow the WAL receiver connection to re-establish.
 $node_replica->safe_psql(
@@ -172,15 +178,17 @@ $node_replica->safe_psql(
 	]);
 
 # Ensure the new WAL receiver has connected.
-$node_replica->poll_query_until($test_db, qq[
-	select exists (select * from pg_stat_wal_receiver);] , 't');
+$node_replica->poll_query_until(
+	$test_db, qq[
+	select exists (select * from pg_stat_wal_receiver);], 't');
 
 # Once the WAL sender is shown on the primary, the replica should have
 # connected with the primary and pushed the horizon backward. Primary Session
 # A won't see that until the VACUUM FREEZE proceeds and does its first round
 # of index vacuuming.
-$node_primary->poll_query_until($test_db, qq[
-	select exists (select * from pg_stat_replication);] , 't');
+$node_primary->poll_query_until(
+	$test_db, qq[
+	select exists (select * from pg_stat_replication);], 't');
 
 # Move the cursor forward to the next 1. We inserted the 1 much later, so
 # advancing the cursor should allow vacuum to proceed vacuuming most pages of
@@ -194,20 +202,21 @@ is($res, 1,
 
 # Prevent the test from incorrectly passing by confirming that we did indeed
 # do a pass of index vacuuming.
-$node_primary->poll_query_until($test_db, qq[
+$node_primary->poll_query_until(
+	$test_db, qq[
 	SELECT index_vacuum_count > 0
 	FROM pg_stat_progress_vacuum
 	WHERE datname='$test_db' AND relid::regclass = '$table1'::regclass;
-	] , 't');
+	], 't');
 
 # Commit the transaction with the open cursor so that the VACUUM can finish.
 $psql_primaryB->query_until(
-		qr/^commit$/m,
-		qq[
+	qr/^commit$/m,
+	qq[
 			COMMIT;
 			\\echo commit
         ]
-	);
+);
 
 # VACUUM proceeds with pruning and does a visibility check on each tuple. In
 # older versions of Postgres, pruning found our final dead tuple
@@ -220,7 +229,8 @@ $psql_primaryB->query_until(
 #
 # With the fix, VACUUM should finish successfully, incrementing the table
 # vacuum_count.
-$node_primary->poll_query_until($test_db,
+$node_primary->poll_query_until(
+	$test_db,
 	qq[
 	SELECT vacuum_count > 0
 	FROM pg_stat_all_tables WHERE relname = '${table1}';

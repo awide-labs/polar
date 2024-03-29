@@ -16,7 +16,7 @@ use lib "$FindBin::RealBin/../../tools/";
 use PerfectHash;
 
 my $output_table_file = "unicode_norm_table.h";
-my $output_func_file  = "unicode_norm_hashfunc.h";
+my $output_func_file = "unicode_norm_hashfunc.h";
 
 my $FH;
 
@@ -36,7 +36,7 @@ close $FH;
 # Read entries from UnicodeData.txt into a list, and a hash table. We need
 # three fields from each row: the codepoint, canonical combining class,
 # and character decomposition mapping
-my @characters     = ();
+my @characters = ();
 my %character_hash = ();
 open($FH, '<', "UnicodeData.txt")
   or die "Could not open UnicodeData.txt: $!.";
@@ -47,9 +47,9 @@ while (my $line = <$FH>)
 	# - Unicode code value
 	# - Canonical Combining Class
 	# - Character Decomposition Mapping
-	my @elts   = split(';', $line);
-	my $code   = $elts[0];
-	my $class  = $elts[3];
+	my @elts = split(';', $line);
+	my $code = $elts[0];
+	my $class = $elts[3];
 	my $decomp = $elts[5];
 
 	# Skip codepoints above U+10FFFF. They cannot be represented in 4 bytes
@@ -161,7 +161,7 @@ typedef struct
 
 HEADER
 
-my $decomp_index  = 0;
+my $decomp_index = 0;
 my $decomp_string = "";
 my @dec_cp_packed;
 my $main_index = 0;
@@ -170,8 +170,8 @@ my @rec_info;
 my $last_code = $characters[-1]->{code};
 foreach my $char (@characters)
 {
-	my $code   = $char->{code};
-	my $class  = $char->{class};
+	my $code = $char->{code};
+	my $class = $char->{class};
 	my $decomp = $char->{decomp};
 
 	# Save the code point bytes as a string in network order.
@@ -198,7 +198,7 @@ foreach my $char (@characters)
 
 	my $first_decomp = shift @decomp_elts;
 
-	my $flags   = "";
+	my $flags = "";
 	my $comment = "";
 
 	if ($compat)
@@ -236,10 +236,10 @@ foreach my $char (@characters)
 		{
 			push @rec_info,
 			  {
-				code       => $code,
+				code => $code,
 				main_index => $main_index,
-				first      => $first_decomp,
-				second     => $decomp_elts[0]
+				first => $first_decomp,
+				second => $decomp_elts[0]
 			  };
 		}
 	}
@@ -295,7 +295,7 @@ HEADER
 
 # Emit the definition of the decomp hash function.
 my $dec_funcname = 'Decomp_hash_func';
-my $dec_func     = PerfectHash::generate_hash_function(\@dec_cp_packed,
+my $dec_func = PerfectHash::generate_hash_function(\@dec_cp_packed,
 	$dec_funcname, fixed_key_length => 4);
 print $OF "/* Perfect hash function for decomposition */\n";
 print $OF "static $dec_func\n";
@@ -388,11 +388,11 @@ sub recomp_sort
 
 	# First sort by the first code point
 	return -1 if $a1 < $b1;
-	return 1  if $a1 > $b1;
+	return 1 if $a1 > $b1;
 
 	# Then sort by the second code point
 	return -1 if $a2 < $b2;
-	return 1  if $a2 > $b2;
+	return 1 if $a2 > $b2;
 
 	# Finally sort by the code point that decomposes into first and
 	# second ones.
@@ -400,7 +400,7 @@ sub recomp_sort
 	my $bcode = hex($b->{code});
 
 	return -1 if $acode < $bcode;
-	return 1  if $acode > $bcode;
+	return 1 if $acode > $bcode;
 
 	die "found duplicate entries of recomposeable code pairs";
 }

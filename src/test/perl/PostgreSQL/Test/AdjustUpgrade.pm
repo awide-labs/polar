@@ -299,13 +299,13 @@ sub adjust_old_dumpfile
 		# adjust some places where we don't print so many parens anymore
 
 		my $prefix = "CONSTRAINT (?:sequence|copy)_con CHECK [(][(]";
-		my $orig   = "((x > 3) AND (y <> 'check failed'::text))";
-		my $repl   = "(x > 3) AND (y <> 'check failed'::text)";
+		my $orig = "((x > 3) AND (y <> 'check failed'::text))";
+		my $repl = "(x > 3) AND (y <> 'check failed'::text)";
 		$dump =~ s/($prefix)\Q$orig\E/$1$repl/mg;
 
 		$prefix = "CONSTRAINT insert_con CHECK [(][(]";
-		$orig   = "((x >= 3) AND (y <> 'check failed'::text))";
-		$repl   = "(x >= 3) AND (y <> 'check failed'::text)";
+		$orig = "((x >= 3) AND (y <> 'check failed'::text))";
+		$repl = "(x >= 3) AND (y <> 'check failed'::text)";
 		$dump =~ s/($prefix)\Q$orig\E/$1$repl/mg;
 
 		$orig = "DEFAULT ((-1) * currval('public.insert_seq'::regclass))";

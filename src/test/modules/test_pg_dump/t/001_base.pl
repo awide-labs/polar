@@ -42,15 +42,15 @@ my $tempdir = PostgreSQL::Test::Utils::tempdir;
 my %pgdump_runs = (
 	binary_upgrade => {
 		dump_cmd => [
-			'pg_dump',                            '--no-sync',
+			'pg_dump', '--no-sync',
 			"--file=$tempdir/binary_upgrade.sql", '--schema-only',
-			'--binary-upgrade',                   '--dbname=postgres',
+			'--binary-upgrade', '--dbname=postgres',
 		],
 	},
 	clean => {
 		dump_cmd => [
 			'pg_dump', "--file=$tempdir/clean.sql",
-			'-c',      '--no-sync',
+			'-c', '--no-sync',
 			'--dbname=postgres',
 		],
 	},
@@ -146,26 +146,26 @@ my %pgdump_runs = (
 	},
 	extension_schema => {
 		dump_cmd => [
-			'pg_dump',                              '--schema=public',
+			'pg_dump', '--schema=public',
 			"--file=$tempdir/extension_schema.sql", 'postgres',
 		],
 	},
 	pg_dumpall_globals => {
 		dump_cmd => [
-			'pg_dumpall',                             '--no-sync',
+			'pg_dumpall', '--no-sync',
 			"--file=$tempdir/pg_dumpall_globals.sql", '-g',
 		],
 	},
 	no_privs => {
 		dump_cmd => [
-			'pg_dump',                      '--no-sync',
+			'pg_dump', '--no-sync',
 			"--file=$tempdir/no_privs.sql", '-x',
 			'postgres',
 		],
 	},
 	no_owner => {
 		dump_cmd => [
-			'pg_dump',                      '--no-sync',
+			'pg_dump', '--no-sync',
 			"--file=$tempdir/no_owner.sql", '-O',
 			'postgres',
 		],
@@ -175,7 +175,8 @@ my %pgdump_runs = (
 	# (undumped) extension tables
 	privileged_internals => {
 		dump_cmd => [
-			'pg_dump', '--no-sync', "--file=$tempdir/privileged_internals.sql",
+			'pg_dump', '--no-sync',
+			"--file=$tempdir/privileged_internals.sql",
 			# these two tables are irrelevant to the test case
 			'--exclude-table=regress_pg_dump_schema.external_tab',
 			'--exclude-table=regress_pg_dump_schema.extdependtab',
@@ -191,14 +192,14 @@ my %pgdump_runs = (
 	},
 	section_pre_data => {
 		dump_cmd => [
-			'pg_dump',                              '--no-sync',
+			'pg_dump', '--no-sync',
 			"--file=$tempdir/section_pre_data.sql", '--section=pre-data',
 			'postgres',
 		],
 	},
 	section_data => {
 		dump_cmd => [
-			'pg_dump',                          '--no-sync',
+			'pg_dump', '--no-sync',
 			"--file=$tempdir/section_data.sql", '--section=data',
 			'postgres',
 		],
@@ -284,16 +285,16 @@ my %pgdump_runs = (
 # Tests which are considered 'full' dumps by pg_dump, but there
 # are flags used to exclude specific items (ACLs, blobs, etc).
 my %full_runs = (
-	binary_upgrade    => 1,
-	clean             => 1,
-	clean_if_exists   => 1,
-	createdb          => 1,
-	defaults          => 1,
-	exclude_table     => 1,
-	no_privs          => 1,
-	no_owner          => 1,
+	binary_upgrade => 1,
+	clean => 1,
+	clean_if_exists => 1,
+	createdb => 1,
+	defaults => 1,
+	exclude_table => 1,
+	no_privs => 1,
+	no_owner => 1,
 	privileged_internals => 1,
-	with_extension    => 1,
+	with_extension => 1,
 	without_extension => 1);
 
 my %tests = (
@@ -311,13 +312,13 @@ my %tests = (
 
 	'CREATE EXTENSION test_pg_dump' => {
 		create_order => 2,
-		create_sql   => 'CREATE EXTENSION test_pg_dump;',
-		regexp       => qr/^
+		create_sql => 'CREATE EXTENSION test_pg_dump;',
+		regexp => qr/^
 			\QCREATE EXTENSION IF NOT EXISTS test_pg_dump WITH SCHEMA public;\E
 			\n/xm,
 		like => {
 			%full_runs,
-			schema_only      => 1,
+			schema_only => 1,
 			section_pre_data => 1,
 		},
 		unlike => { binary_upgrade => 1, without_extension => 1 },
@@ -325,9 +326,9 @@ my %tests = (
 
 	'CREATE ROLE regress_dump_test_role' => {
 		create_order => 1,
-		create_sql   => 'CREATE ROLE regress_dump_test_role;',
-		regexp       => qr/^CREATE ROLE regress_dump_test_role;\n/m,
-		like         => { pg_dumpall_globals => 1, },
+		create_sql => 'CREATE ROLE regress_dump_test_role;',
+		regexp => qr/^CREATE ROLE regress_dump_test_role;\n/m,
+		like => { pg_dumpall_globals => 1, },
 	},
 
 	'CREATE ROLE regress_dump_login_role' => {
@@ -374,8 +375,8 @@ my %tests = (
 
 	'CREATE SCHEMA public' => {
 		regexp => qr/^CREATE SCHEMA public;/m,
-		like   => {
-			extension_schema                  => 1,
+		like => {
+			extension_schema => 1,
 			without_extension_explicit_schema => 1,
 		},
 	},
@@ -419,14 +420,14 @@ my %tests = (
 
 	'SETVAL SEQUENCE regress_seq_dumpable' => {
 		create_order => 6,
-		create_sql   => qq{SELECT nextval('regress_seq_dumpable');},
-		regexp       => qr/^
+		create_sql => qq{SELECT nextval('regress_seq_dumpable');},
+		regexp => qr/^
 			\QSELECT pg_catalog.setval('public.regress_seq_dumpable', 1, true);\E
 			\n/xm,
 		like => {
 			%full_runs,
-			data_only        => 1,
-			section_data     => 1,
+			data_only => 1,
+			section_data => 1,
 			extension_schema => 1,
 		},
 		unlike => { without_extension => 1, },
@@ -448,20 +449,20 @@ my %tests = (
 			\n/xm,
 		like => {
 			%full_runs,
-			data_only        => 1,
-			section_data     => 1,
+			data_only => 1,
+			section_data => 1,
 			extension_schema => 1,
 		},
 		unlike => {
-			binary_upgrade    => 1,
-			exclude_table     => 1,
+			binary_upgrade => 1,
+			exclude_table => 1,
 			without_extension => 1,
 		},
 	},
 
 	'REVOKE ALL ON FUNCTION wgo_then_no_access' => {
 		create_order => 3,
-		create_sql   => q{
+		create_sql => q{
 			DO $$BEGIN EXECUTE format(
 				'REVOKE ALL ON FUNCTION wgo_then_no_access()
 				 FROM pg_signal_backend, public, %I',
@@ -475,7 +476,7 @@ my %tests = (
 			/xm,
 		like => {
 			%full_runs,
-			schema_only      => 1,
+			schema_only => 1,
 			section_pre_data => 1,
 		},
 		unlike => { no_privs => 1, without_extension => 1, },
@@ -483,7 +484,7 @@ my %tests = (
 
 	'REVOKE GRANT OPTION FOR UPDATE ON SEQUENCE wgo_then_regular' => {
 		create_order => 3,
-		create_sql   => 'REVOKE GRANT OPTION FOR UPDATE ON SEQUENCE
+		create_sql => 'REVOKE GRANT OPTION FOR UPDATE ON SEQUENCE
 							wgo_then_regular FROM pg_signal_backend;',
 		regexp => qr/^
 			\QREVOKE ALL ON SEQUENCE public.wgo_then_regular FROM pg_signal_backend;\E
@@ -492,7 +493,7 @@ my %tests = (
 			/xm,
 		like => {
 			%full_runs,
-			schema_only      => 1,
+			schema_only => 1,
 			section_pre_data => 1,
 		},
 		unlike => { no_privs => 1, without_extension => 1, },
@@ -512,7 +513,7 @@ my %tests = (
 			\n/xm,
 		like => {
 			%full_runs,
-			schema_only      => 1,
+			schema_only => 1,
 			section_pre_data => 1,
 		},
 		unlike => { without_extension => 1, },
@@ -537,7 +538,7 @@ my %tests = (
 			\n/xm,
 		like => {
 			%full_runs,
-			schema_only      => 1,
+			schema_only => 1,
 			section_pre_data => 1,
 		},
 		unlike => { no_privs => 1, without_extension => 1, },
@@ -564,14 +565,14 @@ my %tests = (
 	'GRANT SELECT(col2) ON regress_pg_dump_table TO regress_dump_test_role'
 	  => {
 		create_order => 4,
-		create_sql   => 'GRANT SELECT(col2) ON regress_pg_dump_table
+		create_sql => 'GRANT SELECT(col2) ON regress_pg_dump_table
 						   TO regress_dump_test_role;',
 		regexp => qr/^
 			\QGRANT SELECT(col2) ON TABLE public.regress_pg_dump_table TO regress_dump_test_role;\E
 			\n/xm,
 		like => {
 			%full_runs,
-			schema_only      => 1,
+			schema_only => 1,
 			section_pre_data => 1,
 		},
 		unlike => { no_privs => 1, without_extension => 1 },
@@ -587,7 +588,7 @@ my %tests = (
 			\n/xm,
 		like => {
 			%full_runs,
-			schema_only      => 1,
+			schema_only => 1,
 			section_pre_data => 1,
 		},
 		unlike => { no_privs => 1, without_extension => 1, },
@@ -602,14 +603,14 @@ my %tests = (
 
 	'REVOKE SELECT(col1) ON regress_pg_dump_table' => {
 		create_order => 3,
-		create_sql   => 'REVOKE SELECT(col1) ON regress_pg_dump_table
+		create_sql => 'REVOKE SELECT(col1) ON regress_pg_dump_table
 						   FROM PUBLIC;',
 		regexp => qr/^
 			\QREVOKE SELECT(col1) ON TABLE public.regress_pg_dump_table FROM PUBLIC;\E
 			\n/xm,
 		like => {
 			%full_runs,
-			schema_only      => 1,
+			schema_only => 1,
 			section_pre_data => 1,
 		},
 		unlike => { no_privs => 1, without_extension => 1, },
@@ -718,14 +719,14 @@ my %tests = (
 		regexp => qr/^
 		\QALTER INDEX regress_pg_dump_schema.extdependtab_pkey DEPENDS ON EXTENSION test_pg_dump;\E\n
 		/xms,
-		like   => {%pgdump_runs},
+		like => {%pgdump_runs},
 		unlike => {
-			data_only          => 1,
-			extension_schema   => 1,
+			data_only => 1,
+			extension_schema => 1,
 			pg_dumpall_globals => 1,
 			privileged_internals => 1,
-			section_data       => 1,
-			section_pre_data   => 1,
+			section_data => 1,
+			section_pre_data => 1,
 			# Excludes this schema as extension is not listed.
 			without_extension_explicit_schema => 1,
 		},
@@ -735,14 +736,14 @@ my %tests = (
 		regexp => qr/^
 			\QALTER INDEX regress_pg_dump_schema.extdependtab_col2_idx DEPENDS ON EXTENSION test_pg_dump;\E\n
 			/xms,
-		like   => {%pgdump_runs},
+		like => {%pgdump_runs},
 		unlike => {
-			data_only          => 1,
-			extension_schema   => 1,
+			data_only => 1,
+			extension_schema => 1,
 			pg_dumpall_globals => 1,
 			privileged_internals => 1,
-			section_data       => 1,
-			section_pre_data   => 1,
+			section_data => 1,
+			section_pre_data => 1,
 			# Excludes this schema as extension is not listed.
 			without_extension_explicit_schema => 1,
 		},
@@ -751,7 +752,7 @@ my %tests = (
 	# Objects not included in extension, part of schema created by extension
 	'CREATE TABLE regress_pg_dump_schema.external_tab' => {
 		create_order => 4,
-		create_sql   => 'CREATE TABLE regress_pg_dump_schema.external_tab
+		create_sql => 'CREATE TABLE regress_pg_dump_schema.external_tab
 						   (col1 int);',
 		regexp => qr/^
 			\QCREATE TABLE regress_pg_dump_schema.external_tab (\E
@@ -759,7 +760,7 @@ my %tests = (
 			\n\);\n/xm,
 		like => {
 			%full_runs,
-			schema_only      => 1,
+			schema_only => 1,
 			section_pre_data => 1,
 			# Excludes the extension and keeps the schema's data.
 			without_extension_internal_schema => 1,

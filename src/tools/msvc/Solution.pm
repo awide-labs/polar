@@ -18,14 +18,14 @@ no warnings qw(redefine);    ## no critic
 sub _new
 {
 	my $classname = shift;
-	my $options   = shift;
-	my $self      = {
-		projects                   => {},
-		options                    => $options,
-		VisualStudioVersion        => undef,
+	my $options = shift;
+	my $self = {
+		projects => {},
+		options => $options,
+		VisualStudioVersion => undef,
 		MinimumVisualStudioVersion => undef,
-		vcver                      => undef,
-		platform                   => undef,
+		vcver => undef,
+		platform => undef,
 	};
 	bless($self, $classname);
 
@@ -105,7 +105,7 @@ sub IsNewer
 sub copyFile
 {
 	my ($src, $dest) = @_;
-	open(my $i, '<', $src)  || croak "Could not open $src";
+	open(my $i, '<', $src) || croak "Could not open $src";
 	open(my $o, '>', $dest) || croak "Could not open $dest";
 	while (<$i>)
 	{
@@ -147,8 +147,8 @@ sub GetOpenSSLVersion
 
 sub GenerateFiles
 {
-	my $self          = shift;
-	my $bits          = $self->{platform} eq 'Win32' ? 32 : 64;
+	my $self = shift;
+	my $bits = $self->{platform} eq 'Win32' ? 32 : 64;
 	my $ac_init_found = 0;
 	my $package_name;
 	my $package_version;
@@ -168,8 +168,8 @@ sub GenerateFiles
 		{
 			$ac_init_found = 1;
 
-			$package_name      = $1;
-			$package_version   = $2;
+			$package_name = $1;
+			$package_version = $2;
 			$package_bugreport = $3;
 			#$package_tarname   = $4;
 			$package_url = $5;
@@ -184,7 +184,7 @@ sub GenerateFiles
 		elsif (/\bAC_DEFINE\(OPENSSL_API_COMPAT, \[([0-9xL]+)\]/)
 		{
 			$ac_define_openssl_api_compat_found = 1;
-			$openssl_api_compat                 = $1;
+			$openssl_api_compat = $1;
 		}
 	}
 	close($c);
@@ -205,348 +205,348 @@ sub GenerateFiles
 	# Every symbol in pg_config.h.in must be accounted for here.  Set
 	# to undef if the symbol should not be defined.
 	my %define = (
-		ALIGNOF_DOUBLE             => 8,
-		ALIGNOF_INT                => 4,
-		ALIGNOF_LONG               => 4,
-		ALIGNOF_LONG_LONG_INT      => 8,
-		ALIGNOF_PG_INT128_TYPE     => undef,
-		ALIGNOF_SHORT              => 2,
-		AC_APPLE_UNIVERSAL_BUILD   => undef,
-		BLCKSZ                     => 1024 * $self->{options}->{blocksize},
-		CONFIGURE_ARGS             => '"' . $self->GetFakeConfigure() . '"',
-		DEF_PGPORT                 => $port,
-		DEF_PGPORT_STR             => qq{"$port"},
-		DLSUFFIX                   => '".dll"',
-		ENABLE_GSS                 => $self->{options}->{gss} ? 1 : undef,
-		ENABLE_NLS                 => $self->{options}->{nls} ? 1 : undef,
-		ENABLE_THREAD_SAFETY       => 1,
-		GETTIMEOFDAY_1ARG          => undef,
-		HAVE_APPEND_HISTORY        => undef,
+		ALIGNOF_DOUBLE => 8,
+		ALIGNOF_INT => 4,
+		ALIGNOF_LONG => 4,
+		ALIGNOF_LONG_LONG_INT => 8,
+		ALIGNOF_PG_INT128_TYPE => undef,
+		ALIGNOF_SHORT => 2,
+		AC_APPLE_UNIVERSAL_BUILD => undef,
+		BLCKSZ => 1024 * $self->{options}->{blocksize},
+		CONFIGURE_ARGS => '"' . $self->GetFakeConfigure() . '"',
+		DEF_PGPORT => $port,
+		DEF_PGPORT_STR => qq{"$port"},
+		DLSUFFIX => '".dll"',
+		ENABLE_GSS => $self->{options}->{gss} ? 1 : undef,
+		ENABLE_NLS => $self->{options}->{nls} ? 1 : undef,
+		ENABLE_THREAD_SAFETY => 1,
+		GETTIMEOFDAY_1ARG => undef,
+		HAVE_APPEND_HISTORY => undef,
 		HAVE_ASN1_STRING_GET0_DATA => undef,
-		HAVE_ATOMICS               => 1,
-		HAVE_ATOMIC_H              => undef,
-		HAVE_BACKTRACE_SYMBOLS     => undef,
-		HAVE_BIO_METH_NEW          => undef,
-		HAVE_CLOCK_GETTIME         => undef,
-		HAVE_COMPUTED_GOTO         => undef,
-		HAVE_COPYFILE              => undef,
-		HAVE_COPYFILE_H            => undef,
-		HAVE_CRTDEFS_H             => undef,
-		HAVE_CRYPTO_LOCK           => undef,
-		HAVE_DECL_FDATASYNC        => 0,
-		HAVE_DECL_F_FULLFSYNC      => 0,
+		HAVE_ATOMICS => 1,
+		HAVE_ATOMIC_H => undef,
+		HAVE_BACKTRACE_SYMBOLS => undef,
+		HAVE_BIO_METH_NEW => undef,
+		HAVE_CLOCK_GETTIME => undef,
+		HAVE_COMPUTED_GOTO => undef,
+		HAVE_COPYFILE => undef,
+		HAVE_COPYFILE_H => undef,
+		HAVE_CRTDEFS_H => undef,
+		HAVE_CRYPTO_LOCK => undef,
+		HAVE_DECL_FDATASYNC => 0,
+		HAVE_DECL_F_FULLFSYNC => 0,
 		HAVE_DECL_LLVMCREATEGDBREGISTRATIONLISTENER => 0,
-		HAVE_DECL_LLVMCREATEPERFJITEVENTLISTENER    => 0,
-		HAVE_DECL_LLVMGETHOSTCPUNAME                => 0,
-		HAVE_DECL_LLVMGETHOSTCPUFEATURES            => 0,
-		HAVE_DECL_LLVMORCGETSYMBOLADDRESSIN         => 0,
-		HAVE_DECL_POSIX_FADVISE                     => 0,
-		HAVE_DECL_PREADV                            => 0,
-		HAVE_DECL_PWRITEV                           => 0,
-		HAVE_DECL_RTLD_GLOBAL                       => 0,
-		HAVE_DECL_RTLD_NOW                          => 0,
-		HAVE_DECL_SIGWAIT                           => 0,
-		HAVE_DECL_STRLCAT                           => 0,
-		HAVE_DECL_STRLCPY                           => 0,
-		HAVE_DECL_STRNLEN                           => 1,
-		HAVE_DECL_STRTOLL                           => 1,
-		HAVE_DECL_STRTOULL                          => 1,
-		HAVE_DLOPEN                                 => undef,
-		HAVE_EDITLINE_HISTORY_H                     => undef,
-		HAVE_EDITLINE_READLINE_H                    => undef,
-		HAVE_EXECINFO_H                             => undef,
-		HAVE_EXPLICIT_BZERO                         => undef,
-		HAVE_FDATASYNC                              => undef,
-		HAVE_FLS                                    => undef,
-		HAVE_FSEEKO                                 => 1,
-		HAVE_FUNCNAME__FUNC                         => undef,
-		HAVE_FUNCNAME__FUNCTION                     => 1,
-		HAVE_GCC__ATOMIC_INT32_CAS                  => undef,
-		HAVE_GCC__ATOMIC_INT64_CAS                  => undef,
-		HAVE_GCC__SYNC_CHAR_TAS                     => undef,
-		HAVE_GCC__SYNC_INT32_CAS                    => undef,
-		HAVE_GCC__SYNC_INT32_TAS                    => undef,
-		HAVE_GCC__SYNC_INT64_CAS                    => undef,
-		HAVE_GETADDRINFO                            => undef,
-		HAVE_GETHOSTBYNAME_R                        => undef,
-		HAVE_GETIFADDRS                             => undef,
-		HAVE_GETOPT                                 => undef,
-		HAVE_GETOPT_H                               => undef,
-		HAVE_GETOPT_LONG                            => undef,
-		HAVE_GETPEEREID                             => undef,
-		HAVE_GETPEERUCRED                           => undef,
-		HAVE_GETPWUID_R                             => undef,
-		HAVE_GETRLIMIT                              => undef,
-		HAVE_GETRUSAGE                              => undef,
-		HAVE_GETTIMEOFDAY                           => undef,
-		HAVE_GSSAPI_GSSAPI_H                        => undef,
-		HAVE_GSSAPI_H                               => undef,
-		HAVE_HMAC_CTX_FREE                          => undef,
-		HAVE_HMAC_CTX_NEW                           => undef,
-		HAVE_HISTORY_H                              => undef,
-		HAVE_HISTORY_TRUNCATE_FILE                  => undef,
-		HAVE_IFADDRS_H                              => undef,
-		HAVE_INET_ATON                              => undef,
-		HAVE_INET_PTON                              => 1,
-		HAVE_INT_TIMEZONE                           => 1,
-		HAVE_INT64                                  => undef,
-		HAVE_INT8                                   => undef,
-		HAVE_INTTYPES_H                             => undef,
-		HAVE_INT_OPTERR                             => undef,
-		HAVE_INT_OPTRESET                           => undef,
-		HAVE_IPV6                                   => 1,
-		HAVE_I_CONSTRAINT__BUILTIN_CONSTANT_P       => undef,
-		HAVE_KQUEUE                                 => undef,
-		HAVE_LANGINFO_H                             => undef,
-		HAVE_LDAP_H                                 => undef,
-		HAVE_LDAP_INITIALIZE                        => undef,
-		HAVE_LIBCRYPTO                              => undef,
-		HAVE_LIBLDAP                                => undef,
-		HAVE_LIBLZ4                                 => undef,
-		HAVE_LIBM                                   => undef,
-		HAVE_LIBPAM                                 => undef,
-		HAVE_LIBREADLINE                            => undef,
-		HAVE_LIBSELINUX                             => undef,
-		HAVE_LIBSSL                                 => undef,
-		HAVE_LIBWLDAP32                             => undef,
-		HAVE_LIBXML2                                => undef,
-		HAVE_LIBXSLT                                => undef,
-		HAVE_LIBZ                   => $self->{options}->{zlib} ? 1 : undef,
-		HAVE_LIBZSTD                => undef,
-		HAVE_LINK                   => undef,
-		HAVE_LOCALE_T               => 1,
-		HAVE_LONG_INT_64            => undef,
-		HAVE_LONG_LONG_INT_64       => 1,
-		HAVE_MBARRIER_H             => undef,
-		HAVE_MBSTOWCS_L             => 1,
-		HAVE_MEMORY_H               => 1,
-		HAVE_MEMSET_S               => undef,
-		HAVE_MINIDUMP_TYPE          => 1,
-		HAVE_MKDTEMP                => undef,
-		HAVE_NETINET_TCP_H          => undef,
-		HAVE_NET_IF_H               => undef,
-		HAVE_OPENSSL_INIT_SSL       => undef,
-		HAVE_OSSP_UUID_H            => undef,
-		HAVE_PAM_PAM_APPL_H         => undef,
-		HAVE_POLL                   => undef,
-		HAVE_POLL_H                 => undef,
-		HAVE_POSIX_DECL_SIGWAIT     => undef,
-		HAVE_POSIX_FADVISE          => undef,
-		HAVE_POSIX_FALLOCATE        => undef,
-		HAVE_PPC_LWARX_MUTEX_HINT   => undef,
-		HAVE_PPOLL                  => undef,
-		HAVE_PREAD                  => undef,
-		HAVE_PSTAT                  => undef,
-		HAVE_PS_STRINGS             => undef,
-		HAVE_PTHREAD                => undef,
-		HAVE_PTHREAD_BARRIER_WAIT   => undef,
+		HAVE_DECL_LLVMCREATEPERFJITEVENTLISTENER => 0,
+		HAVE_DECL_LLVMGETHOSTCPUNAME => 0,
+		HAVE_DECL_LLVMGETHOSTCPUFEATURES => 0,
+		HAVE_DECL_LLVMORCGETSYMBOLADDRESSIN => 0,
+		HAVE_DECL_POSIX_FADVISE => 0,
+		HAVE_DECL_PREADV => 0,
+		HAVE_DECL_PWRITEV => 0,
+		HAVE_DECL_RTLD_GLOBAL => 0,
+		HAVE_DECL_RTLD_NOW => 0,
+		HAVE_DECL_SIGWAIT => 0,
+		HAVE_DECL_STRLCAT => 0,
+		HAVE_DECL_STRLCPY => 0,
+		HAVE_DECL_STRNLEN => 1,
+		HAVE_DECL_STRTOLL => 1,
+		HAVE_DECL_STRTOULL => 1,
+		HAVE_DLOPEN => undef,
+		HAVE_EDITLINE_HISTORY_H => undef,
+		HAVE_EDITLINE_READLINE_H => undef,
+		HAVE_EXECINFO_H => undef,
+		HAVE_EXPLICIT_BZERO => undef,
+		HAVE_FDATASYNC => undef,
+		HAVE_FLS => undef,
+		HAVE_FSEEKO => 1,
+		HAVE_FUNCNAME__FUNC => undef,
+		HAVE_FUNCNAME__FUNCTION => 1,
+		HAVE_GCC__ATOMIC_INT32_CAS => undef,
+		HAVE_GCC__ATOMIC_INT64_CAS => undef,
+		HAVE_GCC__SYNC_CHAR_TAS => undef,
+		HAVE_GCC__SYNC_INT32_CAS => undef,
+		HAVE_GCC__SYNC_INT32_TAS => undef,
+		HAVE_GCC__SYNC_INT64_CAS => undef,
+		HAVE_GETADDRINFO => undef,
+		HAVE_GETHOSTBYNAME_R => undef,
+		HAVE_GETIFADDRS => undef,
+		HAVE_GETOPT => undef,
+		HAVE_GETOPT_H => undef,
+		HAVE_GETOPT_LONG => undef,
+		HAVE_GETPEEREID => undef,
+		HAVE_GETPEERUCRED => undef,
+		HAVE_GETPWUID_R => undef,
+		HAVE_GETRLIMIT => undef,
+		HAVE_GETRUSAGE => undef,
+		HAVE_GETTIMEOFDAY => undef,
+		HAVE_GSSAPI_GSSAPI_H => undef,
+		HAVE_GSSAPI_H => undef,
+		HAVE_HMAC_CTX_FREE => undef,
+		HAVE_HMAC_CTX_NEW => undef,
+		HAVE_HISTORY_H => undef,
+		HAVE_HISTORY_TRUNCATE_FILE => undef,
+		HAVE_IFADDRS_H => undef,
+		HAVE_INET_ATON => undef,
+		HAVE_INET_PTON => 1,
+		HAVE_INT_TIMEZONE => 1,
+		HAVE_INT64 => undef,
+		HAVE_INT8 => undef,
+		HAVE_INTTYPES_H => undef,
+		HAVE_INT_OPTERR => undef,
+		HAVE_INT_OPTRESET => undef,
+		HAVE_IPV6 => 1,
+		HAVE_I_CONSTRAINT__BUILTIN_CONSTANT_P => undef,
+		HAVE_KQUEUE => undef,
+		HAVE_LANGINFO_H => undef,
+		HAVE_LDAP_H => undef,
+		HAVE_LDAP_INITIALIZE => undef,
+		HAVE_LIBCRYPTO => undef,
+		HAVE_LIBLDAP => undef,
+		HAVE_LIBLZ4 => undef,
+		HAVE_LIBM => undef,
+		HAVE_LIBPAM => undef,
+		HAVE_LIBREADLINE => undef,
+		HAVE_LIBSELINUX => undef,
+		HAVE_LIBSSL => undef,
+		HAVE_LIBWLDAP32 => undef,
+		HAVE_LIBXML2 => undef,
+		HAVE_LIBXSLT => undef,
+		HAVE_LIBZ => $self->{options}->{zlib} ? 1 : undef,
+		HAVE_LIBZSTD => undef,
+		HAVE_LINK => undef,
+		HAVE_LOCALE_T => 1,
+		HAVE_LONG_INT_64 => undef,
+		HAVE_LONG_LONG_INT_64 => 1,
+		HAVE_MBARRIER_H => undef,
+		HAVE_MBSTOWCS_L => 1,
+		HAVE_MEMORY_H => 1,
+		HAVE_MEMSET_S => undef,
+		HAVE_MINIDUMP_TYPE => 1,
+		HAVE_MKDTEMP => undef,
+		HAVE_NETINET_TCP_H => undef,
+		HAVE_NET_IF_H => undef,
+		HAVE_OPENSSL_INIT_SSL => undef,
+		HAVE_OSSP_UUID_H => undef,
+		HAVE_PAM_PAM_APPL_H => undef,
+		HAVE_POLL => undef,
+		HAVE_POLL_H => undef,
+		HAVE_POSIX_DECL_SIGWAIT => undef,
+		HAVE_POSIX_FADVISE => undef,
+		HAVE_POSIX_FALLOCATE => undef,
+		HAVE_PPC_LWARX_MUTEX_HINT => undef,
+		HAVE_PPOLL => undef,
+		HAVE_PREAD => undef,
+		HAVE_PSTAT => undef,
+		HAVE_PS_STRINGS => undef,
+		HAVE_PTHREAD => undef,
+		HAVE_PTHREAD_BARRIER_WAIT => undef,
 		HAVE_PTHREAD_IS_THREADED_NP => undef,
-		HAVE_PTHREAD_PRIO_INHERIT   => undef,
-		HAVE_PWRITE                 => undef,
-		HAVE_READLINE_H             => undef,
-		HAVE_READLINE_HISTORY_H     => undef,
-		HAVE_READLINE_READLINE_H    => undef,
-		HAVE_READLINK               => undef,
-		HAVE_READV                  => undef,
-		HAVE_RL_COMPLETION_MATCHES  => undef,
-		HAVE_RL_COMPLETION_SUPPRESS_QUOTE        => undef,
-		HAVE_RL_FILENAME_COMPLETION_FUNCTION     => undef,
-		HAVE_RL_FILENAME_QUOTE_CHARACTERS        => undef,
-		HAVE_RL_FILENAME_QUOTING_FUNCTION        => undef,
-		HAVE_RL_RESET_SCREEN_SIZE                => undef,
-		HAVE_RL_VARIABLE_BIND                    => undef,
-		HAVE_SECURITY_PAM_APPL_H                 => undef,
-		HAVE_SETENV                              => undef,
-		HAVE_SETPROCTITLE                        => undef,
-		HAVE_SETPROCTITLE_FAST                   => undef,
-		HAVE_SETSID                              => undef,
-		HAVE_SHM_OPEN                            => undef,
-		HAVE_SOCKLEN_T                           => 1,
-		HAVE_SPINLOCKS                           => 1,
-		HAVE_SSL_CTX_SET_NUM_TICKETS             => undef,
-		HAVE_STDBOOL_H                           => 1,
-		HAVE_STDINT_H                            => 1,
-		HAVE_STDLIB_H                            => 1,
-		HAVE_STRCHRNUL                           => undef,
-		HAVE_STRERROR_R                          => undef,
-		HAVE_STRINGS_H                           => undef,
-		HAVE_STRING_H                            => 1,
-		HAVE_STRLCAT                             => undef,
-		HAVE_STRLCPY                             => undef,
-		HAVE_STRNLEN                             => 1,
-		HAVE_STRSIGNAL                           => undef,
-		HAVE_STRTOF                              => 1,
-		HAVE_STRTOLL                             => 1,
-		HAVE_STRTOQ                              => undef,
-		HAVE_STRTOULL                            => 1,
-		HAVE_STRTOUQ                             => undef,
-		HAVE_STRUCT_ADDRINFO                     => 1,
-		HAVE_STRUCT_CMSGCRED                     => undef,
-		HAVE_STRUCT_OPTION                       => undef,
-		HAVE_STRUCT_SOCKADDR_SA_LEN              => undef,
-		HAVE_STRUCT_SOCKADDR_STORAGE             => 1,
-		HAVE_STRUCT_SOCKADDR_STORAGE_SS_FAMILY   => 1,
-		HAVE_STRUCT_SOCKADDR_STORAGE_SS_LEN      => undef,
+		HAVE_PTHREAD_PRIO_INHERIT => undef,
+		HAVE_PWRITE => undef,
+		HAVE_READLINE_H => undef,
+		HAVE_READLINE_HISTORY_H => undef,
+		HAVE_READLINE_READLINE_H => undef,
+		HAVE_READLINK => undef,
+		HAVE_READV => undef,
+		HAVE_RL_COMPLETION_MATCHES => undef,
+		HAVE_RL_COMPLETION_SUPPRESS_QUOTE => undef,
+		HAVE_RL_FILENAME_COMPLETION_FUNCTION => undef,
+		HAVE_RL_FILENAME_QUOTE_CHARACTERS => undef,
+		HAVE_RL_FILENAME_QUOTING_FUNCTION => undef,
+		HAVE_RL_RESET_SCREEN_SIZE => undef,
+		HAVE_RL_VARIABLE_BIND => undef,
+		HAVE_SECURITY_PAM_APPL_H => undef,
+		HAVE_SETENV => undef,
+		HAVE_SETPROCTITLE => undef,
+		HAVE_SETPROCTITLE_FAST => undef,
+		HAVE_SETSID => undef,
+		HAVE_SHM_OPEN => undef,
+		HAVE_SOCKLEN_T => 1,
+		HAVE_SPINLOCKS => 1,
+		HAVE_SSL_CTX_SET_NUM_TICKETS => undef,
+		HAVE_STDBOOL_H => 1,
+		HAVE_STDINT_H => 1,
+		HAVE_STDLIB_H => 1,
+		HAVE_STRCHRNUL => undef,
+		HAVE_STRERROR_R => undef,
+		HAVE_STRINGS_H => undef,
+		HAVE_STRING_H => 1,
+		HAVE_STRLCAT => undef,
+		HAVE_STRLCPY => undef,
+		HAVE_STRNLEN => 1,
+		HAVE_STRSIGNAL => undef,
+		HAVE_STRTOF => 1,
+		HAVE_STRTOLL => 1,
+		HAVE_STRTOQ => undef,
+		HAVE_STRTOULL => 1,
+		HAVE_STRTOUQ => undef,
+		HAVE_STRUCT_ADDRINFO => 1,
+		HAVE_STRUCT_CMSGCRED => undef,
+		HAVE_STRUCT_OPTION => undef,
+		HAVE_STRUCT_SOCKADDR_SA_LEN => undef,
+		HAVE_STRUCT_SOCKADDR_STORAGE => 1,
+		HAVE_STRUCT_SOCKADDR_STORAGE_SS_FAMILY => 1,
+		HAVE_STRUCT_SOCKADDR_STORAGE_SS_LEN => undef,
 		HAVE_STRUCT_SOCKADDR_STORAGE___SS_FAMILY => undef,
-		HAVE_STRUCT_SOCKADDR_STORAGE___SS_LEN    => undef,
-		HAVE_STRUCT_SOCKADDR_UN                  => undef,
-		HAVE_STRUCT_TM_TM_ZONE                   => undef,
-		HAVE_SYNC_FILE_RANGE                     => undef,
-		HAVE_SYMLINK                             => 1,
-		HAVE_SYNCFS                              => undef,
-		HAVE_SYSLOG                              => undef,
-		HAVE_SYS_EPOLL_H                         => undef,
-		HAVE_SYS_EVENT_H                         => undef,
-		HAVE_SYS_IPC_H                           => undef,
-		HAVE_SYS_PERSONALITY_H                   => undef,
-		HAVE_SYS_PRCTL_H                         => undef,
-		HAVE_SYS_PROCCTL_H                       => undef,
-		HAVE_SYS_PSTAT_H                         => undef,
-		HAVE_SYS_RESOURCE_H                      => undef,
-		HAVE_SYS_SELECT_H                        => undef,
-		HAVE_SYS_SEM_H                           => undef,
-		HAVE_SYS_SHM_H                           => undef,
-		HAVE_SYS_SIGNALFD_H                      => undef,
-		HAVE_SYS_SOCKIO_H                        => undef,
-		HAVE_SYS_STAT_H                          => 1,
-		HAVE_SYS_TAS_H                           => undef,
-		HAVE_SYS_TYPES_H                         => 1,
-		HAVE_SYS_UCRED_H                         => undef,
-		HAVE_SYS_UIO_H                           => undef,
-		HAVE_SYS_UN_H                            => undef,
-		HAVE_TERMIOS_H                           => undef,
-		HAVE_TYPEOF                              => undef,
-		HAVE_UCRED_H                             => undef,
-		HAVE_UINT64                              => undef,
-		HAVE_UINT8                               => undef,
-		HAVE_UNION_SEMUN                         => undef,
-		HAVE_UNISTD_H                            => 1,
-		HAVE_UNSETENV                            => undef,
-		HAVE_USELOCALE                           => undef,
-		HAVE_UUID_BSD                            => undef,
-		HAVE_UUID_E2FS                           => undef,
-		HAVE_UUID_OSSP                           => undef,
-		HAVE_UUID_H                              => undef,
-		HAVE_UUID_UUID_H                         => undef,
-		HAVE_WINLDAP_H                           => undef,
-		HAVE_WCSTOMBS_L                          => 1,
-		HAVE_WCTYPE_H                            => 1,
-		HAVE_WRITEV                              => undef,
-		HAVE_X509_GET_SIGNATURE_NID              => 1,
-		HAVE_X509_GET_SIGNATURE_INFO             => undef,
-		HAVE_X86_64_POPCNTQ                      => undef,
-		HAVE__BOOL                               => undef,
-		HAVE__BUILTIN_BSWAP16                    => undef,
-		HAVE__BUILTIN_BSWAP32                    => undef,
-		HAVE__BUILTIN_BSWAP64                    => undef,
-		HAVE__BUILTIN_CLZ                        => undef,
-		HAVE__BUILTIN_CONSTANT_P                 => undef,
-		HAVE__BUILTIN_CTZ                        => undef,
-		HAVE__BUILTIN_FRAME_ADDRESS              => undef,
-		HAVE__BUILTIN_OP_OVERFLOW                => undef,
-		HAVE__BUILTIN_POPCOUNT                   => undef,
-		HAVE__BUILTIN_TYPES_COMPATIBLE_P         => undef,
-		HAVE__BUILTIN_UNREACHABLE                => undef,
-		HAVE__CONFIGTHREADLOCALE                 => 1,
-		HAVE__CPUID                              => 1,
-		HAVE__GET_CPUID                          => undef,
-		HAVE__STATIC_ASSERT                      => undef,
-		HAVE___STRTOLL                           => undef,
-		HAVE___STRTOULL                          => undef,
-		INT64_MODIFIER                           => qq{"ll"},
-		LOCALE_T_IN_XLOCALE                      => undef,
-		MAXIMUM_ALIGNOF                          => 8,
-		MEMSET_LOOP_LIMIT                        => 1024,
-		OPENSSL_API_COMPAT                       => $openssl_api_compat,
-		PACKAGE_BUGREPORT                        => qq{"$package_bugreport"},
-		PACKAGE_NAME                             => qq{"$package_name"},
-		PACKAGE_STRING      => qq{"$package_name $package_version"},
-		PACKAGE_TARNAME     => lc qq{"$package_name"},
-		PACKAGE_URL         => qq{"$package_url"},
-		PACKAGE_VERSION     => qq{"$package_version"},
-		PG_INT128_TYPE      => undef,
-		PG_INT64_TYPE       => 'long long int',
-		PG_KRB_SRVNAM       => qq{"postgres"},
-		PG_MAJORVERSION     => qq{"$majorver"},
+		HAVE_STRUCT_SOCKADDR_STORAGE___SS_LEN => undef,
+		HAVE_STRUCT_SOCKADDR_UN => undef,
+		HAVE_STRUCT_TM_TM_ZONE => undef,
+		HAVE_SYNC_FILE_RANGE => undef,
+		HAVE_SYMLINK => 1,
+		HAVE_SYNCFS => undef,
+		HAVE_SYSLOG => undef,
+		HAVE_SYS_EPOLL_H => undef,
+		HAVE_SYS_EVENT_H => undef,
+		HAVE_SYS_IPC_H => undef,
+		HAVE_SYS_PERSONALITY_H => undef,
+		HAVE_SYS_PRCTL_H => undef,
+		HAVE_SYS_PROCCTL_H => undef,
+		HAVE_SYS_PSTAT_H => undef,
+		HAVE_SYS_RESOURCE_H => undef,
+		HAVE_SYS_SELECT_H => undef,
+		HAVE_SYS_SEM_H => undef,
+		HAVE_SYS_SHM_H => undef,
+		HAVE_SYS_SIGNALFD_H => undef,
+		HAVE_SYS_SOCKIO_H => undef,
+		HAVE_SYS_STAT_H => 1,
+		HAVE_SYS_TAS_H => undef,
+		HAVE_SYS_TYPES_H => 1,
+		HAVE_SYS_UCRED_H => undef,
+		HAVE_SYS_UIO_H => undef,
+		HAVE_SYS_UN_H => undef,
+		HAVE_TERMIOS_H => undef,
+		HAVE_TYPEOF => undef,
+		HAVE_UCRED_H => undef,
+		HAVE_UINT64 => undef,
+		HAVE_UINT8 => undef,
+		HAVE_UNION_SEMUN => undef,
+		HAVE_UNISTD_H => 1,
+		HAVE_UNSETENV => undef,
+		HAVE_USELOCALE => undef,
+		HAVE_UUID_BSD => undef,
+		HAVE_UUID_E2FS => undef,
+		HAVE_UUID_OSSP => undef,
+		HAVE_UUID_H => undef,
+		HAVE_UUID_UUID_H => undef,
+		HAVE_WINLDAP_H => undef,
+		HAVE_WCSTOMBS_L => 1,
+		HAVE_WCTYPE_H => 1,
+		HAVE_WRITEV => undef,
+		HAVE_X509_GET_SIGNATURE_NID => 1,
+		HAVE_X509_GET_SIGNATURE_INFO => undef,
+		HAVE_X86_64_POPCNTQ => undef,
+		HAVE__BOOL => undef,
+		HAVE__BUILTIN_BSWAP16 => undef,
+		HAVE__BUILTIN_BSWAP32 => undef,
+		HAVE__BUILTIN_BSWAP64 => undef,
+		HAVE__BUILTIN_CLZ => undef,
+		HAVE__BUILTIN_CONSTANT_P => undef,
+		HAVE__BUILTIN_CTZ => undef,
+		HAVE__BUILTIN_FRAME_ADDRESS => undef,
+		HAVE__BUILTIN_OP_OVERFLOW => undef,
+		HAVE__BUILTIN_POPCOUNT => undef,
+		HAVE__BUILTIN_TYPES_COMPATIBLE_P => undef,
+		HAVE__BUILTIN_UNREACHABLE => undef,
+		HAVE__CONFIGTHREADLOCALE => 1,
+		HAVE__CPUID => 1,
+		HAVE__GET_CPUID => undef,
+		HAVE__STATIC_ASSERT => undef,
+		HAVE___STRTOLL => undef,
+		HAVE___STRTOULL => undef,
+		INT64_MODIFIER => qq{"ll"},
+		LOCALE_T_IN_XLOCALE => undef,
+		MAXIMUM_ALIGNOF => 8,
+		MEMSET_LOOP_LIMIT => 1024,
+		OPENSSL_API_COMPAT => $openssl_api_compat,
+		PACKAGE_BUGREPORT => qq{"$package_bugreport"},
+		PACKAGE_NAME => qq{"$package_name"},
+		PACKAGE_STRING => qq{"$package_name $package_version"},
+		PACKAGE_TARNAME => lc qq{"$package_name"},
+		PACKAGE_URL => qq{"$package_url"},
+		PACKAGE_VERSION => qq{"$package_version"},
+		PG_INT128_TYPE => undef,
+		PG_INT64_TYPE => 'long long int',
+		PG_KRB_SRVNAM => qq{"postgres"},
+		PG_MAJORVERSION => qq{"$majorver"},
 		PG_MAJORVERSION_NUM => $majorver,
 		PG_MINORVERSION_NUM => $minorver,
 		PG_PRINTF_ATTRIBUTE => undef,
-		PG_USE_STDBOOL      => 1,
-		PG_VERSION          => qq{"$package_version$extraver"},
-		PG_VERSION_NUM      => sprintf("%d%04d", $majorver, $minorver),
+		PG_USE_STDBOOL => 1,
+		PG_VERSION => qq{"$package_version$extraver"},
+		PG_VERSION_NUM => sprintf("%d%04d", $majorver, $minorver),
 		PG_VERSION_STR =>
 		  qq{"PostgreSQL $package_version$extraver, compiled by Visual C++ build " CppAsString2(_MSC_VER) ", $bits-bit"},
-		PROFILE_PID_DIR         => undef,
+		PROFILE_PID_DIR => undef,
 		PTHREAD_CREATE_JOINABLE => undef,
-		RELSEG_SIZE             => (1024 / $self->{options}->{blocksize}) *
+		RELSEG_SIZE => (1024 / $self->{options}->{blocksize}) *
 		  $self->{options}->{segsize} * 1024,
-		SIZEOF_BOOL                         => 1,
-		SIZEOF_LONG                         => 4,
-		SIZEOF_OFF_T                        => undef,
-		SIZEOF_SIZE_T                       => $bits / 8,
-		SIZEOF_VOID_P                       => $bits / 8,
-		STDC_HEADERS                        => 1,
-		STRERROR_R_INT                      => undef,
-		USE_ARMV8_CRC32C                    => undef,
+		SIZEOF_BOOL => 1,
+		SIZEOF_LONG => 4,
+		SIZEOF_OFF_T => undef,
+		SIZEOF_SIZE_T => $bits / 8,
+		SIZEOF_VOID_P => $bits / 8,
+		STDC_HEADERS => 1,
+		STRERROR_R_INT => undef,
+		USE_ARMV8_CRC32C => undef,
 		USE_ARMV8_CRC32C_WITH_RUNTIME_CHECK => undef,
 		USE_ASSERT_CHECKING => $self->{options}->{asserts} ? 1 : undef,
-		USE_BONJOUR         => undef,
-		USE_BSD_AUTH        => undef,
+		USE_BONJOUR => undef,
+		USE_BSD_AUTH => undef,
 		USE_ICU => $self->{options}->{icu} ? 1 : undef,
-		USE_LIBXML                 => undef,
-		USE_LIBXSLT                => undef,
-		USE_LZ4                    => undef,
-		USE_LDAP                   => $self->{options}->{ldap} ? 1 : undef,
-		USE_LLVM                   => undef,
+		USE_LIBXML => undef,
+		USE_LIBXSLT => undef,
+		USE_LZ4 => undef,
+		USE_LDAP => $self->{options}->{ldap} ? 1 : undef,
+		USE_LLVM => undef,
 		USE_NAMED_POSIX_SEMAPHORES => undef,
-		USE_OPENSSL                => undef,
-		USE_PAM                    => undef,
-		USE_SLICING_BY_8_CRC32C    => undef,
-		USE_SSE42_CRC32C           => undef,
+		USE_OPENSSL => undef,
+		USE_PAM => undef,
+		USE_SLICING_BY_8_CRC32C => undef,
+		USE_SSE42_CRC32C => undef,
 		USE_SSE42_CRC32C_WITH_RUNTIME_CHECK => 1,
-		USE_SYSTEMD                         => undef,
-		USE_SYSV_SEMAPHORES                 => undef,
-		USE_SYSV_SHARED_MEMORY              => undef,
-		USE_UNNAMED_POSIX_SEMAPHORES        => undef,
-		USE_WIN32_SEMAPHORES                => 1,
-		USE_WIN32_SHARED_MEMORY             => 1,
-		USE_ZSTD                            => undef,
-		WCSTOMBS_L_IN_XLOCALE               => undef,
-		WORDS_BIGENDIAN                     => undef,
-		XLOG_BLCKSZ       => 1024 * $self->{options}->{wal_blocksize},
+		USE_SYSTEMD => undef,
+		USE_SYSV_SEMAPHORES => undef,
+		USE_SYSV_SHARED_MEMORY => undef,
+		USE_UNNAMED_POSIX_SEMAPHORES => undef,
+		USE_WIN32_SEMAPHORES => 1,
+		USE_WIN32_SHARED_MEMORY => 1,
+		USE_ZSTD => undef,
+		WCSTOMBS_L_IN_XLOCALE => undef,
+		WORDS_BIGENDIAN => undef,
+		XLOG_BLCKSZ => 1024 * $self->{options}->{wal_blocksize},
 		_FILE_OFFSET_BITS => undef,
 		_LARGEFILE_SOURCE => undef,
-		_LARGE_FILES      => undef,
-		inline            => '__inline',
-		pg_restrict       => '__restrict',
+		_LARGE_FILES => undef,
+		inline => '__inline',
+		pg_restrict => '__restrict',
 		# not defined, because it'd conflict with __declspec(restrict)
 		restrict => undef,
-		typeof   => undef,);
+		typeof => undef,);
 
 	if ($self->{options}->{uuid})
 	{
 		$define{HAVE_UUID_OSSP} = 1;
-		$define{HAVE_UUID_H}    = 1;
+		$define{HAVE_UUID_H} = 1;
 	}
 	if ($self->{options}->{xml})
 	{
 		$define{HAVE_LIBXML2} = 1;
-		$define{USE_LIBXML}   = 1;
+		$define{USE_LIBXML} = 1;
 	}
 	if ($self->{options}->{xslt})
 	{
 		$define{HAVE_LIBXSLT} = 1;
-		$define{USE_LIBXSLT}  = 1;
+		$define{USE_LIBXSLT} = 1;
 	}
 	if ($self->{options}->{lz4})
 	{
 		$define{HAVE_LIBLZ4} = 1;
-		$define{USE_LZ4}     = 1;
+		$define{USE_LZ4} = 1;
 	}
 	if ($self->{options}->{zstd})
 	{
 		$define{HAVE_LIBZSTD} = 1;
-		$define{USE_ZSTD}     = 1;
+		$define{USE_ZSTD} = 1;
 	}
 	if ($self->{options}->{openssl})
 	{
@@ -567,14 +567,14 @@ sub GenerateFiles
 			|| ($digit1 >= '1' && $digit2 >= '1' && $digit3 >= '0'))
 		{
 			$define{HAVE_ASN1_STRING_GET0_DATA} = 1;
-			$define{HAVE_BIO_METH_NEW}          = 1;
-			$define{HAVE_HMAC_CTX_FREE}         = 1;
-			$define{HAVE_HMAC_CTX_NEW}          = 1;
-			$define{HAVE_OPENSSL_INIT_SSL}      = 1;
+			$define{HAVE_BIO_METH_NEW} = 1;
+			$define{HAVE_HMAC_CTX_FREE} = 1;
+			$define{HAVE_HMAC_CTX_NEW} = 1;
+			$define{HAVE_OPENSSL_INIT_SSL} = 1;
 		}
 	}
 
-	$self->GenerateConfigHeader('src/include/pg_config.h',     \%define, 1);
+	$self->GenerateConfigHeader('src/include/pg_config.h', \%define, 1);
 	$self->GenerateConfigHeader('src/include/pg_config_ext.h', \%define, 0);
 	$self->GenerateConfigHeader('src/interfaces/ecpg/include/ecpg_config.h',
 		\%define, 0);
@@ -890,7 +890,7 @@ sub GenerateConfigHeader
 		{
 			if (m/^#(\s*)undef\s+(\w+)/)
 			{
-				my $ws    = $1;
+				my $ws = $1;
 				my $macro = $2;
 				if (exists $defines->{$macro})
 				{
@@ -984,23 +984,23 @@ sub AddProject
 			if (-e "$self->{options}->{openssl}/lib/VC/sslcrypto32MD.lib")
 			{
 				# Win32 here, with a debugging library set.
-				$dbgsuffix     = 1;
-				$libsslpath    = '\lib\VC\libssl32.lib';
+				$dbgsuffix = 1;
+				$libsslpath = '\lib\VC\libssl32.lib';
 				$libcryptopath = '\lib\VC\libcrypto32.lib';
 			}
 			elsif (-e "$self->{options}->{openssl}/lib/VC/sslcrypto64MD.lib")
 			{
 				# Win64 here, with a debugging library set.
-				$dbgsuffix     = 1;
-				$libsslpath    = '\lib\VC\libssl64.lib';
+				$dbgsuffix = 1;
+				$libsslpath = '\lib\VC\libssl64.lib';
 				$libcryptopath = '\lib\VC\libcrypto64.lib';
 			}
 			else
 			{
 				# On both Win32 and Win64 the same library
 				# names are used without a debugging context.
-				$dbgsuffix     = 0;
-				$libsslpath    = '\lib\libssl.lib';
+				$dbgsuffix = 0;
+				$libsslpath = '\lib\libssl.lib';
 				$libcryptopath = '\lib\libcrypto.lib';
 			}
 
@@ -1203,23 +1203,23 @@ sub GetFakeConfigure
 	my $self = shift;
 
 	my $cfg = '--enable-thread-safety';
-	$cfg .= ' --enable-cassert'   if ($self->{options}->{asserts});
-	$cfg .= ' --enable-nls'       if ($self->{options}->{nls});
+	$cfg .= ' --enable-cassert' if ($self->{options}->{asserts});
+	$cfg .= ' --enable-nls' if ($self->{options}->{nls});
 	$cfg .= ' --enable-tap-tests' if ($self->{options}->{tap_tests});
-	$cfg .= ' --with-ldap'        if ($self->{options}->{ldap});
+	$cfg .= ' --with-ldap' if ($self->{options}->{ldap});
 	$cfg .= ' --without-zlib' unless ($self->{options}->{zlib});
 	$cfg .= ' --with-extra-version' if ($self->{options}->{extraver});
-	$cfg .= ' --with-ssl=openssl'   if ($self->{options}->{openssl});
-	$cfg .= ' --with-uuid'          if ($self->{options}->{uuid});
-	$cfg .= ' --with-libxml'        if ($self->{options}->{xml});
-	$cfg .= ' --with-libxslt'       if ($self->{options}->{xslt});
-	$cfg .= ' --with-lz4'           if ($self->{options}->{lz4});
-	$cfg .= ' --with-zstd'          if ($self->{options}->{zstd});
-	$cfg .= ' --with-gssapi'        if ($self->{options}->{gss});
-	$cfg .= ' --with-icu'           if ($self->{options}->{icu});
-	$cfg .= ' --with-tcl'           if ($self->{options}->{tcl});
-	$cfg .= ' --with-perl'          if ($self->{options}->{perl});
-	$cfg .= ' --with-python'        if ($self->{options}->{python});
+	$cfg .= ' --with-ssl=openssl' if ($self->{options}->{openssl});
+	$cfg .= ' --with-uuid' if ($self->{options}->{uuid});
+	$cfg .= ' --with-libxml' if ($self->{options}->{xml});
+	$cfg .= ' --with-libxslt' if ($self->{options}->{xslt});
+	$cfg .= ' --with-lz4' if ($self->{options}->{lz4});
+	$cfg .= ' --with-zstd' if ($self->{options}->{zstd});
+	$cfg .= ' --with-gssapi' if ($self->{options}->{gss});
+	$cfg .= ' --with-icu' if ($self->{options}->{icu});
+	$cfg .= ' --with-tcl' if ($self->{options}->{tcl});
+	$cfg .= ' --with-perl' if ($self->{options}->{perl});
+	$cfg .= ' --with-python' if ($self->{options}->{python});
 	my $port = $self->{options}->{'--with-pgport'};
 	$cfg .= " --with-pgport=$port" if defined($port);
 
@@ -1242,13 +1242,13 @@ no warnings qw(redefine);    ## no critic
 sub new
 {
 	my $classname = shift;
-	my $self      = $classname->SUPER::_new(@_);
+	my $self = $classname->SUPER::_new(@_);
 	bless($self, $classname);
 
-	$self->{solutionFileVersion}        = '12.00';
-	$self->{vcver}                      = '12.00';
-	$self->{visualStudioName}           = 'Visual Studio 2013';
-	$self->{VisualStudioVersion}        = '12.0.21005.1';
+	$self->{solutionFileVersion} = '12.00';
+	$self->{vcver} = '12.00';
+	$self->{visualStudioName} = 'Visual Studio 2013';
+	$self->{VisualStudioVersion} = '12.0.21005.1';
 	$self->{MinimumVisualStudioVersion} = '10.0.40219.1';
 
 	return $self;
@@ -1270,13 +1270,13 @@ no warnings qw(redefine);    ## no critic
 sub new
 {
 	my $classname = shift;
-	my $self      = $classname->SUPER::_new(@_);
+	my $self = $classname->SUPER::_new(@_);
 	bless($self, $classname);
 
-	$self->{solutionFileVersion}        = '12.00';
-	$self->{vcver}                      = '14.00';
-	$self->{visualStudioName}           = 'Visual Studio 2015';
-	$self->{VisualStudioVersion}        = '14.0.24730.2';
+	$self->{solutionFileVersion} = '12.00';
+	$self->{vcver} = '14.00';
+	$self->{visualStudioName} = 'Visual Studio 2015';
+	$self->{VisualStudioVersion} = '14.0.24730.2';
 	$self->{MinimumVisualStudioVersion} = '10.0.40219.1';
 
 	return $self;
@@ -1298,13 +1298,13 @@ no warnings qw(redefine);    ## no critic
 sub new
 {
 	my $classname = shift;
-	my $self      = $classname->SUPER::_new(@_);
+	my $self = $classname->SUPER::_new(@_);
 	bless($self, $classname);
 
-	$self->{solutionFileVersion}        = '12.00';
-	$self->{vcver}                      = '15.00';
-	$self->{visualStudioName}           = 'Visual Studio 2017';
-	$self->{VisualStudioVersion}        = '15.0.26730.3';
+	$self->{solutionFileVersion} = '12.00';
+	$self->{vcver} = '15.00';
+	$self->{visualStudioName} = 'Visual Studio 2017';
+	$self->{VisualStudioVersion} = '15.0.26730.3';
 	$self->{MinimumVisualStudioVersion} = '10.0.40219.1';
 
 	return $self;
@@ -1326,13 +1326,13 @@ no warnings qw(redefine);    ## no critic
 sub new
 {
 	my $classname = shift;
-	my $self      = $classname->SUPER::_new(@_);
+	my $self = $classname->SUPER::_new(@_);
 	bless($self, $classname);
 
-	$self->{solutionFileVersion}        = '12.00';
-	$self->{vcver}                      = '16.00';
-	$self->{visualStudioName}           = 'Visual Studio 2019';
-	$self->{VisualStudioVersion}        = '16.0.28729.10';
+	$self->{solutionFileVersion} = '12.00';
+	$self->{vcver} = '16.00';
+	$self->{visualStudioName} = 'Visual Studio 2019';
+	$self->{VisualStudioVersion} = '16.0.28729.10';
 	$self->{MinimumVisualStudioVersion} = '10.0.40219.1';
 
 	return $self;
@@ -1354,13 +1354,13 @@ no warnings qw(redefine);    ## no critic
 sub new
 {
 	my $classname = shift;
-	my $self      = $classname->SUPER::_new(@_);
+	my $self = $classname->SUPER::_new(@_);
 	bless($self, $classname);
 
-	$self->{solutionFileVersion}        = '12.00';
-	$self->{vcver}                      = '17.00';
-	$self->{visualStudioName}           = 'Visual Studio 2022';
-	$self->{VisualStudioVersion}        = '17.0.31903.59';
+	$self->{solutionFileVersion} = '12.00';
+	$self->{vcver} = '17.00';
+	$self->{visualStudioName} = 'Visual Studio 2022';
+	$self->{VisualStudioVersion} = '17.0.31903.59';
 	$self->{MinimumVisualStudioVersion} = '10.0.40219.1';
 
 	return $self;

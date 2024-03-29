@@ -1317,7 +1317,7 @@ static LLVMOrcObjectLayerRef
 llvm_create_object_layer(void *Ctx, LLVMOrcExecutionSessionRef ES, const char *Triple)
 {
 	LLVMOrcObjectLayerRef objlayer =
-	LLVMOrcCreateRTDyldObjectLinkingLayerWithSectionMemoryManager(ES);
+		LLVMOrcCreateRTDyldObjectLinkingLayerWithSectionMemoryManager(ES);
 
 #if defined(HAVE_DECL_LLVMCREATEGDBREGISTRATIONLISTENER) && HAVE_DECL_LLVMCREATEGDBREGISTRATIONLISTENER
 	if (jit_debugging_support)

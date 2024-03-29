@@ -104,7 +104,7 @@ if ($ENV{with_icu} eq 'yes')
 
 	command_ok(
 		[
-			'initdb',                '--no-sync',
+			'initdb', '--no-sync',
 			'--locale-provider=icu', '--icu-locale=en',
 			"$tempdir/data3"
 		],
@@ -112,7 +112,7 @@ if ($ENV{with_icu} eq 'yes')
 
 	command_fails_like(
 		[
-			'initdb',                '--no-sync',
+			'initdb', '--no-sync',
 			'--locale-provider=icu', '--icu-locale=@colNumeric=lower',
 			"$tempdir/dataX"
 		],
@@ -121,7 +121,7 @@ if ($ENV{with_icu} eq 'yes')
 
 	command_fails_like(
 		[
-			'initdb',                '--no-sync',
+			'initdb', '--no-sync',
 			'--locale-provider=icu', '--encoding=SQL_ASCII',
 			'--icu-locale=en', "$tempdir/dataX"
 		],
@@ -141,7 +141,7 @@ command_fails(
 
 command_fails(
 	[
-		'initdb',                 '--no-sync',
+		'initdb', '--no-sync',
 		'--locale-provider=libc', '--icu-locale=en',
 		"$tempdir/dataX"
 	],

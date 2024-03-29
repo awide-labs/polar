@@ -1358,8 +1358,8 @@ Bitmapset *
 ExecGetAllUpdatedCols(ResultRelInfo *relinfo, EState *estate)
 {
 
-	Bitmapset	   *ret;
-	MemoryContext	oldcxt;
+	Bitmapset  *ret;
+	MemoryContext oldcxt;
 
 	oldcxt = MemoryContextSwitchTo(GetPerTupleMemoryContext(estate));
 

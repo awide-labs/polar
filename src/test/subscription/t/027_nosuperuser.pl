@@ -97,7 +97,7 @@ sub grant_bypassrls
 # "regress_admin".  For partitioned tables, layout the partitions differently
 # on the publisher than on the subscriber.
 #
-$node_publisher  = PostgreSQL::Test::Cluster->new('publisher');
+$node_publisher = PostgreSQL::Test::Cluster->new('publisher');
 $node_subscriber = PostgreSQL::Test::Cluster->new('subscriber');
 $node_publisher->init(allows_streaming => 'logical');
 $node_subscriber->init;
@@ -105,10 +105,10 @@ $node_publisher->start;
 $node_subscriber->start;
 $publisher_connstr = $node_publisher->connstr . ' dbname=postgres';
 my %remainder_a = (
-	publisher  => 0,
+	publisher => 0,
 	subscriber => 1);
 my %remainder_b = (
-	publisher  => 1,
+	publisher => 1,
 	subscriber => 0);
 
 for my $node ($node_publisher, $node_subscriber)

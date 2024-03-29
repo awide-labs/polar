@@ -150,11 +150,11 @@ foreach my $file (sort readdir $dh)
 		foreach my $cmdname (@cmdnames)
 		{
 			$entries{$cmdname} = {
-				cmdid       => $cmdid,
-				cmddesc     => $cmddesc,
+				cmdid => $cmdid,
+				cmddesc => $cmddesc,
 				cmdsynopsis => $cmdsynopsis,
-				params      => \@params,
-				nl_count    => $nl_count
+				params => \@params,
+				nl_count => $nl_count
 			};
 			$maxlen =
 			  ($maxlen >= length $cmdname) ? $maxlen : length $cmdname;
@@ -169,7 +169,7 @@ foreach my $file (sort readdir $dh)
 foreach (sort keys %entries)
 {
 	my $prefix = "\t" x 5 . '  ';
-	my $id     = $_;
+	my $id = $_;
 	$id =~ s/ /_/g;
 	my $synopsis = "\"$entries{$_}{cmdsynopsis}\"";
 	$synopsis =~ s/\\n/\\n"\n$prefix"/g;

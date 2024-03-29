@@ -84,7 +84,7 @@ test_standby_func_tab_stats_status('test', $dboid, $tableoid, $funcoid, 't');
 test_standby_db_stats_status('test', $dboid, 't');
 
 $node_primary->safe_psql('postgres', "DROP DATABASE test");
-$sect        = "post dropdb";
+$sect = "post dropdb";
 $primary_lsn = $node_primary->lsn('flush');
 $node_primary->wait_for_catchup($node_standby, 'replay', $primary_lsn);
 

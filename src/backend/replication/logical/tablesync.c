@@ -559,7 +559,7 @@ process_syncing_tables_for_apply(XLogRecPtr current_lsn)
 				 * the lock.
 				 */
 				int			nsyncworkers =
-				logicalrep_sync_worker_count(MyLogicalRepWorker->subid);
+					logicalrep_sync_worker_count(MyLogicalRepWorker->subid);
 
 				/* Now safe to release the LWLock */
 				LWLockRelease(LogicalRepWorkerLock);
@@ -778,6 +778,7 @@ fetch_remote_table_info(char *nspname, char *relname,
 		TupleTableSlot *tslot;
 		Oid			attrsRow[] = {INT2VECTOROID};
 		StringInfoData pub_names;
+
 		initStringInfo(&pub_names);
 		foreach(lc, MySubscription->publications)
 		{

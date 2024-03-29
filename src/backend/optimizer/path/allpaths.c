@@ -75,7 +75,7 @@ typedef enum pushdown_safe_type
 	PUSHDOWN_SAFE,				/* safe to push qual into subquery */
 	PUSHDOWN_WINDOWCLAUSE_RUNCOND	/* unsafe, but may work as WindowClause
 									 * run condition */
-} pushdown_safe_type;
+}			pushdown_safe_type;
 
 /* These parameters are set by GUC */
 bool		enable_geqo = false;	/* just in case GUC doesn't set it */

@@ -19,7 +19,7 @@ sub query_log
 	local $ENV{PGOPTIONS} = join " ",
 	  map { "-c $_=$params->{$_}" } keys %$params;
 
-	my $log    = $node->logfile();
+	my $log = $node->logfile();
 	my $offset = -s $log;
 
 	$node->safe_psql("postgres", $sql);

@@ -50,10 +50,10 @@ my $result =
 is($result, qq(2|2|2), 'check initial data was copied to subscriber');
 
 # Interleave a pair of transactions, each exceeding the 64kB limit.
-my $h = $node_publisher->background_psql('postgres',
-	on_error_stop => 0);
+my $h = $node_publisher->background_psql('postgres', on_error_stop => 0);
 
-$h->query_safe(q{
+$h->query_safe(
+	q{
 BEGIN;
 INSERT INTO test_tab SELECT i, md5(i::text) FROM generate_series(3, 5000) s(i);
 UPDATE test_tab SET b = md5(b) WHERE mod(a,2) = 0;

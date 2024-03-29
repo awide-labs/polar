@@ -540,9 +540,9 @@ heapgettup(HeapScanDesc scan,
 			if (scan->rs_base.rs_parallel != NULL)
 			{
 				ParallelBlockTableScanDesc pbscan =
-				(ParallelBlockTableScanDesc) scan->rs_base.rs_parallel;
+					(ParallelBlockTableScanDesc) scan->rs_base.rs_parallel;
 				ParallelBlockTableScanWorker pbscanwork =
-				scan->rs_parallelworkerdata;
+					scan->rs_parallelworkerdata;
 
 				table_block_parallelscan_startblock_init(scan->rs_base.rs_rd,
 														 pbscanwork, pbscan);
@@ -762,9 +762,9 @@ heapgettup(HeapScanDesc scan,
 		else if (scan->rs_base.rs_parallel != NULL)
 		{
 			ParallelBlockTableScanDesc pbscan =
-			(ParallelBlockTableScanDesc) scan->rs_base.rs_parallel;
+				(ParallelBlockTableScanDesc) scan->rs_base.rs_parallel;
 			ParallelBlockTableScanWorker pbscanwork =
-			scan->rs_parallelworkerdata;
+				scan->rs_parallelworkerdata;
 
 			page = table_block_parallelscan_nextpage(scan->rs_base.rs_rd,
 													 pbscanwork, pbscan);
@@ -878,9 +878,9 @@ heapgettup_pagemode(HeapScanDesc scan,
 			if (scan->rs_base.rs_parallel != NULL)
 			{
 				ParallelBlockTableScanDesc pbscan =
-				(ParallelBlockTableScanDesc) scan->rs_base.rs_parallel;
+					(ParallelBlockTableScanDesc) scan->rs_base.rs_parallel;
 				ParallelBlockTableScanWorker pbscanwork =
-				scan->rs_parallelworkerdata;
+					scan->rs_parallelworkerdata;
 
 				table_block_parallelscan_startblock_init(scan->rs_base.rs_rd,
 														 pbscanwork, pbscan);
@@ -1071,9 +1071,9 @@ heapgettup_pagemode(HeapScanDesc scan,
 		else if (scan->rs_base.rs_parallel != NULL)
 		{
 			ParallelBlockTableScanDesc pbscan =
-			(ParallelBlockTableScanDesc) scan->rs_base.rs_parallel;
+				(ParallelBlockTableScanDesc) scan->rs_base.rs_parallel;
 			ParallelBlockTableScanWorker pbscanwork =
-			scan->rs_parallelworkerdata;
+				scan->rs_parallelworkerdata;
 
 			page = table_block_parallelscan_nextpage(scan->rs_base.rs_rd,
 													 pbscanwork, pbscan);
@@ -2643,7 +2643,7 @@ static inline bool
 xmax_infomask_changed(uint16 new_infomask, uint16 old_infomask)
 {
 	const uint16 interesting =
-	HEAP_XMAX_IS_MULTI | HEAP_XMAX_LOCK_ONLY | HEAP_LOCK_MASK;
+		HEAP_XMAX_IS_MULTI | HEAP_XMAX_LOCK_ONLY | HEAP_LOCK_MASK;
 
 	if ((new_infomask & interesting) != (old_infomask & interesting))
 		return true;
@@ -2720,6 +2720,7 @@ heap_delete(Relation relation, ItemPointer tid,
 	tp.t_self = *tid;
 
 l1:
+
 	/*
 	 * If we didn't pin the visibility map page and the page has become all
 	 * visible while we were busy locking the buffer, we'll have to unlock and
