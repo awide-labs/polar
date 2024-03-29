@@ -6,7 +6,8 @@ set -e
 
 # set this to override default perltidy program:
 PERLTIDY=${PERLTIDY:-perltidy}
+EXCLUDE='src/tools/pgindent/perl_exclude_file_patterns'
 
 . src/tools/perlcheck/find_perl_files
 
-find_perl_files | xargs $PERLTIDY --profile=src/tools/pgindent/perltidyrc
+find_perl_files | grep -vf $EXCLUDE | xargs $PERLTIDY --profile=src/tools/pgindent/perltidyrc

@@ -1,0 +1,9 @@
+# List of filename patterns to exclude from polar_copyright_check.pl runs
+#
+
+src/interfaces/ecpg/test/expected/
+
+# The license is different from the official one provided by PostgresSQL
+src/include/regex/regcustom.h
+src/include/regex/regex.h
+src/include/regex/regguts.h

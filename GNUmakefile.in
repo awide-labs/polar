@@ -140,4 +140,28 @@ headerscheck: submake-generated-headers
 cpluspluscheck: submake-generated-headers
 	$(top_srcdir)/src/tools/pginclude/cpluspluscheck $(top_srcdir) $(abs_top_builddir)
 
-.PHONY: dist distdir distcheck docs install-docs world check-world install-world installcheck-world headerscheck cpluspluscheck
+#
+# POLAR
+#
+LAST_COMMIT = HEAD~1
+
+stylecheck:
+	@echo "| checking copyrights"
+	$(top_srcdir)/src/tools/polar_copyright_check.pl -s -p $(LAST_COMMIT)
+	@echo "| checking GUC short description"
+	$(top_srcdir)/src/tools/polar_check_guc_short_desc.pl
+	@echo "| checking configure style"
+	autoconf
+	autoheader
+	@rm -rf autom4te.cache/
+	@echo "| checking C style"
+	$(top_srcdir)/src/tools/pgindent/pgindent
+	@echo "| checking Perl style"
+	$(top_srcdir)/src/tools/pgindent/pgperltidy
+
+#
+# POLAR end
+#
+
+.PHONY: dist distdir distcheck docs install-docs world check-world install-world installcheck-world headerscheck cpluspluscheck \
+	stylecheck

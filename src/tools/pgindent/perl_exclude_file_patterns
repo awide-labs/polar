@@ -1,0 +1,2 @@
+# ignore some Perl scripts like extensions
+# external/pg_hint_plan/
