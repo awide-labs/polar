@@ -31,6 +31,7 @@
 #include "storage/ipc.h"
 #include "tcop/tcopprot.h"
 
+#include "storage/pg_shmem.h"
 
 /*
  * This flag is set during proc_exit() to change ereport()'s behavior,
@@ -70,6 +71,10 @@ static void proc_exit_prepare(int code);
 
 #define MAX_ON_EXITS 20
 
+#define polar_elog_hook(name, list, index) elog(LOG, "%s[%d]: %p, %lu", \
+			name, index, list[index].function, list[index].arg);
+#define polar_check_hook(name) polar_check_hook_util(#name, name##_list, name##_index, function, arg, false);
+
 struct ONEXIT
 {
 	pg_on_exit_callback function;
@@ -83,7 +88,55 @@ static struct ONEXIT before_shmem_exit_list[MAX_ON_EXITS];
 static int	on_proc_exit_index,
 			on_shmem_exit_index,
 			before_shmem_exit_index;
+static bool polar_check_hook_util(const char *hook_name, struct ONEXIT hook_list[], int hook_index,
+								  pg_on_exit_callback function, Datum arg, bool print_backtrace);
 
+/*
+ * POLAR: check hook before adding to list.
+ *
+ * Works in two situation:
+ *  1. List overflowed: elog all hook functions and args.
+ *  2. Add same hook: elog the same hook functions and args.
+ *
+ * Return true when no overflow and no same hook
+ */
+static bool
+polar_check_hook_util(const char *hook_name, struct ONEXIT hook_list[], int hook_index,
+					  pg_on_exit_callback function, Datum arg, bool print_backtrace)
+{
+	int			i;
+	bool		found_same = false;
+
+	if (hook_index >= MAX_ON_EXITS)
+	{
+		for (i = 0; i < hook_index; i++)
+			polar_elog_hook(hook_name, hook_list, i);
+		elog(LOG, "%s[%d]: %p, %lu", hook_name, hook_index, function, arg);
+		ereport(FATAL,
+				(errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
+				 errmsg_internal("out of %s slots", hook_name)));
+	}
+
+	for (i = 0; i < hook_index; i++)
+	{
+		if (hook_list[i].function == function && hook_list[i].arg == arg)
+		{
+			found_same = true;
+			polar_elog_hook(hook_name, hook_list, i);
+		}
+	}
+	if (found_same && print_backtrace)
+	{
+		ErrorData	edata;
+
+		elog(LOG, "%s[%d]: %p, %lu", hook_name, hook_index, function, arg);
+		elog(LOG, "Found same exit hook!");
+		set_backtrace(&edata, 2);
+		elog(LOG, "%s", edata.backtrace);
+		pfree(edata.backtrace);
+	}
+	return !found_same;
+}
 
 /* ----------------------------------------------------------------
  *		proc_exit
@@ -263,6 +316,13 @@ shmem_exit(int code)
 	dsm_backend_shutdown();
 
 	/*
+	 * POLAR: Solve the limitation that the usage of some functions relies on
+	 * shared memory. If the shared memory has been detached, the address
+	 * content of the shared memory variable is no longer correct.
+	 */
+	UsedShmemSegAddr = NULL;
+
+	/*
 	 * Call on_shmem_exit callbacks.
 	 *
 	 * These are generally releasing low-level shared memory resources.  In
@@ -308,10 +368,7 @@ atexit_callback(void)
 void
 on_proc_exit(pg_on_exit_callback function, Datum arg)
 {
-	if (on_proc_exit_index >= MAX_ON_EXITS)
-		ereport(FATAL,
-				(errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
-				 errmsg_internal("out of on_proc_exit slots")));
+	polar_check_hook(on_proc_exit);
 
 	on_proc_exit_list[on_proc_exit_index].function = function;
 	on_proc_exit_list[on_proc_exit_index].arg = arg;
@@ -336,10 +393,7 @@ on_proc_exit(pg_on_exit_callback function, Datum arg)
 void
 before_shmem_exit(pg_on_exit_callback function, Datum arg)
 {
-	if (before_shmem_exit_index >= MAX_ON_EXITS)
-		ereport(FATAL,
-				(errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
-				 errmsg_internal("out of before_shmem_exit slots")));
+	polar_check_hook(before_shmem_exit);
 
 	before_shmem_exit_list[before_shmem_exit_index].function = function;
 	before_shmem_exit_list[before_shmem_exit_index].arg = arg;
@@ -364,10 +418,7 @@ before_shmem_exit(pg_on_exit_callback function, Datum arg)
 void
 on_shmem_exit(pg_on_exit_callback function, Datum arg)
 {
-	if (on_shmem_exit_index >= MAX_ON_EXITS)
-		ereport(FATAL,
-				(errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
-				 errmsg_internal("out of on_shmem_exit slots")));
+	polar_check_hook(on_shmem_exit);
 
 	on_shmem_exit_list[on_shmem_exit_index].function = function;
 	on_shmem_exit_list[on_shmem_exit_index].arg = arg;
@@ -436,4 +487,16 @@ check_on_shmem_exit_lists_are_empty(void)
 	if (on_shmem_exit_index)
 		elog(FATAL, "on_shmem_exit has been called prematurely");
 	/* Checking DSM detach state seems unnecessary given the above */
+}
+
+/*
+ * POLAR: Check whether it's able to register a before_shmem_exit callback
+ * return true when before_shmem_list is not overflowed
+ * and there is no same before_shmem_exit callback has been registered previously
+ */
+bool
+polar_check_before_shmem_exit(pg_on_exit_callback function, Datum arg, bool print_backtrace)
+{
+	return polar_check_hook_util("before_shmem_exit", before_shmem_exit_list, before_shmem_exit_index,
+								 function, arg, print_backtrace);
 }

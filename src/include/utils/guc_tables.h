@@ -95,6 +95,13 @@ enum config_group
 	ERROR_HANDLING_OPTIONS,
 	PRESET_OPTIONS,
 	CUSTOM_OPTIONS,
+	/* POLAR */
+	POLAR_STORAGE,
+	POLAR_REL_SIZE_CACHE,
+	POLAR_BUFFER_MANAGEMENT,
+	POLAR_PROXY,
+	POLAR_BULK_READ_EXTEND,
+	/* POLAR end */
 	DEVELOPER_OPTIONS
 };
 
@@ -151,6 +158,9 @@ struct config_generic
 	const char *short_desc;		/* short desc. of this variable's purpose */
 	const char *long_desc;		/* long desc. of this variable's purpose */
 	int			flags;			/* flag bits, see guc.h */
+	/* POLAR: added for parameter manger */
+	const char *optional;		/* hint for user to set correct value */
+	/* POLAR end */
 	/* variable fields, initialized at runtime: */
 	enum config_type vartype;	/* type of variable (set only at startup) */
 	int			status;			/* status bits, see below */
@@ -282,5 +292,8 @@ extern const char *config_enum_lookup_by_value(struct config_enum *record, int v
 extern bool config_enum_lookup_by_name(struct config_enum *record,
 									   const char *value, int *retval);
 extern struct config_generic **get_explain_guc_options(int *num);
+
+/* check guc flag to hint us */
+extern void polar_parameter_manage_check_flag(struct config_generic **guc_variables, int size);
 
 #endif							/* GUC_TABLES_H */

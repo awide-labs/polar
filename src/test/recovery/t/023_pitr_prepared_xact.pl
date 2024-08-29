@@ -14,7 +14,8 @@ my $node_primary = PostgreSQL::Test::Cluster->new('primary');
 $node_primary->init(has_archiving => 1, allows_streaming => 1);
 $node_primary->append_conf(
 	'postgresql.conf', qq{
-max_prepared_transactions = 10});
+max_prepared_transactions = 10
+polar_enable_switch_wal_in_backup = on});
 $node_primary->start;
 
 # Take backup

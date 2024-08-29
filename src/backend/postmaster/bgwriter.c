@@ -21,7 +21,8 @@
  * should be killed by SIGQUIT and then a recovery cycle started.
  *
  *
- * Portions Copyright (c) 1996-2022, PostgreSQL Global Development Group
+ * Portions Copyright (c) 2024, Alibaba Group Holding Limited
+ * Portions Copyright (c) 1996-2021, PostgreSQL Global Development Group
  *
  *
  * IDENTIFICATION
@@ -30,6 +31,9 @@
  *-------------------------------------------------------------------------
  */
 #include "postgres.h"
+
+/* POLAR */
+#include <math.h>
 
 #include "access/xlog.h"
 #include "access/xlog_internal.h"
@@ -54,6 +58,13 @@
 #include "utils/memutils.h"
 #include "utils/resowner.h"
 #include "utils/timestamp.h"
+#include "utils/timeout.h"
+
+/* POLAR */
+#include "postmaster/polar_parallel_bgwriter.h"
+#include "storage/polar_bufmgr.h"
+#include "storage/polar_fd.h"
+#include "storage/polar_flush.h"
 
 /*
  * GUC parameters
@@ -80,6 +91,8 @@ int			BgWriterDelay = 200;
 static TimestampTz last_snapshot_ts;
 static XLogRecPtr last_snapshot_lsn = InvalidXLogRecPtr;
 
+static bool polar_flush_dispatcher(void);
+static bool polar_flush_dispatch_task(XLogRecPtr consistent_lag, int lru_ahead_lap);
 
 /*
  * Main entry point for bgwriter process
@@ -111,6 +124,13 @@ BackgroundWriterMain(void)
 	 * Reset some signals that are accepted by postmaster but not here
 	 */
 	pqsignal(SIGCHLD, SIG_DFL);
+
+	/*
+	 * POLAR: Establishes SIGALRM handler and initialize parameters to
+	 * facilitate the running of scheduled tasks. Some scheduled tasks will
+	 * cause assertion errors when parameters are not initialized.
+	 */
+	InitializeTimeouts();
 
 	/*
 	 * We just started, assume there has been either a shutdown or
@@ -217,6 +237,9 @@ BackgroundWriterMain(void)
 	 */
 	PG_SETMASK(&UnBlockSig);
 
+	/* POLAR: start parallel background writer workers. */
+	polar_launch_parallel_bgwriter_workers();
+
 	/*
 	 * Reset hibernation state after any error.
 	 */
@@ -235,10 +258,20 @@ BackgroundWriterMain(void)
 
 		HandleMainLoopInterrupts();
 
-		/*
-		 * Do one cycle of dirty-buffer writing.
-		 */
-		can_hibernate = BgBufferSync(&wb_context);
+		if (!polar_enable_flush_dispatcher ||
+			polar_normal_buffer_sync_enabled() ||
+			polar_is_standby())
+		{
+			/*
+			 * Do one cycle of dirty-buffer writing.
+			 */
+			can_hibernate = polar_bg_buffer_sync(&wb_context, 0);
+		}
+		else
+		{
+			/* POLAR: dispatcher flush task */
+			can_hibernate = polar_flush_dispatcher();
+		}
 
 		/* Report pending statistics to the cumulative stats system */
 		pgstat_report_bgwriter();
@@ -298,6 +331,12 @@ BackgroundWriterMain(void)
 		}
 
 		/*
+		 * POLAR: Check the parallel background writers, if some writers are
+		 * stopped, start some.
+		 */
+		polar_check_parallel_bgwriter_worker();
+
+		/*
 		 * Sleep until we are signaled or BgWriterDelay has elapsed.
 		 *
 		 * Note: the feedback control loop in BgBufferSync() expects that we
@@ -344,4 +383,230 @@ BackgroundWriterMain(void)
 
 		prev_hibernate = can_hibernate;
 	}
+}
+
+static bool
+polar_flush_dispatcher(void)
+{
+	bool		res = false;
+	XLogRecPtr	consistent_lag;
+	int			lru_ahead_lap = 0;
+
+	consistent_lag = polar_calculate_consistent_lsn_lag();
+	lru_ahead_lap = polar_calculate_lru_lap();
+
+	res = polar_flush_dispatch_task(consistent_lag, lru_ahead_lap);
+
+	/*
+	 * Normal background writer will create or close some parallel background
+	 * workers.
+	 */
+	polar_adjust_parallel_bgwriters(consistent_lag, lru_ahead_lap);
+
+	return res;
+}
+
+static bool
+polar_flush_add_type_task(int flush_type, int flush_task)
+{
+	int			write_worker_idx,
+				read_worker_idx;
+	int			pre_flush_task = flush_task;
+	int			task_count = 0;
+	bool		success = true;
+
+	SpinLockAcquire(&polar_parallel_bgwriter_info->lock);
+
+	read_worker_idx = polar_parallel_bgwriter_info->read_worker_idx;
+	write_worker_idx = polar_parallel_bgwriter_info->write_worker_idx;
+
+	while (flush_task > 0)
+	{
+		if ((write_worker_idx + 1) % MAX_NUM_OF_PARALLEL_BGWRITER == read_worker_idx)
+			break;
+
+		polar_parallel_bgwriter_info->flush_task[write_worker_idx] = flush_type;
+		flush_task--;
+		task_count++;
+
+		if (++write_worker_idx >= MAX_NUM_OF_PARALLEL_BGWRITER)
+			write_worker_idx = 0;
+	}
+
+	polar_parallel_bgwriter_info->write_worker_idx = write_worker_idx;
+
+	SpinLockRelease(&polar_parallel_bgwriter_info->lock);
+
+	if (pre_flush_task > 0 && task_count <= 0)
+		success = false;
+
+	return success;
+}
+
+static bool
+polar_task_been_consumed(void)
+{
+	int			read_worker_idx,
+				write_worker_idx;
+	int			current_works;
+	int			idle_workers;
+	uint32		flushlist_workers,
+				lru_workers;
+
+	SpinLockAcquire(&polar_parallel_bgwriter_info->lock);
+	read_worker_idx = polar_parallel_bgwriter_info->read_worker_idx;
+	write_worker_idx = polar_parallel_bgwriter_info->write_worker_idx;
+
+	if (read_worker_idx != write_worker_idx)
+	{
+		SpinLockRelease(&polar_parallel_bgwriter_info->lock);
+		return false;
+	}
+	SpinLockRelease(&polar_parallel_bgwriter_info->lock);
+
+	current_works = CURRENT_PARALLEL_WORKERS;
+	flushlist_workers = pg_atomic_read_u32(&polar_parallel_bgwriter_info->flush_workers[FLUSHLIST_TASK]);
+	lru_workers = pg_atomic_read_u32(&polar_parallel_bgwriter_info->flush_workers[FLUSHLRU_TASK]);
+
+	/* idle_works */
+	idle_workers = current_works - (flushlist_workers + lru_workers);
+
+	if (idle_workers <= 0)
+		return false;
+
+	return true;
+}
+
+static bool
+polar_flush_generate_task(XLogRecPtr consistent_lag, int lru_ahead_lap, int *flush_task)
+{
+	uint32		flush_works[MAX_FLUSH_TASK] = {0};
+	int			idle_workers;
+
+	int			lru_sleep_lap;
+	XLogRecPtr	consistent_sleep_lag;
+	XLogRecPtr	threshold_lag;
+	int			current_works;
+
+	int			lru_limit,
+				flushlist_limit;
+	bool		flushlist_behind,
+				lru_behind;
+
+	bool		lru_no_task;
+
+	current_works = CURRENT_PARALLEL_WORKERS;
+	flush_works[FLUSHLIST_TASK] = pg_atomic_read_u32(&polar_parallel_bgwriter_info->flush_workers[FLUSHLIST_TASK]);
+	flush_works[FLUSHLRU_TASK] = pg_atomic_read_u32(&polar_parallel_bgwriter_info->flush_workers[FLUSHLRU_TASK]);
+
+	idle_workers = current_works - (flush_works[FLUSHLIST_TASK] + flush_works[FLUSHLRU_TASK]);
+
+	threshold_lag = polar_parallel_new_bgwriter_threshold_lag * 1024 * 1024L;
+
+	flushlist_behind = consistent_lag >= threshold_lag;
+	lru_behind = lru_ahead_lap == LRU_BUFFER_BEHIND;
+
+	if ((flushlist_behind && lru_behind) ||
+		(!flushlist_behind && !lru_behind))
+	{
+		/*
+		 * flushlist lag delay more than threshold_lag and lru flush behind
+		 * buffer alloc, or flushlist lag delay less than threshold_lag and
+		 * lru flush ahead buffer alloc
+		 */
+		flush_task[FLUSHLRU_TASK] = ceil((double) idle_workers / 2);
+		flush_task[FLUSHLIST_TASK] = ceil((double) idle_workers / 2);
+	}
+	else if (flushlist_behind && !lru_behind)
+	{
+		/*
+		 * flushlist lag delay more than threshold_lag and lru flush ahead
+		 * buffer alloc
+		 */
+		flush_task[FLUSHLRU_TASK] = 1;
+		flush_task[FLUSHLIST_TASK] = idle_workers;
+	}
+	else if (lru_behind && !flushlist_behind)
+	{
+		/*
+		 * flushlist lag delay less than threshold_lag and lru flush behind
+		 * buffer alloc
+		 */
+		flush_task[FLUSHLRU_TASK] = idle_workers;
+		flush_task[FLUSHLIST_TASK] = 1;
+	}
+
+	lru_limit = (int) (current_works * polar_lru_works_threshold);
+	flushlist_limit = ceil((double) current_works * (1 - polar_lru_works_threshold));
+
+	lru_no_task = (lru_ahead_lap == NBuffers || lru_limit <= 0);
+
+	/* lru buffer not alloc or ahead one pass or close lru */
+	if (lru_no_task)
+		flush_task[FLUSHLRU_TASK] = 0;
+
+	lru_sleep_lap = polar_bgwriter_sleep_lru_lap > (NBuffers / 2) ? (NBuffers / 2) : polar_bgwriter_sleep_lru_lap;
+	consistent_sleep_lag = polar_bgwriter_sleep_lsn_lag * 1024 * 1024L;
+
+	/* limit lru */
+	if ((flush_works[FLUSHLRU_TASK] + flush_task[FLUSHLRU_TASK]) >= lru_limit)
+	{
+		flush_task[FLUSHLRU_TASK] = lru_limit - flush_works[FLUSHLRU_TASK] > 0 ? lru_limit - flush_works[FLUSHLRU_TASK] : 0;
+
+		if (idle_workers > flush_task[FLUSHLIST_TASK] && consistent_lag > consistent_sleep_lag)
+			flush_task[FLUSHLIST_TASK] = idle_workers;
+	}
+
+	/* limit flushlist */
+	if (flush_works[FLUSHLIST_TASK] + flush_task[FLUSHLIST_TASK] >= flushlist_limit)
+		flush_task[FLUSHLIST_TASK] = flushlist_limit - flush_works[FLUSHLIST_TASK] > 0 ? flushlist_limit - flush_works[FLUSHLIST_TASK] : 0;
+
+	/* lru sleep */
+	if (lru_ahead_lap >= lru_sleep_lap && !lru_no_task)
+		flush_task[FLUSHLRU_TASK] = flush_works[FLUSHLRU_TASK] >= 1 ? 0 : 1;
+
+	/* flushlist sleep */
+	if (consistent_lag <= consistent_sleep_lag)
+		flush_task[FLUSHLIST_TASK] = flush_works[FLUSHLIST_TASK] >= 1 ? 0 : 1;
+
+	if (unlikely(polar_enable_lru_log))
+		elog(LOG, "lru-flushlist task %d-%d, lru-flushlist works %d-%d",
+			 flush_task[FLUSHLRU_TASK], flush_task[FLUSHLIST_TASK],
+			 flush_works[FLUSHLRU_TASK], flush_works[FLUSHLIST_TASK]);
+
+	return (lru_ahead_lap >= lru_sleep_lap) && (consistent_lag <= consistent_sleep_lag);
+}
+
+static bool
+polar_flush_dispatch_task(XLogRecPtr consistent_lag, int lru_ahead_lap)
+{
+	int			flush_task[MAX_FLUSH_TASK] = {0};
+	int			i;
+	bool		flush_delay = false;
+	parallel_flush_type_t type;
+
+	/*
+	 * If the task has not been consumed, it means that the all flush process
+	 * is still working.
+	 */
+	if (!polar_task_been_consumed())
+		return flush_delay;
+
+	/* generate task by consistent_lag and lru_ahead_lap */
+	flush_delay = polar_flush_generate_task(consistent_lag, lru_ahead_lap, flush_task);
+
+	/* add type task by generate task */
+	for (type = FLUSHLIST_TASK; type < MAX_FLUSH_TASK; type++)
+	{
+		if (!polar_flush_add_type_task(type, flush_task[type]))
+			elog(WARNING, "Add flush type %d, task num %d fail", type, flush_task[type]);
+	}
+
+	for (i = 0; i < MAX_NUM_OF_PARALLEL_BGWRITER; i++)
+	{
+		if (polar_parallel_bgwriter_info->polar_flush_work_info[i].latch != NULL)
+			SetLatch(polar_parallel_bgwriter_info->polar_flush_work_info[i].latch);
+	}
+
+	return flush_delay;
 }

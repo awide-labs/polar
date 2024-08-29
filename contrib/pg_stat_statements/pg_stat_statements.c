@@ -73,6 +73,9 @@
 #include "utils/memutils.h"
 #include "utils/timestamp.h"
 
+/* POLAR */
+#include "storage/polar_fd.h"
+
 PG_MODULE_MAGIC;
 
 /* Location of permanent stats file (valid when database is shut down) */
@@ -289,11 +292,27 @@ static bool pgss_track_utility; /* whether to track utility commands */
 static bool pgss_track_planning;	/* whether to track planning duration */
 static bool pgss_save;			/* whether to save stats across shutdown */
 
+/* POLAR */
+static bool polar_pgss_track_superuser; /* whether to track commands executed
+										 * by superuser */
+static bool polar_pgss_ignore_sensitive_ddl;
+
+#define polar_pgss_enable_superuser_track() ((MyProc && MyProc->issuper) ? polar_pgss_track_superuser : true)
+
+#define POLAR_PGSS_IGNORED_UTILITY(n) \
+	(polar_pgss_ignore_sensitive_ddl && \
+	 (IsA(n, CreateRoleStmt) || IsA(n, AlterRoleStmt) || \
+	  IsA(n, CreateForeignServerStmt) || IsA(n, AlterForeignServerStmt) || \
+	  IsA(n, CreateUserMappingStmt) || IsA(n, AlterUserMappingStmt) || \
+	  IsA(n, CreateSubscriptionStmt) || IsA(n, AlterSubscriptionStmt)))
 
 #define pgss_enabled(level) \
 	(!IsParallelWorker() && \
 	(pgss_track == PGSS_TRACK_ALL || \
-	(pgss_track == PGSS_TRACK_TOP && (level) == 0)))
+	(pgss_track == PGSS_TRACK_TOP && (level) == 0))&& \
+	 polar_pgss_enable_superuser_track())
+
+/* POLAR end */
 
 #define record_gc_qtexts() \
 	do { \
@@ -401,7 +420,7 @@ _PG_init(void)
 							100,
 							INT_MAX / 2,
 							PGC_POSTMASTER,
-							0,
+							POLAR_GUC_IS_UNCHANGABLE,
 							NULL,
 							NULL,
 							NULL);
@@ -413,7 +432,7 @@ _PG_init(void)
 							 PGSS_TRACK_TOP,
 							 track_options,
 							 PGC_SUSET,
-							 0,
+							 POLAR_GUC_IS_UNCHANGABLE,
 							 NULL,
 							 NULL,
 							 NULL);
@@ -424,7 +443,7 @@ _PG_init(void)
 							 &pgss_track_utility,
 							 true,
 							 PGC_SUSET,
-							 0,
+							 POLAR_GUC_IS_UNCHANGABLE,
 							 NULL,
 							 NULL,
 							 NULL);
@@ -446,10 +465,41 @@ _PG_init(void)
 							 &pgss_save,
 							 true,
 							 PGC_SIGHUP,
+							 POLAR_GUC_IS_UNCHANGABLE,
+							 NULL,
+							 NULL,
+							 NULL);
+
+	/*
+	 * POLAR: ignore what superuser execute
+	 */
+	DefineCustomBoolVariable("pg_stat_statements.enable_superuser_track",
+							 "Selects whether commands executed by superuser "
+							 "are tracked by pg_stat_statements.",
+							 NULL,
+							 &polar_pgss_track_superuser,
+							 false,
+							 PGC_SUSET,
 							 0,
 							 NULL,
 							 NULL,
 							 NULL);
+
+	/*
+	 * POLAR: whether to ignore tracking sensitive DDL like CREATE/ALTER ROLE.
+	 */
+	DefineCustomBoolVariable("pg_stat_statements.ignore_sensitive_ddl",
+							 "Selects whether to ignore tracking sensitive DDL "
+							 "by pg_stat_statements.",
+							 NULL,
+							 &polar_pgss_ignore_sensitive_ddl,
+							 true,
+							 PGC_SUSET,
+							 0,
+							 NULL,
+							 NULL,
+							 NULL);
+	/* POLAR end */
 
 	MarkGUCPrefixReserved("pg_stat_statements");
 
@@ -837,7 +887,9 @@ pgss_post_parse_analyze(ParseState *pstate, Query *query, JumbleState *jstate)
 	 */
 	if (query->utilityStmt)
 	{
-		if (pgss_track_utility && !PGSS_HANDLED_UTILITY(query->utilityStmt))
+		if (pgss_track_utility &&
+			(!PGSS_HANDLED_UTILITY(query->utilityStmt) ||
+			 POLAR_PGSS_IGNORED_UTILITY(query->utilityStmt)))
 			query->queryId = UINT64CONST(0);
 		return;
 	}
@@ -1120,7 +1172,7 @@ pgss_ProcessUtility(PlannedStmt *pstmt, const char *queryString,
 	 * Likewise, we don't track execution of DEALLOCATE.
 	 */
 	if (pgss_track_utility && pgss_enabled(exec_nested_level) &&
-		PGSS_HANDLED_UTILITY(parsetree))
+		PGSS_HANDLED_UTILITY(parsetree) && !POLAR_PGSS_IGNORED_UTILITY(parsetree))
 	{
 		instr_time	start;
 		instr_time	duration;
@@ -2123,9 +2175,9 @@ qtext_store(const char *query, int query_len,
 	if (fd < 0)
 		goto error;
 
-	if (pg_pwrite(fd, query, query_len, off) != query_len)
+	if (polar_pwrite(fd, query, query_len, off) != query_len)
 		goto error;
-	if (pg_pwrite(fd, "\0", 1, off + query_len) != 1)
+	if (polar_pwrite(fd, "\0", 1, off + query_len) != 1)
 		goto error;
 
 	CloseTransientFile(fd);
@@ -2193,7 +2245,7 @@ qtext_load_file(Size *buffer_size)
 	}
 
 	/* Get file length */
-	if (fstat(fd, &stat))
+	if (polar_fstat(fd, &stat))
 	{
 		ereport(LOG,
 				(errcode_for_file_access(),
@@ -2237,7 +2289,7 @@ qtext_load_file(Size *buffer_size)
 		 * writes from garbage collection.
 		 */
 		errno = 0;
-		if (read(fd, buf + nread, toread) != toread)
+		if (polar_read(fd, buf + nread, toread) != toread)
 		{
 			if (errno)
 				ereport(LOG,

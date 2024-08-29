@@ -18,6 +18,8 @@ my $node_subscriber = PostgreSQL::Test::Cluster->new('subscriber');
 $node_subscriber->init(allows_streaming => 'logical');
 $node_subscriber->append_conf('postgresql.conf',
 	qq(max_logical_replication_workers = 6));
+$node_subscriber->append_conf('postgresql.conf',
+	qq(max_worker_processes = 16));
 $node_subscriber->start;
 
 my $publisher_connstr = $node_publisher->connstr . ' dbname=postgres';

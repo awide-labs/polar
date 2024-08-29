@@ -18,6 +18,11 @@
 #include "storage/block.h"
 #include "storage/relfilenode.h"
 
+/* POLAR */
+#include "storage/polar_rsc.h"
+
+typedef struct polar_rsc_shared_relation_t polar_rsc_shared_relation_t;
+
 /*
  * smgr.c maintains a table of SMgrRelation objects, which are essentially
  * cached file handles.  An SMgrRelation is created (if not already present)
@@ -40,6 +45,10 @@ typedef struct SMgrRelationData
 {
 	/* rnode is the hashtable lookup key, so it must be first! */
 	RelFileNodeBackend smgr_rnode;	/* relation physical identifier */
+
+	/* pointer to shared object, valid if non-NULL and generation matches */
+	polar_rsc_shared_relation_t *rsc_ref;
+	uint64		rsc_generation;
 
 	/* pointer to owning pointer, or NULL if none */
 	struct SMgrRelationData **smgr_owner;
@@ -70,6 +79,11 @@ typedef struct SMgrRelationData
 
 	/* if unowned, list link in list of all unowned SMgrRelations */
 	dlist_node	node;
+
+	/* POLAR: bulk extend */
+	bool		polar_flag_for_bulk_extend[MAX_FORKNUM + 1];
+	BlockNumber polar_nblocks_faked_for_bulk_extend[MAX_FORKNUM + 1];
+	/* POLAR end */
 } SMgrRelationData;
 
 typedef SMgrRelationData *SMgrRelation;
@@ -107,5 +121,15 @@ extern void smgrtruncate(SMgrRelation reln, ForkNumber *forknum,
 extern void smgrimmedsync(SMgrRelation reln, ForkNumber forknum);
 extern void AtEOXact_SMgr(void);
 extern bool ProcessBarrierSmgrRelease(void);
+
+/* POLAR: bulk io */
+extern void polar_smgrbulkextend(SMgrRelation reln, ForkNumber forknum,
+								 BlockNumber blocknum, int blockCount, char *buffer, bool skipFsync);
+extern void polar_smgr_init_bulk_extend(SMgrRelation reln, ForkNumber forknum);
+extern void polar_smgr_clear_bulk_extend(SMgrRelation reln, ForkNumber forknum);
+extern void polar_smgrbulkread(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
+							   int blockCount, char *buffer);
+
+/* POLAR end */
 
 #endif							/* SMGR_H */

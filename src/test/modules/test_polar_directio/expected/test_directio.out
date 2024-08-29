@@ -1,0 +1,9 @@
+CREATE EXTENSION test_directio;
+-- See README for explanation of arguments:
+SELECT test_directio();
+ test_directio 
+---------------
+ 
+(1 row)
+
+DROP EXTENSION test_directio;

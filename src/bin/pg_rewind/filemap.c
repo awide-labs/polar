@@ -157,6 +157,13 @@ static const struct exclude_list_item excludeFiles[] =
 	{"postmaster.pid", false},
 	{"postmaster.opts", false},
 
+	/* Skip polar_settings conf temporary file. */
+	{"polar_settings.conf.tmp", false}, /* defined as POLAR_SETTING_FILENAME */
+	{"pg_stat_statements.stat", false},
+	{"pgss_query_texts.stat", false},
+	{"polar_node_static.conf", false},
+	/* POLAR end */
+
 	/* end of list */
 	{NULL, false}
 };

@@ -44,6 +44,9 @@ typedef enum
 	PROCSIG_RECOVERY_CONFLICT_BUFFERPIN,
 	PROCSIG_RECOVERY_CONFLICT_STARTUP_DEADLOCK,
 
+	/* POLAR */
+	POLAR_PROCSIG_BACKEND_MEMORY_CONTEXT,
+
 	NUM_PROCSIGNALS				/* Must be last! */
 } ProcSignalReason;
 
@@ -67,5 +70,8 @@ extern void WaitForProcSignalBarrier(uint64 generation);
 extern void ProcessProcSignalBarrier(void);
 
 extern void procsignal_sigusr1_handler(SIGNAL_ARGS);
+
+/* POLAR: CheckProcSignal for POLAR */
+extern bool polar_check_proc_signal(ProcSignalReason reason);
 
 #endif							/* PROCSIGNAL_H */

@@ -20,6 +20,12 @@
 #include "storage/bufmgr.h"
 #include "storage/proc.h"
 
+/* POLAR */
+#include "access/xlog.h"
+#include "storage/polar_flush.h"
+#include "utils/guc.h"
+/* POLAR end */
+
 #define INT_ACCESS_ONCE(var)	((int)(*((volatile int *)&(var))))
 
 
@@ -196,6 +202,8 @@ have_free_buffer(void)
  *
  *	To ensure that no one else can pin the buffer before we do, we must
  *	return the buffer with the buffer header spinlock still held.
+ *	POLAR: if reading bulk non-first page and most buffers are pinned. return NULL
+ *	instead of log(error).
  */
 BufferDesc *
 StrategyGetBuffer(BufferAccessStrategy strategy, uint32 *buf_state)
@@ -350,6 +358,14 @@ StrategyGetBuffer(BufferAccessStrategy strategy, uint32 *buf_state)
 			 * infinite loop.
 			 */
 			UnlockBufHdr(buf, local_buf_state);
+
+			/*
+			 * POLAR: bulk read, alloc not-first page, if failed just ok,
+			 * return NULL.
+			 */
+			if (polar_bulk_io_is_in_progress && polar_bulk_io_in_progress_count > 0)
+				return NULL;
+
 			elog(ERROR, "no unpinned buffers available");
 		}
 		UnlockBufHdr(buf, local_buf_state);
@@ -556,13 +572,13 @@ GetAccessStrategy(BufferAccessStrategyType btype)
 			return NULL;
 
 		case BAS_BULKREAD:
-			ring_size = 256 * 1024 / BLCKSZ;
+			ring_size = polar_ring_buffer_bulkread_size;
 			break;
 		case BAS_BULKWRITE:
-			ring_size = 16 * 1024 * 1024 / BLCKSZ;
+			ring_size = polar_ring_buffer_bulkwrite_size;
 			break;
 		case BAS_VACUUM:
-			ring_size = 256 * 1024 / BLCKSZ;
+			ring_size = polar_ring_buffer_vacuum_size;
 			break;
 
 		default:
@@ -570,6 +586,9 @@ GetAccessStrategy(BufferAccessStrategyType btype)
 				 (int) btype);
 			return NULL;		/* keep compiler quiet */
 	}
+
+	if (ring_size == 0 || !polar_enable_ring_buffer)
+		return NULL;
 
 	/* Make sure ring isn't an undue fraction of shared buffers */
 	ring_size = Min(NBuffers / 8, ring_size);
@@ -680,10 +699,30 @@ AddBufferToRing(BufferAccessStrategy strategy, BufferDesc *buf)
  *
  * Returns true if buffer manager should ask for a new victim, and false
  * if this buffer should be written and re-used.
+ *
+ * POLAR: move XLogNeedsFlush condition from BufferAlloc, also add guc to
+ * determine whether to reject current buffer.
  */
 bool
 StrategyRejectBuffer(BufferAccessStrategy strategy, BufferDesc *buf)
 {
+	/* POLAR */
+	XLogRecPtr	lsn;
+	uint32		buf_state;
+
+	/* Read the LSN while holding buffer header lock */
+	buf_state = LockBufHdr(buf);
+	lsn = BufferGetLSN(buf);
+	UnlockBufHdr(buf, buf_state);
+
+	/*
+	 * return false when writing the buffer won't require a WAL flush and
+	 * reject is not enable
+	 */
+	if (!(XLogNeedsFlush(lsn) || polar_enable_strategy_reject_buffer))
+		return false;
+	/* POLAR end */
+
 	/* We only do this in bulkread mode */
 	if (strategy->btype != BAS_BULKREAD)
 		return false;
@@ -701,3 +740,41 @@ StrategyRejectBuffer(BufferAccessStrategy strategy, BufferDesc *buf)
 
 	return true;
 }
+
+/* POLAR: some polar related implementations */
+bool
+polar_try_to_wake_bgwriter(void)
+{
+	int			bgwprocno = INT_ACCESS_ONCE(StrategyControl->bgwprocno);
+
+	if (bgwprocno != -1)
+	{
+		/* reset bgwprocno first, before setting the latch */
+		StrategyControl->bgwprocno = -1;
+
+		/*
+		 * Not acquiring ProcArrayLock here which is slightly icky. It's
+		 * actually fine because procLatch isn't ever freed, so we just can
+		 * potentially set the wrong process' (or no process') latch.
+		 */
+		SetLatch(&ProcGlobal->allProcs[bgwprocno].procLatch);
+		return true;
+	}
+	return false;
+}
+
+void
+polar_backend_flush_stat(BufferAccessStrategy strategy)
+{
+	if (polar_flush_ctl && (!strategy || (strategy && !strategy->current_was_in_ring)))
+		pg_atomic_fetch_add_u64(&polar_flush_ctl->backend_flush, 1);
+}
+
+/* POLAR: bulk read */
+int
+polar_get_buffer_access_strategy_ring_size(BufferAccessStrategy strategy)
+{
+	return strategy->ring_size;
+}
+
+/* POLAR end */

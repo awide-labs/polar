@@ -309,12 +309,14 @@ HandleFunctionRequest(StringInfo msgBuf)
 	{
 		case 1:
 			ereport(LOG,
-					(errmsg("duration: %s ms", msec_str)));
+					(errmsg("duration: %s ms", msec_str),
+					 polar_mark_slow_log(true)));	/* POLAR */
 			break;
 		case 2:
 			ereport(LOG,
 					(errmsg("duration: %s ms  fastpath function call: \"%s\" (OID %u)",
-							msec_str, fip->fname, fid)));
+							msec_str, fip->fname, fid),
+					 polar_mark_slow_log(true)));	/* POLAR */
 			break;
 	}
 }

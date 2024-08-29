@@ -38,6 +38,9 @@
 #include "utils/index_selfuncs.h"
 #include "utils/memutils.h"
 
+/* POLAR: index bulk read */
+#include "storage/polar_bufmgr.h"
+#include "utils/guc.h"
 
 /*
  * BTPARALLEL_NOT_INITIALIZED indicates that the scan has not started.
@@ -81,7 +84,7 @@ typedef struct BTParallelScanDescData *BTParallelScanDesc;
 static void btvacuumscan(IndexVacuumInfo *info, IndexBulkDeleteResult *stats,
 						 IndexBulkDeleteCallback callback, void *callback_state,
 						 BTCycleId cycleid);
-static void btvacuumpage(BTVacState *vstate, BlockNumber scanblkno);
+static void btvacuumpage(BTVacState *vstate, BlockNumber scanblkno, BlockNumber nblocks);
 static BTVacuumPosting btreevacuumposting(BTVacState *vstate,
 										  IndexTuple posting,
 										  OffsetNumber updatedoffset,
@@ -153,7 +156,7 @@ btbuildempty(Relation index)
 	Page		metapage;
 
 	/* Construct metapage. */
-	metapage = (Page) palloc(BLCKSZ);
+	metapage = (Page) palloc_io_aligned(BLCKSZ, 0);
 	_bt_initmetapage(metapage, P_NONE, 0, _bt_allequalimage(index, false));
 
 	/*
@@ -995,7 +998,7 @@ btvacuumscan(IndexVacuumInfo *info, IndexBulkDeleteResult *stats,
 		/* Iterate over pages, then loop back to recheck length */
 		for (; scanblkno < num_pages; scanblkno++)
 		{
-			btvacuumpage(&vstate, scanblkno);
+			btvacuumpage(&vstate, scanblkno, num_pages);
 			if (info->report_progress)
 				pgstat_progress_update_param(PROGRESS_SCAN_BLOCKS_DONE,
 											 scanblkno);
@@ -1032,7 +1035,7 @@ btvacuumscan(IndexVacuumInfo *info, IndexBulkDeleteResult *stats,
  * recycled (i.e. before the page split).
  */
 static void
-btvacuumpage(BTVacState *vstate, BlockNumber scanblkno)
+btvacuumpage(BTVacState *vstate, BlockNumber scanblkno, BlockNumber nblocks)
 {
 	IndexVacuumInfo *info = vstate->info;
 	IndexBulkDeleteResult *stats = vstate->stats;
@@ -1062,8 +1065,19 @@ backtrack:
 	 * recycle all-zero pages, not fail.  Also, we want to use a nondefault
 	 * buffer access strategy.
 	 */
-	buf = ReadBufferExtended(rel, MAIN_FORKNUM, blkno, RBM_NORMAL,
-							 info->strategy);
+	if (polar_bulk_read_size > 0)
+	{
+		int			maxBlockCount = nblocks - blkno;
+
+		buf = polar_bulk_read_buffer_extended(rel, MAIN_FORKNUM, blkno,
+											  RBM_NORMAL, info->strategy,
+											  maxBlockCount);
+	}
+	else
+	{
+		buf = ReadBufferExtended(rel, MAIN_FORKNUM, blkno, RBM_NORMAL,
+								 info->strategy);
+	}
 	_bt_lockbuf(rel, buf, BT_READ);
 	page = BufferGetPage(buf);
 	opaque = NULL;

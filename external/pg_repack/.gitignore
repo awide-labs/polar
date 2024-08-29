@@ -1,0 +1,3 @@
+# Global excludes across all subdirectories
+dist/*.zip
+lib/exports.list

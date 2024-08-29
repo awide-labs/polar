@@ -1,0 +1,4 @@
+comment = 'Test code for local_cache'
+default_version = '1.0'
+module_pathname = '$libdir/test_local_cache'
+relocatable = true

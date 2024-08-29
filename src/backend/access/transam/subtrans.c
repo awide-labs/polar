@@ -34,6 +34,10 @@
 #include "pg_trace.h"
 #include "utils/snapmgr.h"
 
+/* POLAR */
+#include "access/xlogrecovery.h"
+#include "access/xlogutils.h"
+#include "utils/guc.h"
 
 /*
  * Defines for SubTrans page sizes.  A page is the same BLCKSZ as is used
@@ -66,6 +70,7 @@ static SlruCtlData SubTransCtlData;
 static int	ZeroSUBTRANSPage(int pageno);
 static bool SubTransPagePrecedes(int page1, int page2);
 
+int			polar_subtrans_buffer_slot_size = NUM_SUBTRANS_BUFFERS;
 
 /*
  * Record the parent of a subtransaction in the subtrans log.
@@ -82,6 +87,23 @@ SubTransSetParent(TransactionId xid, TransactionId parent)
 	Assert(TransactionIdFollows(xid, parent));
 
 	LWLockAcquire(SubtransSLRULock, LW_EXCLUSIVE);
+
+	/*
+	 * POLAR: If we enable incremental checkpoint and recovery from last
+	 * consistent lsn, we may replay subtrans xlog which parent transaction is
+	 * commited and subtrans file is truncated. Here we will try to fallocate
+	 * a new block and zero it if we replay xlog to record the parent.
+	 */
+	if (InRecovery && !reachedConsistency && polar_enable_incremental_checkpoint)
+	{
+		if (!polar_slru_page_physical_exists(SubTransCtl, pageno))
+		{
+			/* Zero the page */
+			slotno = ZeroSUBTRANSPage(pageno);
+			SimpleLruWritePage(SubTransCtl, slotno);
+			Assert(!SubTransCtl->shared->page_dirty[slotno]);
+		}
+	}
 
 	slotno = SimpleLruReadPage(SubTransCtl, pageno, true, xid);
 	ptr = (TransactionId *) SubTransCtl->shared->page_buffer[slotno];
@@ -120,6 +142,19 @@ SubTransGetParent(TransactionId xid)
 	/* Bootstrap and frozen XIDs have no parent */
 	if (!TransactionIdIsNormal(xid))
 		return InvalidTransactionId;
+
+	/*
+	 * POLAR: If we enable incremental checkpoint and recovery from last
+	 * consistent lsn, we may replay subtrans xlog which parent transaction is
+	 * commited and subtrans file is truncated. Here we will
+	 * InvalidTransactionId, and in the following xlog repaly it's parent
+	 * transaction should be commited.
+	 */
+	if (InRecovery && !reachedConsistency && polar_enable_incremental_checkpoint)
+	{
+		if (!polar_slru_page_physical_exists(SubTransCtl, pageno))
+			return InvalidTransactionId;
+	}
 
 	/* lock is acquired by SimpleLruReadPage_ReadOnly */
 
@@ -184,16 +219,16 @@ SubTransGetTopmostTransaction(TransactionId xid)
 Size
 SUBTRANSShmemSize(void)
 {
-	return SimpleLruShmemSize(NUM_SUBTRANS_BUFFERS, 0);
+	return SimpleLruShmemSize(polar_subtrans_buffer_slot_size, 0);
 }
 
 void
 SUBTRANSShmemInit(void)
 {
 	SubTransCtl->PagePrecedes = SubTransPagePrecedes;
-	SimpleLruInit(SubTransCtl, "Subtrans", NUM_SUBTRANS_BUFFERS, 0,
+	SimpleLruInit(SubTransCtl, "Subtrans", polar_subtrans_buffer_slot_size, 0,
 				  SubtransSLRULock, "pg_subtrans",
-				  LWTRANCHE_SUBTRANS_BUFFER, SYNC_HANDLER_NONE);
+				  LWTRANCHE_SUBTRANS_BUFFER, SYNC_HANDLER_NONE, false);
 	SlruPagePrecedesUnitTests(SubTransCtl, SUBTRANS_XACTS_PER_PAGE);
 }
 

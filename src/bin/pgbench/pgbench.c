@@ -6309,11 +6309,11 @@ printVersion(PGconn *con)
 		}
 
 		printf(_("%s (%s, server %s)\n"),
-			   "pgbench", PG_VERSION, server_version);
+			   "pgbench", PG_VERSION_STR, server_version);
 	}
 	/* For version match, only print pgbench version */
 	else
-		printf("%s (%s)\n", "pgbench", PG_VERSION);
+		printf("%s (%s)\n", "pgbench", PG_VERSION_STR);
 	fflush(stdout);
 }
 

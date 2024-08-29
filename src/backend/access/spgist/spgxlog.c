@@ -33,7 +33,7 @@ static MemoryContext opCtx;		/* working memory for operations */
  * At present, all we need is enough info to support spgFormDeadTuple(),
  * plus the isBuild flag.
  */
-static void
+void
 fillFakeState(SpGistState *state, spgxlogState stateSrc)
 {
 	memset(state, 0, sizeof(*state));
@@ -48,7 +48,7 @@ fillFakeState(SpGistState *state, spgxlogState stateSrc)
  * to replay SpGistPageAddNewItem() operations.  If the offset points at an
  * existing tuple, it had better be a placeholder tuple.
  */
-static void
+void
 addOrReplaceTuple(Page page, Item tuple, int size, OffsetNumber offset)
 {
 	if (offset <= PageGetMaxOffsetNumber(page))
@@ -138,7 +138,7 @@ spgRedoAddLeaf(XLogReaderState *record)
 		}
 
 		PageSetLSN(page, lsn);
-		MarkBufferDirty(buffer);
+		PolarMarkBufferDirty(buffer, record->ReadRecPtr);
 	}
 	if (BufferIsValid(buffer))
 		UnlockReleaseBuffer(buffer);
@@ -162,7 +162,7 @@ spgRedoAddLeaf(XLogReaderState *record)
 							  blknoLeaf, xldata->offnumLeaf);
 
 			PageSetLSN(page, lsn);
-			MarkBufferDirty(buffer);
+			PolarMarkBufferDirty(buffer, record->ReadRecPtr);
 		}
 		if (BufferIsValid(buffer))
 			UnlockReleaseBuffer(buffer);
@@ -240,7 +240,7 @@ spgRedoMoveLeafs(XLogReaderState *record)
 		}
 
 		PageSetLSN(page, lsn);
-		MarkBufferDirty(buffer);
+		PolarMarkBufferDirty(buffer, record->ReadRecPtr);
 	}
 	if (BufferIsValid(buffer))
 		UnlockReleaseBuffer(buffer);
@@ -257,7 +257,7 @@ spgRedoMoveLeafs(XLogReaderState *record)
 								toInsert[nInsert - 1]);
 
 		PageSetLSN(page, lsn);
-		MarkBufferDirty(buffer);
+		PolarMarkBufferDirty(buffer, record->ReadRecPtr);
 	}
 	if (BufferIsValid(buffer))
 		UnlockReleaseBuffer(buffer);
@@ -276,7 +276,7 @@ spgRedoMoveLeafs(XLogReaderState *record)
 						  blknoDst, toInsert[nInsert - 1]);
 
 		PageSetLSN(page, lsn);
-		MarkBufferDirty(buffer);
+		PolarMarkBufferDirty(buffer, record->ReadRecPtr);
 	}
 	if (BufferIsValid(buffer))
 		UnlockReleaseBuffer(buffer);
@@ -318,7 +318,7 @@ spgRedoAddNode(XLogReaderState *record)
 					 innerTupleHdr.size);
 
 			PageSetLSN(page, lsn);
-			MarkBufferDirty(buffer);
+			PolarMarkBufferDirty(buffer, record->ReadRecPtr);
 		}
 		if (BufferIsValid(buffer))
 			UnlockReleaseBuffer(buffer);
@@ -370,7 +370,7 @@ spgRedoAddNode(XLogReaderState *record)
 								  blknoNew, xldata->offnumNew);
 			}
 			PageSetLSN(page, lsn);
-			MarkBufferDirty(buffer);
+			PolarMarkBufferDirty(buffer, record->ReadRecPtr);
 		}
 		if (BufferIsValid(buffer))
 			UnlockReleaseBuffer(buffer);
@@ -417,7 +417,7 @@ spgRedoAddNode(XLogReaderState *record)
 								  blknoNew, xldata->offnumNew);
 			}
 			PageSetLSN(page, lsn);
-			MarkBufferDirty(buffer);
+			PolarMarkBufferDirty(buffer, record->ReadRecPtr);
 		}
 		if (BufferIsValid(buffer))
 			UnlockReleaseBuffer(buffer);
@@ -441,7 +441,7 @@ spgRedoAddNode(XLogReaderState *record)
 								  blknoNew, xldata->offnumNew);
 
 				PageSetLSN(page, lsn);
-				MarkBufferDirty(buffer);
+				PolarMarkBufferDirty(buffer, record->ReadRecPtr);
 			}
 			if (BufferIsValid(buffer))
 				UnlockReleaseBuffer(buffer);
@@ -498,7 +498,7 @@ spgRedoSplitTuple(XLogReaderState *record)
 							  postfixTupleHdr.size, xldata->offnumPostfix);
 
 			PageSetLSN(page, lsn);
-			MarkBufferDirty(buffer);
+			PolarMarkBufferDirty(buffer, record->ReadRecPtr);
 		}
 		if (BufferIsValid(buffer))
 			UnlockReleaseBuffer(buffer);
@@ -521,7 +521,7 @@ spgRedoSplitTuple(XLogReaderState *record)
 							  xldata->offnumPostfix);
 
 		PageSetLSN(page, lsn);
-		MarkBufferDirty(buffer);
+		PolarMarkBufferDirty(buffer, record->ReadRecPtr);
 	}
 	if (BufferIsValid(buffer))
 		UnlockReleaseBuffer(buffer);
@@ -672,12 +672,12 @@ spgRedoPickSplit(XLogReaderState *record)
 	if (srcPage != NULL)
 	{
 		PageSetLSN(srcPage, lsn);
-		MarkBufferDirty(srcBuffer);
+		PolarMarkBufferDirty(srcBuffer, record->ReadRecPtr);
 	}
 	if (destPage != NULL)
 	{
 		PageSetLSN(destPage, lsn);
-		MarkBufferDirty(destBuffer);
+		PolarMarkBufferDirty(destBuffer, record->ReadRecPtr);
 	}
 
 	/* restore new inner tuple */
@@ -709,7 +709,7 @@ spgRedoPickSplit(XLogReaderState *record)
 		}
 
 		PageSetLSN(page, lsn);
-		MarkBufferDirty(innerBuffer);
+		PolarMarkBufferDirty(innerBuffer, record->ReadRecPtr);
 	}
 	if (BufferIsValid(innerBuffer))
 		UnlockReleaseBuffer(innerBuffer);
@@ -740,7 +740,7 @@ spgRedoPickSplit(XLogReaderState *record)
 							  blknoInner, xldata->offnumInner);
 
 			PageSetLSN(page, lsn);
-			MarkBufferDirty(parentBuffer);
+			PolarMarkBufferDirty(parentBuffer, record->ReadRecPtr);
 		}
 		if (BufferIsValid(parentBuffer))
 			UnlockReleaseBuffer(parentBuffer);
@@ -826,7 +826,7 @@ spgRedoVacuumLeaf(XLogReaderState *record)
 		}
 
 		PageSetLSN(page, lsn);
-		MarkBufferDirty(buffer);
+		PolarMarkBufferDirty(buffer, record->ReadRecPtr);
 	}
 	if (BufferIsValid(buffer))
 		UnlockReleaseBuffer(buffer);
@@ -852,7 +852,7 @@ spgRedoVacuumRoot(XLogReaderState *record)
 		PageIndexMultiDelete(page, toDelete, xldata->nDelete);
 
 		PageSetLSN(page, lsn);
-		MarkBufferDirty(buffer);
+		PolarMarkBufferDirty(buffer, record->ReadRecPtr);
 	}
 	if (BufferIsValid(buffer))
 		UnlockReleaseBuffer(buffer);
@@ -929,7 +929,7 @@ spgRedoVacuumRedirect(XLogReaderState *record)
 		}
 
 		PageSetLSN(page, lsn);
-		MarkBufferDirty(buffer);
+		PolarMarkBufferDirty(buffer, record->ReadRecPtr);
 	}
 	if (BufferIsValid(buffer))
 		UnlockReleaseBuffer(buffer);

@@ -42,10 +42,13 @@ typedef struct LWLock
 	uint16		tranche;		/* tranche ID */
 	pg_atomic_uint32 state;		/* state of exclusive/nonexclusive lockers */
 	proclist_head waiters;		/* list of waiting PGPROCs */
-#ifdef LOCK_DEBUG
 	pg_atomic_uint32 nwaiters;	/* number of waiters */
+#ifdef LOCK_DEBUG
 	struct PGPROC *owner;		/* last exclusive owner of the lock */
 #endif
+	/* POLAR :last owner pid of the lock */
+	pg_atomic_uint32 owner_pid;
+	/* POLAR end */
 } LWLock;
 
 /*
@@ -68,6 +71,10 @@ typedef union LWLockPadded
 } LWLockPadded;
 
 extern PGDLLIMPORT LWLockPadded *MainLWLockArray;
+
+/* POLAR */
+extern char *MainLWLockNames[];
+extern LWLockPadded *SysLoggerWriterLWLockArray;	/* POLAR */
 
 /* struct for storing named tranche information */
 typedef struct NamedLWLockTranche
@@ -99,15 +106,29 @@ extern PGDLLIMPORT int NamedLWLockTrancheRequests;
 #define LOG2_NUM_PREDICATELOCK_PARTITIONS  4
 #define NUM_PREDICATELOCK_PARTITIONS  (1 << LOG2_NUM_PREDICATELOCK_PARTITIONS)
 
+/* POLAR */
+#define NUM_SYSLOGGER_LOCK_PARTITIONS 16
+
+/* POLAR RSC */
+#define NUM_POLAR_RSC_LOCK_PARTITIONS 128
+
 /* Offsets for various chunks of preallocated lwlocks. */
 #define BUFFER_MAPPING_LWLOCK_OFFSET	NUM_INDIVIDUAL_LWLOCKS
 #define LOCK_MANAGER_LWLOCK_OFFSET		\
 	(BUFFER_MAPPING_LWLOCK_OFFSET + NUM_BUFFER_PARTITIONS)
 #define PREDICATELOCK_MANAGER_LWLOCK_OFFSET \
 	(LOCK_MANAGER_LWLOCK_OFFSET + NUM_LOCK_PARTITIONS)
-#define NUM_FIXED_LWLOCKS \
+
+/* POLAR audit */
+#define SYSLOG_WRITER_LWLOCK_OFFSET \
 	(PREDICATELOCK_MANAGER_LWLOCK_OFFSET + NUM_PREDICATELOCK_PARTITIONS)
 
+/* POLAR RSC */
+#define POLAR_RSC_LWLOCK_OFFSET \
+	(SYSLOG_WRITER_LWLOCK_OFFSET + NUM_SYSLOGGER_LOCK_PARTITIONS)
+
+#define NUM_FIXED_LWLOCKS \
+	(POLAR_RSC_LWLOCK_OFFSET + NUM_POLAR_RSC_LOCK_PARTITIONS)
 typedef enum LWLockMode
 {
 	LW_EXCLUSIVE,
@@ -167,6 +188,11 @@ extern int	LWLockNewTrancheId(void);
 extern void LWLockRegisterTranche(int tranche_id, const char *tranche_name);
 extern void LWLockInitialize(LWLock *lock, int tranche_id);
 
+/* POLAR */
+extern int	polar_get_lwlock_counter(void);
+
+/* POLAR end */
+
 /*
  * Every tranche ID less than NUM_INDIVIDUAL_LWLOCKS is reserved; also,
  * we reserve additional tranche IDs for builtin tranches not included in
@@ -190,6 +216,7 @@ typedef enum BuiltinTrancheIds
 	LWTRANCHE_BUFFER_MAPPING,
 	LWTRANCHE_LOCK_MANAGER,
 	LWTRANCHE_PREDICATE_LOCK_MANAGER,
+	LWTRANCHE_SYSLOGGER_WRITER_MAPPING,
 	LWTRANCHE_PARALLEL_HASH_JOIN,
 	LWTRANCHE_PARALLEL_QUERY_DSA,
 	LWTRANCHE_PER_SESSION_DSA,
@@ -202,6 +229,56 @@ typedef enum BuiltinTrancheIds
 	LWTRANCHE_PGSTATS_DSA,
 	LWTRANCHE_PGSTATS_HASH,
 	LWTRANCHE_PGSTATS_DATA,
+	/* POLAR */
+	LWTRANCHE_POLAR_COPY_BUFFER,
+	LWTRANCHE_LOGINDEX_MINI_TRANSACTION,
+	LWTRANCHE_LOGINDEX_MINI_TRANSACTION_TBL,
+
+	/*
+	 * POLAR: Define tranche id for wal logindex. They must be defiend between
+	 * LWTRANCHE_WAL_LOGINDEX_BEGIN and LWTRANCHE_WAL_LOGINDEX_END
+	 */
+	LWTRANCHE_WAL_LOGINDEX_BEGIN,
+	LWTRANCHE_WAL_LOGINDEX_MEM_TBL = LWTRANCHE_WAL_LOGINDEX_BEGIN,
+	LWTRANCHE_WAL_LOGINDEX_HASH_LOCK,
+	LWTRANCHE_WAL_LOGINDEX_IO,
+	LWTRANCHE_WAL_LOGINDEX_FLUSH_ACTIVE_TBL,
+	LWTRANCHE_WAL_LOGINDEX_BLOOM_LRU,
+	LWTRANCHE_WAL_LOGINDEX_END = LWTRANCHE_WAL_LOGINDEX_BLOOM_LRU,
+
+	/*
+	 * POLAR: Define tranche id for fullpage logindex. They must be defiend
+	 * between LWTRANCE_FULLPAGE_LOGINDEX_BEGIN and
+	 * LWTRANCE_FULLPAGE_LOGINDEX_END
+	 */
+	LWTRANCHE_FULLPAGE_LOGINDEX_BEGIN,
+	LWTRANCHE_FULLPAGE_LOGINDEX_MEM_TBL = LWTRANCHE_FULLPAGE_LOGINDEX_BEGIN,
+	LWTRANCHE_FULLPAGE_LOGINDEX_HASH_LOCK,
+	LWTRANCHE_FULLPAGE_LOGINDEX_IO,
+	LWTRANCHE_FULLPAGE_LOGINDEX_FLUSH_ACTIVE_TBL,
+	LWTRANCHE_FULLPAGE_LOGINDEX_BLOOM_LRU,
+	LWTRANCHE_FULLPAGE_LOGINDEX_END = LWTRANCHE_FULLPAGE_LOGINDEX_BLOOM_LRU,
+	LWTRANCHE_FULLPAGE_FILE,
+	/* polar relation size cache for logindex */
+	LWTRANCHE_RELATION_SIZE_CACHE,
+	/* polar xlog meta queue */
+	LWTRANCHE_POLAR_XLOG_QUEUE,
+	/* polar local cache */
+	LWTRANCHE_POLAR_CLOG_LOCAL_CACHE,
+	LWTRANCHE_POLAR_LOGINDEX_LOCAL_CACHE,
+	LWTRANCHE_POLAR_COMMIT_TS_LOCAL_CACHE,
+	LWTRANCHE_POLAR_MULTIXACT_OFFSET_LOCAL_CACHE,
+	LWTRANCHE_POLAR_MULTIXACT_MEMBER_LOCAL_CACHE,
+	/* POLAR xlog buffer */
+	LWTRANCHE_XLOG_BUFFER_CONTENT,
+	/* POLAR end */
+
+	/* POLAR RSC */
+	LWTRANCHE_POLAR_RSC_MAPPING_LOCKS,
+	/* POLAR end */
+
+	LWTRANCHE_POLAR_ASYNC_LOCK_REPLAY,
+
 	LWTRANCHE_FIRST_USER_DEFINED
 }			BuiltinTrancheIds;
 
@@ -211,5 +288,15 @@ typedef enum BuiltinTrancheIds
  * convenience of third-party code, we include the following typedef.
  */
 typedef LWLock *LWLockId;
+
+/* POLAR LWLock for logindex, minimally padded */
+#define POLAR_LWLOCK_MINIMAL_SIZE (sizeof(LWLock) <= 32 ? 32 : 64)
+typedef union polar_lwlock_mini_padded
+{
+	LWLock		lock;
+	char		pad[POLAR_LWLOCK_MINIMAL_SIZE];
+} polar_lwlock_mini_padded;
+
+/* POLAR end */
 
 #endif							/* LWLOCK_H */

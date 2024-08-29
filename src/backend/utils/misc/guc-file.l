@@ -130,6 +130,9 @@ ProcessConfigFile(GucContext context)
 	 * SIGHUP (by the postmaster and its children)
 	 */
 	Assert((context == PGC_POSTMASTER && !IsUnderPostmaster) ||
+			/* POLAR */
+			(context == PGC_POSTMASTER_ONLY_LOAD_POLAR_SETTINGS && !IsUnderPostmaster) ||
+			/* POLAR end */
 		   context == PGC_SIGHUP);
 
 	/*
@@ -177,9 +180,43 @@ ProcessConfigFileInternal(GucContext context, bool applySettings, int elevel)
 			   *tail;
 	int			i;
 
+	/* POLAR: used for extra load polar_settings.conf */
+	bool		polar_only_load_polar_settings = false;
+
 	/* Parse the main config file into a list of option names and values */
 	ConfFileWithError = ConfigFileName;
 	head = tail = NULL;
+
+	/*
+	 * POLAR: ALTER SYSTEM FOR CLUSTER
+	 * Additional load polar_settings.conf
+	 * Read first to ensure priority lower than others configfile.
+	 *
+	 * Note: if polar_settings.conf is in shared storage,
+	 * Only after mount shared storage can we load it
+	 * using virtual context PGC_POSTMASTER_ONLY_LOAD_POLAR_SETTINGS.
+	 */
+	if (DataDir && context != PGC_POSTMASTER)
+	{
+		/* Treat this virtual context as PGC_POSTMASTER */
+		if (context == PGC_POSTMASTER_ONLY_LOAD_POLAR_SETTINGS)
+		{
+			context = PGC_POSTMASTER;
+			/* Set flag to only load polar_settings */
+			polar_only_load_polar_settings = true;
+		}
+
+		if (!ParseConfigFile(POLAR_SETTING_FILENAME, false,
+							 NULL, 0, 0, elevel,
+							 &head, &tail))
+		{
+			/* Syntax error(s) detected in the file, so bail out */
+			error = true;
+			ConfFileWithError = POLAR_SETTING_FILENAME;
+			goto bail_out;
+		}
+	}
+	/* POLAR end */
 
 	if (!ParseConfigFile(ConfigFileName, true,
 						 NULL, 0, 0, elevel,
@@ -207,6 +244,23 @@ ProcessConfigFileInternal(GucContext context, bool applySettings, int elevel)
 			ConfFileWithError = PG_AUTOCONF_FILENAME;
 			goto bail_out;
 		}
+#ifdef POLAR_TODO
+		/*
+		 * POLAR:
+		 * polar_settings will extra load all parameters so 
+		 * extra load polar_node_static to ensure some parameters are not modified
+		 */
+		if (!ParseConfigFile(PLOAR_NODE_CONF_FILENAME, false,
+							NULL, 0, 0, elevel,
+							&head, &tail))
+		{
+			/* Syntax error(s) detected in the file, so bail out */
+			error = true;
+			ConfFileWithError = PLOAR_NODE_CONF_FILENAME;
+			goto bail_out;
+		}
+		/* POLAR end */
+#endif
 	}
 	else
 	{
@@ -308,6 +362,18 @@ ProcessConfigFileInternal(GucContext context, bool applySettings, int elevel)
 		}
 		else if (!valid_custom_variable_name(item->name))
 		{
+			/* POLAR: if server cannot process "polar_" config, ignore */
+			if (strncasecmp(item->name, "polar_", 6) == 0 && strlen(item->name) > 6)
+			{
+				item->ignore = true;
+				ereport(NOTICE,
+						(errcode(ERRCODE_UNDEFINED_OBJECT),
+						 errmsg("unrecognized configuration parameter \"%s\" in file \"%s\" line %u",
+								item->name, item->filename, item->sourceline)));
+				continue;
+			}
+			/* POLAR end */
+
 			/* Invalid non-custom variable, so complain */
 			ereport(elevel,
 					(errcode(ERRCODE_UNDEFINED_OBJECT),
@@ -424,6 +490,21 @@ ProcessConfigFileInternal(GucContext context, bool applySettings, int elevel)
 		/* Ignore anything marked as ignorable */
 		if (item->ignore)
 			continue;
+
+		/* 
+		 * POLAR:
+		 * The parameters of other files have
+		 * been loaded in PGC_POSTMASTER, so ignore
+		 * other file's config 
+		 */
+		if (polar_only_load_polar_settings && item->filename)
+		{
+			const char *p = strstr(item->filename, POLAR_SETTING_FILENAME);
+			/* only match at the end */
+			if(!p || strlen(p) != strlen(POLAR_SETTING_FILENAME))
+				continue;
+		}
+		/* POLAR end */
 
 		/* In SIGHUP cases in the postmaster, we want to report changes */
 		if (context == PGC_SIGHUP && applySettings && !IsUnderPostmaster)

@@ -1,0 +1,4 @@
+comment = 'Extension to select parameters for manger.'
+default_version = '1.1'
+module_pathname = '$libdir/polar_parameter_manager'
+relocatable = true

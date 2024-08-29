@@ -67,6 +67,11 @@ pg_crc32c_armv8_available(void)
 	pqsignal(SIGILL, SIG_DFL);
 
 #ifndef FRONTEND
+#ifdef USE_LIBUNWIND
+	/* restore SIGILL coredump signal handler */
+	polar_set_program_error_handler(SIGILL);
+#endif
+
 	/* We don't expect this case, so complain loudly */
 	if (result == 0)
 		elog(ERROR, "crc32 hardware and software results disagree");

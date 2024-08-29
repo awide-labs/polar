@@ -71,4 +71,16 @@ extern void commit_ts_redo(XLogReaderState *record);
 extern void commit_ts_desc(StringInfo buf, XLogReaderState *record);
 extern const char *commit_ts_identify(uint8 info);
 
+/* POLAR */
+extern PGDLLIMPORT int polar_committs_buffer_slot_size;
+
+/* POLAR: do online promote for commit_ts */
+extern void polar_promote_commit_ts(void);
+
+/* POLAR: remove commit_ts local cache file */
+extern void polar_remove_commit_ts_local_cache_file(void);
+extern void polar_init_local_commit_ts(TransactionId xid, bool copy_all);
+
+/* POLAR end */
+
 #endif							/* COMMIT_TS_H */

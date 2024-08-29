@@ -1,0 +1,29 @@
+src/test/polar_consistency/README
+
+Tests for data consistency between master and replica/standby.
+=======================================
+
+This directory contains a test suite for data consistency check
+between master and replica/standby.
+
+Running the tests
+=================
+
+NOTE: You must have given the --enable-tap-tests argument to configure.
+
+Run
+    make check
+or
+    make installcheck
+You can use "make installcheck" if you previously did "make install".
+In that case, the code in the installation tree is tested.  With
+"make check", a temporary installation tree is built from the current
+sources and then tested.
+
+Either way, this test initializes, starts, and stops a test Postgres
+cluster, including master node, replica node and standby node.
+
+Requirements
+============
+
+Some PERL modules are required, such as IO::Pipe and Test::More. 

@@ -1,0 +1,26 @@
+-- Whenever this test case failed it usually means there is a continus shared memory
+-- area with more than 50MB size at the tail of the ShmemSegHdr segment that is requested
+-- but not used, or wasted, in other words. Consider doing the following checks:
+--      1. Check polar_get_shared_mem_total_size in ipci.c to make sure your feature has an enable
+--      judgement in its add_size function.
+--      2. Be careful using hash_estimate_size function when you request for a dynhash with a large
+--      entrysize(MB level, practically) and small elementsize. The estimated size might exceed the
+--      real demand a lot under such situation due to its internal implementation. Consider using
+--      arrays instead.
+--  If neither works please blame this file and contact the submitter for help, if he's still here.
+-- Setup
+do $$
+declare
+    unused bigint := 0;
+begin
+    select allocated_size into unused from pg_shmem_allocations where name is null;
+    if unused > 52428800 then  -- 50MB
+        raise notice 'ERROR: wasted shared memory exceed 50MB, % bytes now', unused;
+    else
+        raise notice 'SUCCEED: wasted shared memory less than 50MB';
+    end if;
+exception when others then
+    raise notice 'ERROR: got % (%)', sqlstate, sqlerrm;
+end;
+$$ language plpgsql;
+NOTICE:  SUCCEED: wasted shared memory less than 50MB

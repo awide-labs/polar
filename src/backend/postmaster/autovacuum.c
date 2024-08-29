@@ -394,6 +394,13 @@ StartAutoVacLauncher(void)
 {
 	pid_t		AutoVacPID;
 
+	/* POLAR: replica mode disable start autovacuum */
+	if (polar_is_replica())
+	{
+		elog(DEBUG1, "PolarDB replica try to start AutoVacLauncher");
+		return 0;
+	}
+
 #ifdef EXEC_BACKEND
 	switch ((AutoVacPID = avlauncher_forkexec()))
 #else
@@ -588,6 +595,7 @@ AutoVacLauncherMain(int argc, char *argv[])
 	 * regular maintenance from being executed.
 	 */
 	SetConfigOption("statement_timeout", "0", PGC_SUSET, PGC_S_OVERRIDE);
+	SetConfigOption("polar_transaction_timeout", "0", PGC_SUSET, PGC_S_OVERRIDE);
 	SetConfigOption("lock_timeout", "0", PGC_SUSET, PGC_S_OVERRIDE);
 	SetConfigOption("idle_in_transaction_session_timeout", "0",
 					PGC_SUSET, PGC_S_OVERRIDE);
@@ -1611,6 +1619,7 @@ AutoVacWorkerMain(int argc, char *argv[])
 	 * regular maintenance from being executed.
 	 */
 	SetConfigOption("statement_timeout", "0", PGC_SUSET, PGC_S_OVERRIDE);
+	SetConfigOption("polar_transaction_timeout", "0", PGC_SUSET, PGC_S_OVERRIDE);
 	SetConfigOption("lock_timeout", "0", PGC_SUSET, PGC_S_OVERRIDE);
 	SetConfigOption("idle_in_transaction_session_timeout", "0",
 					PGC_SUSET, PGC_S_OVERRIDE);

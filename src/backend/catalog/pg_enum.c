@@ -497,6 +497,8 @@ restart:
 
 	/* Add the new value to the table */
 	(void) hash_search(uncommitted_enums, &newOid, HASH_ENTER, NULL);
+
+	polar_xact_split_mark_unsplittable(POLAR_UNSPLITTABLE_FOR_CREATEENUM);
 }
 
 

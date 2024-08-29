@@ -26,4 +26,6 @@ extern void CheckPointSUBTRANS(void);
 extern void ExtendSUBTRANS(TransactionId newestXact);
 extern void TruncateSUBTRANS(TransactionId oldestXact);
 
+extern PGDLLIMPORT int polar_subtrans_buffer_slot_size;
+
 #endif							/* SUBTRANS_H */

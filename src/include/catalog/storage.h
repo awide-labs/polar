@@ -21,6 +21,7 @@
 
 /* GUC variables */
 extern PGDLLIMPORT int wal_skip_threshold;
+extern PGDLLIMPORT bool polar_hold_truncate_interrupt;
 
 extern SMgrRelation RelationCreateStorage(RelFileNode rnode,
 										  char relpersistence,

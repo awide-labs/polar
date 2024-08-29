@@ -1,0 +1,874 @@
+/*
+ * polar_global_index.sql
+ *
+ * Test global index.
+ */
+SET ROLE polar_repack_superuser;
+CREATE SCHEMA repack_gi_schema;
+SET search_path TO repack_gi_schema;
+-- Create partitioned table
+CREATE TABLE prt (
+    a_int INT PRIMARY KEY,
+    b_text TEXT,
+    c_varchar VARCHAR(30),
+    d_num NUMERIC
+) PARTITION BY RANGE (a_int);
+-- Create normal table
+CREATE TABLE normal (
+    a_int INT PRIMARY KEY,
+    b_text TEXT,
+    c_varchar VARCHAR(30),
+    d_num NUMERIC
+);
+-- Create 3 range partitions
+CREATE TABLE prt_p_0 PARTITION OF prt FOR VALUES FROM (0) TO (10);
+CREATE TABLE prt_p_1 PARTITION OF prt FOR VALUES FROM (10) TO (20);
+CREATE TABLE prt_p_2 PARTITION OF prt FOR VALUES FROM (20) TO (30);
+-- Create default partition, which is also partitioned
+CREATE TABLE prt_p_def PARTITION OF prt DEFAULT PARTITION BY HASH (a_int);
+-- Create 3 hash sub-partitions in default partition
+CREATE TABLE prt_p_def_p_0 PARTITION OF prt_p_def FOR VALUES WITH (MODULUS 3, REMAINDER 0);
+CREATE TABLE prt_p_def_p_1 PARTITION OF prt_p_def FOR VALUES WITH (MODULUS 3, REMAINDER 1);
+CREATE TABLE "prt_p_def_P_2" PARTITION OF prt_p_def FOR VALUES WITH (MODULUS 3, REMAINDER 2);
+-- Load data
+INSERT INTO prt SELECT i * 10, i, i, i FROM generate_series(0, 9) i;
+INSERT INTO normal SELECT i * 10, i, i, i FROM generate_series(0, 9) i;
+-- Create global indexes on partitioned table (even in pg mode)
+CREATE INDEX prt_gi_btree_b ON prt USING btree (b_text) GLOBAL;
+CREATE INDEX "prt_gi_BTREE_c" ON prt USING btree (c_varchar) GLOBAL;
+-- GPI is not supported now
+CREATE INDEX prt_gpi_btree_d ON prt USING btree (d_num) GLOBAL PARTITION BY RANGE (d_num)
+(
+    PARTITION prt_gpi_btree_d_p_0 VALUES less than(0),
+    PARTITION prt_gpi_btree_d_p_1 VALUES less than(10),
+    PARTITION prt_gpi_btree_d_p_max VALUES less than(maxvalue)
+);
+ERROR:  syntax error at or near "PARTITION"
+LINE 1: ...prt_gpi_btree_d ON prt USING btree (d_num) GLOBAL PARTITION ...
+                                                             ^
+-- show table definition
+\d+ prt
+                                  Partitioned table "repack_gi_schema.prt"
+  Column   |         Type          | Collation | Nullable | Default | Storage  | Stats target | Description 
+-----------+-----------------------+-----------+----------+---------+----------+--------------+-------------
+ a_int     | integer               |           | not null |         | plain    |              | 
+ b_text    | text                  |           |          |         | extended |              | 
+ c_varchar | character varying(30) |           |          |         | extended |              | 
+ d_num     | numeric               |           |          |         | main     |              | 
+Partition key: RANGE (a_int)
+Indexes:
+    "prt_pkey" PRIMARY KEY, btree (a_int)
+    "prt_gi_BTREE_c" btree (c_varchar) GLOBAL
+    "prt_gi_btree_b" btree (b_text) GLOBAL
+Partitions: prt_p_0 FOR VALUES FROM (0) TO (10),
+            prt_p_1 FOR VALUES FROM (10) TO (20),
+            prt_p_2 FOR VALUES FROM (20) TO (30),
+            prt_p_def DEFAULT, PARTITIONED
+
+\d+ prt_p_0
+                                      Table "repack_gi_schema.prt_p_0"
+  Column   |         Type          | Collation | Nullable | Default | Storage  | Stats target | Description 
+-----------+-----------------------+-----------+----------+---------+----------+--------------+-------------
+ a_int     | integer               |           | not null |         | plain    |              | 
+ b_text    | text                  |           |          |         | extended |              | 
+ c_varchar | character varying(30) |           |          |         | extended |              | 
+ d_num     | numeric               |           |          |         | main     |              | 
+Partition of: prt FOR VALUES FROM (0) TO (10)
+Partition constraint: ((a_int IS NOT NULL) AND (a_int >= 0) AND (a_int < 10))
+Indexes:
+    "prt_p_0_pkey" PRIMARY KEY, btree (a_int)
+Replica Identity: FULL
+
+\d+ prt_p_def
+                               Partitioned table "repack_gi_schema.prt_p_def"
+  Column   |         Type          | Collation | Nullable | Default | Storage  | Stats target | Description 
+-----------+-----------------------+-----------+----------+---------+----------+--------------+-------------
+ a_int     | integer               |           | not null |         | plain    |              | 
+ b_text    | text                  |           |          |         | extended |              | 
+ c_varchar | character varying(30) |           |          |         | extended |              | 
+ d_num     | numeric               |           |          |         | main     |              | 
+Partition of: prt DEFAULT
+Partition constraint: (NOT ((a_int IS NOT NULL) AND (((a_int >= 0) AND (a_int < 10)) OR ((a_int >= 10) AND (a_int < 20)) OR ((a_int >= 20) AND (a_int < 30)))))
+Partition key: HASH (a_int)
+Indexes:
+    "prt_p_def_pkey" PRIMARY KEY, btree (a_int)
+Partitions: prt_p_def_p_0 FOR VALUES WITH (modulus 3, remainder 0),
+            prt_p_def_p_1 FOR VALUES WITH (modulus 3, remainder 1),
+            "prt_p_def_P_2" FOR VALUES WITH (modulus 3, remainder 2)
+
+\d prt_p_def_p_0
+               Table "repack_gi_schema.prt_p_def_p_0"
+  Column   |         Type          | Collation | Nullable | Default 
+-----------+-----------------------+-----------+----------+---------
+ a_int     | integer               |           | not null | 
+ b_text    | text                  |           |          | 
+ c_varchar | character varying(30) |           |          | 
+ d_num     | numeric               |           |          | 
+Partition of: prt_p_def FOR VALUES WITH (modulus 3, remainder 0)
+Indexes:
+    "prt_p_def_p_0_pkey" PRIMARY KEY, btree (a_int)
+
+-- Force index scan to prove the index is ok after repacking
+SET enable_seqscan TO off;
+--
+-- 1. Repack partitioned table
+--
+SELECT count(*) FROM prt;
+ count 
+-------
+    10
+(1 row)
+
+--- ERROR, cannot use --table for partitioned table
+\! pg_repack --polar-enable-global-index -T 3600 -k -U polar_repack_superuser --dbname=contrib_regression_pg_repack --table=repack_gi_schema.prt
+ERROR: pg_repack failed with error: ERROR:  relation "repack_gi_schema.prt" does not exist
+--- ERROR, does not support repack table with global index by default
+\! pg_repack -T 3600 -k -U polar_repack_superuser --dbname=contrib_regression_pg_repack --parent-table=repack_gi_schema.prt
+ERROR: cannot repack table with global index
+--- OK, can only use --parent-table for partitioned table
+\! pg_repack --polar-enable-global-index -T 3600 -k -U polar_repack_superuser --dbname=contrib_regression_pg_repack --parent-table=repack_gi_schema.prt
+INFO: drop global index at first: DROP INDEX IF EXISTS repack_gi_schema.prt_gi_btree_b
+INFO: drop global index at first: DROP INDEX IF EXISTS repack_gi_schema."prt_gi_BTREE_c"
+INFO: repacking table "repack_gi_schema.prt_p_0"
+INFO: repacking table "repack_gi_schema.prt_p_1"
+INFO: repacking table "repack_gi_schema.prt_p_2"
+INFO: repacking table "repack_gi_schema.prt_p_def_p_0"
+INFO: repacking table "repack_gi_schema.prt_p_def_p_1"
+INFO: repacking table "repack_gi_schema."prt_p_def_P_2""
+INFO: recreate global index at last: CREATE INDEX CONCURRENTLY IF NOT EXISTS prt_gi_btree_b ON repack_gi_schema.prt USING btree (b_text) GLOBAL
+INFO: recreate global index at last: CREATE INDEX CONCURRENTLY IF NOT EXISTS "prt_gi_BTREE_c" ON repack_gi_schema.prt USING btree (c_varchar) GLOBAL
+--- OK, use --parent-table for normal table
+\! pg_repack --polar-enable-global-index -T 3600 -k -U polar_repack_superuser --dbname=contrib_regression_pg_repack --parent-table=repack_gi_schema.normal
+INFO: repacking table "repack_gi_schema.normal"
+--- OK, mix normal table and partitioned table
+\! pg_repack --polar-enable-global-index -T 3600 -k -U polar_repack_superuser --dbname=contrib_regression_pg_repack --parent-table=repack_gi_schema.prt --table=repack_gi_schema.normal
+INFO: drop global index at first: DROP INDEX IF EXISTS repack_gi_schema.prt_gi_btree_b
+INFO: drop global index at first: DROP INDEX IF EXISTS repack_gi_schema."prt_gi_BTREE_c"
+INFO: repacking table "repack_gi_schema.normal"
+INFO: repacking table "repack_gi_schema.prt_p_0"
+INFO: repacking table "repack_gi_schema.prt_p_1"
+INFO: repacking table "repack_gi_schema.prt_p_2"
+INFO: repacking table "repack_gi_schema.prt_p_def_p_0"
+INFO: repacking table "repack_gi_schema.prt_p_def_p_1"
+INFO: repacking table "repack_gi_schema."prt_p_def_P_2""
+INFO: recreate global index at last: CREATE INDEX CONCURRENTLY IF NOT EXISTS prt_gi_btree_b ON repack_gi_schema.prt USING btree (b_text) GLOBAL
+INFO: recreate global index at last: CREATE INDEX CONCURRENTLY IF NOT EXISTS "prt_gi_BTREE_c" ON repack_gi_schema.prt USING btree (c_varchar) GLOBAL
+SELECT count(*) FROM prt;
+ count 
+-------
+    10
+(1 row)
+
+--
+-- 2. Repack partition
+--
+SELECT count(*) FROM prt_p_0;
+ count 
+-------
+     1
+(1 row)
+
+SELECT count(*) FROM prt_p_1;
+ count 
+-------
+     1
+(1 row)
+
+SELECT count(*) FROM prt_p_2;
+ count 
+-------
+     1
+(1 row)
+
+--- ERROR, does not support repack table with global index by default
+\! pg_repack -T 3600 -k -U polar_repack_superuser --dbname=contrib_regression_pg_repack --table=repack_gi_schema.prt_p_0
+ERROR: cannot repack table with global index
+--- OK to use --table for partition
+\! pg_repack --polar-enable-global-index -T 3600 -k -U polar_repack_superuser --dbname=contrib_regression_pg_repack --table=repack_gi_schema.prt_p_0
+INFO: drop global index at first: DROP INDEX IF EXISTS repack_gi_schema.prt_gi_btree_b
+INFO: drop global index at first: DROP INDEX IF EXISTS repack_gi_schema."prt_gi_BTREE_c"
+INFO: repacking table "repack_gi_schema.prt_p_0"
+INFO: recreate global index at last: CREATE INDEX CONCURRENTLY IF NOT EXISTS prt_gi_btree_b ON repack_gi_schema.prt USING btree (b_text) GLOBAL
+INFO: recreate global index at last: CREATE INDEX CONCURRENTLY IF NOT EXISTS "prt_gi_BTREE_c" ON repack_gi_schema.prt USING btree (c_varchar) GLOBAL
+--- OK to use --parent-table for partition
+\! pg_repack --polar-enable-global-index -T 3600 -k -U polar_repack_superuser --dbname=contrib_regression_pg_repack --parent-table=repack_gi_schema.prt_p_0
+INFO: drop global index at first: DROP INDEX IF EXISTS repack_gi_schema.prt_gi_btree_b
+INFO: drop global index at first: DROP INDEX IF EXISTS repack_gi_schema."prt_gi_BTREE_c"
+INFO: repacking table "repack_gi_schema.prt_p_0"
+INFO: recreate global index at last: CREATE INDEX CONCURRENTLY IF NOT EXISTS prt_gi_btree_b ON repack_gi_schema.prt USING btree (b_text) GLOBAL
+INFO: recreate global index at last: CREATE INDEX CONCURRENTLY IF NOT EXISTS "prt_gi_BTREE_c" ON repack_gi_schema.prt USING btree (c_varchar) GLOBAL
+--- OK to specify duplicate partition name
+\! pg_repack --polar-enable-global-index -T 3600 -k -U polar_repack_superuser --dbname=contrib_regression_pg_repack --table=repack_gi_schema.prt_p_0 --parent-table=repack_gi_schema.prt_p_0
+INFO: drop global index at first: DROP INDEX IF EXISTS repack_gi_schema.prt_gi_btree_b
+INFO: drop global index at first: DROP INDEX IF EXISTS repack_gi_schema."prt_gi_BTREE_c"
+INFO: repacking table "repack_gi_schema.prt_p_0"
+INFO: recreate global index at last: CREATE INDEX CONCURRENTLY IF NOT EXISTS prt_gi_btree_b ON repack_gi_schema.prt USING btree (b_text) GLOBAL
+INFO: recreate global index at last: CREATE INDEX CONCURRENTLY IF NOT EXISTS "prt_gi_BTREE_c" ON repack_gi_schema.prt USING btree (c_varchar) GLOBAL
+--- OK for multi partitions
+\! pg_repack --polar-enable-global-index -T 3600 -k -U polar_repack_superuser --dbname=contrib_regression_pg_repack --table=repack_gi_schema.prt_p_0 --table=repack_gi_schema.prt_p_1 --table=repack_gi_schema.prt_p_2
+INFO: drop global index at first: DROP INDEX IF EXISTS repack_gi_schema.prt_gi_btree_b
+INFO: drop global index at first: DROP INDEX IF EXISTS repack_gi_schema."prt_gi_BTREE_c"
+INFO: repacking table "repack_gi_schema.prt_p_0"
+INFO: repacking table "repack_gi_schema.prt_p_1"
+INFO: repacking table "repack_gi_schema.prt_p_2"
+INFO: recreate global index at last: CREATE INDEX CONCURRENTLY IF NOT EXISTS prt_gi_btree_b ON repack_gi_schema.prt USING btree (b_text) GLOBAL
+INFO: recreate global index at last: CREATE INDEX CONCURRENTLY IF NOT EXISTS "prt_gi_BTREE_c" ON repack_gi_schema.prt USING btree (c_varchar) GLOBAL
+--- OK to mix partition and partitioned table
+\! pg_repack --polar-enable-global-index -T 3600 -k -U polar_repack_superuser --dbname=contrib_regression_pg_repack --parent-table=repack_gi_schema.prt --table=repack_gi_schema.prt_p_0
+INFO: drop global index at first: DROP INDEX IF EXISTS repack_gi_schema.prt_gi_btree_b
+INFO: drop global index at first: DROP INDEX IF EXISTS repack_gi_schema."prt_gi_BTREE_c"
+INFO: repacking table "repack_gi_schema.prt_p_0"
+INFO: repacking table "repack_gi_schema.prt_p_1"
+INFO: repacking table "repack_gi_schema.prt_p_2"
+INFO: repacking table "repack_gi_schema.prt_p_def_p_0"
+INFO: repacking table "repack_gi_schema.prt_p_def_p_1"
+INFO: repacking table "repack_gi_schema."prt_p_def_P_2""
+INFO: recreate global index at last: CREATE INDEX CONCURRENTLY IF NOT EXISTS prt_gi_btree_b ON repack_gi_schema.prt USING btree (b_text) GLOBAL
+INFO: recreate global index at last: CREATE INDEX CONCURRENTLY IF NOT EXISTS "prt_gi_BTREE_c" ON repack_gi_schema.prt USING btree (c_varchar) GLOBAL
+--- OK to mix partition and normal table
+\! pg_repack --polar-enable-global-index -T 3600 -k -U polar_repack_superuser --dbname=contrib_regression_pg_repack --parent-table=repack_gi_schema.normal --table=repack_gi_schema.prt_p_0
+INFO: drop global index at first: DROP INDEX IF EXISTS repack_gi_schema.prt_gi_btree_b
+INFO: drop global index at first: DROP INDEX IF EXISTS repack_gi_schema."prt_gi_BTREE_c"
+INFO: repacking table "repack_gi_schema.normal"
+INFO: repacking table "repack_gi_schema.prt_p_0"
+INFO: recreate global index at last: CREATE INDEX CONCURRENTLY IF NOT EXISTS prt_gi_btree_b ON repack_gi_schema.prt USING btree (b_text) GLOBAL
+INFO: recreate global index at last: CREATE INDEX CONCURRENTLY IF NOT EXISTS "prt_gi_BTREE_c" ON repack_gi_schema.prt USING btree (c_varchar) GLOBAL
+SELECT count(*) FROM prt_p_0;
+ count 
+-------
+     1
+(1 row)
+
+SELECT count(*) FROM prt_p_1;
+ count 
+-------
+     1
+(1 row)
+
+SELECT count(*) FROM prt_p_2;
+ count 
+-------
+     1
+(1 row)
+
+-- Scan by index, prove that index is ok after repacking 1 partition
+SELECT * FROM prt WHERE b_text = '1';
+ a_int | b_text | c_varchar | d_num 
+-------+--------+-----------+-------
+    10 | 1      | 1         |     1
+(1 row)
+
+EXPLAIN (COSTS off) SELECT * FROM prt WHERE b_text = '1';
+                  QUERY PLAN                   
+-----------------------------------------------
+ Global Index Scan using prt_gi_btree_b on prt
+   Index Cond: (b_text = '1'::text)
+(2 rows)
+
+SELECT * FROM prt WHERE c_varchar = '1';
+ a_int | b_text | c_varchar | d_num 
+-------+--------+-----------+-------
+    10 | 1      | 1         |     1
+(1 row)
+
+EXPLAIN (COSTS off) SELECT * FROM prt WHERE c_varchar = '1';
+                   QUERY PLAN                    
+-------------------------------------------------
+ Global Index Scan using "prt_gi_BTREE_c" on prt
+   Index Cond: ((c_varchar)::text = '1'::text)
+(2 rows)
+
+--
+-- 3. Repack partitioned partition
+--
+SELECT count(*) FROM prt_p_def;
+ count 
+-------
+     7
+(1 row)
+
+--- ERROR, cannot use --table for partitioned partition
+\! pg_repack --polar-enable-global-index -T 3600 -k -U polar_repack_superuser --dbname=contrib_regression_pg_repack --table=repack_gi_schema.prt_p_def
+ERROR: pg_repack failed with error: ERROR:  relation "repack_gi_schema.prt_p_def" does not exist
+--- ERROR, does not support repack table with global index by default
+\! pg_repack -T 3600 -k -U polar_repack_superuser --dbname=contrib_regression_pg_repack --parent-table=repack_gi_schema.prt_p_def
+ERROR: cannot repack table with global index
+--- OK, can only use --parent-table for partitioned partition
+\! pg_repack --polar-enable-global-index -T 3600 -k -U polar_repack_superuser --dbname=contrib_regression_pg_repack --parent-table=repack_gi_schema.prt_p_def
+INFO: drop global index at first: DROP INDEX IF EXISTS repack_gi_schema.prt_gi_btree_b
+INFO: drop global index at first: DROP INDEX IF EXISTS repack_gi_schema."prt_gi_BTREE_c"
+INFO: repacking table "repack_gi_schema.prt_p_def_p_0"
+INFO: repacking table "repack_gi_schema.prt_p_def_p_1"
+INFO: repacking table "repack_gi_schema."prt_p_def_P_2""
+INFO: recreate global index at last: CREATE INDEX CONCURRENTLY IF NOT EXISTS prt_gi_btree_b ON repack_gi_schema.prt USING btree (b_text) GLOBAL
+INFO: recreate global index at last: CREATE INDEX CONCURRENTLY IF NOT EXISTS "prt_gi_BTREE_c" ON repack_gi_schema.prt USING btree (c_varchar) GLOBAL
+--- OK, partitioned table and partitioned partition
+\! pg_repack --polar-enable-global-index -T 3600 -k -U polar_repack_superuser --dbname=contrib_regression_pg_repack --parent-table=repack_gi_schema.prt --parent-table=repack_gi_schema.prt_p_def
+INFO: drop global index at first: DROP INDEX IF EXISTS repack_gi_schema.prt_gi_btree_b
+INFO: drop global index at first: DROP INDEX IF EXISTS repack_gi_schema."prt_gi_BTREE_c"
+INFO: repacking table "repack_gi_schema.prt_p_0"
+INFO: repacking table "repack_gi_schema.prt_p_1"
+INFO: repacking table "repack_gi_schema.prt_p_2"
+INFO: repacking table "repack_gi_schema.prt_p_def_p_0"
+INFO: repacking table "repack_gi_schema.prt_p_def_p_1"
+INFO: repacking table "repack_gi_schema."prt_p_def_P_2""
+INFO: recreate global index at last: CREATE INDEX CONCURRENTLY IF NOT EXISTS prt_gi_btree_b ON repack_gi_schema.prt USING btree (b_text) GLOBAL
+INFO: recreate global index at last: CREATE INDEX CONCURRENTLY IF NOT EXISTS "prt_gi_BTREE_c" ON repack_gi_schema.prt USING btree (c_varchar) GLOBAL
+--- OK, partitioned partition and sub-partition
+\! pg_repack --polar-enable-global-index -T 3600 -k -U polar_repack_superuser --dbname=contrib_regression_pg_repack --parent-table=repack_gi_schema.prt_p_def --table=repack_gi_schema.prt_p_def_p_1
+INFO: drop global index at first: DROP INDEX IF EXISTS repack_gi_schema.prt_gi_btree_b
+INFO: drop global index at first: DROP INDEX IF EXISTS repack_gi_schema."prt_gi_BTREE_c"
+INFO: repacking table "repack_gi_schema.prt_p_def_p_0"
+INFO: repacking table "repack_gi_schema.prt_p_def_p_1"
+INFO: repacking table "repack_gi_schema."prt_p_def_P_2""
+INFO: recreate global index at last: CREATE INDEX CONCURRENTLY IF NOT EXISTS prt_gi_btree_b ON repack_gi_schema.prt USING btree (b_text) GLOBAL
+INFO: recreate global index at last: CREATE INDEX CONCURRENTLY IF NOT EXISTS "prt_gi_BTREE_c" ON repack_gi_schema.prt USING btree (c_varchar) GLOBAL
+--- OK, partitioned partition and normal table
+\! pg_repack --polar-enable-global-index -T 3600 -k -U polar_repack_superuser --dbname=contrib_regression_pg_repack --parent-table=repack_gi_schema.prt_p_def --table=repack_gi_schema.normal
+INFO: drop global index at first: DROP INDEX IF EXISTS repack_gi_schema.prt_gi_btree_b
+INFO: drop global index at first: DROP INDEX IF EXISTS repack_gi_schema."prt_gi_BTREE_c"
+INFO: repacking table "repack_gi_schema.normal"
+INFO: repacking table "repack_gi_schema.prt_p_def_p_0"
+INFO: repacking table "repack_gi_schema.prt_p_def_p_1"
+INFO: repacking table "repack_gi_schema."prt_p_def_P_2""
+INFO: recreate global index at last: CREATE INDEX CONCURRENTLY IF NOT EXISTS prt_gi_btree_b ON repack_gi_schema.prt USING btree (b_text) GLOBAL
+INFO: recreate global index at last: CREATE INDEX CONCURRENTLY IF NOT EXISTS "prt_gi_BTREE_c" ON repack_gi_schema.prt USING btree (c_varchar) GLOBAL
+SELECT count(*) FROM prt_p_def;
+ count 
+-------
+     7
+(1 row)
+
+-- Scan by index, prove that index is ok after repacking 1 partition
+SELECT * FROM prt WHERE b_text = '2';
+ a_int | b_text | c_varchar | d_num 
+-------+--------+-----------+-------
+    20 | 2      | 2         |     2
+(1 row)
+
+EXPLAIN (COSTS off) SELECT * FROM prt WHERE b_text = '2';
+                  QUERY PLAN                   
+-----------------------------------------------
+ Global Index Scan using prt_gi_btree_b on prt
+   Index Cond: (b_text = '2'::text)
+(2 rows)
+
+SELECT * FROM prt WHERE c_varchar = '2';
+ a_int | b_text | c_varchar | d_num 
+-------+--------+-----------+-------
+    20 | 2      | 2         |     2
+(1 row)
+
+EXPLAIN (COSTS off) SELECT * FROM prt WHERE c_varchar = '2';
+                   QUERY PLAN                    
+-------------------------------------------------
+ Global Index Scan using "prt_gi_BTREE_c" on prt
+   Index Cond: ((c_varchar)::text = '2'::text)
+(2 rows)
+
+--
+-- 4. Repack sub-partition
+--
+SELECT count(*) FROM prt_p_def;
+ count 
+-------
+     7
+(1 row)
+
+--- ERROR, does not support repack table with global index by default
+\! pg_repack -T 3600 -k -U polar_repack_superuser --dbname=contrib_regression_pg_repack --table=repack_gi_schema.prt_p_def_p_1
+ERROR: cannot repack table with global index
+--- OK
+\! pg_repack --polar-enable-global-index -T 3600 -k -U polar_repack_superuser --dbname=contrib_regression_pg_repack --table=repack_gi_schema.prt_p_def_p_1
+INFO: drop global index at first: DROP INDEX IF EXISTS repack_gi_schema.prt_gi_btree_b
+INFO: drop global index at first: DROP INDEX IF EXISTS repack_gi_schema."prt_gi_BTREE_c"
+INFO: repacking table "repack_gi_schema.prt_p_def_p_1"
+INFO: recreate global index at last: CREATE INDEX CONCURRENTLY IF NOT EXISTS prt_gi_btree_b ON repack_gi_schema.prt USING btree (b_text) GLOBAL
+INFO: recreate global index at last: CREATE INDEX CONCURRENTLY IF NOT EXISTS "prt_gi_BTREE_c" ON repack_gi_schema.prt USING btree (c_varchar) GLOBAL
+--- OK
+\! pg_repack --polar-enable-global-index -T 3600 -k -U polar_repack_superuser --dbname=contrib_regression_pg_repack --parent-table=repack_gi_schema.prt_p_def_p_1
+INFO: drop global index at first: DROP INDEX IF EXISTS repack_gi_schema.prt_gi_btree_b
+INFO: drop global index at first: DROP INDEX IF EXISTS repack_gi_schema."prt_gi_BTREE_c"
+INFO: repacking table "repack_gi_schema.prt_p_def_p_1"
+INFO: recreate global index at last: CREATE INDEX CONCURRENTLY IF NOT EXISTS prt_gi_btree_b ON repack_gi_schema.prt USING btree (b_text) GLOBAL
+INFO: recreate global index at last: CREATE INDEX CONCURRENTLY IF NOT EXISTS "prt_gi_BTREE_c" ON repack_gi_schema.prt USING btree (c_varchar) GLOBAL
+--- OK for multi sub-partition
+\! pg_repack --polar-enable-global-index -T 3600 -k -U polar_repack_superuser --dbname=contrib_regression_pg_repack --table=repack_gi_schema.prt_p_def_p_0 --table=repack_gi_schema.prt_p_def_p_1 --table='repack_part_schema."prt_p_def_P_2"'
+INFO: drop global index at first: DROP INDEX IF EXISTS repack_gi_schema.prt_gi_btree_b
+INFO: drop global index at first: DROP INDEX IF EXISTS repack_gi_schema."prt_gi_BTREE_c"
+INFO: repacking table "repack_gi_schema.prt_p_def_p_0"
+INFO: repacking table "repack_gi_schema.prt_p_def_p_1"
+INFO: repacking table "repack_part_schema."prt_p_def_P_2""
+INFO: recreate global index at last: CREATE INDEX CONCURRENTLY IF NOT EXISTS prt_gi_btree_b ON repack_gi_schema.prt USING btree (b_text) GLOBAL
+INFO: recreate global index at last: CREATE INDEX CONCURRENTLY IF NOT EXISTS "prt_gi_BTREE_c" ON repack_gi_schema.prt USING btree (c_varchar) GLOBAL
+--- Error, upper case name should be preserved by '' and ""
+\! pg_repack --polar-enable-global-index -T 3600 -k -U polar_repack_superuser --dbname=contrib_regression_pg_repack --table=repack_gi_schema.prt_p_def_p_0 --table=repack_gi_schema.prt_p_def_p_1 --table=repack_gi_schema.prt_p_def_P_2
+ERROR: pg_repack failed with error: ERROR:  relation "repack_gi_schema.prt_p_def_P_2" does not exist
+\! pg_repack --polar-enable-global-index -T 3600 -k -U polar_repack_superuser --dbname=contrib_regression_pg_repack --table=repack_gi_schema.prt_p_def_p_0 --table=repack_gi_schema.prt_p_def_p_1 --table="repack_gi_schema.prt_p_def_P_2"
+ERROR: pg_repack failed with error: ERROR:  relation "repack_gi_schema.prt_p_def_P_2" does not exist
+\! pg_repack --polar-enable-global-index -T 3600 -k -U polar_repack_superuser --dbname=contrib_regression_pg_repack --table=repack_gi_schema.prt_p_def_p_0 --table=repack_gi_schema.prt_p_def_p_1 --table=repack_gi_schema."prt_p_def_P_2"
+ERROR: pg_repack failed with error: ERROR:  relation "repack_gi_schema.prt_p_def_P_2" does not exist
+SELECT count(*) FROM prt_p_def;
+ count 
+-------
+     7
+(1 row)
+
+-- Scan by index, prove that index is ok after repacking 1 partition
+SELECT * FROM prt WHERE b_text = '3';
+ a_int | b_text | c_varchar | d_num 
+-------+--------+-----------+-------
+    30 | 3      | 3         |     3
+(1 row)
+
+EXPLAIN (COSTS off) SELECT * FROM prt WHERE b_text = '3';
+                  QUERY PLAN                   
+-----------------------------------------------
+ Global Index Scan using prt_gi_btree_b on prt
+   Index Cond: (b_text = '3'::text)
+(2 rows)
+
+SELECT * FROM prt WHERE c_varchar = '3';
+ a_int | b_text | c_varchar | d_num 
+-------+--------+-----------+-------
+    30 | 3      | 3         |     3
+(1 row)
+
+EXPLAIN (COSTS off) SELECT * FROM prt WHERE c_varchar = '3';
+                   QUERY PLAN                    
+-------------------------------------------------
+ Global Index Scan using "prt_gi_BTREE_c" on prt
+   Index Cond: ((c_varchar)::text = '3'::text)
+(2 rows)
+
+--
+-- 5. Repack index on partitioned table
+--
+SELECT count(*) FROM prt_p_def;
+ count 
+-------
+     7
+(1 row)
+
+--- OK for parent table. Only normal indexes are repacked by default, global indexes are skipped
+\! pg_repack -T 3600 -k -U polar_repack_superuser --dbname=contrib_regression_pg_repack --parent-table=repack_gi_schema.prt --only-indexes
+INFO: repacking indexes of "repack_gi_schema.prt_p_0"
+INFO: repacking index "repack_gi_schema.prt_p_0_pkey"
+INFO: repacking indexes of "repack_gi_schema.prt_p_1"
+INFO: repacking index "repack_gi_schema.prt_p_1_pkey"
+INFO: repacking indexes of "repack_gi_schema.prt_p_2"
+INFO: repacking index "repack_gi_schema.prt_p_2_pkey"
+INFO: repacking indexes of "repack_gi_schema."prt_p_def_P_2""
+INFO: repacking index "repack_gi_schema."prt_p_def_P_2_pkey""
+INFO: repacking indexes of "repack_gi_schema.prt_p_def_p_0"
+INFO: repacking index "repack_gi_schema.prt_p_def_p_0_pkey"
+INFO: repacking indexes of "repack_gi_schema.prt_p_def_p_1"
+INFO: repacking index "repack_gi_schema.prt_p_def_p_1_pkey"
+INFO: skipping global indexes of "repack_gi_schema.prt" since it's disabled
+--- OK for parent table, global indexes are also repacked with --polar-enable-global-index
+\! pg_repack --polar-enable-global-index -T 3600 -k -U polar_repack_superuser --dbname=contrib_regression_pg_repack --parent-table=repack_gi_schema.prt --only-indexes
+INFO: repacking indexes of "repack_gi_schema.prt_p_0"
+INFO: repacking index "repack_gi_schema.prt_p_0_pkey"
+INFO: repacking indexes of "repack_gi_schema.prt_p_1"
+INFO: repacking index "repack_gi_schema.prt_p_1_pkey"
+INFO: repacking indexes of "repack_gi_schema.prt_p_2"
+INFO: repacking index "repack_gi_schema.prt_p_2_pkey"
+INFO: repacking indexes of "repack_gi_schema."prt_p_def_P_2""
+INFO: repacking index "repack_gi_schema."prt_p_def_P_2_pkey""
+INFO: repacking indexes of "repack_gi_schema.prt_p_def_p_0"
+INFO: repacking index "repack_gi_schema.prt_p_def_p_0_pkey"
+INFO: repacking indexes of "repack_gi_schema.prt_p_def_p_1"
+INFO: repacking index "repack_gi_schema.prt_p_def_p_1_pkey"
+INFO: repacking global indexes of "repack_gi_schema.prt"
+INFO: repacking global index "repack_gi_schema."prt_gi_BTREE_c""
+INFO: repacking global index "repack_gi_schema.prt_gi_btree_b"
+--- Error, global index is not enabled by default
+\! pg_repack -T 3600 -k -U polar_repack_superuser --dbname=contrib_regression_pg_repack --index=repack_gi_schema.prt_gi_btree_b --index='repack_gi_schema."prt_gi_BTREE_c"'
+ERROR: cannot repack global index
+--- OK for global index with --polar-enable-global-index
+\! pg_repack --polar-enable-global-index -T 3600 -k -U polar_repack_superuser --dbname=contrib_regression_pg_repack --index=repack_gi_schema.prt_gi_btree_b --index='repack_gi_schema."prt_gi_BTREE_c"'
+INFO: repacking global index "repack_gi_schema.prt_gi_btree_b"
+INFO: repacking global index "repack_gi_schema."prt_gi_BTREE_c""
+--- Error, upper case name should be preserved by '' and ""
+\! pg_repack --polar-enable-global-index -T 3600 -k -U polar_repack_superuser --dbname=contrib_regression_pg_repack --index=repack_gi_schema.prt_gi_BTREE_c
+WARNING: ERROR:  relation "repack_gi_schema.prt_gi_btree_c" does not exist
+CONTEXT:  unnamed portal parameter $1 = '...'
+\! pg_repack --polar-enable-global-index -T 3600 -k -U polar_repack_superuser --dbname=contrib_regression_pg_repack --index="repack_gi_schema.prt_gi_BTREE_c"
+WARNING: ERROR:  relation "repack_gi_schema.prt_gi_btree_c" does not exist
+CONTEXT:  unnamed portal parameter $1 = '...'
+\! pg_repack --polar-enable-global-index -T 3600 -k -U polar_repack_superuser --dbname=contrib_regression_pg_repack --index=repack_gi_schema."prt_gi_BTREE_c"
+WARNING: ERROR:  relation "repack_gi_schema.prt_gi_btree_c" does not exist
+CONTEXT:  unnamed portal parameter $1 = '...'
+--- Error for global partitioned index by default
+\! pg_repack -T 3600 -k -U polar_repack_superuser --dbname=contrib_regression_pg_repack --index=repack_gi_schema.prt_gpi_btree_d
+WARNING: ERROR:  relation "repack_gi_schema.prt_gpi_btree_d" does not exist
+CONTEXT:  unnamed portal parameter $1 = '...'
+--- OK for global partitioned index with --polar-enable-global-index
+\! pg_repack --polar-enable-global-index -T 3600 -k -U polar_repack_superuser --dbname=contrib_regression_pg_repack --index=repack_gi_schema.prt_gpi_btree_d
+WARNING: ERROR:  relation "repack_gi_schema.prt_gpi_btree_d" does not exist
+CONTEXT:  unnamed portal parameter $1 = '...'
+--- OK for global index and global partitioned index
+\! pg_repack --polar-enable-global-index -T 3600 -k -U polar_repack_superuser --dbname=contrib_regression_pg_repack --index=repack_gi_schema.prt_gi_btree_b --index=repack_gi_schema.prt_gpi_btree_d
+INFO: repacking global index "repack_gi_schema.prt_gi_btree_b"
+WARNING: ERROR:  relation "repack_gi_schema.prt_gpi_btree_d" does not exist
+CONTEXT:  unnamed portal parameter $1 = '...'
+SELECT count(*) FROM prt_p_def;
+ count 
+-------
+     7
+(1 row)
+
+-- Scan by index, prove that index is ok after repacking 1 partition
+SELECT * FROM prt WHERE b_text = '3';
+ a_int | b_text | c_varchar | d_num 
+-------+--------+-----------+-------
+    30 | 3      | 3         |     3
+(1 row)
+
+EXPLAIN (COSTS off) SELECT * FROM prt WHERE b_text = '3';
+                  QUERY PLAN                   
+-----------------------------------------------
+ Global Index Scan using prt_gi_btree_b on prt
+   Index Cond: (b_text = '3'::text)
+(2 rows)
+
+SELECT * FROM prt WHERE c_varchar = '3';
+ a_int | b_text | c_varchar | d_num 
+-------+--------+-----------+-------
+    30 | 3      | 3         |     3
+(1 row)
+
+EXPLAIN (COSTS off) SELECT * FROM prt WHERE c_varchar = '3';
+                   QUERY PLAN                    
+-------------------------------------------------
+ Global Index Scan using "prt_gi_BTREE_c" on prt
+   Index Cond: ((c_varchar)::text = '3'::text)
+(2 rows)
+
+--
+-- 6. Repack index on partition
+--
+SELECT count(*) FROM prt_p_0;
+ count 
+-------
+     1
+(1 row)
+
+--- OK, but global indexes are not repacked since they are on parent table but not partitions
+\! pg_repack -T 3600 -k -U polar_repack_superuser --dbname=contrib_regression_pg_repack --table=repack_gi_schema.prt_p_0 --only-indexes
+INFO: repacking indexes of "repack_gi_schema.prt_p_0"
+INFO: repacking index "repack_gi_schema.prt_p_0_pkey"
+\! pg_repack -T 3600 -k -U polar_repack_superuser --dbname=contrib_regression_pg_repack --parent-table=repack_gi_schema.prt_p_0 --only-indexes
+INFO: repacking indexes of "repack_gi_schema.prt_p_0"
+INFO: repacking index "repack_gi_schema.prt_p_0_pkey"
+--- OK with --polar-enable-global-index, global indexes are not repacked since they are on parent table but not partitions
+\! pg_repack --polar-enable-global-index -T 3600 -k -U polar_repack_superuser --dbname=contrib_regression_pg_repack --table=repack_gi_schema.prt_p_0 --only-indexes
+INFO: repacking indexes of "repack_gi_schema.prt_p_0"
+INFO: repacking index "repack_gi_schema.prt_p_0_pkey"
+--- OK with --polar-enable-global-index
+\! pg_repack --polar-enable-global-index -T 3600 -k -U polar_repack_superuser --dbname=contrib_regression_pg_repack --parent-table=repack_gi_schema.prt_p_0 --only-indexes
+INFO: repacking indexes of "repack_gi_schema.prt_p_0"
+INFO: repacking index "repack_gi_schema.prt_p_0_pkey"
+--- OK for multi partitions
+\! pg_repack --polar-enable-global-index -T 3600 -k -U polar_repack_superuser --dbname=contrib_regression_pg_repack --table=repack_gi_schema.prt_p_0 --table=repack_gi_schema.prt_p_1 --table=repack_gi_schema.prt_p_2 --only-indexes
+INFO: repacking indexes of "repack_gi_schema.prt_p_0"
+INFO: repacking index "repack_gi_schema.prt_p_0_pkey"
+INFO: repacking indexes of "repack_gi_schema.prt_p_1"
+INFO: repacking index "repack_gi_schema.prt_p_1_pkey"
+INFO: repacking indexes of "repack_gi_schema.prt_p_2"
+INFO: repacking index "repack_gi_schema.prt_p_2_pkey"
+--- OK for primary key index
+\! pg_repack --polar-enable-global-index -T 3600 -k -U polar_repack_superuser --dbname=contrib_regression_pg_repack --index=repack_gi_schema.prt_p_0_pkey
+INFO: repacking index "repack_gi_schema.prt_p_0_pkey"
+SELECT count(*) FROM prt_p_0;
+ count 
+-------
+     1
+(1 row)
+
+-- Scan by index, prove that index is ok after repacking
+SELECT * FROM prt WHERE b_text = '5';
+ a_int | b_text | c_varchar | d_num 
+-------+--------+-----------+-------
+    50 | 5      | 5         |     5
+(1 row)
+
+EXPLAIN (COSTS off) SELECT * FROM prt WHERE b_text = '5';
+                  QUERY PLAN                   
+-----------------------------------------------
+ Global Index Scan using prt_gi_btree_b on prt
+   Index Cond: (b_text = '5'::text)
+(2 rows)
+
+SELECT * FROM prt WHERE c_varchar = '5';
+ a_int | b_text | c_varchar | d_num 
+-------+--------+-----------+-------
+    50 | 5      | 5         |     5
+(1 row)
+
+EXPLAIN (COSTS off) SELECT * FROM prt WHERE c_varchar = '5';
+                   QUERY PLAN                    
+-------------------------------------------------
+ Global Index Scan using "prt_gi_BTREE_c" on prt
+   Index Cond: ((c_varchar)::text = '5'::text)
+(2 rows)
+
+--
+-- 7. Repack index on partitioned partition
+--
+SELECT count(*) FROM prt_p_def;
+ count 
+-------
+     7
+(1 row)
+
+--- OK, but global indexes are not repacked since they are on parent table but not partitions
+\! pg_repack -T 3600 -k -U polar_repack_superuser --dbname=contrib_regression_pg_repack --parent-table=repack_gi_schema.prt_p_def --only-indexes
+INFO: repacking indexes of "repack_gi_schema."prt_p_def_P_2""
+INFO: repacking index "repack_gi_schema."prt_p_def_P_2_pkey""
+INFO: repacking indexes of "repack_gi_schema.prt_p_def_p_0"
+INFO: repacking index "repack_gi_schema.prt_p_def_p_0_pkey"
+INFO: repacking indexes of "repack_gi_schema.prt_p_def_p_1"
+INFO: repacking index "repack_gi_schema.prt_p_def_p_1_pkey"
+--- OK with --polar-enable-global-index, global indexes are not repacked since they are on parent table but not partitions
+\! pg_repack --polar-enable-global-index -T 3600 -k -U polar_repack_superuser --dbname=contrib_regression_pg_repack --parent-table=repack_gi_schema.prt_p_def --only-indexes
+INFO: repacking indexes of "repack_gi_schema."prt_p_def_P_2""
+INFO: repacking index "repack_gi_schema."prt_p_def_P_2_pkey""
+INFO: repacking indexes of "repack_gi_schema.prt_p_def_p_0"
+INFO: repacking index "repack_gi_schema.prt_p_def_p_0_pkey"
+INFO: repacking indexes of "repack_gi_schema.prt_p_def_p_1"
+INFO: repacking index "repack_gi_schema.prt_p_def_p_1_pkey"
+SELECT count(*) FROM prt_p_def;
+ count 
+-------
+     7
+(1 row)
+
+-- Scan by index, prove that index is ok after repacking index on partitioned partition
+SELECT * FROM prt WHERE a_int = 50;
+ a_int | b_text | c_varchar | d_num 
+-------+--------+-----------+-------
+    50 | 5      | 5         |     5
+(1 row)
+
+EXPLAIN (COSTS off) SELECT * FROM prt WHERE a_int = 50;
+                        QUERY PLAN                        
+----------------------------------------------------------
+ Index Scan using prt_p_def_p_0_pkey on prt_p_def_p_0 prt
+   Index Cond: (a_int = 50)
+(2 rows)
+
+SELECT * FROM prt WHERE b_text = '5';
+ a_int | b_text | c_varchar | d_num 
+-------+--------+-----------+-------
+    50 | 5      | 5         |     5
+(1 row)
+
+EXPLAIN (COSTS off) SELECT * FROM prt WHERE b_text = '5';
+                  QUERY PLAN                   
+-----------------------------------------------
+ Global Index Scan using prt_gi_btree_b on prt
+   Index Cond: (b_text = '5'::text)
+(2 rows)
+
+SELECT * FROM prt WHERE c_varchar = '5';
+ a_int | b_text | c_varchar | d_num 
+-------+--------+-----------+-------
+    50 | 5      | 5         |     5
+(1 row)
+
+EXPLAIN (COSTS off) SELECT * FROM prt WHERE c_varchar = '5';
+                   QUERY PLAN                    
+-------------------------------------------------
+ Global Index Scan using "prt_gi_BTREE_c" on prt
+   Index Cond: ((c_varchar)::text = '5'::text)
+(2 rows)
+
+SELECT * FROM prt WHERE d_num = 5;
+ a_int | b_text | c_varchar | d_num 
+-------+--------+-----------+-------
+    50 | 5      | 5         |     5
+(1 row)
+
+EXPLAIN (COSTS off) SELECT * FROM prt WHERE d_num = 5;
+               QUERY PLAN                
+-----------------------------------------
+ Append
+   ->  Seq Scan on prt_p_0 prt_1
+         Filter: (d_num = '5'::numeric)
+   ->  Seq Scan on prt_p_1 prt_2
+         Filter: (d_num = '5'::numeric)
+   ->  Seq Scan on prt_p_2 prt_3
+         Filter: (d_num = '5'::numeric)
+   ->  Seq Scan on prt_p_def_p_0 prt_4
+         Filter: (d_num = '5'::numeric)
+   ->  Seq Scan on prt_p_def_p_1 prt_5
+         Filter: (d_num = '5'::numeric)
+   ->  Seq Scan on "prt_p_def_P_2" prt_6
+         Filter: (d_num = '5'::numeric)
+(13 rows)
+
+--
+-- 8. Repack index on sub-partition
+--
+SELECT count(*) FROM prt_p_def;
+ count 
+-------
+     7
+(1 row)
+
+--- OK, but global indexes are not repacked since they are on parent table but not partitions
+\! pg_repack -T 3600 -k -U polar_repack_superuser --dbname=contrib_regression_pg_repack --table=repack_gi_schema.prt_p_def_p_0 --only-indexes
+INFO: repacking indexes of "repack_gi_schema.prt_p_def_p_0"
+INFO: repacking index "repack_gi_schema.prt_p_def_p_0_pkey"
+\! pg_repack -T 3600 -k -U polar_repack_superuser --dbname=contrib_regression_pg_repack --parent-table=repack_gi_schema.prt_p_def_p_0 --only-indexes
+INFO: repacking indexes of "repack_gi_schema.prt_p_def_p_0"
+INFO: repacking index "repack_gi_schema.prt_p_def_p_0_pkey"
+--- OK with --polar-enable-global-index, global indexes are not repacked since they are on parent table but not partitions
+\! pg_repack --polar-enable-global-index -T 3600 -k -U polar_repack_superuser --dbname=contrib_regression_pg_repack --table=repack_gi_schema.prt_p_def_p_0 --only-indexes
+INFO: repacking indexes of "repack_gi_schema.prt_p_def_p_0"
+INFO: repacking index "repack_gi_schema.prt_p_def_p_0_pkey"
+--- OK
+\! pg_repack --polar-enable-global-index -T 3600 -k -U polar_repack_superuser --dbname=contrib_regression_pg_repack --parent-table=repack_gi_schema.prt_p_def_p_0 --only-indexes
+INFO: repacking indexes of "repack_gi_schema.prt_p_def_p_0"
+INFO: repacking index "repack_gi_schema.prt_p_def_p_0_pkey"
+--- OK for multi sub-partition
+\! pg_repack --polar-enable-global-index -T 3600 -k -U polar_repack_superuser --dbname=contrib_regression_pg_repack --table=repack_gi_schema.prt_p_def_p_0 --table=repack_gi_schema.prt_p_def_p_1 --table='repack_gi_schema."prt_p_def_P_2"' --only-indexes
+INFO: repacking indexes of "repack_gi_schema.prt_p_def_p_0"
+INFO: repacking index "repack_gi_schema.prt_p_def_p_0_pkey"
+INFO: repacking indexes of "repack_gi_schema.prt_p_def_p_1"
+INFO: repacking index "repack_gi_schema.prt_p_def_p_1_pkey"
+INFO: repacking indexes of "repack_gi_schema."prt_p_def_P_2""
+INFO: repacking index "repack_gi_schema."prt_p_def_P_2_pkey""
+--- Error, upper case name should be preserved by '' and ""
+\! pg_repack --polar-enable-global-index -T 3600 -k -U polar_repack_superuser --dbname=contrib_regression_pg_repack --table=repack_gi_schema.prt_p_def_p_0 --table=repack_gi_schema.prt_p_def_p_1 --table=repack_gi_schema.prt_p_def_P_2 --only-indexes
+ERROR: ERROR:  relation "repack_gi_schema.prt_p_def_P_2" does not exist
+\! pg_repack --polar-enable-global-index -T 3600 -k -U polar_repack_superuser --dbname=contrib_regression_pg_repack --table=repack_gi_schema.prt_p_def_p_0 --table=repack_gi_schema.prt_p_def_p_1 --table="repack_gi_schema.prt_p_def_P_2" --only-indexes
+ERROR: ERROR:  relation "repack_gi_schema.prt_p_def_P_2" does not exist
+\! pg_repack --polar-enable-global-index -T 3600 -k -U polar_repack_superuser --dbname=contrib_regression_pg_repack --table=repack_gi_schema.prt_p_def_p_0 --table=repack_gi_schema.prt_p_def_p_1 --table=repack_gi_schema."prt_p_def_P_2" --only-indexes
+ERROR: ERROR:  relation "repack_gi_schema.prt_p_def_P_2" does not exist
+--- OK for primary key index
+\! pg_repack --polar-enable-global-index -T 3600 -k -U polar_repack_superuser --dbname=contrib_regression_pg_repack --index=repack_gi_schema.prt_p_def_p_0_pkey
+INFO: repacking index "repack_gi_schema.prt_p_def_p_0_pkey"
+-- Scan by index, prove that index is ok after repacking
+SELECT * FROM prt WHERE b_text = '7';
+ a_int | b_text | c_varchar | d_num 
+-------+--------+-----------+-------
+    70 | 7      | 7         |     7
+(1 row)
+
+EXPLAIN (COSTS off) SELECT * FROM prt WHERE b_text = '7';
+                  QUERY PLAN                   
+-----------------------------------------------
+ Global Index Scan using prt_gi_btree_b on prt
+   Index Cond: (b_text = '7'::text)
+(2 rows)
+
+SELECT * FROM prt WHERE c_varchar = '7';
+ a_int | b_text | c_varchar | d_num 
+-------+--------+-----------+-------
+    70 | 7      | 7         |     7
+(1 row)
+
+EXPLAIN (COSTS off) SELECT * FROM prt WHERE c_varchar = '7';
+                   QUERY PLAN                    
+-------------------------------------------------
+ Global Index Scan using "prt_gi_BTREE_c" on prt
+   Index Cond: ((c_varchar)::text = '7'::text)
+(2 rows)
+
+SELECT count(*) FROM prt_p_def;
+ count 
+-------
+     7
+(1 row)
+
+--
+-- 9. Repack table with unique global index
+--
+\d+ prt
+                                  Partitioned table "repack_gi_schema.prt"
+  Column   |         Type          | Collation | Nullable | Default | Storage  | Stats target | Description 
+-----------+-----------------------+-----------+----------+---------+----------+--------------+-------------
+ a_int     | integer               |           | not null |         | plain    |              | 
+ b_text    | text                  |           |          |         | extended |              | 
+ c_varchar | character varying(30) |           |          |         | extended |              | 
+ d_num     | numeric               |           |          |         | main     |              | 
+Partition key: RANGE (a_int)
+Indexes:
+    "prt_pkey" PRIMARY KEY, btree (a_int)
+    "prt_gi_BTREE_c" btree (c_varchar) GLOBAL
+    "prt_gi_btree_b" btree (b_text) GLOBAL
+Partitions: prt_p_0 FOR VALUES FROM (0) TO (10),
+            prt_p_1 FOR VALUES FROM (10) TO (20),
+            prt_p_2 FOR VALUES FROM (20) TO (30),
+            prt_p_def DEFAULT, PARTITIONED
+
+--- Drop normal global index
+DROP INDEX prt_gi_btree_b;
+--- Create unique global index
+CREATE UNIQUE INDEX prt_gi_btree_b ON prt USING btree (b_text) GLOBAL;
+\d+ prt
+                                  Partitioned table "repack_gi_schema.prt"
+  Column   |         Type          | Collation | Nullable | Default | Storage  | Stats target | Description 
+-----------+-----------------------+-----------+----------+---------+----------+--------------+-------------
+ a_int     | integer               |           | not null |         | plain    |              | 
+ b_text    | text                  |           |          |         | extended |              | 
+ c_varchar | character varying(30) |           |          |         | extended |              | 
+ d_num     | numeric               |           |          |         | main     |              | 
+Partition key: RANGE (a_int)
+Indexes:
+    "prt_pkey" PRIMARY KEY, btree (a_int)
+    "prt_gi_BTREE_c" btree (c_varchar) GLOBAL
+    "prt_gi_btree_b" UNIQUE, btree (b_text) GLOBAL
+Partitions: prt_p_0 FOR VALUES FROM (0) TO (10),
+            prt_p_1 FOR VALUES FROM (10) TO (20),
+            prt_p_2 FOR VALUES FROM (20) TO (30),
+            prt_p_def DEFAULT, PARTITIONED
+
+--- ERROR: cannot repack table with unique index
+\! pg_repack --polar-enable-global-index -T 3600 -k -U polar_repack_superuser --dbname=contrib_regression_pg_repack --parent-table=repack_gi_schema.prt
+ERROR: cannot repack table with unique global index: prt_gi_btree_b
+\! pg_repack --polar-enable-global-index -T 3600 -k -U polar_repack_superuser --dbname=contrib_regression_pg_repack --table=repack_gi_schema.prt_p_0
+ERROR: cannot repack table with unique global index: prt_gi_btree_b
+--- OK to repack the unique index because it relies on CIC-swap-DI and there are always unique constraint on the table
+\! pg_repack --polar-enable-global-index -T 3600 -k -U polar_repack_superuser --dbname=contrib_regression_pg_repack --index=repack_gi_schema.prt_gi_btree_b
+INFO: repacking global index "repack_gi_schema.prt_gi_btree_b"
+--- Create unique global index as primary key
+DO $$
+BEGIN
+    CREATE UNIQUE INDEX prt_pkey_global ON prt(a_int) GLOBAL;
+    --- Drop local index primary key
+    ALTER TABLE prt DROP CONSTRAINT prt_pkey;
+    --- Add global index primary key
+    ALTER TABLE prt ADD CONSTRAINT prt_pkey PRIMARY KEY USING INDEX prt_pkey_global;
+END $$;
+NOTICE:  ALTER TABLE / ADD CONSTRAINT USING INDEX will rename index "prt_pkey_global" to "prt_pkey"
+--- Global index is primary key index now
+\d+ prt
+                                  Partitioned table "repack_gi_schema.prt"
+  Column   |         Type          | Collation | Nullable | Default | Storage  | Stats target | Description 
+-----------+-----------------------+-----------+----------+---------+----------+--------------+-------------
+ a_int     | integer               |           | not null |         | plain    |              | 
+ b_text    | text                  |           |          |         | extended |              | 
+ c_varchar | character varying(30) |           |          |         | extended |              | 
+ d_num     | numeric               |           |          |         | main     |              | 
+Partition key: RANGE (a_int)
+Indexes:
+    "prt_pkey" PRIMARY KEY, btree (a_int) GLOBAL
+    "prt_gi_BTREE_c" btree (c_varchar) GLOBAL
+    "prt_gi_btree_b" UNIQUE, btree (b_text) GLOBAL
+Partitions: prt_p_0 FOR VALUES FROM (0) TO (10),
+            prt_p_1 FOR VALUES FROM (10) TO (20),
+            prt_p_2 FOR VALUES FROM (20) TO (30),
+            prt_p_def DEFAULT, PARTITIONED
+
+--- ERROR: cannot repack table with global index primary key
+\! pg_repack --polar-enable-global-index -T 3600 -k -U polar_repack_superuser --dbname=contrib_regression_pg_repack --parent-table=repack_gi_schema.prt
+ERROR: cannot repack table with unique global index: prt_gi_btree_b
+\! pg_repack --polar-enable-global-index -T 3600 -k -U polar_repack_superuser --dbname=contrib_regression_pg_repack --table=repack_gi_schema.prt_p_0
+ERROR: cannot repack table with unique global index: prt_gi_btree_b
+--- OK to repack the unique index because it relies on CIC-swap-DI and there are always unique constraint on the table
+\! pg_repack --polar-enable-global-index -T 3600 -k -U polar_repack_superuser --dbname=contrib_regression_pg_repack --index=repack_gi_schema.prt_pkey
+INFO: repacking global index "repack_gi_schema.prt_pkey"
+RESET search_path;

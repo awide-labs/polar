@@ -59,6 +59,7 @@
  * counter does not fall within the wraparound horizon considering the global
  * minimum value.
  *
+ * Portions Copyright (c) 2024, Alibaba Group Holding Limited
  * Portions Copyright (c) 1996-2022, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
@@ -336,6 +337,12 @@ static MemoryContext MXactContext = NULL;
 #define debug_elog5(a,b,c,d,e)
 #define debug_elog6(a,b,c,d,e,f)
 #endif
+
+/* POLAR: Check whether multixact local file cache is enabled */
+#define POLAR_ENABLE_MULTIXACT_LOCAL_CACHE() \
+	(polar_multixact_max_local_cache_segments > 0 && polar_enable_shared_storage_mode)
+int			polar_mxact_offset_buffer_slot_size = NUM_MULTIXACTOFFSET_BUFFERS;
+int			polar_mxact_member_buffer_slot_size = NUM_MULTIXACTMEMBER_BUFFERS;
 
 /* internal MultiXactId management */
 static void MultiXactIdSetOldestVisible(void);
@@ -1835,8 +1842,12 @@ MultiXactShmemSize(void)
 			 mul_size(sizeof(MultiXactId) * 2, MaxOldestSlot))
 
 	size = SHARED_MULTIXACT_STATE_SIZE;
-	size = add_size(size, SimpleLruShmemSize(NUM_MULTIXACTOFFSET_BUFFERS, 0));
-	size = add_size(size, SimpleLruShmemSize(NUM_MULTIXACTMEMBER_BUFFERS, 0));
+	size = add_size(size, SimpleLruShmemSize(polar_mxact_offset_buffer_slot_size, 0));
+	size = add_size(size, SimpleLruShmemSize(polar_mxact_member_buffer_slot_size, 0));
+
+	if (POLAR_ENABLE_MULTIXACT_LOCAL_CACHE())
+		size = add_size(MAXALIGN(size),
+						mul_size(polar_local_cache_shmem_size(polar_multixact_max_local_cache_segments), 2));
 
 	return size;
 }
@@ -1852,22 +1863,48 @@ MultiXactShmemInit(void)
 	MultiXactMemberCtl->PagePrecedes = MultiXactMemberPagePrecedes;
 
 	SimpleLruInit(MultiXactOffsetCtl,
-				  "MultiXactOffset", NUM_MULTIXACTOFFSET_BUFFERS, 0,
+				  "MultiXactOffset", polar_mxact_offset_buffer_slot_size, 0,
 				  MultiXactOffsetSLRULock, "pg_multixact/offsets",
 				  LWTRANCHE_MULTIXACTOFFSET_BUFFER,
-				  SYNC_HANDLER_MULTIXACT_OFFSET);
+				  SYNC_HANDLER_MULTIXACT_OFFSET,
+				  (polar_enable_shared_storage_mode && !polar_is_replica()));
 	SlruPagePrecedesUnitTests(MultiXactOffsetCtl, MULTIXACT_OFFSETS_PER_PAGE);
 	SimpleLruInit(MultiXactMemberCtl,
-				  "MultiXactMember", NUM_MULTIXACTMEMBER_BUFFERS, 0,
+				  "MultiXactMember", polar_mxact_member_buffer_slot_size, 0,
 				  MultiXactMemberSLRULock, "pg_multixact/members",
 				  LWTRANCHE_MULTIXACTMEMBER_BUFFER,
-				  SYNC_HANDLER_MULTIXACT_MEMBER);
+				  SYNC_HANDLER_MULTIXACT_MEMBER,
+				  (polar_enable_shared_storage_mode && !polar_is_replica()));
 	/* doesn't call SimpleLruTruncate() or meet criteria for unit tests */
 
 	/* Initialize our shared state struct */
 	MultiXactState = ShmemInitStruct("Shared MultiXact State",
 									 SHARED_MULTIXACT_STATE_SIZE,
 									 &found);
+
+	if (POLAR_ENABLE_MULTIXACT_LOCAL_CACHE())
+	{
+		uint32		io_permission = POLAR_CACHE_LOCAL_FILE_READ | POLAR_CACHE_LOCAL_FILE_WRITE;
+		polar_local_cache cache;
+
+		if (!polar_is_replica())
+			io_permission |= (POLAR_CACHE_SHARED_FILE_READ | POLAR_CACHE_SHARED_FILE_WRITE);
+
+		cache = polar_create_local_cache("multixact_offset", "pg_multixact/offsets",
+										 polar_multixact_max_local_cache_segments,
+										 SLRU_PAGES_PER_SEGMENT * BLCKSZ,
+										 LWTRANCHE_POLAR_MULTIXACT_OFFSET_LOCAL_CACHE,
+										 io_permission, NULL);
+		polar_slru_reg_local_cache(MultiXactOffsetCtl, cache);
+
+		cache = polar_create_local_cache("multixact_member", "pg_multixact/members",
+										 polar_multixact_max_local_cache_segments,
+										 SLRU_PAGES_PER_SEGMENT * BLCKSZ,
+										 LWTRANCHE_POLAR_MULTIXACT_MEMBER_LOCAL_CACHE,
+										 io_permission, NULL);
+		polar_slru_reg_local_cache(MultiXactMemberCtl, cache);
+	}
+
 	if (!IsUnderPostmaster)
 	{
 		Assert(!found);
@@ -3432,4 +3469,54 @@ int
 multixactmemberssyncfiletag(const FileTag *ftag, char *path)
 {
 	return SlruSyncFileTag(MultiXactMemberCtl, ftag, path);
+}
+
+/* POLAR: do online promote for multixact offsets */
+void
+polar_promote_multixact_offset(void)
+{
+	polar_slru_promote(MultiXactOffsetCtl);
+}
+
+/* POLAR: do online promote for multixact members */
+void
+polar_promote_multixact_member(void)
+{
+	polar_slru_promote(MultiXactMemberCtl);
+}
+
+/* POLAR: remove multixcat local cache file */
+void
+polar_remove_multixcat_local_cache_file(void)
+{
+	polar_slru_remove_local_cache_file(MultiXactOffsetCtl);
+	polar_slru_remove_local_cache_file(MultiXactMemberCtl);
+}
+
+/* POLAR: copy multixact files from shared storage to local when replica start */
+void
+polar_init_local_multixact(MultiXactId id, bool copy_all)
+{
+	int			start_offset_pageno = 0,
+				start_member_pageno = 0,
+				res;
+	SlruScanCallback copy_condition = NULL;
+
+	Assert(polar_is_replica());
+
+	if (MultiXactIdIsValid(id) && !copy_all)
+	{
+		start_offset_pageno = MultiXactIdToOffsetPage(id);
+		start_offset_pageno -= start_offset_pageno % SLRU_PAGES_PER_SEGMENT;
+		copy_condition = polar_trans_file_need_copy;
+	}
+
+	res = polar_slru_copy_shared_dir(MultiXactOffsetCtl, copy_condition, &start_offset_pageno);
+	if (res)
+		polar_handle_init_local_dir_err(MultiXactOffsetCtl->Dir, res);
+
+	/* copy all multixact member file */
+	res = polar_slru_copy_shared_dir(MultiXactMemberCtl, NULL, &start_member_pageno);
+	if (res)
+		polar_handle_init_local_dir_err(MultiXactMemberCtl->Dir, res);
 }

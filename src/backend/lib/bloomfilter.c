@@ -292,3 +292,35 @@ mod_m(uint32 val, uint64 m)
 
 	return val & (m - 1);
 }
+
+/*
+ * POLAR: Initialize bloom_filter structure base on allocated buffer
+ */
+bloom_filter *
+polar_bloom_init_struct(uint8 *bloom_buf, size_t bloom_buf_size,
+						int64 total_elems, uint64 seed)
+{
+	bloom_filter *filter = (bloom_filter *) (bloom_buf);
+	uint64		bitset_bytes;
+	int			bloom_power;
+	uint64		bitset_bits;
+
+	Assert(bloom_buf_size > (offsetof(bloom_filter, bitset)));
+
+	bitset_bytes = bloom_buf_size - offsetof(bloom_filter, bitset);
+
+	bloom_power = my_bloom_power(bitset_bytes * BITS_PER_BYTE);
+	bitset_bits = UINT64CONST(1) << bloom_power;
+
+	/*
+	 * The bitset size should be large enouth for totale_elems multiply
+	 * MAX_HASH_FUNCS
+	 */
+	Assert(bitset_bits >= total_elems * MAX_HASH_FUNCS);
+
+	filter->k_hash_funcs = optimal_k(bitset_bits, total_elems);
+	filter->seed = seed;
+	filter->m = bitset_bits;
+
+	return filter;
+}

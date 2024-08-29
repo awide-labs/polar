@@ -13,15 +13,21 @@ $(call recurse,all install,src config)
 docs:
 	$(MAKE) -C doc all
 
-$(call recurse,world,doc src config contrib,all)
+$(call recurse,world,doc src config contrib external,all)
 
 # build src/ before contrib/
 world-contrib-recurse: world-src-recurse
 
-$(call recurse,world-bin,src config contrib,all)
+# build src/ before external/
+world-external-recurse: world-src-recurse
+
+$(call recurse,world-bin,src config contrib external,all)
 
 # build src/ before contrib/
 world-bin-contrib-recurse: world-bin-src-recurse
+
+# build src/ before external/
+world-bin-external-recurse: world-bin-src-recurse
 
 html man:
 	$(MAKE) -C doc $@
@@ -29,23 +35,29 @@ html man:
 install-docs:
 	$(MAKE) -C doc install
 
-$(call recurse,install-world,doc src config contrib,install)
+$(call recurse,install-world,doc src config contrib external,install)
 
 # build src/ before contrib/
 install-world-contrib-recurse: install-world-src-recurse
 
-$(call recurse,install-world-bin,src config contrib,install)
+# build src/ before external/
+install-world-external-recurse: install-world-src-recurse
+
+$(call recurse,install-world-bin,src config contrib external,install)
 
 # build src/ before contrib/
 install-world-bin-contrib-recurse: install-world-bin-src-recurse
 
+# build src/ before external/
+install-world-bin-external-recurse: install-world-bin-src-recurse
+
 $(call recurse,installdirs uninstall init-po update-po,doc src config)
 
-$(call recurse,distprep coverage,doc src config contrib)
+$(call recurse,distprep coverage,doc src config contrib external)
 
-# clean, distclean, etc should apply to contrib too, even though
+# clean, distclean, etc should apply to contrib and external too, even though
 # it's not built by default
-$(call recurse,clean,doc contrib src config)
+$(call recurse,clean,doc contrib external src config)
 clean:
 	rm -rf tmp_install/ portlock/
 # Garbage from autoconf:
@@ -56,6 +68,7 @@ clean:
 distclean maintainer-clean:
 	$(MAKE) -C doc $@
 	$(MAKE) -C contrib $@
+	$(MAKE) -C external $@
 	$(MAKE) -C config $@
 	$(MAKE) -C src $@
 	rm -rf tmp_install/ portlock/
@@ -64,14 +77,14 @@ distclean maintainer-clean:
 	rm -f config.cache config.log config.status GNUmakefile
 
 check-tests: | temp-install
-check check-tests installcheck installcheck-parallel installcheck-tests: CHECKPREP_TOP=src/test/regress
-check check-tests installcheck installcheck-parallel installcheck-tests: submake-generated-headers
+check polar-check check-tests installcheck polar-installcheck installcheck-parallel installcheck-tests: CHECKPREP_TOP=src/test/regress
+check polar-check check-tests installcheck polar-installcheck installcheck-parallel installcheck-tests: submake-generated-headers
 	$(MAKE) -C src/test/regress $@
 
-$(call recurse,check-world,src/test src/pl src/interfaces contrib src/bin,check)
-$(call recurse,checkprep,  src/test src/pl src/interfaces contrib src/bin)
+$(call recurse,check-world,src/test src/pl src/interfaces contrib external src/bin,check)
+$(call recurse,checkprep,  src/test src/pl src/interfaces contrib external src/bin)
 
-$(call recurse,installcheck-world,src/test src/pl src/interfaces contrib src/bin,installcheck)
+$(call recurse,installcheck-world,src/test src/pl src/interfaces contrib external src/bin,installcheck)
 $(call recurse,install-tests,src/test/regress,install-tests)
 
 GNUmakefile: GNUmakefile.in $(top_builddir)/config.status
@@ -144,24 +157,47 @@ cpluspluscheck: submake-generated-headers
 # POLAR
 #
 LAST_COMMIT = HEAD~1
+PROVE_FLAGS = "--timer -j4"
+
+precheck-main: | temp-install
+	$(MAKE) check-world EXTRA_TESTS=numeric_big PG_TEST_EXTRA='kerberos ldap ssl' USE_MODULE_DB=1 PROVE_FLAGS=$(PROVE_FLAGS)
+	$(MAKE) installcheck-world EXTRA_TESTS=numeric_big PG_TEST_EXTRA='kerberos ldap ssl' USE_MODULE_DB=1 NO_TAP_TESTS=1
+	$(MAKE) polar-check PG_TEST_EXTRA='kerberos ldap ssl' USE_MODULE_DB=1 PROVE_FLAGS=$(PROVE_FLAGS)
+	$(MAKE) polar-installcheck PG_TEST_EXTRA='kerberos ldap ssl' USE_MODULE_DB=1 NO_TAP_TESTS=1
+
+precheck: plcheck dccheck-lite precheck-main
+
+covcheck: coverage-html
+	$(top_srcdir)/src/tools/delta_coverage.pl -f coverage/delta_coverage.txt -p $(LAST_COMMIT)
 
 stylecheck:
 	@echo "| checking copyrights"
 	$(top_srcdir)/src/tools/polar_copyright_check.pl -s -p $(LAST_COMMIT)
 	@echo "| checking GUC short description"
 	$(top_srcdir)/src/tools/polar_check_guc_short_desc.pl
+	@echo "| checking external extensions Makefile ASCII order"
+	$(top_srcdir)/src/tools/polar_sort_subdir.pl -f $(top_srcdir)/external/Makefile
 	@echo "| checking configure style"
-	autoconf
-	autoheader
+	autoreconf
 	@rm -rf autom4te.cache/
 	@echo "| checking C style"
 	$(top_srcdir)/src/tools/pgindent/pgindent
 	@echo "| checking Perl style"
 	$(top_srcdir)/src/tools/pgindent/pgperltidy
 
+plcheck: | temp-install
+	$(MAKE) -C src/test/polar_pl check PROVE_FLAGS=$(PROVE_FLAGS)
+
+dccheck-lite: | temp-install
+	$(MAKE) -C src/test/polar_consistency check
+
+dccheck: | temp-install
+	$(MAKE) -C src/test/polar_consistency check-all
+
 #
 # POLAR end
 #
 
-.PHONY: dist distdir distcheck docs install-docs world check-world install-world installcheck-world headerscheck cpluspluscheck \
-	stylecheck
+.PHONY: dist distdir distcheck docs install-docs world check-world install-world \
+	installcheck-world headerscheck cpluspluscheck \
+	covcheck precheck stylecheck dccheck

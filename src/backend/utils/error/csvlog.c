@@ -73,6 +73,9 @@ write_csvlog(ErrorData *edata)
 	/* has counter been reset in current process? */
 	static int	log_my_pid = 0;
 
+	/* POLAR */
+	int			prev_buf_pos = 0;
+
 	/*
 	 * This is one of the few places where we'd rather not inherit a static
 	 * variable's value from the postmaster.  But since we will, reset it when
@@ -251,6 +254,9 @@ write_csvlog(ErrorData *edata)
 
 	/* query id */
 	appendStringInfo(&buf, "%lld", (long long) pgstat_get_my_query_id());
+
+	/* POLAR */
+	polar_shrink_audit_log(&buf, prev_buf_pos);
 
 	appendStringInfoChar(&buf, '\n');
 

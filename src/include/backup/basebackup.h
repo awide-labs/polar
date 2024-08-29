@@ -20,6 +20,9 @@
 #define MAX_RATE_LOWER	32
 #define MAX_RATE_UPPER	1048576
 
+/* POLAR: default directory name for polar_datadir inside data_directory. */
+#define POLAR_SHARED_DATA "polar_shared_data"
+
 /*
  * Information about a tablespace
  *
@@ -32,6 +35,7 @@ typedef struct
 	char	   *rpath;			/* relative path if it's within PGDATA, else
 								 * NULL */
 	int64		size;			/* total size as sent; -1 if not known */
+	bool		polar_shared;	/* POLAR: is polar mode has shared storage? */
 } tablespaceinfo;
 
 extern void SendBaseBackup(BaseBackupCmd *cmd);

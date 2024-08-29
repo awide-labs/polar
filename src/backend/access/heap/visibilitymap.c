@@ -98,25 +98,11 @@
 #include "utils/inval.h"
 
 
+/* POLAR */
+#include "access/xlogrecovery.h"
+#include "storage/polar_bufmgr.h"
+
 /*#define TRACE_VISIBILITYMAP */
-
-/*
- * Size of the bitmap on each visibility map page, in bytes. There's no
- * extra headers, so the whole page minus the standard page header is
- * used for the bitmap.
- */
-#define MAPSIZE (BLCKSZ - MAXALIGN(SizeOfPageHeaderData))
-
-/* Number of heap blocks we can represent in one byte */
-#define HEAPBLOCKS_PER_BYTE (BITS_PER_BYTE / BITS_PER_HEAPBLOCK)
-
-/* Number of heap blocks we can represent in one visibility map page. */
-#define HEAPBLOCKS_PER_PAGE (MAPSIZE * HEAPBLOCKS_PER_BYTE)
-
-/* Mapping from heap block number to the right bit in the visibility map */
-#define HEAPBLK_TO_MAPBLOCK(x) ((x) / HEAPBLOCKS_PER_PAGE)
-#define HEAPBLK_TO_MAPBYTE(x) (((x) % HEAPBLOCKS_PER_PAGE) / HEAPBLOCKS_PER_BYTE)
-#define HEAPBLK_TO_OFFSET(x) (((x) % HEAPBLOCKS_PER_BYTE) * BITS_PER_HEAPBLOCK)
 
 /* Masks for counting subsets of bits in the visibility map. */
 #define VISIBLE_MASK64	UINT64CONST(0x5555555555555555) /* The lower bit of each
@@ -137,7 +123,8 @@ static void vm_extend(Relation rel, BlockNumber vm_nblocks);
  * any I/O.  Returns true if any bits have been cleared and false otherwise.
  */
 bool
-visibilitymap_clear(Relation rel, BlockNumber heapBlk, Buffer buf, uint8 flags)
+visibilitymap_clear(Relation rel, BlockNumber heapBlk, Buffer buf, uint8 flags,
+					XLogReaderState *polar_record)
 {
 	BlockNumber mapBlock = HEAPBLK_TO_MAPBLOCK(heapBlk);
 	int			mapByte = HEAPBLK_TO_MAPBYTE(heapBlk);
@@ -162,7 +149,36 @@ visibilitymap_clear(Relation rel, BlockNumber heapBlk, Buffer buf, uint8 flags)
 	{
 		map[mapByte] &= ~mask;
 
+		/*
+		 * POLAR: if system is not in recovery, MarkBufferDirty will set a
+		 * fake oldest lsn for vm buffer.
+		 */
 		MarkBufferDirty(buf);
+
+		/*
+		 * POLAR: set the latest lsn for VM buffer, if the system is in
+		 * recovery, the lsn will be valid, we can use it. Otherwise, we can
+		 * not get a valid lsn, so use current insert position as a fake lsn,
+		 * that is less than or equal to the real lsn generated later.
+		 */
+		if (polar_enable_shared_storage_mode)
+		{
+			/* Set a fake latest lsn */
+			if (polar_record == NULL)
+			{
+				Assert(!RecoveryInProgress());
+				PageSetLSN(BufferGetPage(buf), polar_get_fake_latest_lsn());
+			}
+			/* System is in recovery, set the oldest lsn and latest lsn */
+			else
+			{
+				Assert(RecoveryInProgress());
+				PageSetLSN(BufferGetPage(buf), polar_record->EndRecPtr);
+				polar_redo_set_buffer_oldest_lsn(buf, polar_record->ReadRecPtr);
+			}
+		}
+		/* POLAR end */
+
 		cleared = true;
 	}
 
@@ -243,7 +259,7 @@ visibilitymap_pin_ok(BlockNumber heapBlk, Buffer buf)
 void
 visibilitymap_set(Relation rel, BlockNumber heapBlk, Buffer heapBuf,
 				  XLogRecPtr recptr, Buffer vmBuf, TransactionId cutoff_xid,
-				  uint8 flags)
+				  uint8 flags, XLogRecPtr polar_read_rec_ptr)
 {
 	BlockNumber mapBlock = HEAPBLK_TO_MAPBLOCK(heapBlk);
 	uint32		mapByte = HEAPBLK_TO_MAPBYTE(heapBlk);
@@ -300,6 +316,16 @@ visibilitymap_set(Relation rel, BlockNumber heapBlk, Buffer heapBuf,
 				}
 			}
 			PageSetLSN(page, recptr);
+
+			/*
+			 * POLAR: for primary crash recovery or standby redo, we should
+			 * put the buffer to flush list.
+			 */
+			if (InRecovery)
+			{
+				Assert(!XLogRecPtrIsInvalid(recptr));
+				polar_redo_set_buffer_oldest_lsn(vmBuf, polar_read_rec_ptr);
+			}
 		}
 
 		END_CRIT_SECTION();
@@ -335,6 +361,7 @@ visibilitymap_get_status(Relation rel, BlockNumber heapBlk, Buffer *buf)
 	uint8		mapOffset = HEAPBLK_TO_OFFSET(heapBlk);
 	char	   *map;
 	uint8		result;
+	bool		is_replica_or_promoting;
 
 #ifdef TRACE_VISIBILITYMAP
 	elog(DEBUG1, "vm_get_status %s %d", RelationGetRelationName(rel), heapBlk);
@@ -357,6 +384,29 @@ visibilitymap_get_status(Relation rel, BlockNumber heapBlk, Buffer *buf)
 			return false;
 	}
 
+	/*
+	 * POLAR: replica or online promoting only use vm buffer which lsn is less
+	 * than replay lsn. Acquire XLogRecoveryCtl->lastReplayedEndRecPtr without
+	 * lock to avoid lock contention between backend and startup, otherwise it
+	 * will increase replay lag when accessing the vm very frequently.
+	 */
+	is_replica_or_promoting = polar_is_replica() ||
+		polar_bg_redo_state_is_parallel(polar_logindex_redo_instance);
+	if (is_replica_or_promoting &&
+		PageGetLSN(BufferGetPage(*buf)) > polar_get_xlog_replay_recptr_nolock())
+		return false;
+
+	/*
+	 * POLAR: If it is replica node, or doing online promote, or doing
+	 * parallel replay, then we have to call LockBuffer to try page replay,
+	 * otherwise we could get inconsistent data.
+	 *
+	 * Note: Do LockBuffer for replica node without enable logindex too.
+	 * Obviously, it is not a legal deployment mode.
+	 */
+	if (is_replica_or_promoting)
+		LockBuffer(*buf, BUFFER_LOCK_SHARE);
+
 	map = PageGetContents(BufferGetPage(*buf));
 
 	/*
@@ -365,6 +415,10 @@ visibilitymap_get_status(Relation rel, BlockNumber heapBlk, Buffer *buf)
 	 * about that.
 	 */
 	result = ((map[mapByte] >> mapOffset) & VISIBILITYMAP_VALID_BITS);
+
+	if (is_replica_or_promoting)
+		LockBuffer(*buf, BUFFER_LOCK_UNLOCK);
+
 	return result;
 }
 
@@ -571,7 +625,27 @@ vm_readbuf(Relation rel, BlockNumber blkno, bool extend)
 	if (blkno >= reln->smgr_cached_nblocks[VISIBILITYMAP_FORKNUM])
 	{
 		if (extend)
-			vm_extend(rel, blkno + 1);
+		{
+			/*
+			 * POLAR: replica don't write to filesystem, the block should
+			 * already be extened by primary, so we update vm block size.
+			 */
+			if (!polar_is_replica())
+				vm_extend(rel, blkno + 1);
+			else
+			{
+				/*
+				 * POLAR RSC: invalidate nblocks of VM on replica upon
+				 * updating.
+				 */
+				if (POLAR_RSC_REPLICA_ENABLED())
+					polar_rsc_drop_entry(&reln->smgr_rnode.node);
+				/* POLAR end */
+
+				reln->smgr_cached_nblocks[VISIBILITYMAP_FORKNUM] = InvalidBlockNumber;
+				smgrnblocks(reln, VISIBILITYMAP_FORKNUM);
+			}
+		}
 		else
 			return InvalidBuffer;
 	}

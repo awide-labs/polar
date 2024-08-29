@@ -125,6 +125,9 @@
 #include "utils/memutils.h"
 #include "utils/rel.h"
 
+/* POLAR */
+#include "storage/polar_fd.h"
+
 /*
  * State associated with a rewrite operation. This is opaque to the user
  * of the rewrite facility.
@@ -256,7 +259,7 @@ begin_heap_rewrite(Relation old_heap, Relation new_heap, TransactionId oldest_xm
 
 	state->rs_old_rel = old_heap;
 	state->rs_new_rel = new_heap;
-	state->rs_buffer = (Page) palloc(BLCKSZ);
+	state->rs_buffer = (Page) palloc_io_aligned(BLCKSZ, 0);
 	/* new_heap needn't be empty, just locked */
 	state->rs_blockno = RelationGetNumberOfBlocks(new_heap);
 	state->rs_buffer_valid = false;
@@ -1135,7 +1138,7 @@ heap_xlog_logical_rewrite(XLogReaderState *r)
 	 * previous record or by the last checkpoint).
 	 */
 	pgstat_report_wait_start(WAIT_EVENT_LOGICAL_REWRITE_TRUNCATE);
-	if (ftruncate(fd, xlrec->offset) != 0)
+	if (polar_ftruncate(fd, xlrec->offset) != 0)
 		ereport(ERROR,
 				(errcode_for_file_access(),
 				 errmsg("could not truncate file \"%s\" to %u: %m",
@@ -1149,7 +1152,7 @@ heap_xlog_logical_rewrite(XLogReaderState *r)
 	/* write out tail end of mapping file (again) */
 	errno = 0;
 	pgstat_report_wait_start(WAIT_EVENT_LOGICAL_REWRITE_MAPPING_WRITE);
-	if (pg_pwrite(fd, data, len, xlrec->offset) != len)
+	if (polar_pwrite(fd, data, len, xlrec->offset) != len)
 	{
 		/* if write didn't set errno, assume problem is no disk space */
 		if (errno == 0)
@@ -1166,7 +1169,7 @@ heap_xlog_logical_rewrite(XLogReaderState *r)
 	 * doesn't seem worth the trouble.
 	 */
 	pgstat_report_wait_start(WAIT_EVENT_LOGICAL_REWRITE_MAPPING_SYNC);
-	if (pg_fsync(fd) != 0)
+	if (polar_fsync(fd) != 0)
 		ereport(data_sync_elevel(ERROR),
 				(errcode_for_file_access(),
 				 errmsg("could not fsync file \"%s\": %m", path)));
@@ -1269,7 +1272,7 @@ CheckPointLogicalRewriteHeap(void)
 			 * but it's currently not deemed worth the effort.
 			 */
 			pgstat_report_wait_start(WAIT_EVENT_LOGICAL_REWRITE_CHECKPOINT_SYNC);
-			if (pg_fsync(fd) != 0)
+			if (polar_fsync(fd) != 0)
 				ereport(data_sync_elevel(ERROR),
 						(errcode_for_file_access(),
 						 errmsg("could not fsync file \"%s\": %m", path)));

@@ -18,6 +18,12 @@
 #include "storage/bufmgr.h"
 #include "storage/proc.h"
 
+/* POLAR */
+#include "storage/polar_copybuf.h"
+#include "storage/polar_fd.h"
+#include "storage/polar_flush.h"
+#include "utils/guc.h"
+
 BufferDescPadded *BufferDescriptors;
 char	   *BufferBlocks;
 ConditionVariableMinimallyPadded *BufferIOCVArray;
@@ -79,8 +85,10 @@ InitBufferPool(void)
 						&foundDescs);
 
 	BufferBlocks = (char *)
-		ShmemInitStruct("Buffer Blocks",
-						NBuffers * (Size) BLCKSZ, &foundBufs);
+		TYPEALIGN(POLAR_BUFFER_ALIGN_LEN,
+				  ShmemInitStruct("Buffer Blocks",
+								  ((NBuffers * (Size) BLCKSZ) + POLAR_BUFFER_ALIGN_LEN),
+								  &foundBufs));
 
 	/* Align condition variables to cacheline boundary. */
 	BufferIOCVArray = (ConditionVariableMinimallyPadded *)
@@ -119,6 +127,7 @@ InitBufferPool(void)
 			CLEAR_BUFFERTAG(buf->tag);
 
 			pg_atomic_init_u32(&buf->state, 0);
+			pg_atomic_init_u32(&buf->polar_redo_state, 0);
 			buf->wait_backend_pgprocno = INVALID_PGPROCNO;
 
 			buf->buf_id = i;
@@ -129,10 +138,22 @@ InitBufferPool(void)
 			 */
 			buf->freeNext = i + 1;
 
+#ifdef LOCKBUFHDR_DEBUG
+			buf->lockbufhdr_pid = 0;
+#endif
+
 			LWLockInitialize(BufferDescriptorGetContentLock(buf),
 							 LWTRANCHE_BUFFER_CONTENT);
 
 			ConditionVariableInit(BufferDescriptorGetIOCV(buf));
+
+			/* POLAR */
+			buf->oldest_lsn = InvalidXLogRecPtr;
+			buf->flush_next = POLAR_FLUSHNEXT_NOT_IN_LIST;
+			buf->flush_prev = POLAR_FLUSHNEXT_NOT_IN_LIST;
+			buf->copy_buffer = NULL;
+			buf->recently_modified_count = 0;
+			buf->polar_flags = 0;
 		}
 
 		/* Correct last entry of linked list */
@@ -141,6 +162,12 @@ InitBufferPool(void)
 
 	/* Init other shared buffer-management stuff */
 	StrategyInitialize(!foundDescs);
+
+	/* POLAR: init flush list */
+	polar_init_flush_list_ctl(!foundDescs);
+
+	/* POLAR: init copy buffer pool */
+	polar_init_copy_buffer_pool();
 
 	/* Initialize per-backend file flush context */
 	WritebackContextInit(&BackendWritebackContext,
@@ -177,6 +204,12 @@ BufferShmemSize(void)
 
 	/* size of checkpoint sort array in bufmgr.c */
 	size = add_size(size, mul_size(NBuffers, sizeof(CkptSortItem)));
+
+	/* POLAR: size of flush list */
+	size = add_size(size, polar_flush_list_ctl_shmem_size());
+
+	/* POLAR: add copy buffer shared memory size */
+	size = add_size(size, polar_copy_buffer_shmem_size());
 
 	return size;
 }

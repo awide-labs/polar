@@ -511,7 +511,7 @@ pg_stat_get_progress_info(PG_FUNCTION_ARGS)
 			continue;
 
 		/* Value available to all callers */
-		values[0] = Int32GetDatum(beentry->st_procpid);
+		values[0] = Int32GetDatum(polar_get_session_id_by_beentry(beentry));
 		values[1] = ObjectIdGetDatum(beentry->st_databaseid);
 
 		/* show rest of the values including relid only to role members */
@@ -537,16 +537,30 @@ pg_stat_get_progress_info(PG_FUNCTION_ARGS)
 /*
  * Returns activity of PG backends.
  */
+/* POLAR: if we pass POLAR_GET_PID_ARG(-2), means force to get OS pid */
 Datum
 pg_stat_get_activity(PG_FUNCTION_ARGS)
 {
+#define POLAR_GET_PID_ARG			-2
 #define PG_STAT_GET_ACTIVITY_COLS	30
 	int			num_backends = pgstat_fetch_stat_numbackends();
 	int			curr_backend;
 	int			pid = PG_ARGISNULL(0) ? -1 : PG_GETARG_INT32(0);
 	ReturnSetInfo *rsinfo = (ReturnSetInfo *) fcinfo->resultinfo;
+	bool		get_pid = false;
 
 	InitMaterializedSRF(fcinfo, 0);
+
+	/* POLAR: when we pass POLAR_GET_PID_ARG(-2), means get all OS pid */
+	if (pid == POLAR_GET_PID_ARG)
+	{
+		get_pid = true;
+		pid = -1;
+	}
+
+	/* POLAR: try to get pid if it's proxy sid */
+	if (POLAR_IS_PROXY_SID(pid))
+		pid = polar_proxy_get_pid(pid, 0, false);
 
 	/* 1-based index */
 	for (curr_backend = 1; curr_backend <= num_backends; curr_backend++)
@@ -595,7 +609,12 @@ pg_stat_get_activity(PG_FUNCTION_ARGS)
 		else
 			nulls[0] = true;
 
-		values[1] = Int32GetDatum(beentry->st_procpid);
+		if (get_pid)
+			/* POLAR: return OS pid */
+			values[1] = Int32GetDatum(beentry->st_procpid);
+		else
+			/* POLAR: return proper session id if available */
+			values[1] = Int32GetDatum(polar_get_session_id_by_beentry(beentry));
 
 		if (beentry->st_userid != InvalidOid)
 			values[2] = ObjectIdGetDatum(beentry->st_userid);
@@ -751,21 +770,28 @@ pg_stat_get_activity(PG_FUNCTION_ARGS)
 					char		remote_host[NI_MAXHOST];
 					char		remote_port[NI_MAXSERV];
 					int			ret;
+					SockAddr	socket = beentry->polar_proxy ? beentry->polar_proxy_client_raddr : beentry->st_clientaddr;
 
 					remote_host[0] = '\0';
 					remote_port[0] = '\0';
-					ret = pg_getnameinfo_all(&beentry->st_clientaddr.addr,
-											 beentry->st_clientaddr.salen,
+					ret = pg_getnameinfo_all(&socket.addr,
+											 socket.salen,
 											 remote_host, sizeof(remote_host),
 											 remote_port, sizeof(remote_port),
 											 NI_NUMERICHOST | NI_NUMERICSERV);
 					if (ret == 0)
 					{
-						clean_ipv6_addr(beentry->st_clientaddr.addr.ss_family, remote_host);
+						clean_ipv6_addr(socket.addr.ss_family, remote_host);
 						values[12] = DirectFunctionCall1(inet_in,
 														 CStringGetDatum(remote_host));
+
+						/*
+						 * POLAR: In proxy mode, we can't get the client's
+						 * hostname
+						 */
 						if (beentry->st_clienthostname &&
-							beentry->st_clienthostname[0])
+							beentry->st_clienthostname[0] &&
+							!beentry->polar_proxy)
 							values[13] = CStringGetTextDatum(beentry->st_clienthostname);
 						else
 							nulls[13] = true;
@@ -907,7 +933,7 @@ pg_stat_get_activity(PG_FUNCTION_ARGS)
 Datum
 pg_backend_pid(PG_FUNCTION_ARGS)
 {
-	PG_RETURN_INT32(MyProcPid);
+	PG_RETURN_INT32(polar_get_session_id(MyProcPid));
 }
 
 
@@ -920,7 +946,7 @@ pg_stat_get_backend_pid(PG_FUNCTION_ARGS)
 	if ((beentry = pgstat_fetch_stat_beentry(beid)) == NULL)
 		PG_RETURN_NULL();
 
-	PG_RETURN_INT32(beentry->st_procpid);
+	PG_RETURN_INT32(polar_get_session_id_by_beentry(beentry));
 }
 
 
@@ -1096,6 +1122,7 @@ pg_stat_get_backend_client_addr(PG_FUNCTION_ARGS)
 	SockAddr	zero_clientaddr;
 	char		remote_host[NI_MAXHOST];
 	int			ret;
+	SockAddr	raddr;
 
 	if ((beentry = pgstat_fetch_stat_beentry(beid)) == NULL)
 		PG_RETURN_NULL();
@@ -1120,16 +1147,18 @@ pg_stat_get_backend_client_addr(PG_FUNCTION_ARGS)
 			PG_RETURN_NULL();
 	}
 
+	raddr = beentry->polar_proxy ? beentry->polar_proxy_client_raddr : beentry->st_clientaddr;
+
 	remote_host[0] = '\0';
-	ret = pg_getnameinfo_all(&beentry->st_clientaddr.addr,
-							 beentry->st_clientaddr.salen,
+	ret = pg_getnameinfo_all(&raddr.addr,
+							 raddr.salen,
 							 remote_host, sizeof(remote_host),
 							 NULL, 0,
 							 NI_NUMERICHOST | NI_NUMERICSERV);
 	if (ret != 0)
 		PG_RETURN_NULL();
 
-	clean_ipv6_addr(beentry->st_clientaddr.addr.ss_family, remote_host);
+	clean_ipv6_addr(raddr.addr.ss_family, remote_host);
 
 	PG_RETURN_INET_P(DirectFunctionCall1(inet_in,
 										 CStringGetDatum(remote_host)));
@@ -1143,6 +1172,7 @@ pg_stat_get_backend_client_port(PG_FUNCTION_ARGS)
 	SockAddr	zero_clientaddr;
 	char		remote_port[NI_MAXSERV];
 	int			ret;
+	SockAddr	raddr;
 
 	if ((beentry = pgstat_fetch_stat_beentry(beid)) == NULL)
 		PG_RETURN_NULL();
@@ -1169,9 +1199,11 @@ pg_stat_get_backend_client_port(PG_FUNCTION_ARGS)
 			PG_RETURN_NULL();
 	}
 
+	raddr = beentry->polar_proxy ? beentry->polar_proxy_client_raddr : beentry->st_clientaddr;
+
 	remote_port[0] = '\0';
-	ret = pg_getnameinfo_all(&beentry->st_clientaddr.addr,
-							 beentry->st_clientaddr.salen,
+	ret = pg_getnameinfo_all(&raddr.addr,
+							 raddr.salen,
 							 NULL, 0,
 							 remote_port, sizeof(remote_port),
 							 NI_NUMERICHOST | NI_NUMERICSERV);

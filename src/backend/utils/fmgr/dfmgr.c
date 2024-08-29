@@ -75,6 +75,11 @@ static DynamicFileList *file_tail = NULL;
 
 char	   *Dynamic_library_path;
 
+/* POLAR: GUC */
+bool		polar_suppress_preload_error;
+
+/* POLAR end */
+
 static void *internal_load_library(const char *libname);
 static void incompatible_module_error(const char *libname,
 									  const Pg_magic_struct *module_magic_data) pg_attribute_noreturn();
@@ -204,10 +209,21 @@ internal_load_library(const char *libname)
 		 * Check for same files - different paths (ie, symlink or link)
 		 */
 		if (stat(libname, &stat_buf) == -1)
-			ereport(ERROR,
+		{
+			int			error_level = ERROR;
+
+			/* POLAR: do not ERROR if library is missing */
+			if (process_shared_preload_libraries_in_progress &&
+				polar_suppress_preload_error && errno == ENOENT)
+				error_level = WARNING;
+			/* POLAR end */
+
+			ereport(error_level,
 					(errcode_for_file_access(),
 					 errmsg("could not access file \"%s\": %m",
 							libname)));
+			return NULL;
+		}
 
 		for (file_scanner = file_list;
 			 file_scanner != NULL &&

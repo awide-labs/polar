@@ -95,6 +95,9 @@
 #include "utils/snapmgr.h"
 #include "utils/syscache.h"
 
+/* POLAR */
+#include "storage/polar_fd.h"
+
 /*
  * Replay progress of a single remote node.
  */
@@ -589,7 +592,7 @@ CheckPointReplicationOrigin(void)
 
 	/* write magic */
 	errno = 0;
-	if ((write(tmpfd, &magic, sizeof(magic))) != sizeof(magic))
+	if ((polar_write(tmpfd, &magic, sizeof(magic))) != sizeof(magic))
 	{
 		/* if write didn't set errno, assume problem is no disk space */
 		if (errno == 0)
@@ -630,7 +633,7 @@ CheckPointReplicationOrigin(void)
 		XLogFlush(local_lsn);
 
 		errno = 0;
-		if ((write(tmpfd, &disk_state, sizeof(disk_state))) !=
+		if ((polar_write(tmpfd, &disk_state, sizeof(disk_state))) !=
 			sizeof(disk_state))
 		{
 			/* if write didn't set errno, assume problem is no disk space */
@@ -650,7 +653,7 @@ CheckPointReplicationOrigin(void)
 	/* write out the CRC */
 	FIN_CRC32C(crc);
 	errno = 0;
-	if ((write(tmpfd, &crc, sizeof(crc))) != sizeof(crc))
+	if ((polar_write(tmpfd, &crc, sizeof(crc))) != sizeof(crc))
 	{
 		/* if write didn't set errno, assume problem is no disk space */
 		if (errno == 0)
@@ -720,7 +723,7 @@ StartupReplicationOrigin(void)
 						path)));
 
 	/* verify magic, that is written even if nothing was active */
-	readBytes = read(fd, &magic, sizeof(magic));
+	readBytes = polar_read(fd, &magic, sizeof(magic));
 	if (readBytes != sizeof(magic))
 	{
 		if (readBytes < 0)
@@ -748,7 +751,7 @@ StartupReplicationOrigin(void)
 	{
 		ReplicationStateOnDisk disk_state;
 
-		readBytes = read(fd, &disk_state, sizeof(disk_state));
+		readBytes = polar_read(fd, &disk_state, sizeof(disk_state));
 
 		/* no further data */
 		if (readBytes == sizeof(crc))

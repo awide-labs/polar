@@ -1,0 +1,12 @@
+CREATE EXTENSION test_buffer;
+CHECKPOINT;
+-- See README for explanation of arguments:
+BEGIN;
+SET TRANSACTION ISOLATION LEVEL SERIALIZABLE, READ ONLY, DEFERRABLE;
+SELECT test_buffer();
+ test_buffer 
+-------------
+ 
+(1 row)
+
+ABORT;

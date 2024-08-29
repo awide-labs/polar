@@ -1,0 +1,39 @@
+==================POLAR==================
+This is not an introduction or user document for pg_repack, if you are looking for those docs, see:
+
+1. external/pg_repack/README.rst for a brief introduction of pg_repack.
+2. external/pg_repack/doc/pg_repack.rst for more details about Downloading, Installing, Execution and Release Notes.
+3. polar-doc/docs/zh/features/v11/extensions/pg-repack.md for PolarDB user document of pg_repack.
+
+Here we focus on how to develop new features by ourselves or port new features from the pg_repack community.
+
+### How to develop new features by ourselves in PolarDB:
+
+1. Develop new feature and add regression tests
+2. Increase the pg_repack version number from like `1.4.8-1` to `1.4.8-2`
+    - We usually increase like from `1.4.8` to `1.4.9` if we follow the rule of pg_repack community. However, we
+      will get a version number conflict once we port the version `1.4.9` from the community because we also have
+      a self-developed version `1.4.9` in PolarDB.
+    - In order to solve the version number conflict, we introduce a sub-version number like `1.4.8-1`, `1.4.8-2`.
+      All the self-developed features based on community version `1.4.8` will be named like that. If there is a
+      newer community version `1.4.9` in the future, we can port it into PolarDB without version number conflict.
+3. Update the Release Notes in external/pg_repack/doc/pg_repack.rst, we use it as CHANGELOG.
+
+### How to port new features into PolarDB from pg_repack community:
+1. Community commit id we ported last time: f89c26123c7b7b6cee5100ab0005ee06143a6620
+2. Get the latest commit id `new_commit_id` from [pg_repack github repository](https://github.com/reorg/pg_repack).
+3. Run `git init && git add . && git commit -m "first commit"` in external/pg_repack.
+4. Apply the latest commit
+  Method 1(recommended):
+  4.1 Run `git remote add pg_repack https://github.com/reorg/pg_repack.git` in external/pg_repack.
+  4.2 Fetch the latest: `git fetch pg_repack master`.
+  4.3 Cherry-pick all the commits by: `git cherry-pick <old_commit_id>..<new_commit_id>`:
+    - If there are conflicts, resolve them and continue: `git cherry-pick --continue`.
+    - If fail with `error: commit xx is a merge but no -m option was given`, it's ok because
+      it's a merge commit, just skip the commit.
+  Method 2:
+  4.1 Generate a patch for the commits in range (`old_commit_id`, `new_commit_id`] with:
+    `git format-patch <old_commit_id>..<new_commit_id> --stdout > xxx.patch`.
+  4.2 Apply the patch to external/pg_repack with `git apply xxx.patch` or `git am xxx.patch`.
+5. Run `rm -rf .git/` in external/pg_repack.
+6. Add the new commits in polardb_pg.

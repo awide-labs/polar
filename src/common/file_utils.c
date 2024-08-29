@@ -29,6 +29,10 @@
 #include "common/logging.h"
 #endif
 
+/* POLAR */
+#include "storage/polar_fd.h"
+/* POLAR end */
+
 #ifdef FRONTEND
 
 /* Define PG_FLUSH_DATA_WORKS if we have an implementation for pg_flush_data */
@@ -83,7 +87,7 @@ fsync_pgdata(const char *pg_data,
 	{
 		struct stat st;
 
-		if (lstat(pg_wal, &st) < 0)
+		if (polar_lstat(pg_wal, &st) < 0)
 			pg_log_error("could not stat file \"%s\": %m", pg_wal);
 		else if (S_ISLNK(st.st_mode))
 			xlog_is_symlink = true;
@@ -116,6 +120,40 @@ fsync_pgdata(const char *pg_data,
 	walkdir(pg_data, fsync_fname, false);
 	if (xlog_is_symlink)
 		walkdir(pg_wal, fsync_fname, false);
+	walkdir(pg_tblspc, fsync_fname, true);
+}
+
+/*
+ * In PolarDB shared storage mode, the pg_wal dir is not exist.
+ */
+void
+polar_fsync_pgdata(const char *pg_data,
+				   int serverVersion)
+{
+	char		pg_tblspc[MAXPGPATH];
+
+	/* handle renaming of pg_xlog to pg_wal in post-10 clusters */
+	snprintf(pg_tblspc, MAXPGPATH, "%s/pg_tblspc", pg_data);
+
+	/*
+	 * If possible, hint to the kernel that we're soon going to fsync the data
+	 * directory and its contents.
+	 */
+#ifdef PG_FLUSH_DATA_WORKS
+	walkdir(pg_data, pre_sync_fname, false);
+	walkdir(pg_tblspc, pre_sync_fname, true);
+#endif
+
+	/*
+	 * Now we do the fsync()s in the same order.
+	 *
+	 * The main call ignores symlinks, so in addition to specially processing
+	 * pg_wal if it's a symlink, pg_tblspc has to be visited separately with
+	 * process_symlinks = true.  Note that if there are any plain directories
+	 * in pg_tblspc, they'll get fsync'd twice.  That's not an expected case
+	 * so we don't worry about optimizing it.
+	 */
+	walkdir(pg_data, fsync_fname, false);
 	walkdir(pg_tblspc, fsync_fname, true);
 }
 
@@ -160,14 +198,14 @@ walkdir(const char *path,
 	DIR		   *dir;
 	struct dirent *de;
 
-	dir = opendir(path);
+	dir = polar_opendir(path);
 	if (dir == NULL)
 	{
 		pg_log_error("could not open directory \"%s\": %m", path);
 		return;
 	}
 
-	while (errno = 0, (de = readdir(dir)) != NULL)
+	while (errno = 0, (de = polar_readdir(dir)) != NULL)
 	{
 		char		subpath[MAXPGPATH * 2];
 
@@ -199,7 +237,7 @@ walkdir(const char *path,
 	if (errno)
 		pg_log_error("could not read directory \"%s\": %m", path);
 
-	(void) closedir(dir);
+	(void) polar_closedir(dir);
 
 	/*
 	 * It's important to fsync the destination directory itself as individual
@@ -223,7 +261,7 @@ pre_sync_fname(const char *fname, bool isdir)
 {
 	int			fd;
 
-	fd = open(fname, O_RDONLY | PG_BINARY, 0);
+	fd = polar_open(fname, O_RDONLY | PG_BINARY, 0);
 
 	if (fd < 0)
 	{
@@ -241,12 +279,12 @@ pre_sync_fname(const char *fname, bool isdir)
 #if defined(HAVE_SYNC_FILE_RANGE)
 	(void) sync_file_range(fd, 0, 0, SYNC_FILE_RANGE_WRITE);
 #elif defined(USE_POSIX_FADVISE) && defined(POSIX_FADV_DONTNEED)
-	(void) posix_fadvise(fd, 0, 0, POSIX_FADV_DONTNEED);
+	(void) polar_posix_fadvise(fd, 0, 0, POSIX_FADV_DONTNEED);
 #else
 #error PG_FLUSH_DATA_WORKS should not have been defined
 #endif
 
-	(void) close(fd);
+	(void) polar_close(fd);
 	return 0;
 }
 
@@ -283,7 +321,7 @@ fsync_fname(const char *fname, bool isdir)
 	 * unsupported operations, e.g. opening a directory under Windows), and
 	 * logging others.
 	 */
-	fd = open(fname, flags, 0);
+	fd = polar_open(fname, flags, 0);
 	if (fd < 0)
 	{
 		if (errno == EACCES || (isdir && errno == EISDIR))
@@ -292,7 +330,7 @@ fsync_fname(const char *fname, bool isdir)
 		return -1;
 	}
 
-	returncode = fsync(fd);
+	returncode = polar_fsync(fd);
 
 	/*
 	 * Some OSes don't allow us to fsync directories at all, so we can ignore
@@ -301,11 +339,11 @@ fsync_fname(const char *fname, bool isdir)
 	if (returncode != 0 && !(isdir && (errno == EBADF || errno == EINVAL)))
 	{
 		pg_log_error("could not fsync file \"%s\": %m", fname);
-		(void) close(fd);
+		(void) polar_close(fd);
 		exit(EXIT_FAILURE);
 	}
 
-	(void) close(fd);
+	(void) polar_close(fd);
 	return 0;
 }
 
@@ -357,7 +395,7 @@ durable_rename(const char *oldfile, const char *newfile)
 	if (fsync_fname(oldfile, false) != 0)
 		return -1;
 
-	fd = open(newfile, PG_BINARY | O_RDWR, 0);
+	fd = polar_open(newfile, PG_BINARY | O_RDWR, 0);
 	if (fd < 0)
 	{
 		if (errno != ENOENT)
@@ -368,17 +406,17 @@ durable_rename(const char *oldfile, const char *newfile)
 	}
 	else
 	{
-		if (fsync(fd) != 0)
+		if (polar_fsync(fd) != 0)
 		{
 			pg_log_error("could not fsync file \"%s\": %m", newfile);
-			close(fd);
+			polar_close(fd);
 			exit(EXIT_FAILURE);
 		}
-		close(fd);
+		polar_close(fd);
 	}
 
 	/* Time to do the real deal... */
-	if (rename(oldfile, newfile) != 0)
+	if (polar_rename(oldfile, newfile) != 0)
 	{
 		pg_log_error("could not rename file \"%s\" to \"%s\": %m",
 					 oldfile, newfile);
@@ -440,9 +478,9 @@ get_dirent_type(const char *path,
 
 
 		if (look_through_symlinks)
-			sret = stat(path, &fst);
+			sret = polar_stat(path, &fst);
 		else
-			sret = lstat(path, &fst);
+			sret = polar_lstat(path, &fst);
 
 		if (sret < 0)
 		{

@@ -256,8 +256,8 @@ my $node_primary2 = PostgreSQL::Test::Cluster->new('primary2');
 $node_primary2->init(allows_streaming => 1);
 $node_primary2->append_conf(
 	'postgresql.conf', qq(
-min_wal_size = 32MB
-max_wal_size = 32MB
+min_wal_size = 2GB
+max_wal_size = 2GB
 log_checkpoints = yes
 ));
 $node_primary2->start;

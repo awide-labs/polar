@@ -47,3 +47,19 @@ src/pl/plperl/Util\.c$
 /tmp_install/
 # ... and for paranoia's sake, don't touch git stuff.
 /\.git/
+
+# Exclude third-party plugin to facilitate our tracking.
+external/faultinjector/
+external/hll/
+external/hypopg/
+external/log_fdw/
+external/pase/
+external/pg_bigm/
+external/pg_jieba/
+external/pg_repack
+external/pg_similarity/
+external/pgvector/
+external/roaringbitmap/
+
+# weird
+src/include/utils/faultinjector_lists.h

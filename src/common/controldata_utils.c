@@ -39,6 +39,16 @@
 #include "storage/fd.h"
 #endif
 
+/* POLAR */
+#ifdef FRONTEND
+#include "polar_vfs/polar_vfs_fe.h"
+#else
+#include "access/xlog.h"
+#endif
+#include "storage/polar_fd.h"
+#include "utils/elog.h"
+/* POLAR end */
+
 /*
  * get_controlfile()
  *
@@ -64,7 +74,14 @@ get_controlfile(const char *DataDir, bool *crc_ok_p)
 	AssertArg(crc_ok_p);
 
 	ControlFile = palloc(sizeof(ControlFileData));
-	snprintf(ControlFilePath, MAXPGPATH, "%s/global/pg_control", DataDir);
+#ifndef FRONTEND
+	if (polar_enable_shared_storage_mode && !polar_is_replica())
+#else
+	if (polar_enable_shared_storage_mode && !polar_in_replica_mode_fe(DataDir))
+#endif
+		snprintf(ControlFilePath, MAXPGPATH, "%s/global/pg_control", polar_datadir);
+	else
+		snprintf(ControlFilePath, MAXPGPATH, "%s/global/pg_control", DataDir);
 
 #ifdef FRONTEND
 	INIT_CRC32C(last_crc);
@@ -73,18 +90,18 @@ retry:
 #endif
 
 #ifndef FRONTEND
-	if ((fd = OpenTransientFile(ControlFilePath, O_RDONLY | PG_BINARY)) == -1)
+	if ((fd = polar_open(ControlFilePath, O_RDONLY | PG_BINARY, 0)) == -1)
 		ereport(ERROR,
 				(errcode_for_file_access(),
 				 errmsg("could not open file \"%s\" for reading: %m",
 						ControlFilePath)));
 #else
-	if ((fd = open(ControlFilePath, O_RDONLY | PG_BINARY, 0)) == -1)
+	if ((fd = polar_open(ControlFilePath, O_RDONLY | PG_BINARY, 0)) == -1)
 		pg_fatal("could not open file \"%s\" for reading: %m",
 				 ControlFilePath);
 #endif
 
-	r = read(fd, ControlFile, sizeof(ControlFileData));
+	r = polar_read(fd, ControlFile, sizeof(ControlFileData));
 	if (r != sizeof(ControlFileData))
 	{
 		if (r < 0)
@@ -108,13 +125,13 @@ retry:
 	}
 
 #ifndef FRONTEND
-	if (CloseTransientFile(fd) != 0)
+	if (polar_close(fd) != 0)
 		ereport(ERROR,
 				(errcode_for_file_access(),
 				 errmsg("could not close file \"%s\": %m",
 						ControlFilePath)));
 #else
-	if (close(fd) != 0)
+	if (polar_close(fd) != 0)
 		pg_fatal("could not close file \"%s\": %m", ControlFilePath);
 #endif
 
@@ -205,7 +222,15 @@ update_controlfile(const char *DataDir,
 	memset(buffer, 0, PG_CONTROL_FILE_SIZE);
 	memcpy(buffer, ControlFile, sizeof(ControlFileData));
 
-	snprintf(ControlFilePath, sizeof(ControlFilePath), "%s/%s", DataDir, XLOG_CONTROL_FILE);
+#ifndef FRONTEND
+	if (polar_enable_shared_storage_mode && !polar_is_replica())
+#else
+	if (polar_enable_shared_storage_mode && !polar_in_replica_mode_fe(DataDir))
+#endif
+		snprintf(ControlFilePath, MAXPGPATH, "%s/%s", polar_datadir, XLOG_CONTROL_FILE);
+	else
+		snprintf(ControlFilePath, MAXPGPATH, "%s/%s", DataDir, XLOG_CONTROL_FILE);
+
 
 #ifndef FRONTEND
 
@@ -219,8 +244,8 @@ update_controlfile(const char *DataDir,
 				 errmsg("could not open file \"%s\": %m",
 						ControlFilePath)));
 #else
-	if ((fd = open(ControlFilePath, O_WRONLY | PG_BINARY,
-				   pg_file_create_mode)) == -1)
+	if ((fd = polar_open(ControlFilePath, O_WRONLY | PG_BINARY,
+						 pg_file_create_mode)) == -1)
 		pg_fatal("could not open file \"%s\": %m", ControlFilePath);
 #endif
 
@@ -228,7 +253,7 @@ update_controlfile(const char *DataDir,
 #ifndef FRONTEND
 	pgstat_report_wait_start(WAIT_EVENT_CONTROL_FILE_WRITE_UPDATE);
 #endif
-	if (write(fd, buffer, PG_CONTROL_FILE_SIZE) != PG_CONTROL_FILE_SIZE)
+	if (polar_write(fd, buffer, PG_CONTROL_FILE_SIZE) != PG_CONTROL_FILE_SIZE)
 	{
 		/* if write didn't set errno, assume problem is no disk space */
 		if (errno == 0)
@@ -251,19 +276,19 @@ update_controlfile(const char *DataDir,
 	{
 #ifndef FRONTEND
 		pgstat_report_wait_start(WAIT_EVENT_CONTROL_FILE_SYNC_UPDATE);
-		if (pg_fsync(fd) != 0)
+		if (polar_fsync(fd) != 0)
 			ereport(PANIC,
 					(errcode_for_file_access(),
 					 errmsg("could not fsync file \"%s\": %m",
 							ControlFilePath)));
 		pgstat_report_wait_end();
 #else
-		if (fsync(fd) != 0)
+		if (polar_fsync(fd) != 0)
 			pg_fatal("could not fsync file \"%s\": %m", ControlFilePath);
 #endif
 	}
 
-	if (close(fd) != 0)
+	if (polar_close(fd) != 0)
 	{
 #ifndef FRONTEND
 		ereport(PANIC,

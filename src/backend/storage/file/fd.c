@@ -3,6 +3,7 @@
  * fd.c
  *	  Virtual file descriptor code.
  *
+ * Portions Copyright (c) 2024, Alibaba Group Holding Limited
  * Portions Copyright (c) 1996-2022, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
@@ -102,6 +103,9 @@
 #include "storage/ipc.h"
 #include "utils/guc.h"
 #include "utils/resowner_private.h"
+
+/* POLAR */
+#include "storage/polar_fd.h"
 
 /* Define PG_FLUSH_DATA_WORKS if we have an implementation for pg_flush_data */
 #if defined(HAVE_SYNC_FILE_RANGE)
@@ -498,8 +502,8 @@ pg_flush_data(int fd, off_t offset, off_t nbytes)
 		 * reliably when available (contrast to msync()) and doesn't flush out
 		 * clean data (like FADV_DONTNEED).
 		 */
-		rc = sync_file_range(fd, offset, nbytes,
-							 SYNC_FILE_RANGE_WRITE);
+		rc = polar_sync_file_range(fd, offset, nbytes,
+								   SYNC_FILE_RANGE_WRITE);
 		if (rc != 0)
 		{
 			int			elevel;
@@ -544,7 +548,7 @@ pg_flush_data(int fd, off_t offset, off_t nbytes)
 		/* mmap() needs actual length if we want to map whole file */
 		if (offset == 0 && nbytes == 0)
 		{
-			nbytes = lseek(fd, 0, SEEK_END);
+			nbytes = polar_lseek(fd, 0, SEEK_END);
 			if (nbytes < 0)
 			{
 				ereport(WARNING,
@@ -578,7 +582,7 @@ pg_flush_data(int fd, off_t offset, off_t nbytes)
 		 * through to the next implementation.
 		 */
 		if (nbytes <= (off_t) SSIZE_MAX)
-			p = mmap(NULL, nbytes, PROT_READ, MAP_SHARED, fd, offset);
+			p = polar_mmap(NULL, nbytes, PROT_READ, MAP_SHARED, fd, offset);
 		else
 			p = MAP_FAILED;
 
@@ -620,7 +624,7 @@ pg_flush_data(int fd, off_t offset, off_t nbytes)
 		 * preferable method.
 		 */
 
-		rc = posix_fadvise(fd, offset, nbytes, POSIX_FADV_DONTNEED);
+		rc = polar_posix_fadvise(fd, offset, nbytes, POSIX_FADV_DONTNEED);
 
 		if (rc != 0)
 		{
@@ -659,7 +663,7 @@ pg_truncate(const char *path, off_t length)
 
 	return ret;
 #else
-	return truncate(path, length);
+	return polar_truncate(path, length);
 #endif
 }
 
@@ -723,7 +727,7 @@ durable_rename(const char *oldfile, const char *newfile, int elevel)
 	}
 	else
 	{
-		if (pg_fsync(fd) != 0)
+		if (polar_fsync(fd) != 0)
 		{
 			int			save_errno;
 
@@ -748,7 +752,7 @@ durable_rename(const char *oldfile, const char *newfile, int elevel)
 	}
 
 	/* Time to do the real deal... */
-	if (rename(oldfile, newfile) < 0)
+	if (polar_rename(oldfile, newfile) < 0)
 	{
 		ereport(elevel,
 				(errcode_for_file_access(),
@@ -788,7 +792,7 @@ durable_rename(const char *oldfile, const char *newfile, int elevel)
 int
 durable_unlink(const char *fname, int elevel)
 {
-	if (unlink(fname) < 0)
+	if (polar_unlink(fname) < 0)
 	{
 		ereport(elevel,
 				(errcode_for_file_access(),
@@ -828,6 +832,12 @@ durable_unlink(const char *fname, int elevel)
 int
 durable_rename_excl(const char *oldfile, const char *newfile, int elevel)
 {
+#ifdef HAVE_WORKING_LINK
+	bool		have_link_fun = true;
+#else
+	bool		have_link_fun = false;
+#endif
+
 	/*
 	 * Ensure that, if we crash directly after the rename/link, a file with
 	 * valid contents is moved into place.
@@ -835,26 +845,31 @@ durable_rename_excl(const char *oldfile, const char *newfile, int elevel)
 	if (fsync_fname_ext(oldfile, false, false, elevel) != 0)
 		return -1;
 
+	if (have_link_fun && !polar_enable_shared_storage_mode)
+	{
 #ifdef HAVE_WORKING_LINK
-	if (link(oldfile, newfile) < 0)
-	{
-		ereport(elevel,
-				(errcode_for_file_access(),
-				 errmsg("could not link file \"%s\" to \"%s\": %m",
-						oldfile, newfile)));
-		return -1;
-	}
-	unlink(oldfile);
-#else
-	if (rename(oldfile, newfile) < 0)
-	{
-		ereport(elevel,
-				(errcode_for_file_access(),
-				 errmsg("could not rename file \"%s\" to \"%s\": %m",
-						oldfile, newfile)));
-		return -1;
-	}
+		if (link(oldfile, newfile) < 0)
+		{
+			ereport(elevel,
+					(errcode_for_file_access(),
+					 errmsg("could not link file \"%s\" to \"%s\": %m",
+							oldfile, newfile)));
+			return -1;
+		}
+		polar_unlink(oldfile);
 #endif
+	}
+	else
+	{
+		if (polar_rename(oldfile, newfile) < 0)
+		{
+			ereport(elevel,
+					(errcode_for_file_access(),
+					 errmsg("could not rename file \"%s\" to \"%s\": %m",
+							oldfile, newfile)));
+			return -1;
+		}
+	}
 
 	/*
 	 * Make change persistent in case of an OS crash, both the new entry and
@@ -1120,9 +1135,9 @@ tryAgain:
 					 "PG_O_DIRECT value collides with O_DSYNC");
 #endif
 
-	fd = open(fileName, fileFlags & ~PG_O_DIRECT, fileMode);
+	fd = polar_open(fileName, fileFlags & ~PG_O_DIRECT, fileMode);
 #else
-	fd = open(fileName, fileFlags, fileMode);
+	fd = polar_open(fileName, fileFlags, fileMode);
 #endif
 
 	if (fd >= 0)
@@ -1278,6 +1293,7 @@ static void
 LruDelete(File file)
 {
 	Vfd		   *vfdP;
+	int			rc = 0;
 
 	Assert(file != 0);
 
@@ -1290,7 +1306,10 @@ LruDelete(File file)
 	 * Close the file.  We aren't expecting this to fail; if it does, better
 	 * to leak the FD than to mess up our internal state.
 	 */
-	if (close(vfdP->fd) != 0)
+
+	rc = polar_close(vfdP->fd);
+
+	if (rc)
 		elog(vfdP->fdstate & FD_TEMP_FILE_LIMIT ? LOG : data_sync_elevel(LOG),
 			 "could not close file \"%s\": %m", vfdP->fileName);
 	vfdP->fd = VFD_CLOSED;
@@ -1676,7 +1695,7 @@ PathNameDeleteTemporaryDir(const char *dirname)
 	struct stat statbuf;
 
 	/* Silently ignore missing directory. */
-	if (stat(dirname, &statbuf) != 0 && errno == ENOENT)
+	if (polar_stat(dirname, &statbuf) != 0 && errno == ENOENT)
 		return;
 
 	/*
@@ -1918,7 +1937,7 @@ PathNameDeleteTemporaryFile(const char *path, bool error_on_failure)
 	int			stat_errno;
 
 	/* Get the final size for pgstat reporting. */
-	if (stat(path, &filestats) != 0)
+	if (polar_stat(path, &filestats) != 0)
 		stat_errno = errno;
 	else
 		stat_errno = 0;
@@ -1931,7 +1950,7 @@ PathNameDeleteTemporaryFile(const char *path, bool error_on_failure)
 	if (stat_errno == ENOENT)
 		return false;
 
-	if (unlink(path) < 0)
+	if (polar_unlink(path) < 0)
 	{
 		if (errno != ENOENT)
 			ereport(error_on_failure ? ERROR : LOG,
@@ -1961,6 +1980,7 @@ void
 FileClose(File file)
 {
 	Vfd		   *vfdP;
+	int			rc;
 
 	Assert(FileIsValid(file));
 
@@ -1972,7 +1992,9 @@ FileClose(File file)
 	if (!FileIsNotOpen(file))
 	{
 		/* close the file */
-		if (close(vfdP->fd) != 0)
+		rc = polar_close(vfdP->fd);
+
+		if (rc)
 		{
 			/*
 			 * We may need to panic on failure to close non-temporary files;
@@ -2015,13 +2037,13 @@ FileClose(File file)
 
 
 		/* first try the stat() */
-		if (stat(vfdP->fileName, &filestats))
+		if (polar_stat(vfdP->fileName, &filestats))
 			stat_errno = errno;
 		else
 			stat_errno = 0;
 
 		/* in any case do the unlink */
-		if (unlink(vfdP->fileName))
+		if (polar_unlink(vfdP->fileName))
 			ereport(LOG,
 					(errcode_for_file_access(),
 					 errmsg("could not delete file \"%s\": %m", vfdP->fileName)));
@@ -2074,8 +2096,8 @@ FilePrefetch(File file, off_t offset, int amount, uint32 wait_event_info)
 		return returnCode;
 
 	pgstat_report_wait_start(wait_event_info);
-	returnCode = posix_fadvise(VfdCache[file].fd, offset, amount,
-							   POSIX_FADV_WILLNEED);
+	returnCode = polar_posix_fadvise(VfdCache[file].fd, offset, amount,
+									 POSIX_FADV_WILLNEED);
 	pgstat_report_wait_end();
 
 	return returnCode;
@@ -2130,7 +2152,9 @@ FileRead(File file, char *buffer, int amount, off_t offset,
 
 retry:
 	pgstat_report_wait_start(wait_event_info);
-	returnCode = pg_pread(vfdP->fd, buffer, amount, offset);
+
+	returnCode = polar_pread(vfdP->fd, buffer, amount, offset);
+
 	pgstat_report_wait_end();
 
 	if (returnCode < 0)
@@ -2212,7 +2236,7 @@ FileWrite(File file, char *buffer, int amount, off_t offset,
 retry:
 	errno = 0;
 	pgstat_report_wait_start(wait_event_info);
-	returnCode = pg_pwrite(VfdCache[file].fd, buffer, amount, offset);
+	returnCode = polar_pwrite(VfdCache[file].fd, buffer, amount, offset);
 	pgstat_report_wait_end();
 
 	/* if write didn't set errno, assume problem is no disk space */
@@ -2277,7 +2301,7 @@ FileSync(File file, uint32 wait_event_info)
 		return returnCode;
 
 	pgstat_report_wait_start(wait_event_info);
-	returnCode = pg_fsync(VfdCache[file].fd);
+	returnCode = polar_fsync(VfdCache[file].fd);
 	pgstat_report_wait_end();
 
 	return returnCode;
@@ -2297,7 +2321,7 @@ FileSize(File file)
 			return (off_t) -1;
 	}
 
-	return lseek(VfdCache[file].fd, 0, SEEK_END);
+	return polar_lseek(VfdCache[file].fd, 0, SEEK_END);
 }
 
 int
@@ -2315,7 +2339,7 @@ FileTruncate(File file, off_t offset, uint32 wait_event_info)
 		return returnCode;
 
 	pgstat_report_wait_start(wait_event_info);
-	returnCode = ftruncate(VfdCache[file].fd, offset);
+	returnCode = polar_ftruncate(VfdCache[file].fd, offset);
 	pgstat_report_wait_end();
 
 	if (returnCode == 0 && VfdCache[file].fileSize > offset)
@@ -2632,10 +2656,10 @@ FreeDesc(AllocateDesc *desc)
 			result = pclose(desc->desc.file);
 			break;
 		case AllocateDescDir:
-			result = closedir(desc->desc.dir);
+			result = polar_closedir(desc->desc.dir);
 			break;
 		case AllocateDescRawFD:
-			result = close(desc->desc.fd);
+			result = polar_close(desc->desc.fd);
 			break;
 		default:
 			elog(ERROR, "AllocateDesc kind not recognized");
@@ -2703,7 +2727,7 @@ CloseTransientFile(int fd)
 	/* Only get here if someone passes us a file not in allocatedDescs */
 	elog(WARNING, "fd passed to CloseTransientFile was not obtained from OpenTransientFile");
 
-	return close(fd);
+	return polar_close(fd);
 }
 
 /*
@@ -2737,7 +2761,7 @@ AllocateDir(const char *dirname)
 	ReleaseLruFiles();
 
 TryAgain:
-	if ((dir = opendir(dirname)) != NULL)
+	if ((dir = polar_opendir(dirname)) != NULL)
 	{
 		AllocateDesc *desc = &allocatedDescs[numAllocatedDescs];
 
@@ -2815,7 +2839,7 @@ ReadDirExtended(DIR *dir, const char *dirname, int elevel)
 	}
 
 	errno = 0;
-	if ((dent = readdir(dir)) != NULL)
+	if ((dent = polar_readdir(dir)) != NULL)
 		return dent;
 
 	if (errno)
@@ -2859,7 +2883,7 @@ FreeDir(DIR *dir)
 	/* Only get here if someone passes us a dir not in allocatedDescs */
 	elog(WARNING, "dir passed to FreeDir was not obtained from AllocateDir");
 
-	return closedir(dir);
+	return polar_closedir(dir);
 }
 
 
@@ -3236,7 +3260,7 @@ RemovePgTempFilesInDir(const char *tmpdirname, bool missing_ok, bool unlink_all)
 		{
 			struct stat statbuf;
 
-			if (lstat(rm_path, &statbuf) < 0)
+			if (polar_lstat(rm_path, &statbuf) < 0)
 			{
 				ereport(LOG,
 						(errcode_for_file_access(),
@@ -3249,7 +3273,7 @@ RemovePgTempFilesInDir(const char *tmpdirname, bool missing_ok, bool unlink_all)
 				/* recursively remove contents, then directory itself */
 				RemovePgTempFilesInDir(rm_path, false, true);
 
-				if (rmdir(rm_path) < 0)
+				if (polar_rmdir(rm_path) < 0)
 					ereport(LOG,
 							(errcode_for_file_access(),
 							 errmsg("could not remove directory \"%s\": %m",
@@ -3257,7 +3281,7 @@ RemovePgTempFilesInDir(const char *tmpdirname, bool missing_ok, bool unlink_all)
 			}
 			else
 			{
-				if (unlink(rm_path) < 0)
+				if (polar_unlink(rm_path) < 0)
 					ereport(LOG,
 							(errcode_for_file_access(),
 							 errmsg("could not remove file \"%s\": %m",
@@ -3319,7 +3343,7 @@ RemovePgTempRelationFilesInDbspace(const char *dbspacedirname)
 		snprintf(rm_path, sizeof(rm_path), "%s/%s",
 				 dbspacedirname, de->d_name);
 
-		if (unlink(rm_path) < 0)
+		if (polar_unlink(rm_path) < 0)
 			ereport(LOG,
 					(errcode_for_file_access(),
 					 errmsg("could not remove file \"%s\": %m",
@@ -3444,7 +3468,7 @@ SyncDataDirectory(void)
 	{
 		struct stat st;
 
-		if (lstat("pg_wal", &st) < 0)
+		if (polar_lstat("pg_wal", &st) < 0)
 			ereport(LOG,
 					(errcode_for_file_access(),
 					 errmsg("could not stat file \"%s\": %m",
@@ -3663,7 +3687,7 @@ unlink_if_exists_fname(const char *fname, bool isdir, int elevel)
 {
 	if (isdir)
 	{
-		if (rmdir(fname) != 0 && errno != ENOENT)
+		if (polar_rmdir(fname) != 0 && errno != ENOENT)
 			ereport(elevel,
 					(errcode_for_file_access(),
 					 errmsg("could not remove directory \"%s\": %m", fname)));
@@ -3721,7 +3745,7 @@ fsync_fname_ext(const char *fname, bool isdir, bool ignore_perm, int elevel)
 		return -1;
 	}
 
-	returncode = pg_fsync(fd);
+	returncode = polar_fsync(fd);
 
 	/*
 	 * Some OSes don't allow us to fsync directories at all, so we can ignore
@@ -3802,7 +3826,7 @@ fsync_parent_path(const char *fname, int elevel)
 int
 MakePGDirectory(const char *directoryName)
 {
-	return mkdir(directoryName, pg_dir_create_mode);
+	return polar_mkdir(directoryName, pg_dir_create_mode);
 }
 
 /*
@@ -3849,7 +3873,7 @@ pg_pwritev_with_retry(int fd, const struct iovec *iov, int iovcnt, off_t offset)
 	for (;;)
 	{
 		/* Write as much as we can. */
-		part = pg_pwritev(fd, iov, iovcnt, offset);
+		part = polar_pwritev(fd, iov, iovcnt, offset);
 		if (part < 0)
 			return -1;
 

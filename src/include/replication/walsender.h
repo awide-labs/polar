@@ -24,6 +24,16 @@ typedef enum
 	CRS_USE_SNAPSHOT
 } CRSSnapshotAction;
 
+/* POLAR: customized replication mode */
+typedef enum polar_repl_mode_t
+{
+	POLAR_REPL_DEFAULT,			/* Default mode, as original one */
+	POLAR_REPL_REPLICA,			/* Replica mode */
+	POLAR_REPL_STANDBY,			/* Standby mode */
+} polar_repl_mode_t;
+
+/* POLAR end */
+
 /* global state */
 extern PGDLLIMPORT bool am_walsender;
 extern PGDLLIMPORT bool am_cascading_walsender;
@@ -34,6 +44,12 @@ extern PGDLLIMPORT bool wake_wal_senders;
 extern PGDLLIMPORT int max_wal_senders;
 extern PGDLLIMPORT int wal_sender_timeout;
 extern PGDLLIMPORT bool log_replication_commands;
+
+/* POLAR: GUC */
+extern PGDLLIMPORT int polar_max_non_super_wal_snd;
+extern PGDLLIMPORT int polar_logical_repl_xlog_bulk_read_size;
+
+/* POLAR end */
 
 extern void InitWalSender(void);
 extern bool exec_replication_command(const char *query_string);
@@ -47,6 +63,10 @@ extern void WalSndInitStopping(void);
 extern void WalSndWaitStopping(void);
 extern void HandleWalSndInitStopping(void);
 extern void WalSndRqstFileReload(void);
+
+/* POLAR */
+extern polar_repl_mode_t polar_gen_replication_mode(void);
+extern const char *polar_replication_mode_str(polar_repl_mode_t mode);
 
 /*
  * Remember that we want to wakeup walsenders later

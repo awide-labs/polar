@@ -18,6 +18,11 @@
 #include "lib/stringinfo.h"
 #include "storage/off.h"
 
+/* POLAR */
+#include "storage/buf.h"
+#include "storage/bufpage.h"
+/* POLAR end */
+
 /*
  * XLOG records for btree operations
  *
@@ -347,5 +352,12 @@ extern const char *btree_identify(uint8 info);
 extern void btree_xlog_startup(void);
 extern void btree_xlog_cleanup(void);
 extern void btree_mask(char *pagedata, BlockNumber blkno);
+
+/* POLAR */
+extern void _bt_restore_page(Page page, char *from, int len);
+extern void btree_xlog_updates(Page page, OffsetNumber *updatedoffsets,
+							   xl_btree_update *updates, int nupdated);
+
+/* POLAR end */
 
 #endif							/* NBTXLOG_H */

@@ -63,7 +63,7 @@ _PG_init(void)
 							0,
 							0, INT_MAX / 1000,
 							PGC_SIGHUP,
-							GUC_UNIT_MS,
+							GUC_UNIT_MS | POLAR_GUC_IS_UNCHANGABLE,
 							NULL,
 							NULL,
 							NULL);

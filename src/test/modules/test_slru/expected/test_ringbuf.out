@@ -1,0 +1,8 @@
+CREATE EXTENSION test_slru;
+-- See README for explanation of arguments:
+SELECT test_slru();
+ test_slru 
+--------------
+ 
+(1 row)
+

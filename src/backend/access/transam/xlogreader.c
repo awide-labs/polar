@@ -34,16 +34,18 @@
 #include "replication/origin.h"
 
 #ifndef FRONTEND
+#include "access/polar_logindex_redo.h"
 #include "miscadmin.h"
 #include "pgstat.h"
+#include "storage/polar_xlogbuf.h"
 #include "utils/memutils.h"
 #else
 #include "common/logging.h"
 #endif
 
-static void report_invalid_record(XLogReaderState *state, const char *fmt,...)
-			pg_attribute_printf(2, 3);
-static void allocate_recordbuf(XLogReaderState *state, uint32 reclength);
+/* POLAR */
+#include "storage/polar_fd.h"
+
 static int	ReadPageInternal(XLogReaderState *state, XLogRecPtr pageptr,
 							 int reqLen);
 static void XLogReaderInvalReadState(XLogReaderState *state);
@@ -55,6 +57,9 @@ static bool ValidXLogRecord(XLogReaderState *state, XLogRecord *record,
 static void ResetDecoder(XLogReaderState *state);
 static void WALOpenSegmentInit(WALOpenSegment *seg, WALSegmentContext *segcxt,
 							   int segsize, const char *waldir);
+
+static void polar_invalid_xlog_buffer(XLogReaderState *state,
+									  XLogRecPtr start_page_lsn, XLogRecPtr end_page_lsn);
 
 /* size of the buffer allocated for error message. */
 #define MAX_ERRORMSG_LEN 1000
@@ -69,7 +74,7 @@ static void WALOpenSegmentInit(WALOpenSegment *seg, WALSegmentContext *segcxt,
  * Construct a string in state->errormsg_buf explaining what's wrong with
  * the current record being read.
  */
-static void
+void
 report_invalid_record(XLogReaderState *state, const char *fmt,...)
 {
 	va_list		args;
@@ -134,6 +139,15 @@ XLogReaderAllocate(int wal_segment_size, const char *waldir,
 		return NULL;
 	}
 
+	/*
+	 * POLAR: fields for bulk reading xlog pages.
+	 */
+	state->bulk_read_buffer = NULL;
+	state->bulk_read_buffer_len = 0;
+	state->bulk_read_buffer_size = 0;
+	state->bulk_read_buffer_start = InvalidXLogRecPtr;
+	/* POLAR end */
+
 	/* Initialize segment info. */
 	WALOpenSegmentInit(&state->seg, &state->segcxt, wal_segment_size,
 					   waldir);
@@ -156,6 +170,14 @@ XLogReaderAllocate(int wal_segment_size, const char *waldir,
 	 * enlarged if necessary.
 	 */
 	allocate_recordbuf(state, 0);
+
+#ifndef FRONTEND
+	/* POLAR: save xlog meta only in standby mode with enabled logindex */
+	if (polar_logindex_redo_instance &&
+		AmStartupProcess() &&
+		polar_is_standby())
+		state->polar_save_xlog_meta = true;
+#endif
 	return state;
 }
 
@@ -188,7 +210,7 @@ XLogReaderFree(XLogReaderState *state)
  * Note: This routine should *never* be called for xl_tot_len until the header
  * of the record has been fully validated.
  */
-static void
+void
 allocate_recordbuf(XLogReaderState *state, uint32 reclength)
 {
 	uint32		newSize = reclength;
@@ -211,6 +233,7 @@ WALOpenSegmentInit(WALOpenSegment *seg, WALSegmentContext *segcxt,
 {
 	seg->ws_file = -1;
 	seg->ws_segno = 0;
+	seg->prev_ws_segno = 0;
 	seg->ws_tli = 0;
 
 	segcxt->ws_segsize = segsize;
@@ -436,7 +459,7 @@ XLogReadRecord(XLogReaderState *state, char **errormsg)
  * Return NULL if there is no space in the decode buffer and allow_oversized
  * is false, or if memory allocation fails for an oversized buffer.
  */
-static DecodedXLogRecord *
+DecodedXLogRecord *
 XLogReadRecordAlloc(XLogReaderState *state, size_t xl_tot_len, bool allow_oversized)
 {
 	size_t		required_space = DecodeXLogRecordRequiredSpace(xl_tot_len);
@@ -542,6 +565,7 @@ XLogDecodeNextRecord(XLogReaderState *state, bool nonblocking)
 	int			readOff;
 	DecodedXLogRecord *decoded;
 	char	   *errormsg;		/* not used */
+	XLogRecPtr	polar_target_page_ptr;
 
 	/*
 	 * randAccess indicates whether to verify the previous-record pointer of
@@ -577,8 +601,17 @@ XLogDecodeNextRecord(XLogReaderState *state, bool nonblocking)
 		 *
 		 * In this case, NextRecPtr should already be pointing to a valid
 		 * record starting position.
+		 *
+		 * POLAR: We allow RecPtr is not exactly the begining of xlog, but the
+		 * begining of xlog page here, because it skiped over page header
+		 * after ReadPageInternal.
 		 */
+#ifndef FRONTEND
+		Assert(XRecOffIsValid(RecPtr) ||
+			   (polar_logindex_redo_instance && (RecPtr % XLOG_BLCKSZ == 0)));
+#else
 		Assert(XRecOffIsValid(RecPtr));
+#endif
 		randAccess = true;
 	}
 
@@ -589,6 +622,7 @@ restart:
 
 	targetPagePtr = RecPtr - (RecPtr % XLOG_BLCKSZ);
 	targetRecOff = RecPtr % XLOG_BLCKSZ;
+	polar_target_page_ptr = targetPagePtr;
 
 	/*
 	 * Read the page containing the record into state->readBuf. Request enough
@@ -598,7 +632,10 @@ restart:
 	readOff = ReadPageInternal(state, targetPagePtr,
 							   Min(targetRecOff + SizeOfXLogRecord, XLOG_BLCKSZ));
 	if (readOff == XLREAD_WOULDBLOCK)
+	{
+		polar_invalid_xlog_buffer(state, polar_target_page_ptr, targetPagePtr);
 		return XLREAD_WOULDBLOCK;
+	}
 	else if (readOff < 0)
 		goto err;
 
@@ -690,6 +727,7 @@ restart:
 		 * only reading ahead.  The caller should consume existing records to
 		 * make space.
 		 */
+		polar_invalid_xlog_buffer(state, polar_target_page_ptr, targetPagePtr);
 		return XLREAD_WOULDBLOCK;
 	}
 
@@ -728,7 +766,10 @@ restart:
 										   XLOG_BLCKSZ));
 
 			if (readOff == XLREAD_WOULDBLOCK)
+			{
+				polar_invalid_xlog_buffer(state, polar_target_page_ptr, targetPagePtr);
 				return XLREAD_WOULDBLOCK;
+			}
 			else if (readOff < 0)
 				goto err;
 
@@ -846,7 +887,10 @@ restart:
 		readOff = ReadPageInternal(state, targetPagePtr,
 								   Min(targetRecOff + total_len, XLOG_BLCKSZ));
 		if (readOff == XLREAD_WOULDBLOCK)
+		{
+			polar_invalid_xlog_buffer(state, polar_target_page_ptr, targetPagePtr);
 			return XLREAD_WOULDBLOCK;
+		}
 		else if (readOff < 0)
 			goto err;
 
@@ -944,6 +988,9 @@ err:
 	 * failure.
 	 */
 	XLogReaderInvalReadState(state);
+
+	/* POLAR: try to remove invalid record from xlog buffer */
+	polar_invalid_xlog_buffer(state, polar_target_page_ptr, targetPagePtr);
 
 	/*
 	 * If an error was written to errmsg_buf, it'll be returned to the caller
@@ -1528,6 +1575,7 @@ WALRead(XLogReaderState *state,
 		 */
 		if (state->seg.ws_file < 0 ||
 			!XLByteInSeg(recptr, state->seg.ws_segno, state->segcxt.ws_segsize) ||
+			state->seg.prev_ws_segno != state->seg.ws_segno ||
 			tli != state->seg.ws_tli)
 		{
 			XLogSegNo	nextSegNo;
@@ -1544,6 +1592,7 @@ WALRead(XLogReaderState *state,
 			/* Update the current segment info. */
 			state->seg.ws_tli = tli;
 			state->seg.ws_segno = nextSegNo;
+			state->seg.prev_ws_segno = nextSegNo;
 		}
 
 		/* How many bytes are within this segment? */
@@ -1558,7 +1607,7 @@ WALRead(XLogReaderState *state,
 
 		/* Reset errno first; eases reporting non-errno-affecting errors */
 		errno = 0;
-		readbytes = pg_pread(state->seg.ws_file, p, segbytes, (off_t) startoff);
+		readbytes = polar_pread(state->seg.ws_file, p, segbytes, (off_t) startoff);
 
 #ifndef FRONTEND
 		pgstat_report_wait_end();
@@ -1641,6 +1690,8 @@ DecodeXLogRecordRequiredSpace(size_t xl_tot_len)
 	size += (MAXIMUM_ALIGNOF - 1);
 	/* We might insert padding before each block's data. */
 	size += (MAXIMUM_ALIGNOF - 1) * (XLR_MAX_BLOCK_ID + 1);
+	/* POLAR: We might insert padding before xlog meta. */
+	size += (MAXIMUM_ALIGNOF - 1);
 	/* We might insert padding at the end. */
 	size += (MAXIMUM_ALIGNOF - 1);
 
@@ -1692,6 +1743,8 @@ DecodeXLogRecord(XLogReaderState *state,
 	decoded->toplevel_xid = InvalidTransactionId;
 	decoded->main_data = NULL;
 	decoded->main_data_len = 0;
+	decoded->polar_xlog_meta = NULL;
+	decoded->polar_xlog_meta_size = 0;
 	decoded->max_block_id = -1;
 	ptr = (char *) record;
 	ptr += SizeOfXLogRecord;
@@ -1897,6 +1950,13 @@ DecodeXLogRecord(XLogReaderState *state,
 		goto shortdata_err;
 
 	/*
+	 * POLAR: Save the length of record's XLogRecordHeader,
+	 * XLogRecordBlockHeader and XLogRecordDataHaeder. In order to reserve
+	 * XLOG queue space to store xlog meta.
+	 */
+	decoded->polar_xlog_meta_size = record->xl_tot_len - remaining;
+
+	/*
 	 * Ok, we've parsed the fragment headers, and verified that the total
 	 * length of the payload in the fragments is equal to the amount of data
 	 * left.  Copy the data of each fragment to contiguous space after the
@@ -1943,6 +2003,15 @@ DecodeXLogRecord(XLogReaderState *state,
 		memcpy(decoded->main_data, ptr, decoded->main_data_len);
 		ptr += decoded->main_data_len;
 		out += decoded->main_data_len;
+	}
+
+	/* POLAR: save xlog meta if needed */
+	if (state->polar_save_xlog_meta)
+	{
+		out = (char *) MAXALIGN(out);
+		decoded->polar_xlog_meta = out;
+		memcpy(decoded->polar_xlog_meta, (char *) record, decoded->polar_xlog_meta_size);
+		out += decoded->polar_xlog_meta_size;
 	}
 
 	/* Report the actual size we used. */
@@ -2191,3 +2260,32 @@ XLogRecGetFullXid(XLogReaderState *record)
 }
 
 #endif
+
+/*
+ * POLAR: Must make sure that xlog buffer will be invalidated before
+ * returning any failed code inside XLogDecodeNextRecord.
+ */
+static void
+polar_invalid_xlog_buffer(XLogReaderState *state, XLogRecPtr start_page_lsn, XLogRecPtr end_page_lsn)
+{
+#ifndef FRONTEND
+	if (unlikely(end_page_lsn < start_page_lsn))
+		ereport(PANIC, errmsg("Unexpected target page ptr: %X/%X vs %X/%X",
+							  LSN_FORMAT_ARGS(end_page_lsn),
+							  LSN_FORMAT_ARGS(start_page_lsn)));
+
+	if (POLAR_ENABLE_XLOG_BUFFER())
+	{
+		/* try to retrieve current xlog page's lsn inside xlog buffer */
+		polar_xlog_buffer_update(state->currRecPtr > 0 ? (state->currRecPtr - 1) : 0);
+
+		/*
+		 * POLAR: If current record is cross block, we need to remove more
+		 * buffer from the next page.
+		 */
+		if (end_page_lsn > start_page_lsn)
+			polar_xlog_buffer_remove_range(start_page_lsn + XLOG_BLCKSZ,
+										   end_page_lsn);
+	}
+#endif
+}

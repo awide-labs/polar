@@ -73,6 +73,9 @@
 #include "utils/guc.h"
 #include "utils/memutils.h"
 
+/* POLAR */
+#include "storage/polar_fd.h"
+
 #ifdef USE_DSM_POSIX
 static bool dsm_impl_posix(dsm_op op, dsm_handle handle, Size request_size,
 						   void **impl_private, void **mapped_address,
@@ -822,7 +825,7 @@ dsm_impl_mmap(dsm_op op, dsm_handle handle, Size request_size,
 		}
 		*mapped_address = NULL;
 		*mapped_size = 0;
-		if (op == DSM_OP_DESTROY && unlink(name) != 0)
+		if (op == DSM_OP_DESTROY && polar_unlink(name) != 0)
 		{
 			ereport(elevel,
 					(errcode_for_dynamic_shared_memory(),
@@ -853,7 +856,7 @@ dsm_impl_mmap(dsm_op op, dsm_handle handle, Size request_size,
 	{
 		struct stat st;
 
-		if (fstat(fd, &st) != 0)
+		if (polar_fstat(fd, &st) != 0)
 		{
 			int			save_errno;
 
@@ -896,7 +899,7 @@ dsm_impl_mmap(dsm_op op, dsm_handle handle, Size request_size,
 			if (goal > ZBUFFER_SIZE)
 				goal = ZBUFFER_SIZE;
 			pgstat_report_wait_start(WAIT_EVENT_DSM_FILL_ZERO_WRITE);
-			if (write(fd, zbuffer, goal) == goal)
+			if (polar_write(fd, zbuffer, goal) == goal)
 				remaining -= goal;
 			else
 				success = false;
@@ -910,7 +913,7 @@ dsm_impl_mmap(dsm_op op, dsm_handle handle, Size request_size,
 			/* Back out what's already been done. */
 			save_errno = errno;
 			CloseTransientFile(fd);
-			unlink(name);
+			polar_unlink(name);
 			errno = save_errno ? save_errno : ENOSPC;
 
 			ereport(elevel,
@@ -922,8 +925,8 @@ dsm_impl_mmap(dsm_op op, dsm_handle handle, Size request_size,
 	}
 
 	/* Map it. */
-	address = mmap(NULL, request_size, PROT_READ | PROT_WRITE,
-				   MAP_SHARED | MAP_HASSEMAPHORE | MAP_NOSYNC, fd, 0);
+	address = polar_mmap(NULL, request_size, PROT_READ | PROT_WRITE,
+						 MAP_SHARED | MAP_HASSEMAPHORE | MAP_NOSYNC, fd, 0);
 	if (address == MAP_FAILED)
 	{
 		int			save_errno;
@@ -932,7 +935,7 @@ dsm_impl_mmap(dsm_op op, dsm_handle handle, Size request_size,
 		save_errno = errno;
 		CloseTransientFile(fd);
 		if (op == DSM_OP_CREATE)
-			unlink(name);
+			polar_unlink(name);
 		errno = save_errno;
 
 		ereport(elevel,

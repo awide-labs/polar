@@ -1,0 +1,89 @@
+CREATE EXTENSION faultinjector;
+-- start with a clean slate
+select inject_fault('all', 'reset');
+ inject_fault 
+--------------
+ Success:
+(1 row)
+
+-- inject fault of type skip
+select inject_fault('checkpoint', 'skip', '', '', 1, 2, 0);
+ inject_fault 
+--------------
+ Success:
+(1 row)
+
+-- wait for fault triggered 0 times, should not block
+select wait_until_triggered_fault('checkpoint', 0);
+ wait_until_triggered_fault 
+----------------------------
+ Success:
+(1 row)
+
+-- trigger a checkpoint which will trigger the fault
+checkpoint;
+select wait_until_triggered_fault('checkpoint', 1);
+ wait_until_triggered_fault 
+----------------------------
+ Success:
+(1 row)
+
+-- check status
+select inject_fault('checkpoint', 'status');
+                                                                                         inject_fault                                                                                         
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Success: fault name:'checkpoint' fault type:'skip' database name:'' table name:'' start occurrence:'1' end occurrence:'2' extra arg:'0' fault injection state:'triggered' num times hit:'1' +
+ 
+(1 row)
+
+select inject_fault('checkpoint', 'reset');
+ inject_fault 
+--------------
+ Success:
+(1 row)
+
+-- inject fault of type error, set it to trigger two times
+select inject_fault('checkpoint', 'error', '', '', 1, 2, 0);
+ inject_fault 
+--------------
+ Success:
+(1 row)
+
+-- trigger once
+checkpoint;
+ERROR:  checkpoint request failed
+HINT:  Consult recent messages in the server log for details.
+select inject_fault('checkpoint', 'status');
+                                                                                         inject_fault                                                                                          
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Success: fault name:'checkpoint' fault type:'error' database name:'' table name:'' start occurrence:'1' end occurrence:'2' extra arg:'0' fault injection state:'triggered' num times hit:'1' +
+ 
+(1 row)
+
+-- trigger twice
+checkpoint;
+ERROR:  checkpoint request failed
+HINT:  Consult recent messages in the server log for details.
+select inject_fault('checkpoint', 'status');
+                                                                                         inject_fault                                                                                          
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Success: fault name:'checkpoint' fault type:'error' database name:'' table name:'' start occurrence:'1' end occurrence:'2' extra arg:'0' fault injection state:'completed' num times hit:'2' +
+ 
+(1 row)
+
+-- no error the third time onwards
+checkpoint;
+select inject_fault('checkpoint', 'status');
+                                                                                         inject_fault                                                                                          
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Success: fault name:'checkpoint' fault type:'error' database name:'' table name:'' start occurrence:'1' end occurrence:'2' extra arg:'0' fault injection state:'completed' num times hit:'2' +
+ 
+(1 row)
+
+-- reset the fault
+select inject_fault('checkpoint', 'reset');
+ inject_fault 
+--------------
+ Success:
+(1 row)
+

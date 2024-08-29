@@ -154,6 +154,12 @@ LocalBufferAlloc(SMgrRelation smgr, ForkNumber forkNum, BlockNumber blockNum,
 			*foundPtr = true;
 		else
 		{
+			/* POLAR: bulk read. the same as StartBufferIO */
+			if (polar_bulk_io_is_in_progress)
+			{
+				polar_bulk_io_in_progress_buf[polar_bulk_io_in_progress_count] = bufHdr;
+				polar_bulk_io_in_progress_count++;
+			}
 			/* Previous read attempt must have failed; try again */
 			*foundPtr = false;
 		}
@@ -275,6 +281,15 @@ LocalBufferAlloc(SMgrRelation smgr, ForkNumber forkNum, BlockNumber blockNum,
 	pg_atomic_unlocked_write_u32(&bufHdr->state, buf_state);
 
 	*foundPtr = false;
+
+	/* POLAR: Bulk read. the same as StartBufferIO */
+	if (polar_bulk_io_is_in_progress)
+	{
+		polar_bulk_io_in_progress_buf[polar_bulk_io_in_progress_count] = bufHdr;
+		polar_bulk_io_in_progress_count++;
+	}
+	/* POLAR end */
+
 	return bufHdr;
 }
 
@@ -455,6 +470,9 @@ InitLocalBuffers(void)
 		 * is -1.)
 		 */
 		buf->buf_id = -i - 2;
+#ifdef LOCKBUFHDR_DEBUG
+		buf->lockbufhdr_pid = 0;
+#endif
 
 		/*
 		 * Intentionally do not initialize the buffer's atomic variable
@@ -525,8 +543,8 @@ GetLocalBufferStorage(void)
 		/* And don't overflow MaxAllocSize, either */
 		num_bufs = Min(num_bufs, MaxAllocSize / BLCKSZ);
 
-		cur_block = (char *) MemoryContextAlloc(LocalBufferContext,
-												num_bufs * BLCKSZ);
+		cur_block = (char *) MemoryContextAllocIOAligned(LocalBufferContext,
+														 num_bufs * BLCKSZ, 0);
 		next_buf_in_block = 0;
 		num_bufs_in_block = num_bufs;
 	}

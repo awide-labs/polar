@@ -65,6 +65,8 @@
 #include "utils/pg_rusage.h"
 #include "utils/timestamp.h"
 
+/* POLAR */
+#include "storage/polar_bufmgr.h"
 
 /*
  * Space/time tradeoff parameters: do these need to be user-tunable?
@@ -970,9 +972,50 @@ lazy_scan_heap(LVRelState *vacrel)
 		 */
 		visibilitymap_pin(vacrel->rel, blkno, &vmbuffer);
 
-		/* Finished preparatory checks.  Actually scan the page. */
-		buf = ReadBufferExtended(vacrel->rel, MAIN_FORKNUM, blkno,
-								 RBM_NORMAL, vacrel->bstrategy);
+		/* ----------------
+		 * POLAR: bulk read
+		 *
+		 * 'skipping_current_range == true', we can ensure that:
+		 *    1. pages [blkno + 1, next_unskippable_block) is skippable
+		 *    2. next_unskippable_block - blkno >= SKIP_PAGES_THRESHOLD.
+		 *
+		 * 'skipping_current_range == true' appear in the following situations,
+		 * next_unskippable_block - current_blkno >= SKIP_PAGE_THRESHOLD
+		 * read/bulk read buffer are not necessary
+		 * ---------+--------+--------+--------+--------+--------+----------------+--------+
+         * |  skip  | UNSKIP |  skip  |  skip  |  skip  |  skip  | ......|  skip  | UNSKIP |
+         * |        |        |        |        |        |        |       |        |        |
+         * ---------+---+----+--------+--------+--------+--------+-------+--------+----+---+
+         *              ^                                                              ^
+         *              |                                                              |
+         *              +                                                              +
+         *            blkno                                              next_unskippable_block
+		 * Only when unskippable_blocks are included in bulk read range, we use bulk read.
+		 * (skipping_current_range == false || next_unskippable_block - blkno < polar_bulk_read_size)
+		 * satisfies this situation. (SKIP_PAGES_THRESHOLD = 32 > polar_bulk_read_size)
+		 * According to the Assert(next_unskippable_block >= blkno + 1),
+		 * next_unskippable_block - blkno > 0.
+		 * ----------------
+		 */
+		if (polar_bulk_read_size > 0 &&
+			(!skipping_current_range ||
+			 next_unskippable_block - blkno < polar_bulk_read_size))
+		{
+			BlockNumber maxBlockCount;
+
+			Assert(rel_pages > blkno);
+			maxBlockCount = rel_pages - blkno;
+
+			buf = polar_bulk_read_buffer_extended(vacrel->rel, MAIN_FORKNUM, blkno,
+												  RBM_NORMAL, vacrel->bstrategy,
+												  maxBlockCount);
+		}						/* POLAR end */
+		else
+		{
+			/* Finished preparatory checks.  Actually scan the page. */
+			buf = ReadBufferExtended(vacrel->rel, MAIN_FORKNUM, blkno,
+									 RBM_NORMAL, vacrel->bstrategy);
+		}
 		page = BufferGetPage(buf);
 
 		/*
@@ -1136,7 +1179,7 @@ lazy_scan_heap(LVRelState *vacrel)
 			MarkBufferDirty(buf);
 			visibilitymap_set(vacrel->rel, blkno, buf, InvalidXLogRecPtr,
 							  vmbuffer, prunestate.visibility_cutoff_xid,
-							  flags);
+							  flags, InvalidXLogRecPtr);
 		}
 
 		/*
@@ -1151,7 +1194,7 @@ lazy_scan_heap(LVRelState *vacrel)
 			elog(WARNING, "page is not marked all-visible but visibility map bit is set in relation \"%s\" page %u",
 				 vacrel->relname, blkno);
 			visibilitymap_clear(vacrel->rel, blkno, vmbuffer,
-								VISIBILITYMAP_VALID_BITS);
+								VISIBILITYMAP_VALID_BITS, NULL);
 		}
 
 		/*
@@ -1176,7 +1219,7 @@ lazy_scan_heap(LVRelState *vacrel)
 			PageClearAllVisible(page);
 			MarkBufferDirty(buf);
 			visibilitymap_clear(vacrel->rel, blkno, vmbuffer,
-								VISIBILITYMAP_VALID_BITS);
+								VISIBILITYMAP_VALID_BITS, NULL);
 		}
 
 		/*
@@ -1195,7 +1238,7 @@ lazy_scan_heap(LVRelState *vacrel)
 			 */
 			visibilitymap_set(vacrel->rel, blkno, buf, InvalidXLogRecPtr,
 							  vmbuffer, InvalidTransactionId,
-							  VISIBILITYMAP_ALL_FROZEN);
+							  VISIBILITYMAP_ALL_FROZEN, InvalidXLogRecPtr);
 		}
 
 		/*
@@ -1499,7 +1542,8 @@ lazy_scan_new_or_empty(LVRelState *vacrel, Buffer buf, BlockNumber blkno,
 			PageSetAllVisible(page);
 			visibilitymap_set(vacrel->rel, blkno, buf, InvalidXLogRecPtr,
 							  vmbuffer, InvalidTransactionId,
-							  VISIBILITYMAP_ALL_VISIBLE | VISIBILITYMAP_ALL_FROZEN);
+							  VISIBILITYMAP_ALL_VISIBLE | VISIBILITYMAP_ALL_FROZEN,
+							  InvalidXLogRecPtr);
 			END_CRIT_SECTION();
 		}
 
@@ -2584,7 +2628,8 @@ lazy_vacuum_heap_page(LVRelState *vacrel, BlockNumber blkno, Buffer buffer,
 		Assert(BufferIsValid(*vmbuffer));
 		if (flags != 0)
 			visibilitymap_set(vacrel->rel, blkno, buffer, InvalidXLogRecPtr,
-							  *vmbuffer, visibility_cutoff_xid, flags);
+							  *vmbuffer, visibility_cutoff_xid, flags,
+							  InvalidXLogRecPtr);
 	}
 
 	/* Revert to the previous phase information for error traceback */
@@ -2814,6 +2859,14 @@ should_attempt_truncation(LVRelState *vacrel)
 		return false;
 
 	possibly_freeable = vacrel->rel_pages - vacrel->nonempty_pages;
+
+	/* POLAR: We don't expect that vacuum cleanup our prealloc file blocks */
+	Assert(vacrel->rel);
+	if (polar_bulk_extend_size > 0 &&
+		!RelationUsesLocalBuffers(vacrel->rel) &&
+		possibly_freeable <= polar_bulk_extend_size)
+		return false;
+
 	if (possibly_freeable > 0 &&
 		(possibly_freeable >= REL_TRUNCATE_MINIMUM ||
 		 possibly_freeable >= vacrel->rel_pages / REL_TRUNCATE_FRACTION))
@@ -3080,7 +3133,14 @@ count_nondeletable_pages(LVRelState *vacrel, bool *lock_waiter_detected)
 
 		/* Done scanning if we found a tuple here */
 		if (hastup)
-			return blkno + 1;
+		{
+			Assert(vacrel->rel);
+			/* POLAR: bulk_extend_page is empty page, should be included */
+			if (polar_bulk_extend_size > 0 && !RelationUsesLocalBuffers(vacrel->rel))
+				return blkno + polar_bulk_extend_size;
+			else
+				return blkno + 1;
+		}
 	}
 
 	/*

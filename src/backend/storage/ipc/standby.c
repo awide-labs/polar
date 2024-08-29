@@ -36,6 +36,11 @@
 #include "utils/timeout.h"
 #include "utils/timestamp.h"
 
+/* POLAR */
+#include "postmaster/polar_async_lock_replay.h"
+#include "replication/syncrep.h"
+#include "utils/guc.h"
+
 /* User-settable GUC parameters */
 int			vacuum_defer_cleanup_age;
 int			max_standby_archive_delay = 30 * 1000;
@@ -55,7 +60,7 @@ static void ResolveRecoveryConflictWithVirtualXIDs(VirtualTransactionId *waitlis
 												   bool report_waiting);
 static void SendRecoveryConflictWithBufferPin(ProcSignalReason reason);
 static XLogRecPtr LogCurrentRunningXacts(RunningTransactions CurrRunningXacts);
-static void LogAccessExclusiveLocks(int nlocks, xl_standby_lock *locks);
+static XLogRecPtr LogAccessExclusiveLocks(int nlocks, xl_standby_lock *locks);
 static const char *get_recovery_conflict_desc(ProcSignalReason reason);
 
 /*
@@ -1024,6 +1029,9 @@ StandbyReleaseLocks(TransactionId xid)
 	}
 	else
 		StandbyReleaseAllLocks();
+
+	if (polar_allow_alr())
+		polar_alr_release_locks(xid, "startup");
 }
 
 /*
@@ -1091,6 +1099,9 @@ StandbyReleaseOldLocks(TransactionId oldxid)
 		StandbyReleaseLockList(entry->locks);
 		hash_search(RecoveryLockLists, entry, HASH_REMOVE, NULL);
 	}
+
+	if (polar_allow_alr())
+		polar_alr_release_old_locks(oldxid);
 }
 
 /*
@@ -1119,9 +1130,28 @@ standby_redo(XLogReaderState *record)
 		int			i;
 
 		for (i = 0; i < xlrec->nlocks; i++)
-			StandbyAcquireAccessExclusiveLock(xlrec->locks[i].xid,
-											  xlrec->locks[i].dbOid,
-											  xlrec->locks[i].relOid);
+		{
+			/*
+			 * POLAR: if enable async lock replay, offload the lock to async
+			 * replay worker
+			 */
+			if (polar_allow_alr())
+			{
+				TimestampTz rtime;
+				bool		fromStream;
+
+				GetXLogReceiptTime(&rtime, &fromStream);
+
+				polar_alr_add_async_lock(&xlrec->locks[i],
+										 GetCurrentReplayRecPtr(NULL),
+										 GetXLogReplayRecPtr(NULL),
+										 rtime, fromStream);
+			}
+			else
+				StandbyAcquireAccessExclusiveLock(xlrec->locks[i].xid,
+												  xlrec->locks[i].dbOid,
+												  xlrec->locks[i].relOid);
+		}
 	}
 	else if (info == XLOG_RUNNING_XACTS)
 	{
@@ -1338,7 +1368,7 @@ LogCurrentRunningXacts(RunningTransactions CurrRunningXacts)
  * Wholesale logging of AccessExclusiveLocks. Other lock types need not be
  * logged, as described in backend/storage/lmgr/README.
  */
-static void
+static XLogRecPtr
 LogAccessExclusiveLocks(int nlocks, xl_standby_lock *locks)
 {
 	xl_standby_locks xlrec;
@@ -1350,7 +1380,7 @@ LogAccessExclusiveLocks(int nlocks, xl_standby_lock *locks)
 	XLogRegisterData((char *) locks, nlocks * sizeof(xl_standby_lock));
 	XLogSetRecordFlags(XLOG_MARK_UNIMPORTANT);
 
-	(void) XLogInsert(RM_STANDBY_ID, XLOG_STANDBY_LOCK);
+	return XLogInsert(RM_STANDBY_ID, XLOG_STANDBY_LOCK);
 }
 
 /*
@@ -1361,13 +1391,24 @@ LogAccessExclusiveLock(Oid dbOid, Oid relOid)
 {
 	xl_standby_lock xlrec;
 
+	/* POLAR */
+	XLogRecPtr	polar_sync_recptr;
+
 	xlrec.xid = GetCurrentTransactionId();
 
 	xlrec.dbOid = dbOid;
 	xlrec.relOid = relOid;
 
-	LogAccessExclusiveLocks(1, &xlrec);
+	polar_sync_recptr = LogAccessExclusiveLocks(1, &xlrec);
 	MyXactFlags |= XACT_FLAGS_ACQUIREDACCESSEXCLUSIVELOCK;
+
+	/* POLAR: synchronous ddl, wait all replicas to replay this log */
+	if (polar_enable_shared_storage_mode && polar_enable_sync_ddl)
+	{
+		Assert(!XLogRecPtrIsInvalid(polar_sync_recptr));
+		XLogFlush(polar_sync_recptr);
+		SyncRepWaitForLSN(polar_sync_recptr, false, true);
+	}
 }
 
 /*

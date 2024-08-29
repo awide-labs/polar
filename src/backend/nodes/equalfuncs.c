@@ -1841,6 +1841,9 @@ static bool
 _equalAlterSystemStmt(const AlterSystemStmt *a, const AlterSystemStmt *b)
 {
 	COMPARE_NODE_FIELD(setstmt);
+	/* POLAR: ALTER SYSTEM [FOR CLUSTER] [RELOAD] [FORCE] Command options */
+	COMPARE_SCALAR_FIELD(polar_options);
+	/* POLAR end */
 
 	return true;
 }

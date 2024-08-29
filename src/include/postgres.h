@@ -47,6 +47,14 @@
 #include "utils/elog.h"
 #include "utils/palloc.h"
 
+/*
+ * POLAR: Hook for plugins to change sql at the beginning of
+ * exec_simple_query and exec_parse_message.
+ */
+typedef const char *(*sql_mapping_hook_type) (const char *query_string);
+extern PGDLLIMPORT sql_mapping_hook_type sql_mapping_hook;
+/* POLAR end */
+
 /* ----------------------------------------------------------------
  *				Section 1:	variable-length datatypes (TOAST support)
  * ----------------------------------------------------------------

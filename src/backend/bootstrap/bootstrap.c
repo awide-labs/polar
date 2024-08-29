@@ -307,7 +307,7 @@ BootstrapModeMain(int argc, char *argv[], bool check_only)
 	}
 
 	/* Acquire configuration parameters */
-	if (!SelectConfigFiles(userDoption, progname))
+	if (!SelectConfigFiles(userDoption, progname, false))
 		proc_exit(1);
 
 	/*

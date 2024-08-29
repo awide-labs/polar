@@ -1,0 +1,50 @@
+CREATE EXTENSION test_procpool;
+-- See README for explanation of arguments:
+SELECT test_procpool(1);
+ test_procpool 
+---------------
+             2
+(1 row)
+
+SELECT test_procpool(10000);
+ test_procpool 
+---------------
+  333433340000
+(1 row)
+
+SELECT test_procpool(100000);
+  test_procpool  
+-----------------
+ 333343333400000
+(1 row)
+
+SELECT test_procpool(100000);
+  test_procpool  
+-----------------
+ 333343333400000
+(1 row)
+
+SELECT test_procpool(1000000);
+   test_procpool    
+--------------------
+ 333334333334000000
+(1 row)
+
+SELECT pg_reload_conf();
+ pg_reload_conf 
+----------------
+ t
+(1 row)
+
+SELECT test_procpool(1000000);
+   test_procpool    
+--------------------
+ 333334333334000000
+(1 row)
+
+SELECT test_procpool(100000);
+  test_procpool  
+-----------------
+ 333343333400000
+(1 row)
+

@@ -111,4 +111,9 @@ extern void gist_xlog_startup(void);
 extern void gist_xlog_cleanup(void);
 extern void gist_mask(char *pagedata, BlockNumber blkno);
 
+/* POLAR */
+extern IndexTuple *decodePageSplitRecord(char *begin, int len, int *n);
+
+/* POLAR end */
+
 #endif

@@ -13,6 +13,9 @@
 #ifndef _POSTMASTER_H
 #define _POSTMASTER_H
 
+/* POLAR */
+#include <signal.h>
+
 /* GUC options */
 extern PGDLLIMPORT bool EnableSSL;
 extern PGDLLIMPORT int ReservedBackends;
@@ -62,6 +65,11 @@ extern void SubPostmasterMain(int argc, char *argv[]) pg_attribute_noreturn();
 extern Size ShmemBackendArraySize(void);
 extern void ShmemBackendArrayAllocation(void);
 #endif
+
+/* POLAR */
+extern void polar_assign_enable_send_stop(bool newval, void *extra);
+
+/* POLAR end */
 
 /*
  * Note: MAX_BACKENDS is limited to 2^18-1 because that's the width reserved

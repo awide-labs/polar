@@ -35,6 +35,11 @@
 #include "pqexpbuffer.h"
 #endif
 
+/* POLAR */
+#include "polar_vfs/polar_vfs_fe.h"
+
+#define RR_RECORD_CMD (rr ? "\"rr\" record" : "")
+
 /* PID can be negative for standalone backend */
 typedef long pgpid_t;
 
@@ -97,6 +102,7 @@ static char *register_password = NULL;
 static char *argv0 = NULL;
 static bool allow_core_files = false;
 static time_t start_time;
+static bool rr = false;
 
 static char postopts_file[MAXPGPATH];
 static char version_file[MAXPGPATH];
@@ -493,12 +499,12 @@ start_postmaster(void)
 	 * has the same PID as the current child process.
 	 */
 	if (log_file != NULL)
-		cmd = psprintf("exec \"%s\" %s%s < \"%s\" >> \"%s\" 2>&1",
-					   exec_path, pgdata_opt, post_opts,
+		cmd = psprintf("exec %s \"%s\" %s%s < \"%s\" >> \"%s\" 2>&1",
+					   RR_RECORD_CMD, exec_path, pgdata_opt, post_opts,
 					   DEVNULL, log_file);
 	else
-		cmd = psprintf("exec \"%s\" %s%s < \"%s\" 2>&1",
-					   exec_path, pgdata_opt, post_opts, DEVNULL);
+		cmd = psprintf("exec %s \"%s\" %s%s < \"%s\" 2>&1",
+					   RR_RECORD_CMD, exec_path, pgdata_opt, post_opts, DEVNULL);
 
 	(void) execl("/bin/sh", "/bin/sh", "-c", cmd, (char *) NULL);
 
@@ -627,7 +633,7 @@ wait_for_postmaster_start(pgpid_t pm_pid, bool do_checkpoint)
 			pmstart = atol(optlines[LOCK_FILE_LINE_START_TIME - 1]);
 			if (pmstart >= start_time - 2 &&
 #ifndef WIN32
-				pmpid == pm_pid
+				(pmpid == pm_pid || rr)
 #else
 			/* Windows can only reject standalone-backend PIDs */
 				pmpid > 0
@@ -912,11 +918,11 @@ do_init(void)
 		post_opts = "";
 
 	if (!silent_mode)
-		cmd = psprintf("\"%s\" %s%s",
-					   exec_path, pgdata_opt, post_opts);
+		cmd = psprintf("%s \"%s\" %s%s",
+					   RR_RECORD_CMD, exec_path, pgdata_opt, post_opts);
 	else
-		cmd = psprintf("\"%s\" %s%s > \"%s\"",
-					   exec_path, pgdata_opt, post_opts, DEVNULL);
+		cmd = psprintf("%s \"%s\" %s%s > \"%s\"",
+					   RR_RECORD_CMD, exec_path, pgdata_opt, post_opts, DEVNULL);
 
 	if (system(cmd) != 0)
 	{
@@ -2087,6 +2093,7 @@ do_help(void)
 	printf(_("  -V, --version          output version information, then exit\n"));
 	printf(_("  -w, --wait             wait until operation completes (default)\n"));
 	printf(_("  -W, --no-wait          do not wait until operation completes\n"));
+	printf(_("  -r, --rr               use rr to record postgres backend\n"));
 	printf(_("  -?, --help             show this help, then exit\n"));
 	printf(_("If the -D option is omitted, the environment variable PGDATA is used.\n"));
 
@@ -2270,7 +2277,13 @@ get_control_dbstate(void)
 {
 	DBState		ret;
 	bool		crc_ok;
-	ControlFileData *control_file_data = get_controlfile(pg_data, &crc_ok);
+	ControlFileData *control_file_data = NULL;
+
+	if (pg_config)
+		polar_vfs_init_simple_fe(pg_config, pg_data, POLAR_VFS_RD);
+
+	control_file_data = get_controlfile(pg_data, &crc_ok);
+
 
 	if (!crc_ok)
 	{
@@ -2280,6 +2293,11 @@ get_control_dbstate(void)
 
 	ret = control_file_data->state;
 	pfree(control_file_data);
+
+	/* POLAR: umount */
+	if (pg_config)
+		polar_vfs_destory_simple_fe();
+
 	return ret;
 }
 
@@ -2299,6 +2317,7 @@ main(int argc, char **argv)
 		{"core-files", no_argument, NULL, 'c'},
 		{"wait", no_argument, NULL, 'w'},
 		{"no-wait", no_argument, NULL, 'W'},
+		{"rr", no_argument, NULL, 'r'},
 		{NULL, 0, NULL, 0}
 	};
 
@@ -2355,6 +2374,9 @@ main(int argc, char **argv)
 	if (env_wait != NULL)
 		wait_seconds = atoi(env_wait);
 
+	if (getenv("PGRR") != NULL)
+		rr = true;
+
 	/*
 	 * 'Action' can be before or after args so loop over both. Some
 	 * getopt_long() implementations will reorder argv[] to place all flags
@@ -2366,7 +2388,7 @@ main(int argc, char **argv)
 	/* process command-line options */
 	while (optind < argc)
 	{
-		while ((c = getopt_long(argc, argv, "cD:e:l:m:N:o:p:P:sS:t:U:wW",
+		while ((c = getopt_long(argc, argv, "cD:e:l:m:N:o:p:P:rsS:t:U:wW",
 								long_options, &option_index)) != -1)
 		{
 			switch (c)
@@ -2417,6 +2439,9 @@ main(int argc, char **argv)
 					break;
 				case 'P':
 					register_password = pg_strdup(optarg);
+					break;
+				case 'r':
+					rr = true;
 					break;
 				case 's':
 					silent_mode = true;
@@ -2530,6 +2555,8 @@ main(int argc, char **argv)
 		pg_data = pg_strdup(pg_config);
 	}
 
+	polar_argv0 = argv[0];
+
 	/* -D might point at config-only directory; if so find the real PGDATA */
 	adjust_data_dir();
 
@@ -2565,6 +2592,27 @@ main(int argc, char **argv)
 		 */
 		if (GetDataDirectoryCreatePerm(pg_data))
 			umask(pg_mode_mask);
+	}
+
+	if (rr)
+	{
+		char		full_path[MAXPGPATH];
+
+		if (find_my_exec("rr", full_path) < 0)
+		{
+			write_stderr(_("The program \"rr\" is needed by %s but was not found in your PATH.\n"
+						   "Please install \"rr\" or run %s without -r/--rr/env PGRR.\n"),
+						 progname, progname);
+			exit(1);
+		}
+
+		/*
+		 * POLAR: rr is not compatible with MMAP_HUGETBL, which PolarDB used
+		 * when huge_pages is enabled. So we need disable it when using rr.
+		 *
+		 * Discussion: https://github.com/rr-debugger/rr/issues/2447
+		 */
+		setenv("PGHUGEPAGES", "off", 1);
 	}
 
 	switch (ctl_command)

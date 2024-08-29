@@ -614,4 +614,7 @@ extern void VirtualXactLockTableInsert(VirtualTransactionId vxid);
 extern void VirtualXactLockTableCleanup(void);
 extern bool VirtualXactLock(VirtualTransactionId vxid, bool wait);
 
+/* POLAR */
+extern void polar_init_lock_access(void);
+
 #endif							/* LOCK_H_ */

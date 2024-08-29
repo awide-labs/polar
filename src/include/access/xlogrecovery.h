@@ -128,6 +128,11 @@ typedef struct
 	 */
 	bool		standby_signal_file_found;
 	bool		recovery_signal_file_found;
+	bool		replica_signal_file_found;
+
+	/* POLAR: promote mode */
+	bool		polar_logindex_promote_ro;
+	bool		polar_logindex_promote_standby;
 } EndOfWalRecoveryInfo;
 
 extern EndOfWalRecoveryInfo *FinishWalRecovery(void);
@@ -153,5 +158,18 @@ extern void XLogRequestWalReceiverReply(void);
 extern void RecoveryRequiresIntParameter(const char *param_name, int currValue, int minValue);
 
 extern void xlog_outdesc(StringInfo buf, XLogReaderState *record);
+
+/* POLAR */
+extern XLogRecPtr polar_get_replay_read_recptr(void);
+extern bool CheckForStandbyTrigger(void);
+extern void polar_reset_xlog_source(void);
+extern void polar_keep_wal_receiver_up(XLogRecPtr lsn);
+extern void polar_wait_primary_xlog_message(XLogReaderState *state);
+extern void polar_update_receipt_time(void);
+extern XLogRecPtr polar_get_last_replayed_read_ptr(void);
+extern XLogRecPtr polar_get_xlog_replay_recptr_nolock(void);
+extern void polar_set_receipt_time(TimestampTz rtime, bool from_stream);
+
+/* POLAR end */
 
 #endif							/* XLOGRECOVERY_H */

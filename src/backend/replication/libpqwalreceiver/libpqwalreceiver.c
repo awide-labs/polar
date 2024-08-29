@@ -487,8 +487,19 @@ libpqrcv_startstreaming(WalReceiverConn *conn,
 		appendStringInfoChar(&cmd, ')');
 	}
 	else
+	{
 		appendStringInfo(&cmd, " TIMELINE %u",
 						 options->proto.physical.startpointTLI);
+
+		/*
+		 * POLAR: Replication on PolarDB like an attribute of physical
+		 * replication. However, PolarDB will not send the xlog in walsender,
+		 * just send some xlog lsn contains consistent lsn and flush lsn of
+		 * primary.
+		 */
+		appendStringInfo(&cmd, " POLAR_REPL_MODE \"%s\"",
+						 polar_replication_mode_str(options->polar_repl_mode));
+	}
 
 	/* Start streaming. */
 	res = libpqrcv_PQexec(conn->streamConn, cmd.data);

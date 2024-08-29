@@ -43,6 +43,7 @@
  * overflow.)
  *
  *
+ * Portions Copyright (c) 2024, Alibaba Group Holding Limited
  * Portions Copyright (c) 1996-2022, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
@@ -83,6 +84,11 @@
 #include "utils/memutils.h"
 #include "utils/ps_status.h"
 
+/* POLAR */
+#include "catalog/namespace.h"
+#include "libpq/pqsignal.h"
+#include "postmaster/syslogger.h"
+#include "utils/polar_backtrace.h"
 
 /* In this module, access gettext() via err_gettext() */
 #undef _
@@ -105,6 +111,11 @@ extern bool redirection_done;
  */
 emit_log_hook_type emit_log_hook = NULL;
 
+/* POLAR: hook for record error sql string */
+polar_record_error_sql_hook_type polar_record_error_sql_hook = NULL;
+
+/* POLAR end */
+
 /* GUC parameters */
 int			Log_error_verbosity = PGERROR_VERBOSE;
 char	   *Log_line_prefix = NULL; /* format for extra log line info */
@@ -112,6 +123,18 @@ int			Log_destination = LOG_DESTINATION_STDERR;
 char	   *Log_destination_string = NULL;
 bool		syslog_sequence_numbers = true;
 bool		syslog_split_messages = true;
+
+/* POLAR */
+#define LOG_CHANNEL_WRITE_BUFFER_SIZE 128 * 1024	/* 128k */
+#define MAX_AUDIT_LOG_LEN 2048	/* 2k */
+
+static char *log_channel_write_buffer = NULL;
+static int	log_channel_write_buffer_pos = 0;
+static bool is_polar_audit_log_writing = false;
+int			polar_auditlog_max_query_length = POLAR_DEFAULT_MAX_AUDIT_LOG_LEN;
+int			polar_audit_log_flush_timeout = 0;
+
+/* POLAR end */
 
 #ifdef HAVE_SYSLOG
 
@@ -170,9 +193,15 @@ static char formatted_log_time[FORMATTED_TS_LEN];
 		} \
 	} while (0)
 
+/* POLAR */
+static void polar_append_with_tabs_n(StringInfo buf, const char *str, int len);
+static int	polar_str_find_passwd(const char *str);
+static void polar_write_channel(PipeProtoChunk *chunk_buf, int len);
+static void polar_construct_pipechunk_header(PipeProtoChunk *p, int len, int dest);
+static void polar_construct_logdata_postprocess(StringInfoData *logbuf, ErrorData *edata);
+static int	polar_log_dest(ErrorData *edata);
 
 static const char *err_gettext(const char *str) pg_attribute_format_arg(1);
-static pg_noinline void set_backtrace(ErrorData *edata, int num_skip);
 static void set_errdata_field(MemoryContextData *cxt, char **ptr, const char *str);
 static void write_console(const char *line, int len);
 static const char *process_log_prefix_padding(const char *p, int *padding);
@@ -475,17 +504,17 @@ errstart(int elevel, const char *domain)
  * check_backtrace_functions.
  */
 static bool
-matches_backtrace_functions(const char *funcname)
+matches_backtrace_functions(char *symbol_list, const char *funcname)
 {
 	char	   *p;
 
-	if (!backtrace_symbol_list || funcname == NULL || funcname[0] == '\0')
+	if (!symbol_list || funcname == NULL || funcname[0] == '\0')
 		return false;
 
-	p = backtrace_symbol_list;
+	p = symbol_list;
 	for (;;)
 	{
-		if (*p == '\0')			/* end of backtrace_symbol_list */
+		if (*p == '\0')			/* end of symbol_list */
 			break;
 
 		if (strcmp(funcname, p) == 0)
@@ -542,11 +571,17 @@ errfinish(const char *filename, int lineno, const char *funcname)
 	 */
 	oldcontext = MemoryContextSwitchTo(ErrorContext);
 
-	if (!edata->backtrace &&
-		edata->funcname &&
-		backtrace_functions &&
-		matches_backtrace_functions(edata->funcname))
+	/* POLAR: save stack according to info level */
+	if ((!edata->backtrace &&
+		 edata->funcname &&
+		 backtrace_functions &&
+		 matches_backtrace_functions(backtrace_symbol_list, edata->funcname)) ||
+		(polar_save_stack_info_level && elevel >= polar_save_stack_info_level))
 		set_backtrace(edata, 2);
+
+	/* POLAR: record error sql hook */
+	if (polar_record_error_sql_hook)
+		polar_record_error_sql_hook(edata);
 
 	/*
 	 * Call any context callback functions.  Errors occurring in callback
@@ -663,6 +698,18 @@ errfinish(const char *filename, int lineno, const char *funcname)
 
 	if (elevel >= PANIC)
 	{
+#ifdef USE_LIBUNWIND
+		/*
+		 * POLAR: PANIC is quite different from other coredump signals. The
+		 * coredump signal (SIGABRT) is not raised yet. So we handle the PANIC
+		 * right now. If it's not ignored, abort as before. And do not use
+		 * polar_program_error_handler to handler SIGABRT again.
+		 */
+		polar_reset_program_error_handler();
+
+		POLAR_IGNORE_COREDUMP_BACKTRACE(SIGABRT, 2);
+#endif
+
 		/*
 		 * Serious crash time. Postmaster will observe SIGABRT process exit
 		 * status and kill the other backends too.
@@ -936,7 +983,7 @@ errbacktrace(void)
 	CHECK_STACK_DEPTH();
 	oldcontext = MemoryContextSwitchTo(edata->assoc_context);
 
-	set_backtrace(edata, 1);
+	set_backtrace(edata, 2);
 
 	MemoryContextSwitchTo(oldcontext);
 	recursion_depth--;
@@ -950,14 +997,75 @@ errbacktrace(void)
  * internal backtrace support functions in the backtrace.  This requires that
  * this and related functions are not inlined.
  */
-static void
+void
 set_backtrace(ErrorData *edata, int num_skip)
 {
 	StringInfoData errtrace;
 
 	initStringInfo(&errtrace);
 
-#ifdef HAVE_BACKTRACE_SYMBOLS
+#ifdef USE_LIBUNWIND
+	{
+		unw_context_t context;
+		unw_cursor_t cursor;
+		int			n = 0;
+		int			ret;
+
+		appendStringInfo(&errtrace, "\n");
+
+		if ((ret = unw_getcontext(&context)) != 0)
+		{
+			appendStringInfo(&errtrace, "unw_getcontext failed: %d\n", ret);
+
+			goto end;
+		}
+
+		if ((ret = unw_init_local(&cursor, &context)) != 0)
+		{
+			appendStringInfo(&errtrace, "unw_init_local failed: %d\n", ret);
+
+			goto end;
+		}
+
+		appendStringInfo(&errtrace, "Process Info:\n");
+		appendStringInfo(&errtrace, "  pid:\t%d\n", MyProcPid);
+		appendStringInfo(&errtrace, "  type:\t%s\n", GetBackendTypeDesc(MyBackendType));
+		appendStringInfo(&errtrace, "  sql:\t%s\n", debug_query_string ? debug_query_string : "<NULL>");
+
+		appendStringInfo(&errtrace, "Backtrace:\n");
+
+		do
+		{
+			unw_word_t	ip,
+						off;
+			char symbol[256] = "<unknown>";
+
+			if (n < num_skip - 1)
+			{
+				n++;
+				continue;
+			}
+
+			unw_get_reg(&cursor, UNW_REG_IP, &ip);
+			unw_get_proc_name(&cursor, symbol, sizeof(symbol), &off);
+
+			appendStringInfo(&errtrace,
+							 "  #%-2d %s+0x%llx [0x%llx]\n",
+							 n - (num_skip - 1),
+							 symbol,
+							 (unsigned long long) off,
+							 (unsigned long long) ip);
+
+			n++;
+		} while ((ret = unw_step(&cursor)) > 0);
+
+		if (ret < 0)
+			appendStringInfo(&errtrace, "unw_step failed: %d\n", ret);
+
+end:
+		Assert(true);			/* keep compiler quiet */
+	}
+#elif defined(HAVE_BACKTRACE_SYMBOLS)
 	{
 		void	   *buf[100];
 		int			nframes;
@@ -2638,6 +2746,58 @@ log_line_prefix(StringInfo buf, ErrorData *edata)
 				else
 					appendStringInfo(buf, "%ld", log_line_number);
 				break;
+				/* POLAR: new format for polar */
+			case 'S':
+				if (edata->is_audit_log || edata->is_slow_log)
+				{
+					if (padding != 0)
+						appendStringInfo(buf, "%*lld", padding, (long long) polar_audit_log.select_row_count);
+					else
+						appendStringInfo(buf, "%lld", (long long) polar_audit_log.select_row_count);
+				}
+				else if (padding != 0)
+					appendStringInfoSpaces(buf,
+										   padding > 0 ? padding : -padding);
+				break;
+			case 'U':
+				if (edata->is_audit_log || edata->is_slow_log)
+				{
+					if (padding != 0)
+						appendStringInfo(buf, "%*lld", padding, (long long) polar_audit_log.update_row_count);
+					else
+						appendStringInfo(buf, "%lld", (long long) polar_audit_log.update_row_count);
+				}
+				else if (padding != 0)
+					appendStringInfoSpaces(buf,
+										   padding > 0 ? padding : -padding);
+				break;
+			case 'E':
+				if (edata->is_audit_log || edata->is_slow_log)
+				{
+					if (padding != 0)
+						appendStringInfo(buf, "%*lld", padding, (long long) polar_get_audit_log_row_count());
+					else
+						appendStringInfo(buf, "%lld", (long long) polar_get_audit_log_row_count());
+				}
+				else if (padding != 0)
+					appendStringInfoSpaces(buf,
+										   padding > 0 ? padding : -padding);
+				break;
+			case 'T':
+				if (edata->is_audit_log || edata->is_slow_log)
+				{
+					if (padding != 0)
+						appendStringInfo(buf, "%*lld", padding, (long long) (GetCurrentTimestamp()
+																			 - GetCurrentStatementStartTimestamp()));
+					else
+						appendStringInfo(buf, "%lld", (long long) (GetCurrentTimestamp()
+																   - GetCurrentStatementStartTimestamp()));
+				}
+				else if (padding != 0)
+					appendStringInfoSpaces(buf,
+										   padding > 0 ? padding : -padding);
+				break;
+				/* POLAR end */
 			case 'm':
 				/* force a log timestamp reset */
 				formatted_log_time[0] = '\0';
@@ -2840,6 +3000,10 @@ send_message_to_server_log(ErrorData *edata)
 	StringInfoData buf;
 	bool		fallback_to_stderr = false;
 
+	/* POLAR */
+	int			prev_buf_pos = 0;
+	int			msg_unmasked_len = -1;
+
 	initStringInfo(&buf);
 
 	saved_timeval_set = false;
@@ -2852,7 +3016,17 @@ send_message_to_server_log(ErrorData *edata)
 		appendStringInfo(&buf, "%s: ", unpack_sql_state(edata->sqlerrcode));
 
 	if (edata->message)
-		append_with_tabs(&buf, edata->message);
+	{
+		/* POLAR */
+		if (edata->needs_mask || (edata->elevel != LOG && edata->elevel != FATAL))
+			msg_unmasked_len = polar_str_find_passwd(edata->message);
+
+		if (msg_unmasked_len >= 0)
+			polar_append_with_tabs_n(&buf, edata->message, msg_unmasked_len);
+		else
+			append_with_tabs(&buf, edata->message);
+		/* POLAR end */
+	}
 	else
 		append_with_tabs(&buf, _("missing error text"));
 
@@ -2863,43 +3037,66 @@ send_message_to_server_log(ErrorData *edata)
 		appendStringInfo(&buf, _(" at character %d"),
 						 edata->internalpos);
 
+	/* POLAR */
+	polar_shrink_audit_log(&buf, prev_buf_pos);
+
 	appendStringInfoChar(&buf, '\n');
 
 	if (Log_error_verbosity >= PGERROR_DEFAULT)
 	{
 		if (edata->detail_log)
 		{
+			/* POLAR */
+			prev_buf_pos = buf.len;
 			log_line_prefix(&buf, edata);
 			appendStringInfoString(&buf, _("DETAIL:  "));
 			append_with_tabs(&buf, edata->detail_log);
+			/* POLAR */
+			polar_shrink_audit_log(&buf, prev_buf_pos);
 			appendStringInfoChar(&buf, '\n');
 		}
 		else if (edata->detail)
 		{
+			/* POLAR */
+			prev_buf_pos = buf.len;
 			log_line_prefix(&buf, edata);
 			appendStringInfoString(&buf, _("DETAIL:  "));
 			append_with_tabs(&buf, edata->detail);
+			/* POLAR */
+			polar_shrink_audit_log(&buf, prev_buf_pos);
 			appendStringInfoChar(&buf, '\n');
 		}
 		if (edata->hint)
 		{
+			/* POLAR */
+			prev_buf_pos = buf.len;
 			log_line_prefix(&buf, edata);
 			appendStringInfoString(&buf, _("HINT:  "));
 			append_with_tabs(&buf, edata->hint);
+			/* POLAR */
+			polar_shrink_audit_log(&buf, prev_buf_pos);
 			appendStringInfoChar(&buf, '\n');
 		}
 		if (edata->internalquery)
 		{
+			/* POLAR */
+			prev_buf_pos = buf.len;
 			log_line_prefix(&buf, edata);
 			appendStringInfoString(&buf, _("QUERY:  "));
 			append_with_tabs(&buf, edata->internalquery);
+			/* POLAR */
+			polar_shrink_audit_log(&buf, prev_buf_pos);
 			appendStringInfoChar(&buf, '\n');
 		}
 		if (edata->context && !edata->hide_ctx)
 		{
+			/* POLAR */
+			prev_buf_pos = buf.len;
 			log_line_prefix(&buf, edata);
 			appendStringInfoString(&buf, _("CONTEXT:  "));
 			append_with_tabs(&buf, edata->context);
+			/* POLAR */
+			polar_shrink_audit_log(&buf, prev_buf_pos);
 			appendStringInfoChar(&buf, '\n');
 		}
 		if (Log_error_verbosity >= PGERROR_VERBOSE)
@@ -2933,10 +3130,61 @@ send_message_to_server_log(ErrorData *edata)
 	 */
 	if (check_log_of_query(edata))
 	{
+		/* POLAR */
+		int			sql_unmasked_len = -1;
+
+		prev_buf_pos = buf.len;
+
 		log_line_prefix(&buf, edata);
 		appendStringInfoString(&buf, _("STATEMENT:  "));
-		append_with_tabs(&buf, debug_query_string);
+
+		/* POLAR */
+		sql_unmasked_len = polar_str_find_passwd(debug_query_string);
+		if (sql_unmasked_len >= 0)
+			polar_append_with_tabs_n(&buf, debug_query_string, sql_unmasked_len);
+		else
+			append_with_tabs(&buf, debug_query_string);
+		polar_shrink_audit_log(&buf, prev_buf_pos);
 		appendStringInfoChar(&buf, '\n');
+
+		/* Log another copy of query string for SQL auditing */
+		if (polar_enable_multi_syslogger)
+		{
+			/* POLAR: Print error sql to audit log */
+			if (log_statement != LOGSTMT_NONE &&
+				polar_enable_error_to_audit_log &&
+				edata->elevel >= ERROR &&
+				errordata_stack_depth == 0)
+			{
+				ErrorData	new_edata;
+
+				MemSet(&new_edata, 0, sizeof(ErrorData));
+				new_edata.elevel = LOG;
+				new_edata.is_audit_log = true;
+				new_edata.hide_stmt = true;
+				new_edata.output_to_server = true;
+				new_edata.message = NULL;
+				new_edata.needs_mask = false;
+				new_edata.sqlerrcode = edata->sqlerrcode;
+				polar_audit_log.query_string = debug_query_string;
+				if (polar_enable_output_search_path_to_log)
+					polar_write_audit_log(&new_edata, "statement: /*%s*/ %s", namespace_search_path, debug_query_string);
+				else
+					polar_write_audit_log(&new_edata, "statement: %s", debug_query_string);
+			}
+		}
+		else
+		{
+			prev_buf_pos = buf.len;
+			log_line_prefix(&buf, edata);
+			appendStringInfoString(&buf, _("LOG:  statement: "));
+			if (sql_unmasked_len >= 0)
+				polar_append_with_tabs_n(&buf, debug_query_string, sql_unmasked_len);
+			else
+				append_with_tabs(&buf, debug_query_string);
+			polar_shrink_audit_log(&buf, prev_buf_pos);
+			appendStringInfoChar(&buf, '\n');
+		}
 	}
 
 #ifdef HAVE_SYSLOG
@@ -3032,7 +3280,7 @@ send_message_to_server_log(ErrorData *edata)
 		 * Otherwise, just do a vanilla write to stderr.
 		 */
 		if (redirection_done && MyBackendType != B_LOGGER)
-			write_pipe_chunks(buf.data, buf.len, LOG_DESTINATION_STDERR);
+			write_pipe_chunks(buf.data, buf.len, polar_log_dest(edata));	/* POLAR */
 #ifdef WIN32
 
 		/*
@@ -3081,8 +3329,6 @@ void
 write_pipe_chunks(char *data, int len, int dest)
 {
 	PipeProtoChunk p;
-	int			fd = fileno(stderr);
-	int			rc;
 
 	Assert(len > 0);
 
@@ -3095,6 +3341,10 @@ write_pipe_chunks(char *data, int len, int dest)
 		p.proto.flags |= PIPE_PROTO_DEST_CSVLOG;
 	else if (dest == LOG_DESTINATION_JSONLOG)
 		p.proto.flags |= PIPE_PROTO_DEST_JSONLOG;
+	else if (dest == LOG_DESTINATION_POLAR_AUDITLOG)	/* POLAR */
+		p.proto.flags |= POLAR_PIPE_PROTO_DEST_AUDITLOG;
+	else if (dest == LOG_DESTINATION_POLAR_SLOWLOG) /* POLAR */
+		p.proto.flags |= POLAR_PIPE_PROTO_DEST_SLOWLOG;
 
 	/* write all but the last chunk */
 	while (len > PIPE_MAX_PAYLOAD)
@@ -3102,8 +3352,7 @@ write_pipe_chunks(char *data, int len, int dest)
 		/* no need to set PIPE_PROTO_IS_LAST yet */
 		p.proto.len = PIPE_MAX_PAYLOAD;
 		memcpy(p.proto.data, data, PIPE_MAX_PAYLOAD);
-		rc = write(fd, &p, PIPE_HEADER_SIZE + PIPE_MAX_PAYLOAD);
-		(void) rc;
+		polar_write_channel(&p, PIPE_HEADER_SIZE + PIPE_MAX_PAYLOAD);
 		data += PIPE_MAX_PAYLOAD;
 		len -= PIPE_MAX_PAYLOAD;
 	}
@@ -3112,8 +3361,7 @@ write_pipe_chunks(char *data, int len, int dest)
 	p.proto.flags |= PIPE_PROTO_IS_LAST;
 	p.proto.len = len;
 	memcpy(p.proto.data, data, len);
-	rc = write(fd, &p, PIPE_HEADER_SIZE + len);
-	(void) rc;
+	polar_write_channel(&p, PIPE_HEADER_SIZE + len);
 }
 
 
@@ -3476,3 +3724,395 @@ trace_recovery(int trace_level)
 
 	return trace_level;
 }
+
+/*
+ *  POLAR: truncate polar audit log, make it not more than polar_auditlog_max_query_length
+ */
+void
+polar_shrink_audit_log(StringInfo buf, int prev_buf_pos)
+{
+	/*
+	 * if log length > polar_auditlog_max_query_length, we will truncate it,
+	 * we just set data[polar_auditlog_max_query_length-1]='\0' we must keep a
+	 * char for '\n', so buf->len is polar_auditlog_max_query_length-1
+	 */
+	if (buf->len - prev_buf_pos >= polar_auditlog_max_query_length)
+	{
+		buf->len = prev_buf_pos + polar_auditlog_max_query_length - 1;
+	}
+}
+
+/*
+ *	polar_append_with_tabs_n
+ *
+ *	Append the string to the StringInfo buffer, inserting a tab after any
+ *	newline.
+ */
+static void
+polar_append_with_tabs_n(StringInfo buf, const char *str, int len)
+{
+	char		ch;
+
+	while ((ch = *str++) != '\0' && len > 0)
+	{
+		appendStringInfoCharMacro(buf, ch);
+		if (ch == '\n')
+			appendStringInfoCharMacro(buf, '\t');
+		len--;
+	}
+}
+
+/* POLAR: find password string from str */
+inline static int
+polar_str_find_passwd(const char *str)
+{
+	char	   *p = strcasestr(str, "password");
+
+	return (p == NULL) ? strlen(str) : p - str;
+}
+
+/*
+ * polar_mark_audit_log --- mark polar audit log
+ *
+ * This should be called if we want print audit log statement.
+ */
+int
+polar_mark_audit_log(bool is_audit_log)
+{
+	ErrorData  *edata = &errordata[errordata_stack_depth];
+
+	/* we don't bother incrementing recursion_depth */
+	CHECK_STACK_DEPTH();
+	edata->is_audit_log = is_audit_log;
+	return 0;					/* return value does not matter */
+}
+
+/*
+ * polar_mark_slow_log --- mark polar slow log
+ *
+ * This should be called if we want print slow log statement.
+ */
+int
+polar_mark_slow_log(bool is_slow_log)
+{
+	ErrorData  *edata = &errordata[errordata_stack_depth];
+
+	/* we don't bother incrementing recursion_depth */
+	CHECK_STACK_DEPTH();
+	edata->is_slow_log = is_slow_log;
+	return 0;					/* return value does not matter */
+}
+
+/*
+ * polar_mark_needs_mask --- mark polar audit log
+ *
+ * This should be called if we want print audit log statement.
+ */
+int
+polar_mark_needs_mask(bool needs_mask)
+{
+	ErrorData  *edata = &errordata[errordata_stack_depth];
+
+	/* we don't bother incrementing recursion_depth */
+	CHECK_STACK_DEPTH();
+	edata->needs_mask = needs_mask;
+	return 0;					/* return value does not matter */
+}
+
+/*
+ * polar find log destination according to edata
+ */
+inline static int
+polar_log_dest(ErrorData *edata)
+{
+	int			dest;
+
+	if (edata->is_slow_log)
+		dest = LOG_DESTINATION_POLAR_SLOWLOG;
+	else if (edata->is_audit_log)
+		dest = LOG_DESTINATION_POLAR_AUDITLOG;
+	else
+	{
+		if (strcmp(Log_destination_string, "polar_multi_dest") == 0 || strcmp(Log_destination_string, "stderr") == 0)
+			dest = LOG_DESTINATION_STDERR;
+		else if (strcmp(Log_destination_string, "polar_multi_dest_csv") == 0)
+			dest = LOG_DESTINATION_CSVLOG;
+		else if (strcmp(Log_destination_string, "polar_multi_dest_json") == 0)
+			dest = LOG_DESTINATION_JSONLOG;
+		else
+			elog(ERROR, "destination log type error, set log_destination again");
+	}
+	return dest;
+}
+
+/*
+ * polar build pipe chunk header
+ */
+static void
+polar_construct_pipechunk_header(PipeProtoChunk *p, int len, int dest)
+{
+	p->proto.nuls[0] = p->proto.nuls[1] = '\0';
+	p->proto.pid = MyProcPid;
+	p->proto.flags = PIPE_PROTO_IS_LAST;
+	switch (dest)
+	{
+		case LOG_DESTINATION_POLAR_AUDITLOG:
+			p->proto.flags |= POLAR_PIPE_PROTO_DEST_AUDITLOG;
+			break;
+		case LOG_DESTINATION_POLAR_SLOWLOG:
+			p->proto.flags |= POLAR_PIPE_PROTO_DEST_SLOWLOG;
+			break;
+		case LOG_DESTINATION_CSVLOG:
+			p->proto.flags |= PIPE_PROTO_DEST_CSVLOG;
+			break;
+		case LOG_DESTINATION_JSONLOG:
+			p->proto.flags |= PIPE_PROTO_DEST_JSONLOG;
+			break;
+		default:
+			p->proto.flags |= PIPE_PROTO_DEST_STDERR;
+			break;
+	}
+	p->proto.len = len;
+}
+
+/*
+ * Construct log data in logbuf, similar to what EmitErrorReport() do,
+ * but we simplify the whole procedure just for audit log
+ *
+ * NOTE(wormhole.gl): lost nearly 10% performance in this code block.
+ */
+#ifndef POLAR_CONSTRUCT_LOGDATA
+#define POLAR_CONSTRUCT_LOGDATA(logbuf, edata)					\
+{																\
+	log_line_prefix(logbuf, edata); 							\
+	appendStringInfo(logbuf, "LOG:  "); 						\
+	for (;;)													\
+	{															\
+		va_list args;											\
+		int needed = 0;											\
+		va_start(args, fmt);									\
+		needed = appendStringInfoVA(logbuf, fmt, args);			\
+		va_end(args);											\
+		if (needed == 0)										\
+			break;												\
+		enlargeStringInfo(logbuf, needed);						\
+	}           												\
+}
+#endif
+
+/*
+ *  deal with the log data after building it
+ */
+static void
+polar_construct_logdata_postprocess(StringInfoData *logbuf, ErrorData *edata)
+{
+	/* strip password */
+	if (edata->needs_mask)
+		logbuf->len = polar_str_find_passwd(logbuf->data);
+	if (!logbuf->data)
+	{
+		/* NOTE(wormhole.gl): We believe this would not overflow */
+		append_with_tabs(logbuf, _("missing error text"));
+	}
+	else
+	{
+		/*
+		 * NOTE(wormhole.gl): make sure logbuf length is not larger than
+		 * PIPE_MAX_PAYLOAD
+		 */
+		polar_shrink_audit_log(logbuf, 0);
+	}
+	appendStringInfoChar(logbuf, '\n');
+}
+#define LOGBUF_MIN_LEN(a, b) ((a) < (b) ? (a) : (b))
+
+/* POLAR: flush audit log interface */
+void
+polar_audit_log_flush(void)
+{
+	Assert(log_channel_write_buffer != NULL);
+	/* do not flush when polar audit log is writing */
+	if (is_polar_audit_log_writing)
+	{
+		return;
+	}
+	polar_write_channel((PipeProtoChunk *) log_channel_write_buffer,
+						log_channel_write_buffer_pos);
+	log_channel_write_buffer_pos = 0;
+}
+
+/* POLAR: return log_channel_write_buffer status */
+bool
+polar_audit_log_buffer_is_null(void)
+{
+	return log_channel_write_buffer == NULL;
+}
+
+/*
+ * Bypass elog framework for reducing buffer copy
+ * You can only use this interface for audit log or slow log now.
+ */
+void
+polar_write_audit_log(ErrorData *edata, const char *fmt,...)
+{
+	int			dest;
+	char	   *logbuf_base = NULL;
+	int			logbuf_len = 0;
+	StringInfoData logbuf;
+
+	if (MyBackendType == B_LOGGER)
+		return;
+	is_polar_audit_log_writing = true;
+	initStringInfo(&logbuf);
+	/* enlargeStringInfo(&logbuf, 4096) */
+	/* initialize log_channel_write_buffer */
+	if (log_channel_write_buffer == NULL)
+	{
+		log_channel_write_buffer = malloc(LOG_CHANNEL_WRITE_BUFFER_SIZE);
+		memset(log_channel_write_buffer, 0, LOG_CHANNEL_WRITE_BUFFER_SIZE);
+		log_channel_write_buffer_pos = 0;
+	}
+	logbuf_base = log_channel_write_buffer + log_channel_write_buffer_pos;
+	/* build log message */
+	POLAR_CONSTRUCT_LOGDATA(&logbuf, edata);
+	polar_construct_logdata_postprocess(&logbuf, edata);
+	/* Not efficiency but safe */
+	logbuf_len = LOGBUF_MIN_LEN(logbuf.len, LOG_CHANNEL_WRITE_BUFFER_SIZE - PIPE_HEADER_SIZE - log_channel_write_buffer_pos);
+	memcpy(logbuf_base + PIPE_HEADER_SIZE, logbuf.data, logbuf_len);
+	/* build pipechunk header */
+	dest = polar_log_dest(edata);
+	polar_construct_pipechunk_header((PipeProtoChunk *) logbuf_base, logbuf_len, dest);
+	logbuf_len = logbuf_len + PIPE_HEADER_SIZE;
+	/* sink log */
+	switch (dest)
+	{
+		case LOG_DESTINATION_POLAR_AUDITLOG:
+			log_channel_write_buffer_pos += logbuf_len;
+			if (polar_enable_syslog_pipe_buffer &&
+				log_channel_write_buffer_pos < LOG_CHANNEL_WRITE_BUFFER_SIZE / 2)
+				break;
+			polar_write_channel((PipeProtoChunk *) log_channel_write_buffer,
+								log_channel_write_buffer_pos);
+			log_channel_write_buffer_pos = 0;
+			polar_last_audit_log_flush_time = GetCurrentTimestamp();
+			break;
+		case LOG_DESTINATION_POLAR_SLOWLOG:
+		default:
+			polar_write_channel((PipeProtoChunk *) logbuf_base, logbuf_len);
+			break;
+	}
+	pfree(logbuf.data);
+	is_polar_audit_log_writing = false;
+}
+
+/*
+ * write to channel(original is pipe, now it's socketpair)
+ * now we write error log, slow log to channel 0, write audit log to the other channels
+ */
+static void
+polar_write_channel(PipeProtoChunk *chunk_buf, int len)
+{
+	int			rc;
+	int			channel_index = 0;
+	int			lock_index = 0;
+
+	/* Now we only try to write audit log into multi sys logger  */
+	/* TODO: maybe used one static int */
+	if (polar_enable_multi_syslogger && polar_syslogger_num > 1)
+	{
+		if ((chunk_buf->proto.flags & POLAR_PIPE_PROTO_DEST_AUDITLOG) != 0)
+		{
+			channel_index = MyProcPid % (polar_syslogger_num - 1) + 1;
+			lock_index = channel_index % NUM_SYSLOGGER_LOCK_PARTITIONS;
+		}
+	}
+	if (channel_index == 0)
+		rc = write(fileno(stderr), chunk_buf, len);
+	else
+	{
+		if (Logging_collector)
+		{
+			LWLockAcquire(&SysLoggerWriterLWLockArray[lock_index].lock, LW_EXCLUSIVE);
+			rc = write(syslogChannels[channel_index][1], chunk_buf, len);
+			LWLockRelease(&SysLoggerWriterLWLockArray[lock_index].lock);
+		}
+	}
+	(void) rc;
+}
+
+#ifdef USE_LIBUNWIND
+
+/*
+ * POLAR: signal handler for coredump signals (ABRT/SEGV/BUS/ILL/SYS)
+ *
+ * Ignore the coredump events or print the coredump stacktrace.
+ */
+static void
+polar_program_error_handler(SIGNAL_ARGS)
+{
+	polar_reset_program_error_handler();
+
+	POLAR_IGNORE_COREDUMP_BACKTRACE(postgres_signal_arg, 3);
+
+	if (polar_enable_coredump_print)
+	{
+		fprintf(stderr, "Got coredump signal(%d) in process(%d)\n", postgres_signal_arg, MyProcPid);
+		POLAR_DUMP_BACKTRACE();
+	}
+
+	/* trigger coredump */
+	raise(postgres_signal_arg);
+}
+
+/* POLAR: register coredump signals, so we can ignore or print the coredump. */
+void
+polar_set_program_error_handler(SIGNAL_ARGS)
+{
+#ifndef _WIN32
+	if (postgres_signal_arg != 0)
+	{
+		pqsignal(postgres_signal_arg, polar_program_error_handler);
+		return;
+	}
+#ifdef SIGILL
+	pqsignal(SIGILL, polar_program_error_handler);
+#endif
+#ifdef SIGABRT
+	pqsignal(SIGABRT, polar_program_error_handler);
+#endif
+#ifdef SIGBUS
+	pqsignal(SIGBUS, polar_program_error_handler);
+#endif
+#ifdef SIGSEGV
+	pqsignal(SIGSEGV, polar_program_error_handler);
+#endif
+#ifdef SIGSYS
+	pqsignal(SIGSYS, polar_program_error_handler);
+#endif
+#endif							/* _WIN32 */
+}
+
+/* POLAR: Unblock coredump signals, and set them to their default settings. */
+void
+polar_reset_program_error_handler(void)
+{
+	PG_SETMASK(&BlockSig);
+#ifndef _WIN32
+#ifdef SIGILL
+	pqsignal(SIGILL, SIG_DFL);
+#endif
+#ifdef SIGABRT
+	pqsignal(SIGABRT, SIG_DFL);
+#endif
+#ifdef SIGBUS
+	pqsignal(SIGBUS, SIG_DFL);
+#endif
+#ifdef SIGSEGV
+	pqsignal(SIGSEGV, SIG_DFL);
+#endif
+#ifdef SIGSYS
+	pqsignal(SIGSYS, SIG_DFL);
+#endif
+#endif							/* _WIN32 */
+}
+#endif

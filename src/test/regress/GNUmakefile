@@ -36,7 +36,7 @@ EXTRADEFS = '-DHOST_TUPLE="$(host_tuple)"' \
 all: pg_regress$(X)
 
 pg_regress$(X): pg_regress.o pg_regress_main.o $(WIN32RES) | submake-libpgport
-	$(CC) $(CFLAGS) $^ $(LDFLAGS) $(LDFLAGS_EX) $(LIBS) -o $@
+	$(CC) $(CFLAGS) $^ $(LDFLAGS) $(LDFLAGS_EX) $(LIBS) $(polar_libvfs) -o $@
 
 # dependencies ensure that path changes propagate
 pg_regress.o: pg_regress.c $(top_builddir)/src/port/pg_config_paths.h
@@ -117,17 +117,34 @@ REGRESS_OPTS = --dlpath=. --max-concurrent-tests=20 \
 check: all
 	$(pg_regress_check) $(REGRESS_OPTS) --schedule=$(srcdir)/parallel_schedule $(MAXCONNOPT) $(EXTRA_TESTS)
 
+polar-check: all | temp-install
+	mkdir -p $(srcdir)/results/polar
+	$(pg_regress_check) $(REGRESS_OPTS) --schedule=$(srcdir)/polar_check_schedule $(MAXCONNOPT) $(EXTRA_TESTS)
+
 check-tests: all | temp-install
 	$(pg_regress_check) $(REGRESS_OPTS) $(MAXCONNOPT) $(TESTS) $(EXTRA_TESTS)
 
 installcheck: all
-	$(pg_regress_installcheck) $(REGRESS_OPTS) --schedule=$(srcdir)/parallel_schedule --max-connections=1 $(EXTRA_TESTS)
+	$(pg_regress_installcheck) $(REGRESS_OPTS) --port=$(PGPORT) --schedule=$(srcdir)/parallel_schedule $(MAXCONNOPT) $(EXTRA_TESTS)
+
+polar-installcheck: all
+	mkdir -p $(srcdir)/results/polar
+	$(pg_regress_installcheck) $(REGRESS_OPTS) --port=$(PGPORT) --schedule=$(srcdir)/polar_check_schedule $(MAXCONNOPT) $(EXTRA_TESTS)
 
 installcheck-parallel: all
 	$(pg_regress_installcheck) $(REGRESS_OPTS) --schedule=$(srcdir)/parallel_schedule $(MAXCONNOPT) $(EXTRA_TESTS)
 
 installcheck-tests: all
 	$(pg_regress_installcheck) $(REGRESS_OPTS) $(TESTS) $(EXTRA_TESTS)
+
+prepare-dccheck: all | temp-install
+	$(pg_regress_check) --polar-prepare-sql $(REGRESS_OPTS) --schedule=$(srcdir)/parallel_schedule $(MAXCONNOPT) $(EXTRA_TESTS)
+	$(pg_regress_check) --polar-prepare-sql $(POLAR_REGRESS_OPTS) --schedule=$(srcdir)/polar_check_schedule $(MAXCONNOPT)
+
+prepare-ora-dccheck: all | temp-install
+	$(pg_regress_check) --polar-prepare-sql $(REGRESS_OPTS) --schedule=$(srcdir)/parallel_schedule $(MAXCONNOPT) $(EXTRA_TESTS)
+# POLAR_TODO
+# $(pg_regress_check) --polar-prepare-sql $(ORA_REGRESS_OPTS) --schedule=$(srcdir)/polar_ora_schedule $(MAXCONNOPT)
 
 # old interfaces follow...
 

@@ -59,7 +59,7 @@ my $identification = 'IDENTIFICATION';
 
 my $invalid_comment_body = 'Invalid comment body';
 
-my @common_mis_spell_words = ('poalr', 'wirte', 'wrod');
+my @common_typo = ('poalr', 'wirte', 'wrod', 'confict');
 my @standard_comment_prefix = ('\/\* POLAR px\:', '\/\* POLAR\:');
 
 #------ the max diff line before checking PG community files ------
@@ -102,7 +102,7 @@ if ($current_branch =~ /^port_/ || $current_branch =~ /^merge_/)
 
 my $last_commit_msg = `git log -1  --pretty='%s'`
   || die "Cannot get last commit message.\n";
-if ($last_commit_msg =~ /^Merge/)
+if ($last_commit_msg =~ /Merge/)
 {
 	print "Merge commit, skipping the check.\n";
 	exit 0;
@@ -299,7 +299,7 @@ sub c_format_check
 	{
 		for (my $i = 0; $i < @lines; $i++)
 		{
-			foreach my $word (@common_mis_spell_words)
+			foreach my $word (@common_typo)
 			{
 				if ($lines[$i] =~ m/$word/i)
 				{
@@ -331,7 +331,7 @@ sub c_format_check
 		$inject_template = 1;
 	}
 	# Postgres-only file: skip
-	elsif ($cc_portion_pg > 0 && $cc_portion_pg_alibaba < 0)
+	elsif ($cc_portion_pg >= 0 && $cc_portion_pg_alibaba < 0)
 	{
 		print "  $logger_log Open source file";
 		$inject_template = 0;
@@ -350,13 +350,13 @@ sub c_format_check
 		}
 	}
 	# Postgres file modified by PolarDB
-	elsif ($cc_portion_pg > 0 && $cc_portion_pg_alibaba > 0)
+	elsif ($cc_portion_pg >= 0 && $cc_portion_pg_alibaba >= 0)
 	{
 		print "  $logger_log Open source file modified by PolarDB.\n";
 		$inject_template = 0;
 	}
 	# Alibaba-owned file
-	elsif ($cc_alibaba > 0)
+	elsif ($cc_alibaba >= 0)
 	{
 		print "  $logger_log PolarDB's file.\n";
 		# format check
@@ -718,7 +718,7 @@ sub script_format_check
 		# check common spell words
 		for (my $i = 0; $i < @lines; $i++)
 		{
-			foreach my $word (@common_mis_spell_words)
+			foreach my $word (@common_typo)
 			{
 				if ($lines[$i] =~ m/$word/i)
 				{
@@ -734,7 +734,7 @@ sub script_format_check
 	my $inject_template = 0;
 
 	# Postgres-only file: skip
-	if ($cc_portion_pg > 0 && $cc_portion_pg_alibaba < 0)
+	if ($cc_portion_pg >= 0 && $cc_portion_pg_alibaba < 0)
 	{
 		print "  $logger_log Open source file, ";
 
@@ -744,13 +744,13 @@ sub script_format_check
 		$inject_template = 0;
 	}
 	# Postgres file modified by PolarDB
-	elsif ($cc_portion_pg > 0 && $cc_portion_pg_alibaba > 0)
+	elsif ($cc_portion_pg >= 0 && $cc_portion_pg_alibaba >= 0)
 	{
 		print "  $logger_log Open source file modified by PolarDB.\n";
 		$inject_template = 0;
 	}
 	# Alibaba-owned file
-	elsif ($cc_alibaba > 0)
+	elsif ($cc_alibaba >= 0)
 	{
 		print "  $logger_log PolarDB's file.\n";
 		# format check

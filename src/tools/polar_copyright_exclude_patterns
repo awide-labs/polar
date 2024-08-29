@@ -7,3 +7,19 @@ src/interfaces/ecpg/test/expected/
 src/include/regex/regcustom.h
 src/include/regex/regex.h
 src/include/regex/regguts.h
+
+# The following files of faultinjector plugin are ported from greenplum
+src/backend/utils/misc/faultinjector.c
+src/include/utils/faultinjector.h
+
+# Exclude third-party plugin to facilitate our tracking.
+external/hll/
+external/hypopg/
+external/log_fdw/
+external/pase/
+external/pg_bigm/
+external/pg_jieba/
+external/pg_repack
+external/pg_similarity/
+external/pgvector/
+external/roaringbitmap/

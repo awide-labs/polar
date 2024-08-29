@@ -50,4 +50,6 @@ extern void HandleNotifyInterrupt(void);
 /* process interrupts */
 extern void ProcessNotifyInterrupt(bool flush);
 
+extern PGDLLIMPORT int polar_notify_buffer_slot_size;
+
 #endif							/* ASYNC_H */

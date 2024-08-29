@@ -812,6 +812,18 @@ pgstat_relation_flush_cb(PgStat_EntryRef *entry_ref, bool nowait)
 	tabentry->inserts_since_vacuum += lstats->t_counts.t_tuples_inserted;
 	tabentry->blocks_fetched += lstats->t_counts.t_blocks_fetched;
 	tabentry->blocks_hit += lstats->t_counts.t_blocks_hit;
+	/* POLAR: bulk extend */
+	tabentry->polar_bulk_extend_times += lstats->t_counts.polar_t_bulk_extend_times;
+	tabentry->polar_bulk_extend_blocks += lstats->t_counts.polar_t_bulk_extend_blocks;
+	/* bulk read */
+	tabentry->polar_bulk_read_calls += lstats->t_counts.polar_t_bulk_read_calls;
+	tabentry->polar_bulk_read_calls_IO += lstats->t_counts.polar_t_bulk_read_calls_IO;
+	tabentry->polar_bulk_read_blocks_IO += lstats->t_counts.polar_t_bulk_read_blocks_IO;
+
+	/* POLAR: create index bulk extend */
+	tabentry->polar_bulk_create_index_extends_times += lstats->t_counts.polar_t_bulk_create_index_extends_times;
+	/* POLAR end */
+
 
 	/* Clamp n_live_tuples in case of negative delta_live_tuples */
 	tabentry->n_live_tuples = Max(tabentry->n_live_tuples, 0);

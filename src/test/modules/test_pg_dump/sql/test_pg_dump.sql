@@ -110,4 +110,15 @@ ALTER EXTENSION test_pg_dump DROP VIEW test_pg_dump_v1;
 DROP EXTENSION test_pg_dump;
 
 -- shouldn't be anything left in pg_init_privs
-SELECT * FROM pg_init_privs WHERE privtype = 'e';
+SELECT pg_init_privs.*
+FROM pg_init_privs LEFT JOIN pg_class ON pg_class.oid = pg_init_privs.objoid
+WHERE privtype = 'e'
+   -- POLAR: polar_feature_utils is created by initdb and it
+   -- grants the schema and view to public.
+   -- It's safe and ignore the objects of it.
+   AND pg_class.relnamespace NOT IN (
+      'polar_feature_utils'::regnamespace
+   )
+   AND pg_init_privs.objoid NOT IN (
+      'polar_feature_utils'::regnamespace
+   );

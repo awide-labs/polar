@@ -160,7 +160,19 @@ IndexOnlyNext(IndexOnlyScanState *node)
 		 * It's worth going through this complexity to avoid needing to lock
 		 * the VM buffer, which could cause significant contention.
 		 */
-		if (!VM_ALL_VISIBLE(scandesc->heapRelation,
+
+		/*
+		 * POLAR: use visibilitymap status according to current node type: 1.
+		 * if we are in master/standby mode, use vm status directly; 2. if we
+		 * are in replica mode, and there is no recovery conflict (when hot
+		 * standy feedback is enabled) or the conflict is resolved during
+		 * recovery, then we can directly use current vm status; otherwise, we
+		 * return false because in the scenario where backend is replaying
+		 * page on demand, the consistency of the vm page and the index page
+		 * can not be guaranteed.
+		 */
+		if (!POLAR_VISIBILITYMAP_ENABLED() ||
+			!VM_ALL_VISIBLE(scandesc->heapRelation,
 							ItemPointerGetBlockNumber(tid),
 							&node->ioss_VMBuffer))
 		{

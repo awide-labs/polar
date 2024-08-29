@@ -78,6 +78,12 @@ typedef struct WalSnd
 	 * Timestamp of the last message received from standby.
 	 */
 	TimestampTz replyTime;
+
+	/* POLAR: mark current user is superuser or not */
+	bool		is_super;
+
+	/* POLAR: mark whether send to replica or not */
+	bool		to_replica;
 } WalSnd;
 
 extern PGDLLIMPORT WalSnd *MyWalSnd;
@@ -89,13 +95,13 @@ typedef struct
 	 * Synchronous replication queue with one queue per request type.
 	 * Protected by SyncRepLock.
 	 */
-	SHM_QUEUE	SyncRepQueue[NUM_SYNC_REP_WAIT_MODE];
+	SHM_QUEUE	SyncRepQueue[POLAR_NUM_ALL_REP_WAIT_MODE];
 
 	/*
 	 * Current location of the head of the queue. All waiters should have a
 	 * waitLSN that follows this value. Protected by SyncRepLock.
 	 */
-	XLogRecPtr	lsn[NUM_SYNC_REP_WAIT_MODE];
+	XLogRecPtr	lsn[POLAR_NUM_ALL_REP_WAIT_MODE];
 
 	/*
 	 * Are any sync standbys defined?  Waiting backends can't reload the

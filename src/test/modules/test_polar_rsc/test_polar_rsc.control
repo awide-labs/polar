@@ -1,0 +1,4 @@
+comment = 'Test code for PolarDB-PG relation size cache'
+default_version = '1.0'
+module_pathname = '$libdir/test_polar_rsc'
+relocatable = true

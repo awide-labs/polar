@@ -4,6 +4,7 @@
  *	  support for communication destinations
  *
  *
+ * Portions Copyright (c) 2024, Alibaba Group Holding Limited
  * Portions Copyright (c) 1996-2022, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
@@ -41,6 +42,15 @@
 #include "libpq/pqformat.h"
 #include "utils/portal.h"
 
+/* POLAR */
+#include "access/xlog.h"
+#include "access/xlogrecovery.h"
+#include "miscadmin.h"
+#include "utils/backend_status.h"
+#include "utils/guc.h"
+/* POLAR end */
+
+static void polar_send_proxy_info(StringInfo buf);
 
 /* ----------------
  *		dummy DestReceiver functions
@@ -280,6 +290,7 @@ ReadyForQuery(CommandDest dest)
 
 				pq_beginmessage(&buf, 'Z');
 				pq_sendbyte(&buf, TransactionBlockStatusCode());
+				polar_send_proxy_info(&buf);
 				pq_endmessage(&buf);
 			}
 			/* Flush output at end of cycle in any case. */
@@ -297,4 +308,80 @@ ReadyForQuery(CommandDest dest)
 		case DestTupleQueue:
 			break;
 	}
+}
+
+/* POLAR: send proxy info, including lsn and xact split info, also collects stats */
+static void
+polar_send_proxy_info(StringInfo buf)
+{
+	/* POLAR: send lsn to maxscale if needed */
+	if (MyProcPort->polar_proxy_send_lsn)
+	{
+		if (RecoveryInProgress())
+			pq_sendint64(buf, (uint64) GetXLogReplayRecPtr(NULL));
+		else
+			pq_sendint64(buf, (uint64) GetXLogInsertRecPtr());
+	}
+
+	if (unlikely(polar_enable_xact_split_debug) && !RecoveryInProgress())
+	{
+		char	   *xids = polar_xact_split_xact_info();
+
+		elog(LOG, "current xids : %s", xids);
+
+		if (xids)
+			pfree(xids);
+	}
+
+	polar_stat_update_proxy_info(polar_stat_proxy->proxy_total);
+
+	/* POLAR: send xact split info to proxy if needed */
+	if (polar_enable_xact_split &&
+		XactIsoLevel == XACT_READ_COMMITTED &&
+		MyProcPort->polar_proxy_send_xact &&
+		!RecoveryInProgress())
+	{
+		char	   *xids = polar_xact_split_xact_info();
+
+		if (xids)
+		{
+			if (strlen(xids) != 0)
+			{
+				/* POLAR: send xids info */
+				pq_sendbyte(buf, 'x');
+				pq_sendstring(buf, xids);
+			}
+			pfree(xids);
+			polar_stat_update_proxy_info(polar_stat_proxy->proxy_splittable);
+		}
+		else
+			polar_stat_update_proxy_info(polar_stat_proxy->proxy_unsplittable);
+
+		switch (polar_unsplittable_reason)
+		{
+			case POLAR_UNSPLITTABLE_FOR_ERROR:
+				polar_stat_update_proxy_info(polar_stat_proxy->proxy_error);
+				break;
+			case POLAR_UNSPLITTABLE_FOR_LOCK:
+				polar_stat_update_proxy_info(polar_stat_proxy->proxy_lock);
+				break;
+			case POLAR_UNSPLITTABLE_FOR_COMBOCID:
+				polar_stat_update_proxy_info(polar_stat_proxy->proxy_combocid);
+				break;
+			case POLAR_UNSPLITTABLE_FOR_CREATEENUM:
+				polar_stat_update_proxy_info(polar_stat_proxy->proxy_combocid);
+				break;
+			case POLAR_UNSPLITTABLE_FOR_AUTOXACT:
+				polar_stat_update_proxy_info(polar_stat_proxy->proxy_autoxact);
+				break;
+			default:
+				break;
+		}
+	}
+	else
+		polar_stat_update_proxy_info(polar_stat_proxy->proxy_disablesplit);
+
+	if (RecoveryInProgress() && MyProcPort->polar_proxy)
+		polar_stat_update_xact_split_info();
+	polar_stat_need_update_proxy_info = false;
 }

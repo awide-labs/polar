@@ -1,0 +1,486 @@
+/*
+ * pg_repack: lib/pg_repack.sql.in
+ *
+ * Portions Copyright (c) 2008-2011, NIPPON TELEGRAPH AND TELEPHONE CORPORATION
+ * Portions Copyright (c) 2011, Itagaki Takahiro
+ * Portions Copyright (c) 2012-2020, The Reorg Development Team
+ */
+
+CREATE SCHEMA repack;
+
+CREATE FUNCTION repack.version() RETURNS text AS
+'MODULE_PATHNAME', 'repack_version'
+LANGUAGE C IMMUTABLE STRICT;
+
+CREATE FUNCTION repack.version_sql() RETURNS text AS
+$$SELECT 'pg_repack REPACK_VERSION'::text$$
+LANGUAGE SQL IMMUTABLE STRICT;
+
+-- Always specify search_path to 'pg_catalog' so that we
+-- always can get schema-qualified relation name
+CREATE FUNCTION repack.oid2text(oid) RETURNS text AS
+$$
+	SELECT textin(regclassout($1));
+$$
+LANGUAGE sql STABLE STRICT SET search_path to 'pg_catalog';
+
+-- Get a comma-separated column list of the index.
+--
+-- Columns are quoted as literals because they are going to be passed to
+-- the `repack_trigger` function as text arguments. `repack_trigger` will quote
+-- them as identifiers later.
+CREATE FUNCTION repack.get_index_columns(oid) RETURNS text AS
+$$
+  SELECT coalesce(string_agg(quote_literal(attname), ', '), '')
+    FROM pg_attribute,
+         (SELECT indrelid,
+                 indkey,
+                 generate_series(0, indnatts-1) AS i
+            FROM pg_index
+           WHERE indexrelid = $1
+         ) AS keys
+   WHERE attrelid = indrelid
+     AND attnum = indkey[i];
+$$
+LANGUAGE sql STABLE STRICT;
+
+CREATE FUNCTION repack.get_order_by(oid, oid) RETURNS text AS
+'MODULE_PATHNAME', 'repack_get_order_by'
+LANGUAGE C STABLE STRICT;
+
+-- POLAR: We cannot use 'row' as column name since it is preserved
+CREATE FUNCTION repack.create_log_table(oid) RETURNS void AS
+$$
+BEGIN
+    EXECUTE 'CREATE TABLE repack.log_' || $1 ||
+            ' (id bigserial PRIMARY KEY,' ||
+            ' pk repack.pk_' || $1 || ',' ||
+            ' repack_row ' || repack.oid2text($1) || ')';
+END
+$$
+LANGUAGE plpgsql;
+
+CREATE FUNCTION repack.create_table(oid, name) RETURNS void AS
+$$
+BEGIN
+    EXECUTE 'CREATE TABLE repack.table_' || $1 ||
+            ' WITH (' || repack.get_storage_param($1) || ') ' ||
+            ' TABLESPACE ' || quote_ident($2) ||
+            ' AS SELECT ' || repack.get_columns_for_create_as($1) ||
+            ' FROM ONLY ' || repack.oid2text($1) || ' WITH NO DATA';
+END
+$$
+LANGUAGE plpgsql;
+
+CREATE FUNCTION repack.create_index_type(oid, oid) RETURNS void AS
+$$
+BEGIN
+    EXECUTE repack.get_create_index_type($1, 'repack.pk_' || $2);
+END
+$$
+LANGUAGE plpgsql;
+
+CREATE FUNCTION repack.get_create_index_type(oid, name) RETURNS text AS
+$$
+  SELECT 'CREATE TYPE ' || $2 || ' AS (' ||
+         coalesce(string_agg(quote_ident(attname) || ' ' ||
+           pg_catalog.format_type(atttypid, atttypmod), ', '), '') || ')'
+    FROM pg_attribute,
+         (SELECT indrelid,
+                 indkey,
+                 generate_series(0, indnatts-1) AS i
+            FROM pg_index
+           WHERE indexrelid = $1
+         ) AS keys
+   WHERE attrelid = indrelid
+     AND attnum = indkey[i];
+$$
+LANGUAGE sql STABLE STRICT;
+
+CREATE FUNCTION repack.get_create_trigger(relid oid, pkid oid)
+  RETURNS text AS
+$$
+  SELECT 'CREATE TRIGGER repack_trigger' ||
+         ' AFTER INSERT OR DELETE OR UPDATE ON ' || repack.oid2text($1) ||
+         ' FOR EACH ROW EXECUTE PROCEDURE repack.repack_trigger(' ||
+         repack.get_index_columns($2) || ')';
+$$
+LANGUAGE sql STABLE STRICT;
+
+CREATE FUNCTION repack.get_enable_trigger(relid oid)
+  RETURNS text AS
+$$
+  SELECT 'ALTER TABLE ' || repack.oid2text($1) ||
+    ' ENABLE ALWAYS TRIGGER repack_trigger';
+$$
+LANGUAGE sql STABLE STRICT;
+
+CREATE FUNCTION repack.get_assign(oid, text) RETURNS text AS
+$$
+  SELECT '(' || coalesce(string_agg(quote_ident(attname), ', '), '') ||
+         ') = (' || $2 || '.' ||
+         coalesce(string_agg(quote_ident(attname), ', ' || $2 || '.'), '') || ')'
+    FROM (SELECT attname FROM pg_attribute
+           WHERE attrelid = $1 AND attnum > 0 AND NOT attisdropped
+           ORDER BY attnum) tmp;
+$$
+LANGUAGE sql STABLE STRICT;
+
+CREATE FUNCTION repack.get_compare_pkey(oid, text)
+  RETURNS text AS
+$$
+  SELECT '(' || coalesce(string_agg(quote_ident(attname), ', '), '') ||
+         ') = (' || $2 || '.' ||
+         coalesce(string_agg(quote_ident(attname), ', ' || $2 || '.'), '') || ')'
+    FROM pg_attribute,
+         (SELECT indrelid,
+                 indkey,
+                 generate_series(0, indnatts-1) AS i
+            FROM pg_index
+           WHERE indexrelid = $1
+         ) AS keys
+   WHERE attrelid = indrelid
+     AND attnum = indkey[i];
+$$
+LANGUAGE sql STABLE STRICT;
+
+-- Get a column list for SELECT all columns including dropped ones.
+-- We use NULLs of integer types for dropped columns (types are not important).
+CREATE FUNCTION repack.get_columns_for_create_as(oid)
+  RETURNS text AS
+$$
+SELECT coalesce(string_agg(c, ','), '') FROM (SELECT
+	CASE WHEN attisdropped
+		THEN 'NULL::integer AS ' || quote_ident(attname)
+		ELSE quote_ident(attname)
+	END AS c
+FROM pg_attribute
+WHERE attrelid = $1 AND attnum > 0 ORDER BY attnum
+) AS COL
+$$
+LANGUAGE sql STABLE STRICT;
+
+-- Get a SQL text to DROP dropped columns for the table,
+-- or NULL if it has no dropped columns.
+CREATE FUNCTION repack.get_drop_columns(oid, text)
+  RETURNS text AS
+$$
+SELECT
+	'ALTER TABLE ' || $2 || ' ' || array_to_string(dropped_columns, ', ')
+FROM (
+	SELECT
+		array_agg('DROP COLUMN ' || quote_ident(attname)) AS dropped_columns
+	FROM (
+		SELECT * FROM pg_attribute
+		WHERE attrelid = $1 AND attnum > 0 AND attisdropped
+		ORDER BY attnum
+	) T
+) T
+WHERE
+	array_upper(dropped_columns, 1) > 0
+$$
+LANGUAGE sql STABLE STRICT;
+
+-- Get a comma-separated storage parameter for the table including
+-- parameters for the corresponding TOAST table.
+-- Note that since oid setting is always not NULL, this function
+-- never returns NULL
+CREATE FUNCTION repack.get_storage_param(oid)
+  RETURNS TEXT AS
+$$
+SELECT string_agg(param, ', ')
+FROM (
+    -- table storage parameter
+    SELECT unnest(reloptions) as param
+    FROM pg_class
+    WHERE oid = $1
+    UNION ALL
+    -- TOAST table storage parameter
+    SELECT ('toast.' || unnest(reloptions)) as param
+    FROM (
+        SELECT reltoastrelid from pg_class where oid = $1
+         ) as t,
+        pg_class as c
+    WHERE c.oid = t.reltoastrelid
+    UNION ALL
+    -- table oid
+    SELECT 'oids = ' ||
+        CASE WHEN relhasoids
+            THEN 'true'
+            ELSE 'false'
+        END
+    FROM pg_class
+    WHERE oid = $1
+
+    ) as t
+$$
+LANGUAGE sql STABLE STRICT;
+
+-- GET a SQL text to set column storage option for the table.
+CREATE FUNCTION repack.get_alter_col_storage(oid)
+  RETURNS text AS
+$$
+ SELECT 'ALTER TABLE repack.table_' || $1 || array_to_string(column_storage, ',')
+ FROM (
+       SELECT
+         array_agg(' ALTER ' || quote_ident(attname) ||
+          CASE attstorage
+               WHEN 'p' THEN ' SET STORAGE PLAIN'
+               WHEN 'm' THEN ' SET STORAGE MAIN'
+               WHEN 'e' THEN ' SET STORAGE EXTERNAL'
+               WHEN 'x' THEN ' SET STORAGE EXTENDED'
+          END) AS column_storage
+       FROM (
+            SELECT *
+            FROM pg_attribute a
+                 JOIN pg_type t on t.oid = atttypid
+                 JOIN pg_class r on r.oid = a.attrelid
+                 JOIN pg_namespace s on s.oid = r.relnamespace
+            WHERE typstorage <> attstorage
+                 AND attrelid = $1
+                 AND attnum > 0
+                 AND NOT attisdropped
+           ORDER BY attnum
+	   ) T
+      ) T
+WHERE array_upper(column_storage , 1) > 0
+$$
+LANGUAGE sql STABLE STRICT;
+
+-- includes not only PRIMARY KEYS but also UNIQUE NOT NULL keys
+DO $$
+BEGIN
+    IF current_setting('server_version_num')::int >= 110000 THEN
+        CREATE VIEW repack.primary_keys AS
+          SELECT indrelid, min(indexrelid) AS indexrelid
+            FROM (SELECT indrelid, indexrelid FROM pg_index
+           WHERE indisunique
+             AND indisvalid
+             AND indpred IS NULL
+             AND 0 <> ALL(indkey)
+             AND NOT EXISTS(
+                   SELECT 1 FROM pg_attribute
+                    WHERE attrelid = indrelid
+                      -- indkey is 0-based int2vector
+                      AND attnum = ANY(indkey[0:indnkeyatts - 1])
+                      AND NOT attnotnull
+             )
+           ORDER BY indrelid, indisprimary DESC, indnatts, indkey) tmp
+           GROUP BY indrelid;
+    ELSE
+        CREATE VIEW repack.primary_keys AS
+          SELECT indrelid, min(indexrelid) AS indexrelid
+            FROM (SELECT indrelid, indexrelid FROM pg_index
+           WHERE indisunique
+             AND indisvalid
+             AND indpred IS NULL
+             AND 0 <> ALL(indkey)
+             AND NOT EXISTS(
+                   SELECT 1 FROM pg_attribute
+                    WHERE attrelid = indrelid
+                      AND attnum = ANY(indkey)
+                      AND NOT attnotnull)
+           ORDER BY indrelid, indisprimary DESC, indnatts, indkey) tmp
+           GROUP BY indrelid;
+    END IF;
+END;
+$$;
+
+CREATE VIEW repack.tables AS
+  SELECT repack.oid2text(R.oid) AS relname,
+        R.oid AS relid,
+        R.reltoastrelid AS reltoastrelid,
+        CASE WHEN R.reltoastrelid = 0 THEN 0 ELSE (
+            SELECT indexrelid FROM pg_index
+            WHERE indrelid = R.reltoastrelid
+            AND indisvalid) END AS reltoastidxid,
+        N.nspname AS schemaname,
+        PK.indexrelid AS pkid,
+        CK.indexrelid AS ckid,
+        'SELECT repack.create_index_type(' || PK.indexrelid || ',' || R.oid || ')' AS create_pktype,
+        'SELECT repack.create_log_table(' || R.oid || ')' AS create_log,
+        repack.get_create_trigger(R.oid, PK.indexrelid) AS create_trigger,
+        repack.get_enable_trigger(R.oid) as enable_trigger,
+        'SELECT repack.create_table($1, $2)'::text AS create_table,
+        coalesce(S.spcname, S2.spcname) AS tablespace_orig,
+        'INSERT INTO repack.table_' || R.oid || ' SELECT ' || repack.get_columns_for_create_as(R.oid) || ' FROM ONLY ' || repack.oid2text(R.oid) AS copy_data,
+        repack.get_alter_col_storage(R.oid) AS alter_col_storage,
+        repack.get_drop_columns(R.oid, 'repack.table_' || R.oid) AS drop_columns,
+        'DELETE FROM repack.log_' || R.oid AS delete_log,
+        'LOCK TABLE ' || repack.oid2text(R.oid) || ' IN ACCESS EXCLUSIVE MODE' AS lock_table,
+        repack.get_order_by(CK.indexrelid, R.oid) AS ckey,
+        'SELECT * FROM repack.log_' || R.oid || ' ORDER BY id LIMIT $1' AS sql_peek,
+        'INSERT INTO repack.table_' || R.oid || ' VALUES ($1.*)' AS sql_insert,
+        'DELETE FROM repack.table_' || R.oid || ' WHERE ' || repack.get_compare_pkey(PK.indexrelid, '$1') AS sql_delete,
+        'UPDATE repack.table_' || R.oid || ' SET ' || repack.get_assign(R.oid, '$2') || ' WHERE ' || repack.get_compare_pkey(PK.indexrelid, '$1') AS sql_update,
+        'DELETE FROM repack.log_' || R.oid || ' WHERE id IN (' AS sql_pop
+    FROM pg_class R
+        LEFT JOIN pg_class T ON R.reltoastrelid = T.oid
+        LEFT JOIN repack.primary_keys PK
+                ON R.oid = PK.indrelid
+        LEFT JOIN (SELECT CKI.* FROM pg_index CKI, pg_class CKT
+                    WHERE CKI.indisvalid
+                      AND CKI.indexrelid = CKT.oid
+                      AND CKI.indisclustered
+                      AND CKT.relam = 403) CK
+                ON R.oid = CK.indrelid
+        LEFT JOIN pg_namespace N ON N.oid = R.relnamespace
+        LEFT JOIN pg_tablespace S ON S.oid = R.reltablespace
+        CROSS JOIN (SELECT S2.spcname
+            FROM pg_catalog.pg_database D
+            JOIN pg_catalog.pg_tablespace S2 ON S2.oid = D.dattablespace
+            WHERE D.datname = current_database()) S2
+  WHERE R.relkind = 'r'
+    AND R.relpersistence = 'p'
+    AND N.nspname NOT IN ('pg_catalog', 'information_schema', 'polar_catalog', 'sys')
+    AND N.nspname NOT LIKE E'pg\\_temp\\_%'
+    -- POLAR: ignore the schema of polar_xxx and dbms_xxx extensions because some of them are created by system
+    -- and the user doesn't have the privilege to repack them.
+    -- We cannot ignore all the extensions because pg_repack supports repacking schemas of extensions.
+    -- If the user want to skip an extension, just use --exclude-extension <extension-name>.
+    AND N.nspname NOT IN (
+        SELECT n.nspname
+        FROM
+            pg_catalog.pg_namespace n,
+            pg_catalog.pg_depend d,
+            pg_catalog.pg_extension e
+        WHERE
+            d.deptype = 'e'
+            AND d.refobjid = e.oid
+            AND d.objid = n.oid
+            AND (e.extname LIKE 'polar_%' OR e.extname LIKE 'dbms_%')
+    );
+
+/*
+ * POLAR: add a parameter to use original index name in index definition.
+ * Set default value to false for old version compatibility.
+ */
+CREATE FUNCTION repack.repack_indexdef(
+    index_oid oid,
+    table_oid oid,
+    tablespace name,
+    concurrently bool,
+    polar_use_original_index_name bool DEFAULT false
+)
+RETURNS text AS
+'MODULE_PATHNAME', 'repack_indexdef'
+LANGUAGE C STABLE;
+
+CREATE FUNCTION repack.repack_trigger() RETURNS trigger AS
+'MODULE_PATHNAME', 'repack_trigger'
+LANGUAGE C VOLATILE STRICT SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp;
+
+CREATE FUNCTION repack.conflicted_triggers(oid) RETURNS SETOF name AS
+$$
+SELECT tgname FROM pg_trigger
+ WHERE tgrelid = $1 AND tgname = 'repack_trigger'
+ ORDER BY tgname;
+$$
+LANGUAGE sql STABLE STRICT;
+
+CREATE FUNCTION repack.disable_autovacuum(regclass) RETURNS void AS
+'MODULE_PATHNAME', 'repack_disable_autovacuum'
+LANGUAGE C VOLATILE STRICT;
+
+CREATE FUNCTION repack.repack_apply(
+  sql_peek      cstring,
+  sql_insert    cstring,
+  sql_delete    cstring,
+  sql_update    cstring,
+  sql_pop       cstring,
+  count         integer)
+RETURNS integer AS
+'MODULE_PATHNAME', 'repack_apply'
+LANGUAGE C VOLATILE;
+
+CREATE FUNCTION repack.repack_swap(oid) RETURNS void AS
+'MODULE_PATHNAME', 'repack_swap'
+LANGUAGE C VOLATILE STRICT;
+
+/*
+ * POLAR: add a parameter to ignore dropped objects.
+ * Set default value to false for old version compatibility.
+ */
+CREATE FUNCTION repack.repack_drop(
+  target_table oid, numobj int,
+  polar_ignore_dropped_objects bool DEFAULT false
+) RETURNS void AS
+'MODULE_PATHNAME', 'repack_drop'
+LANGUAGE C VOLATILE STRICT;
+
+CREATE FUNCTION repack.repack_index_swap(
+  index oid,
+  polar_ignore_dropped_objects bool DEFAULT false
+) RETURNS void AS
+'MODULE_PATHNAME', 'repack_index_swap'
+LANGUAGE C STABLE STRICT;
+
+CREATE FUNCTION repack.get_table_and_inheritors(regclass) RETURNS regclass[] AS
+'MODULE_PATHNAME', 'repack_get_table_and_inheritors'
+LANGUAGE C STABLE STRICT;
+
+CREATE OR REPLACE FUNCTION repack.polar_repack_dc_check(old_table TEXT, old_table_oid OID)
+RETURNS BOOL
+AS $$
+DECLARE
+    new_table_name TEXT := 'repack.table_' || old_table_oid::TEXT;
+    backup_old_table_name TEXT := 'repack.repack_backup_' || old_table_oid::TEXT || '_old';
+    backup_new_table_name TEXT := 'repack.repack_backup_' || old_table_oid::TEXT || '_new';
+    row_diff_count BIGINT := 1;
+BEGIN
+    EXECUTE 'SELECT COUNT(*) FROM
+    (
+      (SELECT * FROM ' || new_table_name || ' EXCEPT ALL SELECT * FROM ' || old_table || ')
+      UNION ALL
+      (SELECT * FROM ' || old_table || ' EXCEPT ALL SELECT * FROM ' || new_table_name || ')
+    ) AS diff'
+    INTO row_diff_count;
+
+    IF row_diff_count <> 0 THEN
+        -- We cannot raise exception if check failed because exception will rollback the txn.
+        -- But we want to backup the tables for debugging here. So we just return false and
+        -- let the caller handle the return value.
+        RAISE WARNING 'consistency check of table "%" failed with % row differences', old_table, row_diff_count;
+        
+        -- Backup the tables for debugging if check failed
+        EXECUTE 'CREATE TABLE ' || backup_old_table_name || ' AS SELECT * FROM ' || old_table;
+        EXECUTE 'CREATE TABLE ' || backup_new_table_name || ' AS SELECT * FROM ' || new_table_name;
+        
+        RETURN False;
+    END IF;
+
+    RAISE NOTICE 'consistency check of table "%" passed', old_table;
+    RETURN True;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE FUNCTION repack.polar_inc_repack_table_count(INT4) RETURNS void AS
+'MODULE_PATHNAME', 'polar_inc_repack_table_count'
+LANGUAGE C STABLE STRICT;
+
+CREATE FUNCTION repack.polar_inc_repack_index_count(INT4) RETURNS void AS
+'MODULE_PATHNAME', 'polar_inc_repack_index_count'
+LANGUAGE C STABLE STRICT;
+
+CREATE FUNCTION repack.polar_inc_repack_apply_log_count(INT4) RETURNS void AS
+'MODULE_PATHNAME', 'polar_inc_repack_apply_log_count'
+LANGUAGE C STABLE STRICT;
+
+CREATE OR REPLACE FUNCTION repack.polar_get_root_table_of_partition(table_in OID)
+RETURNS OID AS $$
+DECLARE
+    parent_table OID;
+    current_table OID := $1;
+BEGIN
+    LOOP
+        SELECT inhparent INTO parent_table FROM pg_catalog.pg_inherits
+            WHERE inhrelid = current_table;
+        IF NOT FOUND THEN
+            EXIT;
+        END IF;
+        current_table := parent_table;
+    END LOOP;
+    RETURN current_table;
+END;
+$$ LANGUAGE PLpgSQL;

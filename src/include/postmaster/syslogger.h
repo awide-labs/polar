@@ -66,6 +66,10 @@ typedef union
 #define PIPE_PROTO_DEST_CSVLOG	0x20
 #define PIPE_PROTO_DEST_JSONLOG	0x40
 
+/* POLAR: new destinations */
+#define POLAR_PIPE_PROTO_DEST_AUDITLOG	0x02	/* is polar audit log */
+#define POLAR_PIPE_PROTO_DEST_SLOWLOG	0x04	/* is polar slow log */
+
 /* GUC options */
 extern PGDLLIMPORT bool Logging_collector;
 extern PGDLLIMPORT int Log_RotationAge;
@@ -82,9 +86,13 @@ extern PGDLLIMPORT HANDLE syslogPipe[2];
 #endif
 
 
-extern int	SysLogger_Start(void);
+/* POLAR */
+extern int	SysLogger_Start(int loggerIndex);
 
 extern void write_syslogger_file(const char *buffer, int count, int dest);
+
+/* POLAR */
+extern void flush_syslogger_file(int dest);
 
 #ifdef EXEC_BACKEND
 extern void SysLoggerMain(int argc, char *argv[]) pg_attribute_noreturn();
@@ -99,5 +107,21 @@ extern void RemoveLogrotateSignalFiles(void);
  */
 #define LOG_METAINFO_DATAFILE  "current_logfiles"
 #define LOG_METAINFO_DATAFILE_TMP  LOG_METAINFO_DATAFILE ".tmp"
+
+/* POLAR */
+#define MAX_SYSLOGGER_NUM 16
+#define DEFAULT_SYSLOGGER_NUM 3
+#define DEFAULT_MULTI_SYSLOGGER_FLAG true
+#ifndef WIN32
+extern int	syslogChannels[MAX_SYSLOGGER_NUM][2];
+#else
+extern HANDLE syslogChannels[MAX_SYSLOGGER_NUM][2];
+#endif
+extern bool polar_enable_multi_syslogger;
+extern bool polar_enable_syslog_pipe_buffer;
+extern bool polar_enable_syslog_file_buffer;
+extern bool polar_enable_error_to_audit_log;
+extern int	polar_syslogger_num;
+extern bool polar_enable_output_search_path_to_log;
 
 #endif							/* _SYSLOGGER_H */

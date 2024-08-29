@@ -27,4 +27,6 @@ OBJS = \
 	sinvaladt.o \
 	standby.o
 
+OBJS += polar_procpool.o
+
 include $(top_srcdir)/src/backend/common.mk

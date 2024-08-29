@@ -26,6 +26,10 @@
 #include "utils/hsearch.h"
 #include "utils/inval.h"
 
+/* POLAR */
+#include "access/polar_logindex_redo.h"
+#include "access/xlog.h"
+#include "storage/polar_rsc.h"
 
 /*
  * This struct of function pointers defines the API between smgr.c and
@@ -62,6 +66,12 @@ typedef struct f_smgr
 	void		(*smgr_truncate) (SMgrRelation reln, ForkNumber forknum,
 								  BlockNumber nblocks);
 	void		(*smgr_immedsync) (SMgrRelation reln, ForkNumber forknum);
+	/* POLAR: bulk io */
+	void		(*polar_smgr_bulkextend) (SMgrRelation reln, ForkNumber forknum,
+										  BlockNumber blocknum, int blockCount, char *buffer, bool skipFsync);
+	void		(*polar_smgr_bulkread) (SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
+										int blockCount, char *buffer);
+	/* POLAR end */
 } f_smgr;
 
 static const f_smgr smgrsw[] = {
@@ -82,6 +92,10 @@ static const f_smgr smgrsw[] = {
 		.smgr_nblocks = mdnblocks,
 		.smgr_truncate = mdtruncate,
 		.smgr_immedsync = mdimmedsync,
+		/* POLAR: extend io */
+		.polar_smgr_bulkextend = polar_mdbulkextend,
+		.polar_smgr_bulkread = polar_mdbulkread,
+		/* POLAR end */
 	}
 };
 
@@ -171,6 +185,8 @@ smgropen(RelFileNode rnode, BackendId backend)
 	/* Initialize it if not present before */
 	if (!found)
 	{
+		int			forknum;
+
 		/* hash_search already filled in the lookup key */
 		reln->smgr_owner = NULL;
 		reln->smgr_targblock = InvalidBlockNumber;
@@ -178,8 +194,20 @@ smgropen(RelFileNode rnode, BackendId backend)
 			reln->smgr_cached_nblocks[i] = InvalidBlockNumber;
 		reln->smgr_which = 0;	/* we only have md.c at present */
 
+		/*
+		 * POLAR RSC: initialization shared entry reference and generation.
+		 */
+		reln->rsc_ref = NULL;
+		reln->rsc_generation = 0;
+		/* POLAR end */
+
 		/* implementation-specific initialization */
 		smgrsw[reln->smgr_which].smgr_open(reln);
+
+		/* POLAR: bulk extend status */
+		for (forknum = 0; forknum <= MAX_FORKNUM; forknum++)
+			polar_smgr_clear_bulk_extend(reln, forknum);
+		/* POLAR end */
 
 		/* it has no owner yet */
 		dlist_push_tail(&unowned_relns, &reln->node);
@@ -428,6 +456,20 @@ smgrdounlinkall(SMgrRelation *rels, int nrels, bool isRedo)
 		return;
 
 	/*
+	 * POLAR: Record relation size change infomation before doing the real
+	 * work
+	 */
+	if (polar_is_replica() || polar_bg_redo_state_is_parallel(polar_logindex_redo_instance) ||
+		polar_should_launch_standby_instant_recovery())
+	{
+		ForkNumber	forks[MAX_FORKNUM + 1] = {MAIN_FORKNUM, FSM_FORKNUM, VISIBILITYMAP_FORKNUM, INIT_FORKNUM};
+		BlockNumber nblocks[MAX_FORKNUM + 1] = {0, 0, 0, 0};
+
+		for (i = 0; i < nrels; i++)
+			POLAR_RECORD_REL_SIZE(&(rels[i]->smgr_rnode.node), MAX_FORKNUM + 1, forks, nblocks);
+	}
+
+	/*
 	 * Get rid of any remaining buffers for the relations.  bufmgr will just
 	 * drop them without bothering to write the contents.
 	 */
@@ -451,6 +493,14 @@ smgrdounlinkall(SMgrRelation *rels, int nrels, bool isRedo)
 	}
 
 	/*
+	 * POLAR RSC: clean up for the relation to be unlinked.
+	 */
+	if (POLAR_RSC_ENABLED())
+		for (i = 0; i < nrels; i++)
+			polar_rsc_drop_entry(&rnodes[i].node);
+	/* POLAR end */
+
+	/*
 	 * Send a shared-inval message to force other backends to close any
 	 * dangling smgr references they may have for these rels.  We should do
 	 * this before starting the actual unlinking, in case we fail partway
@@ -468,13 +518,15 @@ smgrdounlinkall(SMgrRelation *rels, int nrels, bool isRedo)
 	 * ERROR, because we've already decided to commit or abort the current
 	 * xact.
 	 */
-
-	for (i = 0; i < nrels; i++)
+	if (!polar_is_replica())
 	{
-		int			which = rels[i]->smgr_which;
+		for (i = 0; i < nrels; i++)
+		{
+			int			which = rels[i]->smgr_which;
 
-		for (forknum = 0; forknum <= MAX_FORKNUM; forknum++)
-			smgrsw[which].smgr_unlink(rnodes[i], forknum, isRedo);
+			for (forknum = 0; forknum <= MAX_FORKNUM; forknum++)
+				smgrsw[which].smgr_unlink(rnodes[i], forknum, isRedo);
+		}
 	}
 
 	pfree(rnodes);
@@ -502,10 +554,67 @@ smgrextend(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
 	 * value isn't as expected, just invalidate it so the next call asks the
 	 * kernel.
 	 */
+
+	/*
+	 * POLAR: because smgr_cached_nblocks is for backend not shared, fake
+	 * nblocks can be updated. recovery should use fake nblocks to alloc
+	 * extend zero buffer.
+	 */
 	if (reln->smgr_cached_nblocks[forknum] == blocknum)
 		reln->smgr_cached_nblocks[forknum] = blocknum + 1;
 	else
 		reln->smgr_cached_nblocks[forknum] = InvalidBlockNumber;
+
+	/*
+	 * POLAR RSC: update new blocknum into entry.
+	 */
+	if (POLAR_RSC_SHOULD_UPDATE(reln, forknum))
+		polar_rsc_update_entry(reln, forknum, blocknum + 1);
+	/* POLAR end */
+}
+
+/* POLAR: bulk extend */
+void
+polar_smgrbulkextend(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
+					 int blockCount, char *buffer, bool skipFsync)
+{
+	Assert(blockCount >= 1);
+	Assert(!reln->polar_flag_for_bulk_extend[forknum]);
+
+	smgrsw[reln->smgr_which].polar_smgr_bulkextend(reln, forknum, blocknum, blockCount, buffer, skipFsync);
+
+	/*
+	 * Normally we expect this to increase nblocks by one, but if the cached
+	 * value isn't as expected, just invalidate it so the next call asks the
+	 * kernel. nblock should be blocknum + blockCount in bulkExtend
+	 */
+	if (reln->smgr_cached_nblocks[forknum] == blocknum)
+		reln->smgr_cached_nblocks[forknum] = blocknum + blockCount;
+	else
+		reln->smgr_cached_nblocks[forknum] = InvalidBlockNumber;
+
+	/*
+	 * POLAR RSC: update new blocknum into entry.
+	 */
+	if (POLAR_RSC_SHOULD_UPDATE(reln, forknum))
+		polar_rsc_update_entry(reln, forknum, blocknum + blockCount);
+}
+
+/*
+ *  POLAR: bulk read
+ *
+ *	polar_smgrbulkread() -- read multi particular block from a relation into the supplied
+ *    				  buffer.
+ *
+ *		This routine is called from the buffer manager in order to
+ *		instantiate pages in the shared buffer cache.  All storage managers
+ *		return pages in the format that POSTGRES expects.
+ */
+void
+polar_smgrbulkread(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
+				   int blockCount, char *buffer)
+{
+	smgrsw[reln->smgr_which].polar_smgr_bulkread(reln, forknum, blocknum, blockCount, buffer);
 }
 
 /*
@@ -573,6 +682,17 @@ smgrwriteback(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
 }
 
 /*
+ * POLAR: original call of f_smgr level API.
+ */
+inline BlockNumber
+smgrnblocks_real(SMgrRelation reln, ForkNumber forknum)
+{
+	return smgrsw[reln->smgr_which].smgr_nblocks(reln, forknum);
+}
+
+/* POLAR end */
+
+/*
  *	smgrnblocks() -- Calculate the number of blocks in the
  *					 supplied relation.
  */
@@ -586,11 +706,45 @@ smgrnblocks(SMgrRelation reln, ForkNumber forknum)
 	if (result != InvalidBlockNumber)
 		return result;
 
-	result = smgrsw[reln->smgr_which].smgr_nblocks(reln, forknum);
+	/*
+	 * POLAR RSC: search for nblocks value, evict and update entry if
+	 * necessary.
+	 */
+	if (POLAR_RSC_SHOULD_UPDATE(reln, forknum))
+		result = polar_rsc_search_entry(reln, forknum, true);
+	else
+		result = smgrnblocks_real(reln, forknum);
+	/* POLAR end */
 
 	reln->smgr_cached_nblocks[forknum] = result;
 
 	return result;
+}
+
+/*
+ * polar_smgr_init_bulk_extend() -- Init polar bulk extend backend-local-variable.
+ */
+void
+polar_smgr_init_bulk_extend(SMgrRelation reln, ForkNumber forknum)
+{
+	Assert(!reln->polar_flag_for_bulk_extend[forknum]);
+	reln->polar_nblocks_faked_for_bulk_extend[forknum] = smgrnblocks(reln, forknum);
+
+	/*
+	 * polar_flag_for_bulk_extend must be set after
+	 * polar_nblocks_faked_for_bulk_extend, as polar_flag_for_bulk_extend have
+	 * an effort on result of smgrnblocks().
+	 */
+	reln->polar_flag_for_bulk_extend[forknum] = true;
+}
+
+/*
+ * polar_smgr_clear_bulk_extend() -- Clear polar bulk extend backend-local-variable.
+ */
+void
+polar_smgr_clear_bulk_extend(SMgrRelation reln, ForkNumber forknum)
+{
+	reln->polar_flag_for_bulk_extend[forknum] = false;
 }
 
 /*
@@ -604,11 +758,27 @@ BlockNumber
 smgrnblocks_cached(SMgrRelation reln, ForkNumber forknum)
 {
 	/*
+	 * POLAR RSC: make sure all processes will use the shared-memory-based
+	 * search/update mechanism of RSC to get accurate shared nblocks number.
+	 */
+	if (polar_enable_rel_size_cache)
+		return InvalidBlockNumber;
+	/* POLAR end */
+
+	/*
 	 * For now, this function uses cached values only in recovery due to lack
 	 * of a shared invalidation mechanism for changes in file size.  Code
 	 * elsewhere reads smgr_cached_nblocks and copes with stale data.
+	 *
+	 * POLAR: The startup process is just parsing xlog to build logindex
+	 * without doing the real replaying work. So there's no guarantee that all
+	 * blocks of every xlog will be accessed by startup. In other words, the
+	 * cache of smgr's nblock may be not right in startup. However, in standby
+	 * parallel replaying mode, it's safe to use this smgr nblocks cache
+	 * because only startup process could extend file.
 	 */
-	if (InRecovery && reln->smgr_cached_nblocks[forknum] != InvalidBlockNumber)
+	if (InRecovery && reln->smgr_cached_nblocks[forknum] != InvalidBlockNumber &&
+		!polar_is_replica())
 		return reln->smgr_cached_nblocks[forknum];
 
 	return InvalidBlockNumber;
@@ -628,6 +798,10 @@ void
 smgrtruncate(SMgrRelation reln, ForkNumber *forknum, int nforks, BlockNumber *nblocks)
 {
 	int			i;
+
+	/* POLAR :record the new relation size to the cache */
+	POLAR_RECORD_REL_SIZE(&(reln->smgr_rnode.node), nforks, forknum, nblocks);
+	/* POLAR end */
 
 	/*
 	 * Get rid of any buffers for the about-to-be-deleted blocks. bufmgr will
@@ -663,6 +837,13 @@ smgrtruncate(SMgrRelation reln, ForkNumber *forknum, int nforks, BlockNumber *nb
 		 * But these ensure they aren't outright wrong until then.
 		 */
 		reln->smgr_cached_nblocks[forknum[i]] = nblocks[i];
+
+		/*
+		 * POLAR RSC: update blocknum after truncate.
+		 */
+		if (POLAR_RSC_SHOULD_UPDATE(reln, forknum[i]))
+			polar_rsc_update_entry(reln, forknum[i], nblocks[i]);
+		/* POLAR end */
 	}
 }
 
@@ -711,6 +892,10 @@ void
 AtEOXact_SMgr(void)
 {
 	dlist_mutable_iter iter;
+
+	/* POLAR RSC: release the holding reference on transaction ends */
+	polar_rsc_release_holding_ref();
+	/* POLAR end */
 
 	/*
 	 * Zap all unowned SMgrRelations.  We rely on smgrclose() to remove each

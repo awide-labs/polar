@@ -1,0 +1,22 @@
+#------------------------------------------------------------------------------
+# Common Parameters for PostgreSQL
+#------------------------------------------------------------------------------
+full_page_writes = off
+listen_addresses = '*'
+logging_collector = on
+max_prepared_transactions = 10
+max_worker_processes = 128
+max_connections = 1000
+shared_buffers = 256MB
+shared_preload_libraries ='\$libdir/polar_vfs,\$libdir/polar_io_stat,\$libdir/polar_monitor_preload,\$libdir/polar_worker'
+
+#------------------------------------------------------------------------------
+# Common Parameters for PolarDB
+#------------------------------------------------------------------------------
+polar_disk_name = 'home'
+polar_enable_shared_storage_mode = on
+polar_vfs.localfs_mode = true
+polar_logindex_mem_size=64MB
+polar_xlog_queue_buffers=64MB
+polar_xlog_page_buffers=64MB
+polar_has_partial_write = on

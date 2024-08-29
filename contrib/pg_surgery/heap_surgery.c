@@ -264,7 +264,7 @@ heap_force_common(FunctionCallInfo fcinfo, HeapTupleForceOption heap_force_opt)
 				{
 					PageClearAllVisible(page);
 					visibilitymap_clear(rel, blkno, vmbuf,
-										VISIBILITYMAP_VALID_BITS);
+										VISIBILITYMAP_VALID_BITS, NULL);
 					did_modify_vm = true;
 				}
 			}

@@ -1,0 +1,5 @@
+#polar_resource_manager extension
+comment = 'a background process that forcibly frees user session process memory'
+default_version = '1.0'
+module_pathname = '$libdir/polar_resource_manager'
+relocatable = false

@@ -272,6 +272,12 @@ StartupProcessMain(void)
 	RegisterTimeout(STANDBY_LOCK_TIMEOUT, StandbyLockTimeoutHandler);
 
 	/*
+	 * POLAR: Initialize the local directories, copy some directories from
+	 * shared storage to local before unblock signals if needed
+	 */
+	polar_init_local_dir();
+
+	/*
 	 * Unblock signals (they were blocked when the postmaster forked us)
 	 */
 	PG_SETMASK(&UnBlockSig);

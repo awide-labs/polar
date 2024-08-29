@@ -9,6 +9,7 @@
  * context's MemoryContextMethods struct.
  *
  *
+ *  * Portions Copyright (c) 2024, Alibaba Group Holding Limited
  * Portions Copyright (c) 1996-2022, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
@@ -30,6 +31,9 @@
 #include "utils/memdebug.h"
 #include "utils/memutils.h"
 
+/* POLAR */
+#include "storage/polar_fd.h"
+#include "utils/guc.h"
 
 /*****************************************************************************
  *	  GLOBAL MEMORY															 *
@@ -64,6 +68,18 @@ static void MemoryContextStatsInternal(MemoryContext context, int level,
 static void MemoryContextStatsPrint(MemoryContext context, void *passthru,
 									const char *stats_string,
 									bool print_to_stderr);
+
+static void AlignedAllocFree(MemoryContext context, void *pointer);
+
+
+static const MemoryContextMethods AlignedRedirectMethods = {
+	.free_p = AlignedAllocFree,
+};
+
+static const MemoryContextData AlignedRedirectContext = {
+	.type = T_AlignedAllocRedirectContext,
+	.methods = &AlignedRedirectMethods
+};
 
 /*
  * You should not do memory allocations within a critical section, because
@@ -870,6 +886,9 @@ MemoryContextAlloc(MemoryContext context, Size size)
 	if (!AllocSizeIsValid(size))
 		elog(ERROR, "invalid memory alloc request size %zu", size);
 
+	/* POLAR: Enable check interrupt when allocating memory. */
+	POLAR_INTERRUPTS_FOR_ALLOC();
+
 	context->isReset = false;
 
 	ret = context->methods->alloc(context, size);
@@ -913,6 +932,9 @@ MemoryContextAllocZero(MemoryContext context, Size size)
 	if (!AllocSizeIsValid(size))
 		elog(ERROR, "invalid memory alloc request size %zu", size);
 
+	/* POLAR: Enable check interrupt when allocating memory. */
+	POLAR_INTERRUPTS_FOR_ALLOC();
+
 	context->isReset = false;
 
 	ret = context->methods->alloc(context, size);
@@ -951,6 +973,9 @@ MemoryContextAllocZeroAligned(MemoryContext context, Size size)
 	if (!AllocSizeIsValid(size))
 		elog(ERROR, "invalid memory alloc request size %zu", size);
 
+	/* POLAR: Enable check interrupt when allocating memory. */
+	POLAR_INTERRUPTS_FOR_ALLOC();
+
 	context->isReset = false;
 
 	ret = context->methods->alloc(context, size);
@@ -986,6 +1011,9 @@ MemoryContextAllocExtended(MemoryContext context, Size size, int flags)
 	if (((flags & MCXT_ALLOC_HUGE) != 0 && !AllocHugeSizeIsValid(size)) ||
 		((flags & MCXT_ALLOC_HUGE) == 0 && !AllocSizeIsValid(size)))
 		elog(ERROR, "invalid memory alloc request size %zu", size);
+
+	/* POLAR: Enable check interrupt when allocating memory. */
+	POLAR_INTERRUPTS_FOR_ALLOC();
 
 	context->isReset = false;
 
@@ -1077,6 +1105,9 @@ palloc(Size size)
 	if (!AllocSizeIsValid(size))
 		elog(ERROR, "invalid memory alloc request size %zu", size);
 
+	/* POLAR: Enable check interrupt when allocating memory. */
+	POLAR_INTERRUPTS_FOR_ALLOC();
+
 	context->isReset = false;
 
 	ret = context->methods->alloc(context, size);
@@ -1107,6 +1138,9 @@ palloc0(Size size)
 
 	if (!AllocSizeIsValid(size))
 		elog(ERROR, "invalid memory alloc request size %zu", size);
+
+	/* POLAR: Enable check interrupt when allocating memory. */
+	POLAR_INTERRUPTS_FOR_ALLOC();
 
 	context->isReset = false;
 
@@ -1141,6 +1175,9 @@ palloc_extended(Size size, int flags)
 	if (((flags & MCXT_ALLOC_HUGE) != 0 && !AllocHugeSizeIsValid(size)) ||
 		((flags & MCXT_ALLOC_HUGE) == 0 && !AllocSizeIsValid(size)))
 		elog(ERROR, "invalid memory alloc request size %zu", size);
+
+	/* POLAR: Enable check interrupt when allocating memory. */
+	POLAR_INTERRUPTS_FOR_ALLOC();
 
 	context->isReset = false;
 
@@ -1177,7 +1214,9 @@ pfree(void *pointer)
 	MemoryContext context = GetMemoryChunkContext(pointer);
 
 	context->methods->free_p(context, pointer);
-	VALGRIND_MEMPOOL_FREE(context, pointer);
+
+	if (context != &AlignedRedirectContext)
+		VALGRIND_MEMPOOL_FREE(context, pointer);
 }
 
 /*
@@ -1192,6 +1231,9 @@ repalloc(void *pointer, Size size)
 
 	if (!AllocSizeIsValid(size))
 		elog(ERROR, "invalid memory alloc request size %zu", size);
+
+	/* POLAR: Enable check interrupt when allocating memory. */
+	POLAR_INTERRUPTS_FOR_ALLOC();
 
 	AssertNotInCriticalSection(context);
 
@@ -1231,6 +1273,9 @@ MemoryContextAllocHuge(MemoryContext context, Size size)
 	if (!AllocHugeSizeIsValid(size))
 		elog(ERROR, "invalid memory alloc request size %zu", size);
 
+	/* POLAR: Enable check interrupt when allocating memory. */
+	POLAR_INTERRUPTS_FOR_ALLOC();
+
 	context->isReset = false;
 
 	ret = context->methods->alloc(context, size);
@@ -1263,6 +1308,9 @@ repalloc_huge(void *pointer, Size size)
 	if (!AllocHugeSizeIsValid(size))
 		elog(ERROR, "invalid memory alloc request size %zu", size);
 
+	/* POLAR: Enable check interrupt when allocating memory. */
+	POLAR_INTERRUPTS_FOR_ALLOC();
+
 	AssertNotInCriticalSection(context);
 
 	/* isReset must be false already */
@@ -1293,6 +1341,9 @@ MemoryContextStrdup(MemoryContext context, const char *string)
 {
 	char	   *nstr;
 	Size		len = strlen(string) + 1;
+
+	/* POLAR: Enable check interrupt when allocating memory. */
+	POLAR_INTERRUPTS_FOR_ALLOC();
 
 	nstr = (char *) MemoryContextAlloc(context, len);
 
@@ -1338,4 +1389,84 @@ pchomp(const char *in)
 	while (n > 0 && in[n - 1] == '\n')
 		n--;
 	return pnstrdup(in, n);
+}
+
+static void
+AlignedAllocFree(MemoryContext context, void *pointer)
+{
+	void	   *unaligned;
+
+	unaligned = (void *) *(uintptr_t *) ((char *) pointer - sizeof(uintptr_t) - sizeof(uintptr_t));
+
+	pfree(unaligned);
+}
+
+void *
+MemoryContextAllocAligned(MemoryContext context,
+						  Size size, Size alignto, int flags)
+{
+	/* pointer to fake memory context + pointer to actual allocation  */
+	Size		constant_overhead = sizeof(uintptr_t) + sizeof(uintptr_t);
+	Size		alloc_size;
+	void	   *unaligned;
+	void	   *aligned;
+
+	/* wouldn't make much sense to waste that much space */
+	AssertArg(alignto < (128 * 1024 * 1024));
+
+	if (alignto < MAXIMUM_ALIGNOF)
+		return palloc_extended(size, flags);
+
+	/* allocate enough space for alignment padding */
+	alloc_size = size + alignto + constant_overhead;
+
+	unaligned = MemoryContextAllocExtended(context, alloc_size, flags);
+
+	aligned = (char *) unaligned + constant_overhead;
+	aligned = (void *) TYPEALIGN(alignto, aligned);
+
+	Assert((uintptr_t) aligned - (uintptr_t) unaligned >= constant_overhead);
+
+	*(uintptr_t *) ((char *) aligned - sizeof(uintptr_t)) = (uintptr_t) &AlignedRedirectContext;
+	*(uintptr_t *) ((char *) aligned - sizeof(uintptr_t) - sizeof(uintptr_t)) = (uintptr_t) unaligned;
+
+	/* XXX: should we adjust valgrind state here? */
+	return aligned;
+}
+
+void *
+MemoryContextAllocIOAligned(MemoryContext context, Size size, int flags)
+{
+	/* FIXME: don't hardcode page size */
+	return MemoryContextAllocAligned(context, size, POLAR_BUFFER_ALIGN_LEN, flags);
+}
+
+void *
+palloc_aligned(Size size, Size alignto, int flags)
+{
+	return MemoryContextAllocAligned(CurrentMemoryContext, size, alignto, flags);
+}
+
+void *
+palloc_io_aligned(Size size, int flags)
+{
+	return MemoryContextAllocIOAligned(CurrentMemoryContext, size, flags);
+}
+
+/*
+ * POLAR: Like palloc,
+ * but allow to work well in the critical section temporarily.
+ */
+void *
+polar_palloc_in_crit(Size size)
+{
+	/* duplicates MemoryContextAlloc to avoid increased overhead */
+	void	   *ret;
+	MemoryContext context = CurrentMemoryContext;
+	bool		allow_in_crit = context->allowInCritSection;
+
+	context->allowInCritSection = true;
+	ret = palloc(size);
+	context->allowInCritSection = allow_in_crit;
+	return ret;
 }

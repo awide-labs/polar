@@ -73,10 +73,15 @@ extern void *MemoryContextAllocZero(MemoryContext context, Size size);
 extern void *MemoryContextAllocZeroAligned(MemoryContext context, Size size);
 extern void *MemoryContextAllocExtended(MemoryContext context,
 										Size size, int flags);
+extern void *MemoryContextAllocAligned(MemoryContext context,
+									   Size size, Size alignto, int flags);
+extern void *MemoryContextAllocIOAligned(MemoryContext context, Size size, int flags);
 
 extern void *palloc(Size size);
 extern void *palloc0(Size size);
 extern void *palloc_extended(Size size, int flags);
+extern void *palloc_aligned(Size size, Size alignto, int flags);
+extern void *palloc_io_aligned(Size size, int flags);
 extern pg_nodiscard void *repalloc(void *pointer, Size size);
 extern void pfree(void *pointer);
 
@@ -154,5 +159,8 @@ extern char *pchomp(const char *in);
 /* sprintf into a palloc'd buffer --- these are in psprintf.c */
 extern char *psprintf(const char *fmt,...) pg_attribute_printf(1, 2);
 extern size_t pvsnprintf(char *buf, size_t len, const char *fmt, va_list args) pg_attribute_printf(3, 0);
+
+/* POLAR: palloc in the critial section */
+extern void *polar_palloc_in_crit(Size size);
 
 #endif							/* PALLOC_H */

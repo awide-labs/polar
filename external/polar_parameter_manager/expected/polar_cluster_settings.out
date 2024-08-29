@@ -1,0 +1,207 @@
+--begin test
+create schema test_cluster_settings;
+set search_path to test_cluster_settings;
+create view desensitized_file_settings as 
+select case when sourcefile like '%polar_settings.conf%' then 'polar_settings.conf' 
+            when sourcefile like '%postgresql.auto.conf%' then 'postgresql.auto.conf'
+            when sourcefile like '%postgresql.conf%' then 'postgresql.conf' end as sourcefile,
+    name,setting,applied from pg_file_settings 
+    where sourcefile like '%polar_settings.conf%' or 
+          sourcefile like '%postgresql.auto.conf%' or
+          sourcefile like '%postgresql.conf%';
+-- ############### test SQL ##############
+ALTER SYSTEM FOR CLUSTER reset debug_print_rewritten;
+alter system reset debug_print_rewritten;
+select * from desensitized_file_settings where name = 'debug_print_rewritten';
+ sourcefile | name | setting | applied 
+------------+------+---------+---------
+(0 rows)
+
+show debug_print_rewritten;
+ debug_print_rewritten 
+-----------------------
+ off
+(1 row)
+
+ALTER SYSTEM FOR CLUSTER set debug_print_rewritten to on;
+select pg_reload_conf();
+ pg_reload_conf 
+----------------
+ t
+(1 row)
+
+select pg_sleep(1);
+ pg_sleep 
+----------
+ 
+(1 row)
+
+select * from desensitized_file_settings where name = 'debug_print_rewritten';
+     sourcefile      |         name          | setting | applied 
+---------------------+-----------------------+---------+---------
+ polar_settings.conf | debug_print_rewritten | on      | t
+(1 row)
+
+show debug_print_rewritten;
+ debug_print_rewritten 
+-----------------------
+ on
+(1 row)
+
+ALTER SYSTEM FOR CLUSTER set debug_print_rewritten to default;
+select pg_reload_conf();
+ pg_reload_conf 
+----------------
+ t
+(1 row)
+
+select pg_sleep(1);
+ pg_sleep 
+----------
+ 
+(1 row)
+
+select * from desensitized_file_settings where name = 'debug_print_rewritten';
+ sourcefile | name | setting | applied 
+------------+------+---------+---------
+(0 rows)
+
+show debug_print_rewritten;
+ debug_print_rewritten 
+-----------------------
+ off
+(1 row)
+
+ALTER SYSTEM FOR CLUSTER set debug_print_rewritten to on;
+select pg_reload_conf();
+ pg_reload_conf 
+----------------
+ t
+(1 row)
+
+select pg_sleep(1);
+ pg_sleep 
+----------
+ 
+(1 row)
+
+select * from desensitized_file_settings where name = 'debug_print_rewritten';
+     sourcefile      |         name          | setting | applied 
+---------------------+-----------------------+---------+---------
+ polar_settings.conf | debug_print_rewritten | on      | t
+(1 row)
+
+show debug_print_rewritten;
+ debug_print_rewritten 
+-----------------------
+ on
+(1 row)
+
+ALTER SYSTEM FOR CLUSTER reset debug_print_rewritten;
+select pg_reload_conf();
+ pg_reload_conf 
+----------------
+ t
+(1 row)
+
+select pg_sleep(1);
+ pg_sleep 
+----------
+ 
+(1 row)
+
+select * from desensitized_file_settings where name = 'debug_print_rewritten';
+ sourcefile | name | setting | applied 
+------------+------+---------+---------
+(0 rows)
+
+show debug_print_rewritten;
+ debug_print_rewritten 
+-----------------------
+ off
+(1 row)
+
+-- ############### test priority ##############
+ALTER SYSTEM FOR CLUSTER set debug_print_rewritten to on;--polar_settings set on
+alter system set debug_print_rewritten to off;--autoconf set off
+select pg_reload_conf();
+ pg_reload_conf 
+----------------
+ t
+(1 row)
+
+select pg_sleep(1);
+ pg_sleep 
+----------
+ 
+(1 row)
+
+select * from desensitized_file_settings where name = 'debug_print_rewritten';
+      sourcefile      |         name          | setting | applied 
+----------------------+-----------------------+---------+---------
+ polar_settings.conf  | debug_print_rewritten | on      | f
+ postgresql.auto.conf | debug_print_rewritten | off     | t
+(2 rows)
+
+--should be off
+show debug_print_rewritten;
+ debug_print_rewritten 
+-----------------------
+ off
+(1 row)
+
+ALTER SYSTEM FOR CLUSTER reset debug_print_rewritten;
+alter system reset debug_print_rewritten;
+-- make postgresql.conf debug_print_rewritten = off
+copy
+(select 'echo ''debug_print_rewritten = off'' >> ' || current_setting('data_directory') || '/postgresql.conf')
+to '/tmp/set_conf';
+\! sh /tmp/set_conf
+\! rm /tmp/set_conf
+-- set polar_settings
+ALTER SYSTEM FOR CLUSTER set debug_print_rewritten to on;--polar_settings set on
+select pg_reload_conf();
+ pg_reload_conf 
+----------------
+ t
+(1 row)
+
+select pg_sleep(1);
+ pg_sleep 
+----------
+ 
+(1 row)
+
+select * from desensitized_file_settings where name = 'debug_print_rewritten';
+     sourcefile      |         name          | setting | applied 
+---------------------+-----------------------+---------+---------
+ polar_settings.conf | debug_print_rewritten | on      | f
+ postgresql.conf     | debug_print_rewritten | off     | t
+(2 rows)
+
+--should be off
+show debug_print_rewritten;
+ debug_print_rewritten 
+-----------------------
+ off
+(1 row)
+
+ALTER SYSTEM FOR CLUSTER reset debug_print_rewritten;
+copy (select 'sed -i ''$d'' ' || current_setting('data_directory') || '/postgresql.conf') to '/tmp/reset_conf';
+\! sh /tmp/reset_conf
+\! rm /tmp/reset_conf
+select pg_reload_conf();
+ pg_reload_conf 
+----------------
+ t
+(1 row)
+
+select pg_sleep(1);
+ pg_sleep 
+----------
+ 
+(1 row)
+
+-- ############### end ##############
+drop schema test_cluster_settings cascade;
+NOTICE:  drop cascades to view desensitized_file_settings

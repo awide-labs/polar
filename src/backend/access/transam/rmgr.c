@@ -35,7 +35,7 @@
 #include "utils/relmapper.h"
 
 /* must be kept in sync with RmgrData definition in xlog_internal.h */
-#define PG_RMGR(symname,name,redo,desc,identify,startup,cleanup,mask,decode) \
+#define PG_RMGR(symname,name,redo,desc,identify,startup,cleanup,mask,decode,polar_idx_save,polar_idx_parse,polar_idx_redo) \
 	{ name, redo, desc, identify, startup, cleanup, mask, decode },
 
 RmgrData	RmgrTable[RM_MAX_ID + 1] = {

@@ -50,6 +50,9 @@
 #include "utils/ps_status.h"
 #include "utils/resowner_private.h"
 
+/* POLAR */
+#include "storage/polar_lock_stats.h"
+
 
 /* This configuration variable is used to set the lock table size */
 int			max_locks_per_xact; /* set by guc.c */
@@ -907,6 +910,9 @@ LockAcquireExtended(const LOCKTAG *locktag,
 	 * lock more than once but that case won't reach here.
 	 */
 	Assert(!IsRelationExtensionLockHeld);
+	/* POLAR: lock stats */
+	polar_lock_stat_lock(locktag->locktag_type, lockmode);
+	/* POLAR end */
 
 	/*
 	 * Prepare to emit a WAL record if acquisition of this lock needs to be
@@ -927,6 +933,7 @@ LockAcquireExtended(const LOCKTAG *locktag,
 	{
 		LogAccessExclusiveLockPrepare();
 		log_lock = true;
+		polar_xact_split_mark_unsplittable(POLAR_UNSPLITTABLE_FOR_LOCK);
 	}
 
 	/*
@@ -968,6 +975,11 @@ LockAcquireExtended(const LOCKTAG *locktag,
 			locallock->lock = NULL;
 			locallock->proclock = NULL;
 			GrantLockLocal(locallock, owner);
+
+			/* POLAR: stat fast path */
+			polar_lock_stat_fastpath(locktag->locktag_type, lockmode);
+			/* POLAR end */
+
 			return LOCKACQUIRE_OK;
 		}
 	}
@@ -1827,6 +1839,20 @@ WaitOnLock(LOCALLOCK *locallock, ResourceOwner owner)
 	LockMethod	lockMethodTable = LockMethods[lockmethodid];
 	char	   *volatile new_status = NULL;
 
+	/* POLAR: lock wait time stat start */
+	instr_time	lock_start_time;
+
+	INSTR_TIME_SET_ZERO(lock_start_time);
+	polar_lock_stat_block(locallock->tag.lock.locktag_type, locallock->tag.mode);
+	POLAR_LOCK_STATS_TIME_START(lock_start_time);
+
+	/*
+	 * there isn't set wait pid, because we get pid by use
+	 * pg_blocking_pids(pid)
+	 */
+	polar_stat_wait_obj_and_time_set(-1, &lock_start_time, PGPROC_WAIT_PID);
+	/* POLAR: end */
+
 	LOCK_PRINT("WaitOnLock: sleeping on lock",
 			   locallock->lock, locallock->tag.mode);
 
@@ -1909,6 +1935,12 @@ WaitOnLock(LOCALLOCK *locallock, ResourceOwner owner)
 		set_ps_display(new_status);
 		pfree(new_status);
 	}
+
+	/* POLAR:  lock wait time stat end */
+	polar_lock_stat_record_time(locallock->tag.lock.locktag_type,
+								locallock->tag.mode, &lock_start_time);
+	polar_stat_wait_obj_and_time_clear();
+	/* POLAR: end */
 
 	LOCK_PRINT("WaitOnLock: wakeup on lock",
 			   locallock->lock, locallock->tag.mode);
@@ -4496,6 +4528,10 @@ VirtualXactLockTableInsert(VirtualTransactionId vxid)
 	MyProc->fpVXIDLock = true;
 	MyProc->fpLocalTransactionId = vxid.localTransactionId;
 
+	/* POLAR: record virtual xact lock */
+	polar_lock_stat_lock(LOCKTAG_VIRTUALTRANSACTION, ExclusiveLock);
+	/* POLAR end */
+
 	LWLockRelease(&MyProc->fpInfoLock);
 }
 
@@ -4746,4 +4782,13 @@ LockWaiterCount(const LOCKTAG *locktag)
 	LWLockRelease(partitionLock);
 
 	return waiters;
+}
+
+/*
+ * POLAR: init backend-local state needed for lock access
+ */
+void
+polar_init_lock_access(void)
+{
+	polar_init_lock_local_stats();
 }

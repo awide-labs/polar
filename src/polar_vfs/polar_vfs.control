@@ -1,0 +1,5 @@
+comment = 'polar virtual file system for different storage'
+default_version = '1.0'
+module_pathname = '$libdir/polar_vfs'
+relocatable = true
+trusted = true

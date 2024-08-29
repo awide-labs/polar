@@ -17,6 +17,8 @@
 
 #include <dirent.h>
 
+/* POLAR */
+#include "storage/polar_fd.h"
 
 /*
  * Test to see if a directory exists and is empty or not.
@@ -39,11 +41,11 @@ pg_check_dir(const char *dir)
 	bool		mount_found = false;
 	int			readdir_errno;
 
-	chkdir = opendir(dir);
+	chkdir = polar_opendir(dir);
 	if (chkdir == NULL)
 		return (errno == ENOENT) ? 0 : -1;
 
-	while (errno = 0, (file = readdir(chkdir)) != NULL)
+	while (errno = 0, (file = polar_readdir(chkdir)) != NULL)
 	{
 		if (strcmp(".", file->d_name) == 0 ||
 			strcmp("..", file->d_name) == 0)
@@ -75,7 +77,7 @@ pg_check_dir(const char *dir)
 
 	/* Close chkdir and avoid overwriting the readdir errno on success */
 	readdir_errno = errno;
-	if (closedir(chkdir))
+	if (polar_closedir(chkdir))
 		result = -1;			/* error executing closedir */
 	else
 		errno = readdir_errno;

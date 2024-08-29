@@ -33,9 +33,14 @@ volatile sig_atomic_t ProcDiePending = false;
 volatile sig_atomic_t CheckClientConnectionPending = false;
 volatile sig_atomic_t ClientConnectionLost = false;
 volatile sig_atomic_t IdleInTransactionSessionTimeoutPending = false;
+volatile sig_atomic_t TransactionTimeoutPending = false;
 volatile sig_atomic_t IdleSessionTimeoutPending = false;
 volatile sig_atomic_t ProcSignalBarrierPending = false;
 volatile sig_atomic_t LogMemoryContextPending = false;
+
+/* POLAR */
+volatile sig_atomic_t MemoryContextDumpPending = false;
+
 volatile sig_atomic_t IdleStatsUpdateTimeoutPending = false;
 volatile uint32 InterruptHoldoffCount = 0;
 volatile uint32 QueryCancelHoldoffCount = 0;
@@ -135,7 +140,7 @@ int			max_parallel_maintenance_workers = 2;
  */
 int			NBuffers = 1000;
 int			MaxConnections = 90;
-int			max_worker_processes = 8;
+int			max_worker_processes = 16;
 int			max_parallel_workers = 8;
 int			MaxBackends = 0;
 
@@ -151,3 +156,14 @@ int64		VacuumPageDirty = 0;
 
 int			VacuumCostBalance = 0;	/* working state for vacuum */
 bool		VacuumCostActive = false;
+
+/* POLAR: base data dir in shared storage */
+int			polar_shm_limit = 0;
+int			polar_shm_reserved = 512;
+int			polar_shm_unused = 0;
+
+/*
+ * Record the number of interrupts to avoid excessive errordata_stack_depth
+ * problems caused by repeated interrupts during memory allocation.
+ */
+int			polar_alloc_interrupt_num = 0;

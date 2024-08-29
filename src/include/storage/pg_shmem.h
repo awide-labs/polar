@@ -83,6 +83,21 @@ extern void PGSharedMemoryReAttach(void);
 extern void PGSharedMemoryNoReAttach(void);
 #endif
 
+static inline bool
+polar_shmem_is_detach(void)
+{
+	bool		is_detach;
+
+#ifndef WIN32
+	is_detach = (UsedShmemSegAddr == NULL);
+#else
+	is_detach = (ShmemProtectiveRegion == NULL && UsedShmemSegAddr == NULL &&
+				 UsedShmemSegID == INVALID_HANDLE_VALUE);
+#endif
+
+	return is_detach;
+}
+
 extern PGShmemHeader *PGSharedMemoryCreate(Size size,
 										   PGShmemHeader **shim);
 extern bool PGSharedMemoryIsInUse(unsigned long id1, unsigned long id2);

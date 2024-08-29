@@ -1,0 +1,28 @@
+src/backend/utils/polar_parameters_manage/polar_parameters_sample/README
+
+PolarDB Cluster Setting Implementation Notes
+========================
+
+The Polar Cluster Settings module implements configuration
+file of both primary/replica/standby in cluster.
+When init new cluster, initdb.c will copy parameters sample
+to instance's polar_settings.conf depending on 'deploy-mode'
+
+Config File Priority high to low:
+1. postgresql.auto.conf
+2. postgresql.conf
+3. polar_settings.conf
+
+Therefore, please note that the modification of the
+postgresql.conf/postgresql.auto.conf will invalid the
+config settings in polar_settings.conf.We purposely
+designed this to support different configurations
+for different nodes
+
+polar_settings will take effect both in rw/ro/standby, Rely on
+writing the WAL log to maintain consistency.
+
+Kernel developments can use this to make config only takes
+effect after initdb. But the upgrade old version to new version
+does not take effect.To do this, you only need to add the new
+parameter configuration in a specific deployment mode sample file.

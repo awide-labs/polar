@@ -17,6 +17,7 @@ OBJS = \
 	copydir.o \
 	fd.o \
 	fileset.o \
+	polar_fd.o \
 	reinit.o \
 	sharedfileset.o
 

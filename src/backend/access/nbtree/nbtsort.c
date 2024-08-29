@@ -34,6 +34,7 @@
  * This code isn't concerned about the FSM at all. The caller is responsible
  * for initializing that.
  *
+ * Portions Copyright (c) 2024, Alibaba Group Holding Limited
  * Portions Copyright (c) 1996-2022, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
@@ -256,6 +257,14 @@ typedef struct BTWriteState
 	BlockNumber btws_pages_alloced; /* # pages allocated */
 	BlockNumber btws_pages_written; /* # pages written out */
 	Page		btws_zeropage;	/* workspace for filling zeroes */
+
+	/*
+	 * POLAR: bulk extend index file. polar_index_create_bulk_extend_size_copy
+	 * is a copy of polar_index_create_bulk_extend_size, to avoid the impact
+	 * of polar_index_create_bulk_extend_size realtime modifications.
+	 */
+	int			polar_index_create_bulk_extend_size_copy;
+	/* POLAR end */
 } BTWriteState;
 
 
@@ -293,6 +302,11 @@ static void _bt_parallel_scan_and_sort(BTSpool *btspool, BTSpool *btspool2,
 									   Sharedsort *sharedsort2, int sortmem,
 									   bool progress);
 
+/* POLAR */
+__attribute__((__unused__))
+static bool polar_bt_check_bulk_extend(BTWriteState *wstate);
+
+/* POLAR end */
 
 /*
  *	btbuild() -- build a new btree index.
@@ -578,6 +592,10 @@ _bt_leafbuild(BTSpool *btspool, BTSpool *btspool2)
 
 	pgstat_progress_update_param(PROGRESS_CREATEIDX_SUBPHASE,
 								 PROGRESS_BTREE_PHASE_LEAF_LOAD);
+
+	/* POLAR: bulk extend index file */
+	wstate.polar_index_create_bulk_extend_size_copy = polar_index_create_bulk_extend_size;
+
 	_bt_load(&wstate, btspool, btspool2);
 }
 
@@ -619,7 +637,7 @@ _bt_blnewpage(uint32 level)
 	Page		page;
 	BTPageOpaque opaque;
 
-	page = (Page) palloc(BLCKSZ);
+	page = (Page) palloc_io_aligned(BLCKSZ, 0);
 
 	/* Zero the page and set up standard page header info */
 	_bt_pageinit(page, BLCKSZ);
@@ -659,13 +677,45 @@ _bt_blwritepage(BTWriteState *wstate, Page page, BlockNumber blkno)
 	 */
 	while (blkno > wstate->btws_pages_written)
 	{
-		if (!wstate->btws_zeropage)
-			wstate->btws_zeropage = (Page) palloc0(BLCKSZ);
-		/* don't set checksum for all-zero page */
-		smgrextend(RelationGetSmgr(wstate->index), MAIN_FORKNUM,
-				   wstate->btws_pages_written++,
-				   (char *) wstate->btws_zeropage,
-				   true);
+		/* ----------------
+		 * POLAR: bulk extend index relation in "create index", not "insert a index tuple".
+		 * Extra zero-page are safe.
+		 * In "create index", index_create(). Before it finished, it can't be accessed by other backend.
+		 *    1. For a index relation, only one backend writes the index relation, even in parallel index build.
+		 *    2. Logical nblocks is controlled by wstate->btws_pages_alloced, not file lseek.
+		 *    3. zero-page will be overwrite by smgrwrite().
+		 *    4. When index_create() finished, small amount of last zero pages will be truncated.
+		 * ----------------
+		 */
+		if (polar_enable_shared_storage_mode && wstate->polar_index_create_bulk_extend_size_copy > 0)
+		{
+			int			polar_block_count = Min(wstate->polar_index_create_bulk_extend_size_copy, (BlockNumber) RELSEG_SIZE - (blkno % ((BlockNumber) RELSEG_SIZE)));
+
+			if (polar_block_count < 0)
+				polar_block_count = 1;
+			/* ----------------
+			 * btws_zeropage has fixed size wstate->polar_index_create_bulk_extend_size_copy.
+			 * polar_block_count <= wstate->polar_index_create_bulk_extend_size_copy.
+			 * ----------------
+			 */
+			if (!wstate->btws_zeropage)
+				wstate->btws_zeropage = (Page) palloc_io_aligned(BLCKSZ * wstate->polar_index_create_bulk_extend_size_copy, MCXT_ALLOC_ZERO);
+
+			polar_smgrbulkextend(RelationGetSmgr(wstate->index), MAIN_FORKNUM, blkno, polar_block_count, (char *) wstate->btws_zeropage, true);
+			wstate->btws_pages_written += polar_block_count;
+
+			polar_pgstat_count_bulk_create_index_extend_times(wstate->heap);
+		}						/* POLAR end */
+		else
+		{
+			if (!wstate->btws_zeropage)
+				wstate->btws_zeropage = (Page) palloc_io_aligned(BLCKSZ, MCXT_ALLOC_ZERO);
+			/* don't set checksum for all-zero page */
+			smgrextend(RelationGetSmgr(wstate->index), MAIN_FORKNUM,
+					   wstate->btws_pages_written++,
+					   (char *) wstate->btws_zeropage,
+					   true);
+		}
 	}
 
 	PageSetChecksumInplace(page, blkno);
@@ -676,10 +726,47 @@ _bt_blwritepage(BTWriteState *wstate, Page page, BlockNumber blkno)
 	 */
 	if (blkno == wstate->btws_pages_written)
 	{
-		/* extending the file... */
-		smgrextend(RelationGetSmgr(wstate->index), MAIN_FORKNUM, blkno,
-				   (char *) page, true);
-		wstate->btws_pages_written++;
+		/* ----------------
+		 * POLAR: bulk extend index relation in "create index", not "insert a index tuple".
+		 * Extra zero-page are safe.
+		 * In "create index", index_create(). Before it finished, it can't be accessed by other backend.
+		 *    1. For a index relation, only one backend writes the index relation, even in parallel index build.
+		 *    2. Logical nblocks is controlled by wstate->btws_pages_alloced, not file lseek.
+		 *    3. zero-page will be overwrite by smgrwrite().
+		 *    4. When index_create() finished, small amount of last zero pages will be truncated.
+		 * ----------------
+		 */
+		if (polar_enable_shared_storage_mode && wstate->polar_index_create_bulk_extend_size_copy > 0)
+		{
+			int			polar_block_count = Min(wstate->polar_index_create_bulk_extend_size_copy, (BlockNumber) RELSEG_SIZE - (blkno % ((BlockNumber) RELSEG_SIZE)));
+
+			if (polar_block_count < 0)
+				polar_block_count = 1;
+
+			/* ----------------
+			 * btws_zeropage has fixed size wstate->polar_index_create_bulk_extend_size_copy.
+			 * polar_block_count <= wstate->polar_index_create_bulk_extend_size_copy.
+			 * ----------------
+			 */
+			if (!wstate->btws_zeropage)
+				wstate->btws_zeropage = (Page) palloc_io_aligned(BLCKSZ * wstate->polar_index_create_bulk_extend_size_copy, MCXT_ALLOC_ZERO);
+
+			/* first page hold blkno's content */
+			memcpy((char *) wstate->btws_zeropage, (char *) page, BLCKSZ);
+
+			polar_smgrbulkextend(RelationGetSmgr(wstate->index), MAIN_FORKNUM, blkno, polar_block_count, (char *) wstate->btws_zeropage, true);
+
+			wstate->btws_pages_written += polar_block_count;
+
+			polar_pgstat_count_bulk_create_index_extend_times(wstate->heap);
+		}						/* POLAR end */
+		else
+		{
+			/* extending the file... */
+			smgrextend(RelationGetSmgr(wstate->index), MAIN_FORKNUM, blkno,
+					   (char *) page, true);
+			wstate->btws_pages_written++;
+		}
 	}
 	else
 	{
@@ -689,6 +776,12 @@ _bt_blwritepage(BTWriteState *wstate, Page page, BlockNumber blkno)
 	}
 
 	pfree(page);
+	if (polar_enable_shared_storage_mode && wstate->polar_index_create_bulk_extend_size_copy > 0
+		&& wstate->btws_zeropage)
+	{
+		pfree(wstate->btws_zeropage);
+		wstate->btws_zeropage = NULL;
+	}
 }
 
 /*
@@ -1170,7 +1263,7 @@ _bt_uppershutdown(BTWriteState *wstate, BTPageState *state)
 	 * set to point to "P_NONE").  This changes the index to the "valid" state
 	 * by filling in a valid magic number in the metapage.
 	 */
-	metapage = (Page) palloc(BLCKSZ);
+	metapage = (Page) palloc_io_aligned(BLCKSZ, 0);
 	_bt_initmetapage(metapage, rootblkno, rootlevel,
 					 wstate->inskey->allequalimage);
 	_bt_blwritepage(wstate, metapage, BTREE_METAPAGE);
@@ -1194,6 +1287,7 @@ _bt_load(BTWriteState *wstate, BTSpool *btspool, BTSpool *btspool2)
 	SortSupport sortKeys;
 	int64		tuples_done = 0;
 	bool		deduplicate;
+	ForkNumber	bulk_index_extend_forknum;
 
 	deduplicate = wstate->inskey->allequalimage && !btspool->isunique &&
 		BTGetDeduplicateItems(wstate->index);
@@ -1432,6 +1526,20 @@ _bt_load(BTWriteState *wstate, BTSpool *btspool, BTSpool *btspool2)
 	 */
 	if (wstate->btws_use_wal)
 		smgrimmedsync(RelationGetSmgr(wstate->index), MAIN_FORKNUM);
+
+	/*
+	 * POLAR: bulk extend index file, truncate amount of zero page at the end
+	 * of file
+	 */
+	if (polar_enable_shared_storage_mode && wstate->polar_index_create_bulk_extend_size_copy > 0)
+	{
+		if (wstate->btws_pages_alloced < wstate->btws_pages_written)
+		{
+			bulk_index_extend_forknum = MAIN_FORKNUM;
+			Assert(polar_bt_check_bulk_extend(wstate));
+			smgrtruncate(RelationGetSmgr(wstate->index), &bulk_index_extend_forknum, 1, &(wstate->btws_pages_alloced));
+		}
+	}
 }
 
 /*
@@ -2018,4 +2126,40 @@ _bt_parallel_scan_and_sort(BTSpool *btspool, BTSpool *btspool2,
 	tuplesort_end(btspool->sortstate);
 	if (btspool2)
 		tuplesort_end(btspool2->sortstate);
+}
+
+/*
+ * POLAR: check if page content is expected.
+ * return false means something error, true OK.
+ */
+pg_attribute_unused()
+static bool
+polar_bt_check_bulk_extend(BTWriteState *wstate)
+{
+	PGAlignedBlock pg;
+
+	MemSet(pg.data, 0, BLCKSZ);
+	/* wstate->btws_pages_alloced always >= 1 */
+
+	/*
+	 * btws_pages_alloced page must be PageInit(). These pages are not
+	 * zeroed-filled.
+	 */
+	smgrread(RelationGetSmgr(wstate->index), MAIN_FORKNUM, wstate->btws_pages_alloced - 1, pg.data);
+	if (PageIsNew(pg.data))
+		return false;
+
+	if (wstate->btws_pages_alloced < wstate->btws_pages_written)
+	{
+		memset(pg.data, 0, BLCKSZ);
+		smgrread(RelationGetSmgr(wstate->index), MAIN_FORKNUM, wstate->btws_pages_alloced, pg.data);
+
+		/*
+		 * The pages between btws_pages_alloced and btws_pages_written are
+		 * bulk extend. These pages are zeroed-filled.
+		 */
+		if (!PageIsNew(pg.data))
+			return false;
+	}
+	return true;
 }

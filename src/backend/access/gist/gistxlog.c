@@ -59,7 +59,7 @@ gistRedoClearFollowRight(XLogReaderState *record, uint8 block_id)
 		GistClearFollowRight(page);
 
 		PageSetLSN(page, lsn);
-		MarkBufferDirty(buffer);
+		PolarMarkBufferDirty(buffer, record->ReadRecPtr);
 	}
 	if (BufferIsValid(buffer))
 		UnlockReleaseBuffer(buffer);
@@ -148,7 +148,7 @@ gistRedoPageUpdateRecord(XLogReaderState *record)
 		Assert(ninserted == xldata->ntoinsert);
 
 		PageSetLSN(page, lsn);
-		MarkBufferDirty(buffer);
+		PolarMarkBufferDirty(buffer, record->ReadRecPtr);
 	}
 
 	/*
@@ -215,7 +215,7 @@ gistRedoDeleteRecord(XLogReaderState *record)
 		GistMarkTuplesDeleted(page);
 
 		PageSetLSN(page, lsn);
-		MarkBufferDirty(buffer);
+		PolarMarkBufferDirty(buffer, record->ReadRecPtr);
 	}
 
 	if (BufferIsValid(buffer))
@@ -225,7 +225,7 @@ gistRedoDeleteRecord(XLogReaderState *record)
 /*
  * Returns an array of index pointers.
  */
-static IndexTuple *
+IndexTuple *
 decodePageSplitRecord(char *begin, int len, int *n)
 {
 	char	   *ptr;
@@ -327,7 +327,7 @@ gistRedoPageSplitRecord(XLogReaderState *record)
 		}
 
 		PageSetLSN(page, lsn);
-		MarkBufferDirty(buffer);
+		PolarMarkBufferDirty(buffer, record->ReadRecPtr);
 
 		if (i == 0)
 			firstbuffer = buffer;
@@ -359,7 +359,7 @@ gistRedoPageDelete(XLogReaderState *record)
 		GistPageSetDeleted(page, xldata->deleteXid);
 
 		PageSetLSN(page, lsn);
-		MarkBufferDirty(leafBuffer);
+		PolarMarkBufferDirty(leafBuffer, record->ReadRecPtr);
 	}
 
 	if (XLogReadBufferForRedo(record, 1, &parentBuffer) == BLK_NEEDS_REDO)
@@ -369,7 +369,7 @@ gistRedoPageDelete(XLogReaderState *record)
 		PageIndexTupleDelete(page, xldata->downlinkOffset);
 
 		PageSetLSN(page, lsn);
-		MarkBufferDirty(parentBuffer);
+		PolarMarkBufferDirty(parentBuffer, record->ReadRecPtr);
 	}
 
 	if (BufferIsValid(parentBuffer))

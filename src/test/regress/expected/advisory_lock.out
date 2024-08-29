@@ -11,8 +11,12 @@ SELECT
 (1 row)
 
 SELECT locktype, classid, objid, objsubid, mode, granted
-	FROM pg_locks WHERE locktype = 'advisory'
-	ORDER BY classid, objid, objsubid;
+    FROM pg_locks pl JOIN pg_stat_activity pa USING (pid)
+    WHERE
+        locktype = 'advisory'
+        AND pa.datname = current_database()
+        AND pa.application_name = 'pg_regress/advisory_lock'
+    ORDER BY 1, 2, 3, 4;
  locktype | classid | objid | objsubid |     mode      | granted 
 ----------+---------+-------+----------+---------------+---------
  advisory |       0 |     1 |        1 | ExclusiveLock | t
@@ -28,7 +32,10 @@ SELECT pg_advisory_unlock_all();
  
 (1 row)
 
-SELECT count(*) FROM pg_locks WHERE locktype = 'advisory';
+SELECT count(*) FROM pg_locks pl JOIN pg_stat_activity pa USING (pid)
+	WHERE locktype = 'advisory'
+	AND pa.datname = current_database()
+    AND pa.application_name = 'pg_regress/advisory_lock';
  count 
 -------
      4
@@ -49,7 +56,10 @@ WARNING:  you don't own a lock of type ShareLock
 
 -- automatically release xact locks at commit
 COMMIT;
-SELECT count(*) FROM pg_locks WHERE locktype = 'advisory';
+SELECT count(*) FROM pg_locks pl JOIN pg_stat_activity pa USING (pid)
+	WHERE locktype = 'advisory'
+	AND pa.datname = current_database()
+    AND pa.application_name = 'pg_regress/advisory_lock';
  count 
 -------
      0
@@ -66,8 +76,12 @@ SELECT
 (1 row)
 
 SELECT locktype, classid, objid, objsubid, mode, granted
-	FROM pg_locks WHERE locktype = 'advisory'
-	ORDER BY classid, objid, objsubid;
+    FROM pg_locks pl JOIN pg_stat_activity pa USING (pid)
+    WHERE
+        locktype = 'advisory'
+        AND pa.datname = current_database()
+        AND pa.application_name = 'pg_regress/advisory_lock'
+    ORDER BY 1, 2, 3, 4;
  locktype | classid | objid | objsubid |     mode      | granted 
 ----------+---------+-------+----------+---------------+---------
  advisory |       0 |     1 |        1 | ExclusiveLock | t
@@ -86,8 +100,12 @@ SELECT
 
 ROLLBACK;
 SELECT locktype, classid, objid, objsubid, mode, granted
-	FROM pg_locks WHERE locktype = 'advisory'
-	ORDER BY classid, objid, objsubid;
+    FROM pg_locks pl JOIN pg_stat_activity pa USING (pid)
+    WHERE
+        locktype = 'advisory'
+        AND pa.datname = current_database()
+        AND pa.application_name = 'pg_regress/advisory_lock'
+    ORDER BY 1, 2, 3, 4;
  locktype | classid | objid | objsubid |     mode      | granted 
 ----------+---------+-------+----------+---------------+---------
  advisory |       0 |     1 |        1 | ExclusiveLock | t
@@ -111,7 +129,10 @@ WARNING:  you don't own a lock of type ShareLock
  t                  | f                  | t                         | f                         | t                  | f                  | t                         | f
 (1 row)
 
-SELECT count(*) FROM pg_locks WHERE locktype = 'advisory';
+SELECT count(*) FROM pg_locks pl JOIN pg_stat_activity pa USING (pid)
+	WHERE locktype = 'advisory'
+	AND pa.datname = current_database()
+    AND pa.application_name = 'pg_regress/advisory_lock';
  count 
 -------
      0
@@ -128,8 +149,12 @@ SELECT
 (1 row)
 
 SELECT locktype, classid, objid, objsubid, mode, granted
-	FROM pg_locks WHERE locktype = 'advisory'
-	ORDER BY classid, objid, objsubid;
+    FROM pg_locks pl JOIN pg_stat_activity pa USING (pid)
+    WHERE
+        locktype = 'advisory'
+        AND pa.datname = current_database()
+        AND pa.application_name = 'pg_regress/advisory_lock'
+    ORDER BY 1, 2, 3, 4;
  locktype | classid | objid | objsubid |     mode      | granted 
 ----------+---------+-------+----------+---------------+---------
  advisory |       0 |     1 |        1 | ExclusiveLock | t
@@ -148,8 +173,12 @@ SELECT
 
 ROLLBACK;
 SELECT locktype, classid, objid, objsubid, mode, granted
-	FROM pg_locks WHERE locktype = 'advisory'
-	ORDER BY classid, objid, objsubid;
+    FROM pg_locks pl JOIN pg_stat_activity pa USING (pid)
+    WHERE
+        locktype = 'advisory'
+        AND pa.datname = current_database()
+        AND pa.application_name = 'pg_regress/advisory_lock'
+    ORDER BY 1, 2, 3, 4;
  locktype | classid | objid | objsubid |     mode      | granted 
 ----------+---------+-------+----------+---------------+---------
  advisory |       0 |     1 |        1 | ExclusiveLock | t
@@ -165,7 +194,10 @@ SELECT pg_advisory_unlock_all();
  
 (1 row)
 
-SELECT count(*) FROM pg_locks WHERE locktype = 'advisory';
+SELECT count(*) FROM pg_locks pl JOIN pg_stat_activity pa USING (pid)
+	WHERE locktype = 'advisory'
+	AND pa.datname = current_database()
+    AND pa.application_name = 'pg_regress/advisory_lock';
  count 
 -------
      0
@@ -184,8 +216,12 @@ SELECT
 (1 row)
 
 SELECT locktype, classid, objid, objsubid, mode, granted
-	FROM pg_locks WHERE locktype = 'advisory'
-	ORDER BY classid, objid, objsubid;
+    FROM pg_locks pl JOIN pg_stat_activity pa USING (pid)
+    WHERE
+        locktype = 'advisory'
+        AND pa.datname = current_database()
+        AND pa.application_name = 'pg_regress/advisory_lock'
+    ORDER BY 1, 2, 3, 4;
  locktype | classid | objid | objsubid |     mode      | granted 
 ----------+---------+-------+----------+---------------+---------
  advisory |       0 |     1 |        1 | ExclusiveLock | t
@@ -195,7 +231,10 @@ SELECT locktype, classid, objid, objsubid, mode, granted
 (4 rows)
 
 COMMIT;
-SELECT count(*) FROM pg_locks WHERE locktype = 'advisory';
+SELECT count(*) FROM pg_locks pl JOIN pg_stat_activity pa USING (pid)
+	WHERE locktype = 'advisory'
+	AND pa.datname = current_database()
+    AND pa.application_name = 'pg_regress/advisory_lock';
  count 
 -------
      0
@@ -213,8 +252,12 @@ SELECT
 (1 row)
 
 SELECT locktype, classid, objid, objsubid, mode, granted
-	FROM pg_locks WHERE locktype = 'advisory'
-	ORDER BY classid, objid, objsubid;
+    FROM pg_locks pl JOIN pg_stat_activity pa USING (pid)
+    WHERE
+        locktype = 'advisory'
+        AND pa.datname = current_database()
+        AND pa.application_name = 'pg_regress/advisory_lock'
+    ORDER BY 1, 2, 3, 4;
  locktype | classid | objid | objsubid |     mode      | granted 
 ----------+---------+-------+----------+---------------+---------
  advisory |       0 |     1 |        1 | ExclusiveLock | t
@@ -233,7 +276,10 @@ SELECT
  t                  | t                  | t                         | t                         | t                  | t                  | t                         | t
 (1 row)
 
-SELECT count(*) FROM pg_locks WHERE locktype = 'advisory';
+SELECT count(*) FROM pg_locks pl JOIN pg_stat_activity pa USING (pid)
+	WHERE locktype = 'advisory'
+	AND pa.datname = current_database()
+    AND pa.application_name = 'pg_regress/advisory_lock';
  count 
 -------
      0
@@ -251,8 +297,12 @@ SELECT
 (1 row)
 
 SELECT locktype, classid, objid, objsubid, mode, granted
-	FROM pg_locks WHERE locktype = 'advisory'
-	ORDER BY classid, objid, objsubid;
+    FROM pg_locks pl JOIN pg_stat_activity pa USING (pid)
+    WHERE
+        locktype = 'advisory'
+        AND pa.datname = current_database()
+        AND pa.application_name = 'pg_regress/advisory_lock'
+    ORDER BY 1, 2, 3, 4;
  locktype | classid | objid | objsubid |     mode      | granted 
 ----------+---------+-------+----------+---------------+---------
  advisory |       0 |     1 |        1 | ExclusiveLock | t
@@ -267,7 +317,10 @@ SELECT pg_advisory_unlock_all();
  
 (1 row)
 
-SELECT count(*) FROM pg_locks WHERE locktype = 'advisory';
+SELECT count(*) FROM pg_locks pl JOIN pg_stat_activity pa USING (pid)
+	WHERE locktype = 'advisory'
+	AND pa.datname = current_database()
+    AND pa.application_name = 'pg_regress/advisory_lock';
  count 
 -------
      0

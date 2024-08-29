@@ -139,6 +139,9 @@
 #include "utils/snapmgr.h"
 #include "utils/snapshot.h"
 
+/* POLAR */
+#include "storage/polar_fd.h"
+
 /*
  * This struct contains the current state of the snapshot building
  * machinery. Besides a forward declaration in the header, it is not exposed
@@ -1744,7 +1747,7 @@ SnapBuildSerialize(SnapBuild *builder, XLogRecPtr lsn)
 
 	errno = 0;
 	pgstat_report_wait_start(WAIT_EVENT_SNAPBUILD_WRITE);
-	if ((write(fd, ondisk, needed_length)) != needed_length)
+	if ((polar_write(fd, ondisk, needed_length)) != needed_length)
 	{
 		int			save_errno = errno;
 
@@ -1770,7 +1773,7 @@ SnapBuildSerialize(SnapBuild *builder, XLogRecPtr lsn)
 	 * decoding?
 	 */
 	pgstat_report_wait_start(WAIT_EVENT_SNAPBUILD_SYNC);
-	if (pg_fsync(fd) != 0)
+	if (polar_fsync(fd) != 0)
 	{
 		int			save_errno = errno;
 
@@ -1863,7 +1866,7 @@ SnapBuildRestore(SnapBuild *builder, XLogRecPtr lsn)
 
 	/* read statically sized portion of snapshot */
 	pgstat_report_wait_start(WAIT_EVENT_SNAPBUILD_READ);
-	readBytes = read(fd, &ondisk, SnapBuildOnDiskConstantSize);
+	readBytes = polar_read(fd, &ondisk, SnapBuildOnDiskConstantSize);
 	pgstat_report_wait_end();
 	if (readBytes != SnapBuildOnDiskConstantSize)
 	{
@@ -1905,7 +1908,7 @@ SnapBuildRestore(SnapBuild *builder, XLogRecPtr lsn)
 
 	/* read SnapBuild */
 	pgstat_report_wait_start(WAIT_EVENT_SNAPBUILD_READ);
-	readBytes = read(fd, &ondisk.builder, sizeof(SnapBuild));
+	readBytes = polar_read(fd, &ondisk.builder, sizeof(SnapBuild));
 	pgstat_report_wait_end();
 	if (readBytes != sizeof(SnapBuild))
 	{
@@ -1932,7 +1935,7 @@ SnapBuildRestore(SnapBuild *builder, XLogRecPtr lsn)
 	sz = sizeof(TransactionId) * ondisk.builder.committed.xcnt;
 	ondisk.builder.committed.xip = MemoryContextAllocZero(builder->context, sz);
 	pgstat_report_wait_start(WAIT_EVENT_SNAPBUILD_READ);
-	readBytes = read(fd, ondisk.builder.committed.xip, sz);
+	readBytes = polar_read(fd, ondisk.builder.committed.xip, sz);
 	pgstat_report_wait_end();
 	if (readBytes != sz)
 	{

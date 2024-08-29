@@ -81,6 +81,12 @@ typedef struct CheckPoint
 
 
 /*
+ * POLAR WAL: Now use 0xF0 for POLAR_WAL.
+ * Each subtype is identified by using the first 4 bytes of the wal content.
+ */
+#define POLAR_WAL						0xF0
+
+/*
  * System status indicator.  Note this is stored in pg_control; if you change
  * it, you must bump PG_CONTROL_VERSION
  */

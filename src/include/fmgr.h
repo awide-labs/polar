@@ -722,6 +722,11 @@ extern bool CheckFunctionValidatorAccess(Oid validatorOid, Oid functionOid);
  */
 extern PGDLLIMPORT char *Dynamic_library_path;
 
+/* POLAR */
+extern PGDLLIMPORT bool polar_suppress_preload_error;
+
+/* POLAR end */
+
 extern void *load_external_function(const char *filename, const char *funcname,
 									bool signalNotFound, void **filehandle);
 extern void *lookup_external_function(void *filehandle, const char *funcname);

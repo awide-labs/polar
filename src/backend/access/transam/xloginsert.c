@@ -41,6 +41,9 @@
 #include "storage/proc.h"
 #include "utils/memutils.h"
 
+/* POLAR */
+#include "storage/polar_bufmgr.h"
+
 /*
  * Guess the maximum buffer size required to store a compressed version of
  * backup block image.
@@ -85,6 +88,9 @@ typedef struct
 
 	/* buffer to store a compressed version of backup block image */
 	char		compressed_page[COMPRESS_BUFSIZE];
+
+	/* POLAR */
+	Buffer		buffer;			/* used to set buffer oldest lsn */
 } registered_buffer;
 
 static registered_buffer *registered_buffers;
@@ -286,6 +292,9 @@ XLogRegisterBuffer(uint8 block_id, Buffer buffer, uint8 flags)
 #endif
 
 	regbuf->in_use = true;
+
+	/* POLAR */
+	regbuf->buffer = buffer;
 }
 
 /*
@@ -339,6 +348,9 @@ XLogRegisterBlock(uint8 block_id, RelFileNode *rnode, ForkNumber forknum,
 #endif
 
 	regbuf->in_use = true;
+
+	/* POLAR */
+	regbuf->buffer = InvalidBuffer;
 }
 
 /*
@@ -569,6 +581,12 @@ XLogRecordAssemble(RmgrId rmid, uint8 info,
 
 		if (!regbuf->in_use)
 			continue;
+
+		/*
+		 * POLAR: if we do not call MarkBufferDirty first, we will set the
+		 * oldest lsn now.
+		 */
+		polar_set_reg_buffer_oldest_lsn(regbuf->buffer);
 
 		/* Determine if this block needs to be backed up */
 		if (regbuf->flags & REGBUF_FORCE_IMAGE)
@@ -1315,4 +1333,44 @@ InitXLogInsert(void)
 	if (hdr_scratch == NULL)
 		hdr_scratch = MemoryContextAllocZero(xloginsert_cxt,
 											 HEADER_SCRATCH_SIZE);
+}
+
+/* POLAR: Return main data head */
+XLogRecData *
+polar_get_main_data_head(void)
+{
+	Assert(mainrdata_head != NULL);
+	return mainrdata_head;
+}
+
+/* POLAR: Return main data len */
+uint32
+polar_get_main_data_len(void)
+{
+	return mainrdata_len;
+}
+
+/* POLAR: Add a temporary XLogRecData to save main data address and length. */
+void
+polar_set_main_data(void *data, uint32 len)
+{
+	static XLogRecData polar_mainrdata;
+
+	Assert(mainrdata_last == (XLogRecData *) &mainrdata_head);
+	Assert(mainrdata_len == 0);
+	polar_mainrdata.next = NULL;
+	polar_mainrdata.data = data;
+	polar_mainrdata.len = len;
+	mainrdata_last->next = &polar_mainrdata;
+	mainrdata_last = &polar_mainrdata;
+	mainrdata_len += len;
+}
+
+/* POLAR: Rset mainrdata_head and mainrdata_last. */
+void
+polar_reset_main_data(void)
+{
+	mainrdata_len = 0;
+	mainrdata_head = NULL;
+	mainrdata_last = (XLogRecData *) &mainrdata_head;
 }

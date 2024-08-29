@@ -4,6 +4,7 @@
  *
  * Author: Magnus Hagander <magnus@hagander.net>
  *
+ * Portions Copyright (c) 2024, Alibaba Group Holding Limited
  * Portions Copyright (c) 1996-2022, PostgreSQL Global Development Group
  *
  * IDENTIFICATION
@@ -40,6 +41,10 @@
 #include "receivelog.h"
 #include "streamutil.h"
 
+/* POLAR */
+#include "polar_vfs/polar_vfs_fe.h"
+/* POLAR end */
+
 #define ERRCODE_DATA_CORRUPTED	"XX001"
 
 typedef struct TablespaceListCell
@@ -58,6 +63,7 @@ typedef struct TablespaceList
 typedef struct ArchiveStreamState
 {
 	int			tablespacenum;
+	int			polar_shared_tsnum;
 	pg_compress_specification *compress;
 	bbstreamer *streamer;
 	bbstreamer *manifest_inject_streamer;
@@ -69,6 +75,7 @@ typedef struct ArchiveStreamState
 typedef struct WriteTarState
 {
 	int			tablespacenum;
+	bool		is_polar_data;
 	bbstreamer *streamer;
 } WriteTarState;
 
@@ -96,6 +103,11 @@ typedef void (*WriteDataCallback) (size_t nbytes, char *buf,
  * Backup manifests are supported from version 13.
  */
 #define MINIMUM_VERSION_FOR_MANIFESTS	130000
+
+
+#define     DEFAULT_WAL_CACHE_SIZE      12
+#define     MIN_WAL_CACHE_SIZE      8
+#define     MAX_WAL_CACHE_SIZE      256
 
 /*
  * Before v15, tar files received from the server will be improperly
@@ -125,6 +137,7 @@ typedef enum
 
 /* Global options */
 static char *basedir = NULL;
+static char *datadir = NULL;
 static TablespaceList tablespace_dirs = {NULL, NULL};
 static char *xlog_dir = NULL;
 static char format = '\0';		/* p(lain)/t(ar) */
@@ -153,11 +166,19 @@ static char *manifest_checksums = NULL;
 
 static bool success = false;
 static bool made_new_pgdata = false;
+static bool made_new_pgbase = false;
 static bool found_existing_pgdata = false;
+static bool found_existing_polardata = false;
 static bool made_new_xlogdir = false;
 static bool found_existing_xlogdir = false;
 static bool made_tablespace_dirs = false;
 static bool found_tablespace_dirs = false;
+
+/* POLAR: will write shared PolarDB FileSystem? */
+static bool use_pfs_to_write = false;
+
+/* POLAR: have polar datadir ? */
+static bool have_polar_datadir = false;
 
 /* Progress indicators */
 static uint64 totalsize_kb;
@@ -199,6 +220,7 @@ static bbstreamer *CreateBackupStreamer(char *archive_name, char *spclocation,
 										bbstreamer **manifest_inject_streamer_p,
 										bool is_recovery_guc_supported,
 										bool expect_unterminated_tarfile,
+										bool is_polar_data,
 										pg_compress_specification *compress);
 static void ReceiveArchiveStreamChunk(size_t r, char *copybuf,
 									  void *callback_data);
@@ -235,7 +257,7 @@ cleanup_directories_atexit(void)
 
 	if (!noclean && !checksum_failure)
 	{
-		if (made_new_pgdata)
+		if (made_new_pgbase)
 		{
 			pg_log_info("removing data directory \"%s\"", basedir);
 			if (!rmtree(basedir, true))
@@ -245,6 +267,19 @@ cleanup_directories_atexit(void)
 		{
 			pg_log_info("removing contents of data directory \"%s\"", basedir);
 			if (!rmtree(basedir, false))
+				pg_log_error("failed to remove contents of data directory");
+		}
+
+		if (made_new_pgdata)
+		{
+			pg_log_info("removing data directory \"%s\"", datadir);
+			if (!rmtree(datadir, true))
+				pg_log_error("failed to remove data directory");
+		}
+		else if (found_existing_polardata)
+		{
+			pg_log_info("removing contents of data directory \"%s\"", datadir);
+			if (!rmtree(datadir, false))
 				pg_log_error("failed to remove contents of data directory");
 		}
 
@@ -263,8 +298,11 @@ cleanup_directories_atexit(void)
 	}
 	else
 	{
-		if ((made_new_pgdata || found_existing_pgdata) && !checksum_failure)
+		if ((made_new_pgbase || found_existing_pgdata) && !checksum_failure)
 			pg_log_info("data directory \"%s\" not removed at user's request", basedir);
+
+		if ((made_new_pgdata || found_existing_polardata) && !checksum_failure)
+			pg_log_info("data directory \"%s\" not removed at user's request", datadir);
 
 		if (made_new_xlogdir || found_existing_xlogdir)
 			pg_log_info("WAL directory \"%s\" not removed at user's request", xlog_dir);
@@ -436,6 +474,10 @@ usage(void)
 	printf(_("  -U, --username=NAME    connect as specified database user\n"));
 	printf(_("  -w, --no-password      never prompt for password\n"));
 	printf(_("  -W, --password         force password prompt (should happen automatically)\n"));
+	printf(_("      --polardata=datadir  receive polar data backup into directory\n"));
+	printf(_("      --polar_disk_home=disk  polar_disk_home for polar data backup \n"));
+	printf(_("      --polar_host_id=host_id  polar_host_id for polar data backup\n"));
+	printf(_("      --polar_storage_cluster_name=cluster_name  polar_storage_cluster_name for polar data backup\n"));
 	printf(_("\nReport bugs to <%s>.\n"), PACKAGE_BUGREPORT);
 	printf(_("%s home page: <%s>\n"), PACKAGE_NAME, PACKAGE_URL);
 }
@@ -560,9 +602,8 @@ LogStreamerMain(logstreamer_param *param)
 	stream.partial_suffix = NULL;
 	stream.replication_slot = replication_slot;
 	if (format == 'p')
-		stream.walmethod = CreateWalDirectoryMethod(param->xlog,
-													PG_COMPRESSION_NONE, 0,
-													stream.do_sync);
+		stream.walmethod = CreateWalDirectoryMethod(param->xlog, PG_COMPRESSION_NONE, 0,
+													stream.do_sync, use_pfs_to_write);
 	else
 		stream.walmethod = CreateWalTarMethod(param->xlog,
 											  param->wal_compress_algorithm,
@@ -649,7 +690,7 @@ StartLogStreamer(char *startpos, uint32 timeline, char *sysidentifier,
 
 	/* In post-10 cluster, pg_xlog has been renamed to pg_wal */
 	snprintf(param->xlog, sizeof(param->xlog), "%s/%s",
-			 basedir,
+			 datadir,
 			 PQserverVersion(conn) < MINIMUM_VERSION_FOR_PG_WAL ?
 			 "pg_xlog" : "pg_wal");
 
@@ -689,11 +730,11 @@ StartLogStreamer(char *startpos, uint32 timeline, char *sysidentifier,
 		 * tar file may arrive later.
 		 */
 		snprintf(statusdir, sizeof(statusdir), "%s/%s/archive_status",
-				 basedir,
+				 datadir,
 				 PQserverVersion(conn) < MINIMUM_VERSION_FOR_PG_WAL ?
 				 "pg_xlog" : "pg_wal");
 
-		if (pg_mkdir_p(statusdir, pg_dir_create_mode) != 0 && errno != EEXIST)
+		if (polar_mkdir_p(statusdir, pg_dir_create_mode) != 0 && errno != EEXIST)
 			pg_fatal("could not create directory \"%s\": %m", statusdir);
 	}
 
@@ -737,7 +778,7 @@ verify_dir_is_empty_or_create(char *dirname, bool *created, bool *found)
 			/*
 			 * Does not exist, so create
 			 */
-			if (pg_mkdir_p(dirname, pg_dir_create_mode) == -1)
+			if (polar_mkdir_p(dirname, pg_dir_create_mode) == -1)
 				pg_fatal("could not create directory \"%s\": %m", dirname);
 			if (created)
 				*created = true;
@@ -1081,6 +1122,7 @@ CreateBackupStreamer(char *archive_name, char *spclocation,
 					 bbstreamer **manifest_inject_streamer_p,
 					 bool is_recovery_guc_supported,
 					 bool expect_unterminated_tarfile,
+					 bool is_polar_data,
 					 pg_compress_specification *compress)
 {
 	bbstreamer *streamer = NULL;
@@ -1098,8 +1140,11 @@ CreateBackupStreamer(char *archive_name, char *spclocation,
 	 * Normally, we emit the backup manifest as a separate file, but when
 	 * we're writing a tarfile to stdout, we don't have that option, so
 	 * include it in the one tarfile we've got.
+	 *
+	 * POLAR: manifest only be sent after shared storage data.
 	 */
-	inject_manifest = (format == 't' && strcmp(basedir, "-") == 0 && manifest);
+	inject_manifest = (format == 't' && strcmp(basedir, "-") == 0 && manifest && (!have_polar_datadir ||
+																				  (have_polar_datadir && is_polar_data)));
 
 	/* Is this a tar archive? */
 	is_tar = (archive_name_len > 4 &&
@@ -1169,7 +1214,7 @@ CreateBackupStreamer(char *archive_name, char *spclocation,
 		 * located on the server, after applying any user-specified tablespace
 		 * mappings.
 		 */
-		directory = spclocation == NULL ? basedir
+		directory = spclocation == NULL ? (is_polar_data ? datadir : basedir)
 			: get_tablespace_mapping(spclocation);
 		streamer = bbstreamer_extractor_new(directory,
 											get_tablespace_mapping,
@@ -1292,14 +1337,25 @@ CreateBackupStreamer(char *archive_name, char *spclocation,
  * manifest if present - as a single COPY stream.
  */
 static void
-ReceiveArchiveStream(PGconn *conn, pg_compress_specification *compress)
+ReceiveArchiveStream(PGconn *conn, pg_compress_specification *compress, PGresult *res)
 {
 	ArchiveStreamState state;
+	int			i;
 
 	/* Set up initial state. */
 	memset(&state, 0, sizeof(state));
 	state.tablespacenum = -1;
+	state.polar_shared_tsnum = -1;
 	state.compress = compress;
+
+	for (i = 0; i < PQntuples(res); i++)
+	{
+		if (!PQgetisnull(res, i, 3))
+		{
+			state.polar_shared_tsnum = i;
+			break;
+		}
+	}
 
 	/* All the real work happens in ReceiveArchiveStreamChunk. */
 	ReceiveCopyData(conn, ReceiveArchiveStreamChunk, &state);
@@ -1415,6 +1471,7 @@ ReceiveArchiveStreamChunk(size_t r, char *copybuf, void *callback_data)
 											 spclocation,
 											 &state->manifest_inject_streamer,
 											 true, false,
+											 state->tablespacenum == state->polar_shared_tsnum,
 											 state->compress);
 				}
 				break;
@@ -1625,6 +1682,7 @@ ReceiveTarFile(PGconn *conn, char *archive_name, char *spclocation,
 										  &manifest_inject_streamer,
 										  is_recovery_guc_supported,
 										  expect_unterminated_tarfile,
+										  false,
 										  compress);
 	state.tablespacenum = tablespacenum;
 	ReceiveCopyData(conn, ReceiveTarCopyChunk, &state);
@@ -2006,14 +2064,45 @@ BaseBackup(char *compression_algorithm, char *compression_detail,
 
 			verify_dir_is_empty_or_create(path, &made_tablespace_dirs, &found_tablespace_dirs);
 		}
+
+		if (!PQgetisnull(res, i, 3))
+		{
+			if (!have_polar_datadir)
+			{
+				/* In pfs mode, you must specify polardata. */
+				if (use_pfs_to_write)
+				{
+					fprintf(stderr, _("%s: In pfs mode, polardata cannot be empty.\n"), progname);
+					disconnect_atexit();
+					exit(1);
+				}
+				else
+				{
+					/*
+					 * If polardata is not specified, the default value is
+					 * ./POLAR_SHARED_DATA
+					 */
+					char		tmpdata[MAXPGPATH];
+
+					have_polar_datadir = true;
+					sprintf(tmpdata, "%s/%s", basedir, POLAR_SHARED_DATA);
+					datadir = pg_strdup(tmpdata);
+					if (format == 'p' || strcmp(basedir, "-") != 0)
+						verify_dir_is_empty_or_create(datadir, &made_new_pgdata, &found_existing_polardata);
+				}
+			}
+		}
 	}
 
 	/*
 	 * When writing to stdout, require a single tablespace
+	 *
+	 * POLAR: There are two basetablespaces when server is in shared storage
+	 * mode. But we will combine these two basetablespaces into one.
 	 */
 	writing_to_stdout = format == 't' && basedir != NULL &&
 		strcmp(basedir, "-") == 0;
-	if (writing_to_stdout && PQntuples(res) > 1)
+	if (writing_to_stdout && PQntuples(res) > 1 && !have_polar_datadir)
 		pg_fatal("can only write single tablespace to stdout, database has %d",
 				 PQntuples(res));
 
@@ -2048,7 +2137,7 @@ BaseBackup(char *compression_algorithm, char *compression_detail,
 	if (serverMajor >= 1500)
 	{
 		/* Receive a single tar stream with everything. */
-		ReceiveArchiveStream(conn, client_compress);
+		ReceiveArchiveStream(conn, client_compress, res);
 	}
 	else
 	{
@@ -2233,7 +2322,14 @@ BaseBackup(char *compression_algorithm, char *compression_detail,
 		}
 		else
 		{
-			(void) fsync_pgdata(basedir, serverVersion);
+			if (have_polar_datadir)
+			{
+				(void) polar_fsync_pgdata(basedir, serverVersion);
+				if (!use_pfs_to_write)
+					(void) polar_fsync_pgdata(datadir, serverVersion);
+			}
+			else
+				(void) fsync_pgdata(basedir, serverVersion);
 		}
 	}
 
@@ -2311,11 +2407,17 @@ main(int argc, char **argv)
 		{"no-manifest", no_argument, NULL, 5},
 		{"manifest-force-encode", no_argument, NULL, 6},
 		{"manifest-checksums", required_argument, NULL, 7},
+		{"polardata", required_argument, NULL, 8},
+		{"polar_disk_name", required_argument, NULL, 9},
+		{"polar_host_id", required_argument, NULL, 10},
+		{"polar_storage_cluster_name", required_argument, NULL, 11},
 		{NULL, 0, NULL, 0}
 	};
 	int			c;
 
 	int			option_index;
+	char		ftype[MAXPGPATH];
+
 	char	   *compression_algorithm = "none";
 	char	   *compression_detail = NULL;
 	CompressionLocation compressloc = COMPRESS_LOCATION_UNSPECIFIED;
@@ -2482,6 +2584,18 @@ main(int argc, char **argv)
 			case 7:
 				manifest_checksums = pg_strdup(optarg);
 				break;
+			case 8:
+				datadir = pg_strdup(optarg);
+				break;
+			case 9:
+				polar_disk_name = pg_strdup(optarg);
+				break;
+			case 10:
+				polar_hostid = atoi(optarg);
+				break;
+			case 11:
+				polar_storage_cluster_name = pg_strdup(optarg);
+				break;
 			default:
 				/* getopt_long already emitted a complaint */
 				pg_log_error_hint("Try \"%s --help\" for more information.", progname);
@@ -2538,6 +2652,56 @@ main(int argc, char **argv)
 		pg_log_error("cannot specify both output directory and backup target");
 		pg_log_error_hint("Try \"%s --help\" for more information.", progname);
 		exit(1);
+	}
+
+	if (basedir != NULL && strcmp(basedir, "-") == 0 && datadir != NULL)
+	{
+		fprintf(stderr, _("%s: In shared storage mode, backup sets cannot be output to standard outputs.\n"), progname);
+		exit(1);
+	}
+
+	if (datadir == NULL)
+	{
+		if (polar_disk_name != NULL || polar_hostid != 0 || polar_storage_cluster_name != NULL)
+		{
+			fprintf(stderr, _("%s: In shared storage mode, the polardata, polar_disk_name and polar_host_id parameters must be specified or not.\n"), progname);
+			exit(1);
+		}
+
+		use_pfs_to_write = false;
+		have_polar_datadir = false;
+		datadir = basedir;
+	}
+	else
+	{
+		if (polar_disk_name != NULL)
+		{
+			if (polar_hostid == 0)
+			{
+				fprintf(stderr, _("%s: In shared storage mode, polar_disk_name and polar_host_id must be specified.\n"), progname);
+				exit(1);
+			}
+			use_pfs_to_write = true;
+			have_polar_datadir = true;
+		}
+		else
+		{
+			if (polar_hostid != 0 || polar_storage_cluster_name != NULL)
+			{
+				fprintf(stderr, _("%s: In shared storage mode, The polardata, polar_disk_name and polar_host_id parameters must be specified or not.\n"), progname);
+				exit(1);
+			}
+			use_pfs_to_write = false;
+			have_polar_datadir = true;
+		}
+
+		if (format == 't')
+		{
+			fprintf(stderr,
+					_("%s: In shared storage mode, tar mode is not supported.\n"),
+					progname);
+			exit(1);
+		}
 	}
 
 	/*
@@ -2717,6 +2881,11 @@ main(int argc, char **argv)
 		exit(1);
 	}
 
+	polar_enable_shared_storage_mode = have_polar_datadir;
+	snprintf(ftype, MAXPGPATH, "%s", datadir);
+
+	polar_vfs_init_fe(use_pfs_to_write, ftype, polar_storage_cluster_name, polar_disk_name, POLAR_VFS_RDWR);
+
 	/* connection in replication mode to server */
 	conn = GetConnection();
 	if (!conn)
@@ -2759,7 +2928,11 @@ main(int argc, char **argv)
 	 * writing to stdout, so do nothing in that case.
 	 */
 	if (basedir != NULL && (format == 'p' || strcmp(basedir, "-") != 0))
-		verify_dir_is_empty_or_create(basedir, &made_new_pgdata, &found_existing_pgdata);
+	{
+		verify_dir_is_empty_or_create(basedir, &made_new_pgbase, &found_existing_pgdata);
+		if (have_polar_datadir)
+			verify_dir_is_empty_or_create(datadir, &made_new_pgdata, &found_existing_polardata);
+	}
 
 	/* determine remote server's xlog segment size */
 	if (!RetrieveWalSegSize(conn))
@@ -2792,6 +2965,7 @@ main(int argc, char **argv)
 	BaseBackup(compression_algorithm, compression_detail, compressloc,
 			   &client_compress);
 
+	polar_vfs_destory_fe(ftype, polar_disk_name);
 	success = true;
 	return 0;
 }

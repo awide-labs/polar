@@ -1254,3 +1254,31 @@ GetLockNameFromTagType(uint16 locktag_type)
 		return "???";
 	return LockTagTypeNames[locktag_type];
 }
+
+/* POLAR: acquire a lock for relation file */
+void
+polar_acquire_relfile_lock(RelFileNode rnode, ForkNumber forknum, LOCKMODE lockmode)
+{
+	LOCKTAG		tag;
+
+	SET_LOCKTAG_OBJECT(tag,
+					   rnode.dbNode,
+					   rnode.spcNode,
+					   rnode.relNode,
+					   forknum);
+	(void) LockAcquire(&tag, lockmode, false, false);
+}
+void
+polar_release_relfile_lock(RelFileNode rnode, ForkNumber forknum, LOCKMODE lockmode)
+{
+	LOCKTAG		tag;
+
+	SET_LOCKTAG_OBJECT(tag,
+					   rnode.dbNode,
+					   rnode.spcNode,
+					   rnode.relNode,
+					   forknum);
+	LockRelease(&tag, lockmode, false);
+}
+
+/* POLAR end */

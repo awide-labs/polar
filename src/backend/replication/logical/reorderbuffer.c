@@ -108,6 +108,9 @@
 #include "utils/rel.h"
 #include "utils/relfilenodemap.h"
 
+/* POLAR */
+#include "storage/polar_fd.h"
+
 
 /* entry for a hash table we use to map from xid to our transaction state */
 typedef struct ReorderBufferTXNByIdEnt
@@ -3828,7 +3831,7 @@ ReorderBufferSerializeChange(ReorderBuffer *rb, ReorderBufferTXN *txn,
 
 	errno = 0;
 	pgstat_report_wait_start(WAIT_EVENT_REORDER_BUFFER_WRITE);
-	if (write(fd, rb->outbuf, ondisk->size) != ondisk->size)
+	if (polar_write(fd, rb->outbuf, ondisk->size) != ondisk->size)
 	{
 		int			save_errno = errno;
 
@@ -4169,6 +4172,7 @@ ReorderBufferRestoreChanges(ReorderBuffer *rb, ReorderBufferTXN *txn,
 		 * end of this file.
 		 */
 		ReorderBufferSerializeReserve(rb, sizeof(ReorderBufferDiskChange));
+
 		readBytes = FileRead(file->vfd, rb->outbuf,
 							 sizeof(ReorderBufferDiskChange),
 							 file->curOffset, WAIT_EVENT_REORDER_BUFFER_READ);
@@ -4425,7 +4429,7 @@ ReorderBufferRestoreCleanup(ReorderBuffer *rb, ReorderBufferTXN *txn)
 		char		path[MAXPGPATH];
 
 		ReorderBufferSerializedPath(path, MyReplicationSlot, txn->xid, cur);
-		if (unlink(path) != 0 && errno != ENOENT)
+		if (polar_unlink(path) != 0 && errno != ENOENT)
 			ereport(ERROR,
 					(errcode_for_file_access(),
 					 errmsg("could not remove file \"%s\": %m", path)));
@@ -4447,7 +4451,7 @@ ReorderBufferCleanupSerializedTXNs(const char *slotname)
 	sprintf(path, "pg_replslot/%s", slotname);
 
 	/* we're only handling directories here, skip if it's not ours */
-	if (lstat(path, &statbuf) == 0 && !S_ISDIR(statbuf.st_mode))
+	if (polar_lstat(path, &statbuf) == 0 && !S_ISDIR(statbuf.st_mode))
 		return;
 
 	spill_dir = AllocateDir(path);
@@ -4460,7 +4464,7 @@ ReorderBufferCleanupSerializedTXNs(const char *slotname)
 					 "pg_replslot/%s/%s", slotname,
 					 spill_de->d_name);
 
-			if (unlink(path) != 0)
+			if (polar_unlink(path) != 0)
 				ereport(ERROR,
 						(errcode_for_file_access(),
 						 errmsg("could not remove file \"%s\" during removal of pg_replslot/%s/xid*: %m",
@@ -4949,7 +4953,7 @@ ApplyLogicalMappingFile(HTAB *tuplecid_data, Oid relid, const char *fname)
 
 		/* read all mappings till the end of the file */
 		pgstat_report_wait_start(WAIT_EVENT_REORDER_LOGICAL_MAPPING_READ);
-		readBytes = read(fd, &map, sizeof(LogicalRewriteMappingData));
+		readBytes = polar_read(fd, &map, sizeof(LogicalRewriteMappingData));
 		pgstat_report_wait_end();
 
 		if (readBytes < 0)

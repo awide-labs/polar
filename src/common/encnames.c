@@ -3,6 +3,7 @@
  * encnames.c
  *	  Encoding names and routines for working with them.
  *
+ * Portions Copyright (c) 2024, Alibaba Group Holding Limited
  * Portions Copyright (c) 2001-2022, PostgreSQL Global Development Group
  *
  * IDENTIFICATION
@@ -345,9 +346,9 @@ const pg_enc2name pg_enc2name_tbl[] =
 	DEF_ENC2NAME(KOI8U, 21866),
 	DEF_ENC2NAME(SJIS, 932),
 	DEF_ENC2NAME(BIG5, 950),
-	DEF_ENC2NAME(GBK, 936),
+	DEF_ENC2NAME(GBK, 936),		/* POLAR */
 	DEF_ENC2NAME(UHC, 949),
-	DEF_ENC2NAME(GB18030, 54936),
+	DEF_ENC2NAME(GB18030, 54936),	/* POLAR */
 	DEF_ENC2NAME(JOHAB, 0),
 	DEF_ENC2NAME(SHIFT_JIS_2004, 932)
 };
@@ -449,6 +450,11 @@ static const char *const pg_enc2icu_tbl[] =
 	"CP1255",					/* PG_WIN1255 */
 	"CP1257",					/* PG_WIN1257 */
 	"KOI8-U",					/* PG_KOI8U */
+	NULL,
+	NULL,
+	"GBK",						/* GBK (Windows-936) (POLAR) */
+	NULL,
+	"GB18030"					/* GB18030 (POLAR) */
 };
 
 
@@ -469,7 +475,11 @@ is_encoding_supported_by_icu(int encoding)
 const char *
 get_encoding_name_for_icu(int encoding)
 {
-	StaticAssertStmt(lengthof(pg_enc2icu_tbl) == PG_ENCODING_BE_LAST + 1,
+	/*
+	 * POLAR: PG_ENCODING_BE_LAST need to plus GBK and GB18030 GBK and GB18030
+	 * is supported by server encoding while keep numbering still
+	 */
+	StaticAssertStmt(lengthof(pg_enc2icu_tbl) == PG_ENCODING_BE_LAST + 6,
 					 "pg_enc2icu_tbl incomplete");
 
 	if (!PG_VALID_BE_ENCODING(encoding))

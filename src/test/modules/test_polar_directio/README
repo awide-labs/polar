@@ -1,0 +1,4 @@
+test_polar_directio is an extension explicitly to test vfs directio I/O.
+
+These tests generate data randomly through multiple rounds, and check 
+whether the data is correct by calling the vfs directio interface.

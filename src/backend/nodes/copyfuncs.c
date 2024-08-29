@@ -4223,6 +4223,9 @@ _copyAlterSystemStmt(const AlterSystemStmt *from)
 	AlterSystemStmt *newnode = makeNode(AlterSystemStmt);
 
 	COPY_NODE_FIELD(setstmt);
+	/* POLAR: ALTER SYSTEM [FOR CLUSTER] [RELOAD] [FORCE] Command options */
+	COPY_SCALAR_FIELD(polar_options);
+	/* POLAR end */
 
 	return newnode;
 }

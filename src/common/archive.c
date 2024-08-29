@@ -21,6 +21,7 @@
 
 #include "common/archive.h"
 #include "lib/stringinfo.h"
+#include "storage/polar_fd.h"
 
 /*
  * BuildRestoreCommand
@@ -58,6 +59,7 @@ BuildRestoreCommand(const char *restoreCommand,
 				case 'p':
 					{
 						char	   *nativePath;
+						const char *polar_xlog_path;
 
 						/* %p: relative path of target file */
 						if (xlogpath == NULL)
@@ -72,7 +74,10 @@ BuildRestoreCommand(const char *restoreCommand,
 						 * input with the conversion done via
 						 * make_native_path().
 						 */
-						nativePath = pstrdup(xlogpath);
+						/* POLAR: remove polar_vfs protocol from xlogpath. */
+						polar_xlog_path = polar_path_remove_protocol(xlogpath);
+						nativePath = pstrdup(polar_xlog_path);
+						/* POLAR end */
 						make_native_path(nativePath);
 						appendStringInfoString(&result,
 											   nativePath);

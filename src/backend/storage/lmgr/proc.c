@@ -61,6 +61,7 @@ int			DeadlockTimeout = 1000;
 int			StatementTimeout = 0;
 int			LockTimeout = 0;
 int			IdleInTransactionSessionTimeout = 0;
+int			TransactionTimeout = 0;
 int			IdleSessionTimeout = 0;
 bool		log_lock_waits = false;
 
@@ -162,7 +163,7 @@ InitProcGlobal(void)
 	int			i,
 				j;
 	bool		found;
-	uint32		TotalProcs = MaxBackends + NUM_AUXILIARY_PROCS + max_prepared_xacts;
+	uint32		TotalProcs = POLAR_TOTALPROCS;
 
 	/* Create the ProcGlobal shared structure */
 	ProcGlobal = (PROC_HDR *)
@@ -385,6 +386,9 @@ InitProcess(void)
 	MyProc->fpLocalTransactionId = InvalidLocalTransactionId;
 	MyProc->xid = InvalidTransactionId;
 	MyProc->xmin = InvalidTransactionId;
+	/* POLAR: Initialize fields for read view min lsn before pid */
+	pg_atomic_init_u64(&MyProc->polar_read_min_lsn, InvalidXLogRecPtr);
+	pg_write_barrier();
 	MyProc->pid = MyProcPid;
 	/* backendId, databaseId and roleId will be filled in later */
 	MyProc->backendId = InvalidBackendId;
@@ -429,6 +433,19 @@ InitProcess(void)
 
 	/* Initialize wait event information. */
 	MyProc->wait_event_info = 0;
+	/* POLAR: initialize wait stack  */
+	{
+		int			i;
+
+		for (i = 0; i < PGPROC_WAIT_STACK_LEN; i++)
+		{
+			MyProc->wait_object[i] = PGPROC_INVAILD_WAIT_OBJ;
+			MyProc->wait_type[i] = PGPROC_INVAILD_WAIT_OBJ;
+			INSTR_TIME_SET_ZERO(MyProc->wait_time[i]);
+		}
+		MyProc->cur_wait_stack_index = PGPROC_INVAILD_WAIT_OBJ;
+	}
+	/* POLAR end */
 
 	/* Initialize fields for group transaction status update. */
 	MyProc->clogGroupMember = false;
@@ -437,6 +454,9 @@ InitProcess(void)
 	MyProc->clogGroupMemberPage = -1;
 	MyProc->clogGroupMemberLsn = InvalidXLogRecPtr;
 	Assert(pg_atomic_read_u32(&MyProc->clogGroupNext) == INVALID_PGPROCNO);
+
+	/* POLAR */
+	MyProc->polar_master_pgprocno = MyProc->pgprocno;
 
 	/*
 	 * Acquire ownership of the PGPROC's latch, so that we can use WaitLatch
@@ -467,6 +487,9 @@ InitProcess(void)
 	 */
 	InitLWLockAccess();
 	InitDeadLockChecking();
+
+	/* POLAR: init lock state */
+	polar_init_lock_access();
 }
 
 /*
@@ -584,6 +607,20 @@ InitAuxiliaryProcess(void)
 	MyProc->waitLock = NULL;
 	MyProc->waitProcLock = NULL;
 	pg_atomic_write_u64(&MyProc->waitStart, 0);
+	/* POLAR: initialize wait event information. */
+	{
+		int			i;
+
+		for (i = 0; i < PGPROC_WAIT_STACK_LEN; i++)
+		{
+			MyProc->wait_object[i] = PGPROC_INVAILD_WAIT_OBJ;
+			MyProc->wait_type[i] = PGPROC_INVAILD_WAIT_OBJ;
+			INSTR_TIME_SET_ZERO(MyProc->wait_time[i]);
+		}
+		MyProc->cur_wait_stack_index = PGPROC_INVAILD_WAIT_OBJ;
+	}
+	/* POLAR end */
+
 #ifdef USE_ASSERT_CHECKING
 	{
 		int			i;

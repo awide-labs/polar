@@ -8,6 +8,7 @@
  * None of this code is used during normal system operation.
  *
  *
+ * Portions Copyright (c) 2024, Alibaba Group Holding Limited
  * Portions Copyright (c) 1996-2022, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
@@ -31,6 +32,15 @@
 #include "utils/guc.h"
 #include "utils/hsearch.h"
 #include "utils/rel.h"
+
+/* POLAR */
+#include "access/polar_logindex_redo.h"
+#include "storage/bufpage.h"
+#include "storage/buf_internals.h"
+#include "storage/lmgr.h"
+#include "storage/polar_fd.h"
+#include "storage/polar_xlogbuf.h"
+#include "utils/polar_log.h"
 
 
 /* GUC variable */
@@ -375,26 +385,36 @@ XLogReadBufferForRedoExtended(XLogReaderState *record,
 	/*
 	 * Make sure that if the block is marked with WILL_INIT, the caller is
 	 * going to initialize it. And vice versa.
+	 *
+	 * POLAR: If buffer is valid we don't check WILL_INIT.
 	 */
-	zeromode = (mode == RBM_ZERO_AND_LOCK || mode == RBM_ZERO_AND_CLEANUP_LOCK);
-	willinit = (XLogRecGetBlock(record, block_id)->flags & BKPBLOCK_WILL_INIT) != 0;
-	if (willinit && !zeromode)
-		elog(PANIC, "block with WILL_INIT flag in WAL record must be zeroed by redo routine");
-	if (!willinit && zeromode)
-		elog(PANIC, "block to be initialized in redo routine must be marked with WILL_INIT flag in the WAL record");
+	if (mode != RBM_NORMAL_VALID)
+	{
+		zeromode = (mode == RBM_ZERO_AND_LOCK || mode == RBM_ZERO_AND_CLEANUP_LOCK);
+		willinit = (XLogRecGetBlock(record, block_id)->flags & BKPBLOCK_WILL_INIT) != 0;
+		if (willinit && !zeromode)
+			elog(PANIC, "block with WILL_INIT flag in WAL record must be zeroed by redo routine");
+		if (!willinit && zeromode)
+			elog(PANIC, "block to be initialized in redo routine must be marked with WILL_INIT flag in the WAL record");
+	}
 
 	/* If it has a full-page image and it should be restored, do it. */
 	if (XLogRecBlockImageApply(record, block_id))
 	{
 		Assert(XLogRecHasBlockImage(record, block_id));
-		*buf = XLogReadBufferExtended(rnode, forknum, blkno,
-									  get_cleanup_lock ? RBM_ZERO_AND_CLEANUP_LOCK : RBM_ZERO_AND_LOCK,
-									  prefetch_buffer);
+		/* POLAR: If buffer is valid we don't need to read */
+		if (mode != RBM_NORMAL_VALID)
+			*buf = XLogReadBufferExtended(rnode, forknum, blkno,
+										  get_cleanup_lock ? RBM_ZERO_AND_CLEANUP_LOCK : RBM_ZERO_AND_LOCK,
+										  prefetch_buffer);
 		page = BufferGetPage(*buf);
 		if (!RestoreBlockImage(record, block_id, page))
+		{
+			POLAR_LOG_REDO_INFO(page, record);
 			ereport(ERROR,
 					(errcode(ERRCODE_INTERNAL_ERROR),
 					 errmsg_internal("%s", record->errormsg_buf)));
+		}
 
 		/*
 		 * The page may be uninitialized. If so, we can't set the LSN because
@@ -405,7 +425,8 @@ XLogReadBufferForRedoExtended(XLogReaderState *record,
 			PageSetLSN(page, lsn);
 		}
 
-		MarkBufferDirty(*buf);
+		if (mode != RBM_NORMAL_VALID)
+			PolarMarkBufferDirty(*buf, record->ReadRecPtr);
 
 		/*
 		 * At the end of crash recovery the init forks of unlogged relations
@@ -420,10 +441,12 @@ XLogReadBufferForRedoExtended(XLogReaderState *record,
 	}
 	else
 	{
-		*buf = XLogReadBufferExtended(rnode, forknum, blkno, mode, prefetch_buffer);
+		/* POLAR: If buffer is valid we don't need to read */
+		if (mode != RBM_NORMAL_VALID)
+			*buf = XLogReadBufferExtended(rnode, forknum, blkno, mode, prefetch_buffer);
 		if (BufferIsValid(*buf))
 		{
-			if (mode != RBM_ZERO_AND_LOCK && mode != RBM_ZERO_AND_CLEANUP_LOCK)
+			if (mode != RBM_NORMAL_VALID && mode != RBM_ZERO_AND_LOCK && mode != RBM_ZERO_AND_CLEANUP_LOCK)
 			{
 				if (get_cleanup_lock)
 					LockBufferForCleanup(*buf);
@@ -438,6 +461,156 @@ XLogReadBufferForRedoExtended(XLogReaderState *record,
 		else
 			return BLK_NOTFOUND;
 	}
+}
+
+/*
+ * POLAR:
+ * polar_xlog_relation_bulk_extend_within_segment -- extends one file with
+ * num_bulk_block_once * BLCKSZ Btyes.
+ *
+ * Params:
+ * num_bulk_block_once: the num of blocks to be extended.
+ *
+ * Returns: the last block buffer, but also should be the target block
+ *		during recoverying.
+ *
+ * Attention: caller should make sure that, the extension will not
+ * exceed one file size.
+ */
+static Buffer
+polar_xlog_relation_bulk_extend_within_segment(SMgrRelationData *smgr,
+											   RelFileNode rnode,
+											   ReadBufferMode mode,
+											   ForkNumber forknum,
+											   int num_bulk_block_once)
+{
+	char	   *bulk_buf_block = NULL;
+	BlockNumber first_block_num_extended = InvalidBlockNumber;
+	Buffer		buffer = InvalidBuffer;
+
+	Assert(num_bulk_block_once > 0);
+
+	PG_TRY();
+	{
+		int			index = 0;
+
+		/*
+		 * POLAR: acquire relation file lock to avoid extend the same block
+		 * concurrently which may result in EOF error when proc1 read block
+		 * extended and modified by proc2.
+		 */
+		polar_acquire_relfile_lock(rnode, forknum, ExclusiveLock);
+
+		polar_smgr_init_bulk_extend(smgr, forknum);
+		first_block_num_extended = smgr->polar_nblocks_faked_for_bulk_extend[forknum];
+
+		bulk_buf_block = (char *) palloc_io_aligned(num_bulk_block_once * BLCKSZ, MCXT_ALLOC_ZERO);
+
+		do
+		{
+			index++;
+			if (buffer != InvalidBuffer)
+			{
+				/*
+				 * Whether is ReleaseBuffer safe or not here? If ReleaseBuffer
+				 * before extend it on disk actually, the buffer is zero
+				 * page'ed, also the bufhdr state is no BM_DIRTY. If other
+				 * read transaction arrives now, and this buffer will be
+				 * evicted,it will not launch any write to disk. So, it is
+				 * Safe. By the way, maybe the most safe algo is to do this
+				 * after polar_smgrbulkextend, but it's ok to leave it here
+				 * currently. The last buffer will hold on buffer content
+				 * exclusive lock.
+				 */
+				if (mode == RBM_ZERO_AND_LOCK || mode == RBM_ZERO_AND_CLEANUP_LOCK)
+				{
+					LockBuffer(buffer, BUFFER_LOCK_UNLOCK);
+				}
+				ReleaseBuffer(buffer);
+			}
+			buffer = ReadBufferWithoutRelcache(rnode, forknum, P_NEW, mode, NULL, true);
+
+		} while (index < num_bulk_block_once);
+	}
+	PG_CATCH();
+	{
+		polar_smgr_clear_bulk_extend(smgr, forknum);
+
+		/* POLAR: release relation file lock after extend */
+		polar_release_relfile_lock(rnode, forknum, ExclusiveLock);
+
+		PG_RE_THROW();
+	}
+	PG_END_TRY();
+
+	polar_smgr_clear_bulk_extend(smgr, forknum);
+
+	if (bulk_buf_block == NULL)
+		elog(FATAL, "Block buffer is NULL in recovery bulk extend");
+
+	/*
+	 * In polar_smgrbulkextend, if first_block_num_extended is a new segment
+	 * start block, then, it will open a new file, and write it from 0 to
+	 * num_bulk_block_once * 8K. else, will just return an existing file
+	 * handler to write into.
+	 */
+	polar_smgrbulkextend(smgr, forknum, first_block_num_extended, num_bulk_block_once, bulk_buf_block, false);
+
+	/* POLAR: release relation file lock after extend */
+	polar_release_relfile_lock(rnode, forknum, ExclusiveLock);
+
+	pfree(bulk_buf_block);
+	return buffer;
+}
+
+/*
+ * POLAR:
+ * polar_xlog_relation_bulk_extend_blocks -- to extend relation file size more once,
+ * worked only on polar store env, with recoverying mode.
+ *
+ * Returns: the target block's buffer.
+ *
+ * Params:
+ * current_total_blocks: the total number of rel blocks currently, which is the
+ *		start position of PwriteExtend.
+ * target_blkno: the block id to be replayed, target_blkno - current_total_blocks is
+ *		the total blocks to be extended.
+ */
+static Buffer
+polar_xlog_relation_bulk_extend_blocks(SMgrRelationData *smgr,
+									   RelFileNode rnode,
+									   ReadBufferMode mode,
+									   ForkNumber forknum,
+									   BlockNumber current_total_blocks,
+									   BlockNumber target_blkno,
+									   int one_bulk_max_size)
+{
+	int			left_blocks_seg = 0;
+	int			num_bulk_block = 0;
+	int			left_blocks = target_blkno + 1 - current_total_blocks;
+	Buffer		buffer = InvalidBuffer;
+
+	do
+	{
+		if (buffer != InvalidBuffer)
+		{
+			if (mode == RBM_ZERO_AND_LOCK || mode == RBM_ZERO_AND_CLEANUP_LOCK)
+			{
+				LockBuffer(buffer, BUFFER_LOCK_UNLOCK);
+			}
+			ReleaseBuffer(buffer);
+		}
+		left_blocks_seg = (BlockNumber) RELSEG_SIZE -
+			(current_total_blocks % (BlockNumber) RELSEG_SIZE);
+		num_bulk_block = Min(left_blocks, left_blocks_seg);
+		num_bulk_block = Min(num_bulk_block, one_bulk_max_size);
+		buffer = polar_xlog_relation_bulk_extend_within_segment(smgr,
+																rnode, mode, forknum, num_bulk_block);
+		current_total_blocks += num_bulk_block;
+		left_blocks -= num_bulk_block;
+	} while (left_blocks > 0);
+
+	return buffer;
 }
 
 /*
@@ -474,9 +647,11 @@ XLogReadBufferExtended(RelFileNode rnode, ForkNumber forknum,
 					   BlockNumber blkno, ReadBufferMode mode,
 					   Buffer recent_buffer)
 {
-	BlockNumber lastblock;
+	BlockNumber lastblock = InvalidBlockNumber;
 	Buffer		buffer;
 	SMgrRelation smgr;
+	int			one_bulk_max_size = 0;
+	bool		can_bulk = false;
 
 	Assert(blkno != P_NEW);
 
@@ -500,11 +675,14 @@ XLogReadBufferExtended(RelFileNode rnode, ForkNumber forknum,
 	 * filesystem loses an inode during a crash.  Better to write the data
 	 * until we are actually told to delete the file.)
 	 */
-	smgrcreate(smgr, forknum, true);
+	if (!polar_is_replica())
+	{
+		smgrcreate(smgr, forknum, true);
+		lastblock = smgrnblocks(smgr, forknum);
+	}
 
-	lastblock = smgrnblocks(smgr, forknum);
-
-	if (blkno < lastblock)
+	/* POLAR: replica mode data file in shared storage has been extended */
+	if (polar_is_replica() || blkno < lastblock)
 	{
 		/* page exists in file */
 		buffer = ReadBufferWithoutRelcache(rnode, forknum, blkno,
@@ -522,20 +700,70 @@ XLogReadBufferExtended(RelFileNode rnode, ForkNumber forknum,
 			return InvalidBuffer;
 		/* OK to extend the file */
 		/* we do this in recovery only - no rel-extension lock needed */
-		Assert(InRecovery);
+		Assert(InRecovery || POLAR_IN_LOGINDEX_PARALLEL_REPLAY());
 		buffer = InvalidBuffer;
-		do
+
+		/* POLAR: bulk block extend opt start */
+		one_bulk_max_size = polar_recovery_bulk_extend_size;
+		can_bulk = false;
+		if (InHotStandby)
 		{
-			if (buffer != InvalidBuffer)
-			{
-				if (mode == RBM_ZERO_AND_LOCK || mode == RBM_ZERO_AND_CLEANUP_LOCK)
-					LockBuffer(buffer, BUFFER_LOCK_UNLOCK);
-				ReleaseBuffer(buffer);
-			}
-			buffer = ReadBufferWithoutRelcache(rnode, forknum,
-											   P_NEW, mode, NULL, true);
+			can_bulk = true;
 		}
-		while (BufferGetBlockNumber(buffer) < blkno);
+		else if (InRecovery && polar_enable_primary_recovery_bulk_extend)
+		{
+			/*
+			 * can_bulk set true when RW crashes recovery and page in xlog
+			 * will not exist in heap table. The latter will occur in insert
+			 * and truncate relfilenode. In online promote, can_bulk will not
+			 * be true because RO type has been RW when xlog replay.
+			 * InRecovery here is always false in online promote.
+			 */
+			can_bulk = true;
+		}
+
+		/* get last blocks */
+		if (lastblock == InvalidBlockNumber)
+			lastblock = smgrnblocks(smgr, forknum);
+		/* avoid small table bloat */
+		if (lastblock < polar_min_bulk_extend_table_size)
+			can_bulk = false;
+
+		if (can_bulk && polar_enable_shared_storage_mode &&
+			one_bulk_max_size > 0)
+		{
+			buffer = polar_xlog_relation_bulk_extend_blocks(smgr,
+															rnode, mode, forknum, lastblock, blkno,
+															one_bulk_max_size);
+		}
+		else
+		{
+			do
+			{
+				if (buffer != InvalidBuffer)
+				{
+					if (mode == RBM_ZERO_AND_LOCK || mode == RBM_ZERO_AND_CLEANUP_LOCK)
+						LockBuffer(buffer, BUFFER_LOCK_UNLOCK);
+					ReleaseBuffer(buffer);
+				}
+
+				/*
+				 * POLAR: acquire relation file lock to avoid extend the same
+				 * block concurrently which may result in EOF error when proc1
+				 * read block extended and modified by proc2.
+				 */
+				polar_acquire_relfile_lock(rnode, forknum, ExclusiveLock);
+
+				buffer = ReadBufferWithoutRelcache(rnode, forknum,
+												   P_NEW, mode, NULL, true);
+
+				/* POLAR: release relation file lock after extend */
+				polar_release_relfile_lock(rnode, forknum, ExclusiveLock);
+			}
+			while (BufferGetBlockNumber(buffer) < blkno);
+		}
+		/* POLAR: bulk block extend opt end */
+
 		/* Handle the corner case that P_NEW returns non-consecutive pages */
 		if (BufferGetBlockNumber(buffer) != blkno)
 		{
@@ -553,15 +781,36 @@ recent_buffer_fast_path:
 		/* check that page has been initialized */
 		Page		page = (Page) BufferGetPage(buffer);
 
+		bool		polar_page_just_inited = polar_page_is_just_inited(page);
+
 		/*
 		 * We assume that PageIsNew is safe without a lock. During recovery,
 		 * there should be no other backends that could modify the buffer at
 		 * the same time.
+		 *
+		 * POLAR: init-page(PageIsEmpty && LSN==0) which is introduced by
+		 * extending a relation by multiple blocks, should also be treated as
+		 * an invalid page just like zero-page. We assume that PageIsEmpty &&
+		 * PageGetLSN is safe without a lock. During recovery, there should be
+		 * no other backends that could modify the buffer at the same time.
+		 *
+		 * Using init-page to replay will occur coredump. So we have to treat
+		 * init-page and zero-page as InvalidPage in replay.
 		 */
-		if (PageIsNew(page))
+		if (polar_page_just_inited ||
+			PageIsNew(page))
 		{
 			ReleaseBuffer(buffer);
 			log_invalid_page(rnode, forknum, blkno, true);
+
+			/* POLAR: log for just-inited page */
+			if (polar_page_just_inited)
+			{
+				elog(WARNING, "Func %s, Page ([%u, %u, %u]), %u, %u is just-inited page during replay xlog",
+					 __func__, rnode.spcNode, rnode.dbNode, rnode.relNode, forknum, blkno);
+			}
+			/* POLAR */
+
 			return InvalidBuffer;
 		}
 	}
@@ -857,7 +1106,7 @@ wal_segment_open(XLogReaderState *state, XLogSegNo nextSegNo,
 void
 wal_segment_close(XLogReaderState *state)
 {
-	close(state->seg.ws_file);
+	polar_close(state->seg.ws_file);
 	/* need to check errno? */
 	state->seg.ws_file = -1;
 }
@@ -920,6 +1169,18 @@ read_local_xlog_page_guts(XLogReaderState *state, XLogRecPtr targetPagePtr,
 		 */
 		if (!RecoveryInProgress())
 			read_upto = GetFlushRecPtr(&currTLI);
+
+		/*
+		 * POLAR: If call logindex parse we read upto replayEndRecPtr instead
+		 * of lastReplayedEndRecPtr. Because we may read xlog during logindex
+		 * parse but lastReplayedEndRecPtr is set after logindex parsed. If we
+		 * read data block and replay replayEndRecPtr XLOG in startup or
+		 * backend process, but read_upto is set to lastReplayedEndRecPtr,
+		 * because lastReplayedEndRecPtr is less than replayEndRecPtr, then
+		 * replayEndRecPtr XLOG will never be read.
+		 */
+		else if (polar_enable_logindex_parse())
+			read_upto = GetCurrentReplayRecPtr(&currTLI);
 		else
 			read_upto = GetXLogReplayRecPtr(&currTLI);
 		tli = currTLI;
@@ -952,6 +1213,25 @@ read_local_xlog_page_guts(XLogReaderState *state, XLogRecPtr targetPagePtr,
 
 		if (state->currTLI == currTLI)
 		{
+			/*
+			 * POLAR: if enable fullpage snapshot, read_upto maybe behind of
+			 * fullpage lsn
+			 */
+			if (loc > read_upto && POLAR_LOGINDEX_ENABLE_FULLPAGE())
+			{
+				XLogRecPtr	fullpage_max_lsn = polar_get_logindex_snapshot_max_lsn(polar_logindex_redo_instance->fullpage_logindex_snapshot);
+
+				/*
+				 * POLAR: fpsi format: xlog_record + mainrdata_len_var +
+				 * RelFileNode + SizeOfXLogRecordBlockHeader + BlockNumber +
+				 * PolarWalType + fullpage_no(uint64)
+				 */
+				int			fpsi_record_len = SizeOfXLogRecord + 2 + sizeof(RelFileNode) + SizeOfXLogRecordBlockHeader + sizeof(BlockNumber) + \
+					sizeof(PolarWalType) + sizeof(uint64);
+
+				read_upto = Max(read_upto, fullpage_max_lsn + fpsi_record_len);
+			}
+			/* POLAR end */
 
 			if (loc <= read_upto)
 				break;
@@ -1024,9 +1304,41 @@ read_local_xlog_page_guts(XLogReaderState *state, XLogRecPtr targetPagePtr,
 	 * Even though we just determined how much of the page can be validly read
 	 * as 'count', read the whole page anyway. It's guaranteed to be
 	 * zero-padded up to the page boundary if it's incomplete.
+	 *
+	 * POLAR: If xlog buffer is enabled, we will try to read from xlog buffer
+	 * at first. If record is not found in xlog buffer, do the WALRead work
+	 * and then cache it in xlog buffer.
 	 */
-	if (!WALRead(state, cur_page, targetPagePtr, XLOG_BLCKSZ, tli,
-				 &errinfo))
+	if (POLAR_ENABLE_XLOG_BUFFER())
+	{
+		Assert((targetPagePtr % XLOG_BLCKSZ) == 0);
+
+		if (!polar_xlog_buffer_lookup(targetPagePtr, count, cur_page))
+		{
+			if (!WALRead(state, cur_page, targetPagePtr, XLOG_BLCKSZ, tli, &errinfo))
+				WALReadRaiseError(&errinfo);
+			else
+			{
+				XLogRecPtr	max_expected_lsn = InvalidXLogRecPtr;
+
+				/* Consider the data replay lag of parallel replayers. */
+				if (polar_logindex_redo_instance &&
+					(polar_is_replica() || polar_bg_redo_state_is_parallel(polar_logindex_redo_instance)))
+				{
+					max_expected_lsn = polar_bg_redo_get_replayed_lsn(polar_logindex_redo_instance);
+					max_expected_lsn -= (max_expected_lsn % XLOG_BLCKSZ);
+					max_expected_lsn += XLOG_BLCKSZ * (uint64) (POLAR_XLOG_BUFFER_TOTAL_COUNT());
+				}
+				if (targetPagePtr < max_expected_lsn)
+					polar_xlog_buffer_append(targetPagePtr, count, cur_page);
+			}
+		}
+		else
+		{
+			Assert(reqLen <= count);
+		}
+	}
+	else if (!WALRead(state, cur_page, targetPagePtr, XLOG_BLCKSZ, tli, &errinfo))
 		WALReadRaiseError(&errinfo);
 
 	/* number of valid bytes in the buffer */

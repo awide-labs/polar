@@ -1,0 +1,4 @@
+comment = 'polar io stat in multi dimension'
+default_version = '1.0'
+module_pathname = '$libdir/polar_io_stat'
+relocatable = true

@@ -1,0 +1,4 @@
+comment = 'PolarDB feature utilization'
+default_version = '1.0'
+module_pathname = '$libdir/polar_feature_utils'
+schema = 'pg_catalog'

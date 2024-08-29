@@ -1,0 +1,4 @@
+comment = 'polar_worker'
+default_version = '1.0'
+module_pathname = '$libdir/polar_worker'
+relocatable = true

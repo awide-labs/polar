@@ -42,6 +42,19 @@ PGAC_ARG_REQ(with, extra-version, [STRING], [append STRING to version],
              [PG_VERSION="$PACKAGE_VERSION"])
 AC_DEFINE_UNQUOTED(PG_VERSION, "$PG_VERSION", [PostgreSQL version as a string])
 
+POLAR_COMMIT=`git rev-parse --short=8 HEAD || echo unknown`
+POLAR_MAJORVERSION="2.0.$PG_MAJORVERSION"
+POLAR_MINORVERSION="2.0" # monthly-version.hotfix
+POLAR_RELEASE_DATE="20240815" # YYYYMMDD
+POLAR_VERSION="$POLAR_MAJORVERSION.$POLAR_MINORVERSION" # eg: 2.0.15.6.2
+POLAR_PG_VERSION="$PACKAGE_VERSION.$POLAR_MINORVERSION" # eg: 15.6.1.2
+POLARDB_VERSION="PolarDB V2.0.$PACKAGE_VERSION.$POLAR_MINORVERSION" # eg: 2.0.15.6.1.2
+AC_DEFINE_UNQUOTED(POLAR_COMMIT, "$POLAR_COMMIT", [PolarDB commit as a string])
+AC_DEFINE_UNQUOTED(POLAR_VERSION, "$POLAR_MAJORVERSION.$POLAR_MINORVERSION", [PolarDB internal version as a string])
+AC_DEFINE_UNQUOTED(POLAR_PG_VERSION, "$PACKAGE_VERSION.$POLAR_MINORVERSION", [PolarDB PG internal version as a string])
+AC_DEFINE_UNQUOTED(POLARDB_VERSION, "PolarDB V2.0.$PACKAGE_VERSION.$POLAR_MINORVERSION", [PolarDB version as a string])
+AC_DEFINE_UNQUOTED(POLAR_RELEASE_DATE, "$POLAR_RELEASE_DATE", [PolarDB release date as a string])
+
 AC_CANONICAL_HOST
 
 template=
@@ -769,6 +782,45 @@ PGAC_ARG_BOOL(enable, cassert, no, [enable assertion checks (for debugging)],
               [AC_DEFINE([USE_ASSERT_CHECKING], 1,
                          [Define to 1 to build with assertion checks. (--enable-cassert)])])
 
+#
+# Enable fault injector
+#
+AC_MSG_CHECKING([whether to build with fault injector enable])
+PGAC_ARG_BOOL(enable, fault-injector, no, [enable fault injector (for testing)],
+              [AC_DEFINE([FAULT_INJECTOR], 1,
+                         [Define to 1 to build with fault injector. (--enable-fault-injector)])])
+AC_MSG_RESULT([$enable_fault_injector])
+AC_SUBST(enable_fault_injector)
+
+#
+# Enable minimal compile
+#
+AC_MSG_CHECKING([whether to build with minimal compile])
+PGAC_ARG_BOOL(enable, minimal, no, [enable minimal compile (for development)],
+              [AC_DEFINE([USE_MINIMAL_COMPILE], 0,
+                         [Define to 1 to build with minimal compile. (--enable-minimal)])])
+AC_MSG_RESULT([$enable_minimal])
+AC_SUBST(enable_minimal)
+
+#
+# libunwind
+#
+AC_MSG_CHECKING([whether to build with libunwind])
+PGAC_ARG_BOOL(with, libunwind, no,
+              [build with libunwind support],
+              [AC_DEFINE([USE_LIBUNWIND], 1, [Define to 1 to build with libunwind support. (--with-libunwind)])])
+AC_MSG_RESULT([$with_libunwind])
+AC_SUBST(with_libunwind)[]dnl
+
+#
+# SUBMODULE
+#
+AC_MSG_CHECKING([whether to build with submodule packages])
+PGAC_ARG_BOOL(with, submodule, no, [build with submodule packages],
+              [AC_DEFINE([USE_SUBMODULE], 1, [Define to 1 to build with submodule packages. (--with-submodule)])])
+AC_MSG_RESULT([$with_submodule])
+AC_SUBST(with_submodule)
+
 
 #
 # Include directories
@@ -847,6 +899,15 @@ AC_MSG_CHECKING([whether to build Perl modules])
 PGAC_ARG_BOOL(with, perl, no, [build Perl modules (PL/Perl)])
 AC_MSG_RESULT([$with_perl])
 AC_SUBST(with_perl)
+
+#
+# PFSD
+#
+AC_MSG_CHECKING([whether to build with PFSD support])
+PGAC_ARG_BOOL(with, pfsd, no, [build with PFSD support],
+              [AC_DEFINE([USE_PFSD], 1, [Define to 1 to build with PFSD support. (--with-pfsd)])])
+AC_MSG_RESULT([$with_pfsd])
+AC_SUBST(with_pfsd)
 
 #
 # Optionally build Python modules (PL/Python)
@@ -1108,6 +1169,11 @@ if test "$with_zstd" = yes; then
     esac
   done
 fi
+
+if test "$with_libunwind" = yes; then
+  AC_CHECK_LIB(unwind, unw_backtrace, [], [AC_MSG_ERROR([library 'unwind' is required for backtrace support])])
+fi
+
 #
 # Assignments
 #
@@ -1272,6 +1338,7 @@ AC_SEARCH_LIBS(fdatasync, [rt posix4])
 # Cygwin:
 AC_SEARCH_LIBS(shmget, cygipc)
 # *BSD:
+AC_SEARCH_LIBS(__backtrace, execinfo)
 AC_SEARCH_LIBS(backtrace_symbols, execinfo)
 
 if test "$enable_thread_safety" = yes; then
@@ -1810,6 +1877,7 @@ LIBS_including_readline="$LIBS"
 LIBS=`echo "$LIBS" | sed -e 's/-ledit//g' -e 's/-lreadline//g'`
 
 AC_CHECK_FUNCS(m4_normalize([
+	__backtrace
 	backtrace_symbols
 	clock_gettime
 	copyfile
@@ -2517,9 +2585,13 @@ else
   cc_string=$CC
 fi
 
+if test "$enable_debug" = yes; then
+  debug_string=" debug"
+fi
+
 AC_DEFINE_UNQUOTED(PG_VERSION_STR,
-                   ["PostgreSQL $PG_VERSION on $host, compiled by $cc_string, `expr $ac_cv_sizeof_void_p \* 8`-bit"],
-                   [A string containing the version number, platform, and C compiler])
+                   ["PostgreSQL $PG_VERSION (PolarDB $POLAR_PG_VERSION build $POLAR_COMMIT$debug_string) on $host_cpu-$host_os"],
+                   [A string containing the PostgreSQL version number, PolarDB version number, PolarDB version commit])
 
 # Supply a numeric version string for use by 3rd party add-ons
 # awk -F is a regex on some platforms, and not on others, so make "." a tab

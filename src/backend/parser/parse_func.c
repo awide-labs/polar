@@ -3,6 +3,7 @@
  * parse_func.c
  *		handle function calls in parser
  *
+ * Portions Copyright (c) 2024, Alibaba Group Holding Limited
  * Portions Copyright (c) 1996-2022, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
@@ -33,6 +34,11 @@
 #include "utils/builtins.h"
 #include "utils/lsyscache.h"
 #include "utils/syscache.h"
+
+/* POLAR */
+#include "miscadmin.h"
+#include "parser/parse_utilcmd.h"
+#include "utils/guc.h"
 
 
 /* Possible error codes from LookupFuncNameInternal */

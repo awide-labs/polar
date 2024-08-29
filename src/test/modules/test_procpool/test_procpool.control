@@ -1,0 +1,4 @@
+comment = 'Test code for polar processes pool'
+default_version = '1.0'
+module_pathname = '$libdir/test_procpool'
+relocatable = true

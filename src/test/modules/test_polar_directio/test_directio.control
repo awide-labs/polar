@@ -1,0 +1,4 @@
+comment = 'Test code for polar (p)read or (p)write with PG_O_DIRECT feature'
+default_version = '1.0'
+module_pathname = '$libdir/test_directio'
+relocatable = true

@@ -24,6 +24,7 @@ SUBDIRS = \
 	backend/replication/libpqwalreceiver \
 	backend/replication/pgoutput \
 	fe_utils \
+	polar_vfs \
 	bin \
 	pl \
 	makefiles \
@@ -71,7 +72,7 @@ distclean maintainer-clean:
 	$(MAKE) -C test $@
 	$(MAKE) -C tutorial NO_PGXS=1 $@
 	$(MAKE) -C test/isolation $@
-	rm -f Makefile.port Makefile.global
+	rm -f Makefile.port Makefile.global Makefile.precheck
 
 
 .PHONY: install-local installdirs-local uninstall-local

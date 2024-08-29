@@ -48,7 +48,12 @@
 static int
 pg_signal_backend(int pid, int sig)
 {
-	PGPROC	   *proc = BackendPidGetProc(pid);
+	PGPROC	   *proc;
+
+	/* POLAR: try to get pid if it's proxy sid */
+	if (POLAR_IS_PROXY_SID(pid))
+		pid = polar_proxy_get_pid(pid, 0, false);
+	proc = BackendPidGetProc(pid);
 
 	/*
 	 * BackendPidGetProc returns NULL if the pid isn't valid; but by the time
@@ -153,6 +158,10 @@ pg_wait_until_termination(int pid, int64 timeout)
 	 * Initially remaining time is the entire timeout specified by the user.
 	 */
 	int64		remainingtime = timeout;
+
+	/* POLAR: try to get pid if it's proxy sid */
+	if (POLAR_IS_PROXY_SID(pid))
+		pid = polar_proxy_get_pid(pid, 0, false);
 
 	/*
 	 * Check existence of the backend. If the backend still exists, then wait

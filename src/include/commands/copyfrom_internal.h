@@ -164,6 +164,8 @@ typedef struct CopyFromStateData
 #define RAW_BUF_BYTES(cstate) ((cstate)->raw_buf_len - (cstate)->raw_buf_index)
 
 	uint64		bytes_processed;	/* number of bytes processed so far */
+	bool		polar_disable_escape_inside_gbk;	/* POLAR: conflicts in
+													 * GBK/GB18030 */
 } CopyFromStateData;
 
 extern void ReceiveCopyBegin(CopyFromState cstate);

@@ -4,6 +4,7 @@ CREATE EXTENSION pg_stat_statements;
 --
 SET pg_stat_statements.track_utility = FALSE;
 SET pg_stat_statements.track_planning = TRUE;
+SET pg_stat_statements.enable_superuser_track = ON;
 SELECT pg_stat_statements_reset();
  pg_stat_statements_reset 
 --------------------------
@@ -1141,4 +1142,35 @@ SELECT COUNT(*) FROM pg_stat_statements WHERE query LIKE '%SELECT GROUPING%';
      2
 (1 row)
 
+/*
+ * POLAR: disable super user track
+ */
+SET pg_stat_statements.enable_superuser_track = FALSE;
+SELECT pg_stat_statements_reset();
+ pg_stat_statements_reset 
+--------------------------
+ 
+(1 row)
+
+CREATE FUNCTION PLUS_ONE(i INTEGER) RETURNS INTEGER AS
+$$ SELECT (i + 1.0)::INTEGER LIMIT 1 $$ LANGUAGE SQL;
+SELECT PLUS_ONE(8);
+ plus_one 
+----------
+        9
+(1 row)
+
+SELECT PLUS_ONE(10);
+ plus_one 
+----------
+       11
+(1 row)
+
+DROP FUNCTION PLUS_ONE(INTEGER);
+SELECT query, calls, rows FROM pg_stat_statements ORDER BY query COLLATE "C";
+ query | calls | rows 
+-------+-------+------
+(0 rows)
+
+/* POLAR end */
 DROP EXTENSION pg_stat_statements;

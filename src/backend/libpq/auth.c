@@ -442,8 +442,9 @@ ClientAuthentication(Port *port)
 			{
 				char		hostinfo[NI_MAXHOST];
 				const char *encryption_state;
+				SockAddr	raddr = POLAR_PROXY_GET_CLIENT_RADDR(port);
 
-				pg_getnameinfo_all(&port->raddr.addr, port->raddr.salen,
+				pg_getnameinfo_all(&raddr.addr, raddr.salen,
 								   hostinfo, sizeof(hostinfo),
 								   NULL, 0,
 								   NI_NUMERICHOST);
@@ -488,8 +489,9 @@ ClientAuthentication(Port *port)
 			{
 				char		hostinfo[NI_MAXHOST];
 				const char *encryption_state;
+				SockAddr	raddr = POLAR_PROXY_GET_CLIENT_RADDR(port);
 
-				pg_getnameinfo_all(&port->raddr.addr, port->raddr.salen,
+				pg_getnameinfo_all(&raddr.addr, raddr.salen,
 								   hostinfo, sizeof(hostinfo),
 								   NULL, 0,
 								   NI_NUMERICHOST);
@@ -1679,7 +1681,7 @@ interpret_ident_response(const char *ident_response,
 static int
 ident_inet(hbaPort *port)
 {
-	const SockAddr remote_addr = port->raddr;
+	const SockAddr remote_addr = POLAR_PROXY_GET_CLIENT_RADDR(port);
 	const SockAddr local_addr = port->laddr;
 	char		ident_user[IDENT_USERNAME_MAX + 1];
 	pgsocket	sock_fd = PGINVALID_SOCKET; /* for talking to Ident server */

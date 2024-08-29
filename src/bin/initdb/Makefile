@@ -24,7 +24,7 @@ override CPPFLAGS := -DFRONTEND -I$(libpq_srcdir) -I$(top_srcdir)/src/timezone $
 # should ensure that that happens.
 #
 # We need libpq only because fe_utils does.
-LDFLAGS_INTERNAL += -L$(top_builddir)/src/fe_utils -lpgfeutils $(libpq_pgport)
+LDFLAGS_INTERNAL += -L$(top_builddir)/src/fe_utils -lpgfeutils $(libpq_pgport) $(polar_libvfs)
 
 # use system timezone data?
 ifneq (,$(with_system_tzdata))
@@ -48,6 +48,7 @@ localtime.c: % : $(top_srcdir)/src/timezone/%
 
 install: all installdirs
 	$(INSTALL_PROGRAM) initdb$(X) '$(DESTDIR)$(bindir)/initdb$(X)'
+	$(INSTALL_PROGRAM) polar-initdb.sh '$(DESTDIR)$(bindir)/'
 
 installdirs:
 	$(MKDIR_P) '$(DESTDIR)$(bindir)'

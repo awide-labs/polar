@@ -16,6 +16,8 @@ umask(0077);
 
 my $primary = PostgreSQL::Test::Cluster->new('primary');
 $primary->init(allows_streaming => 1, extra => ['--wal-segsize=1']);
+$primary->append_conf('postgresql.conf',
+	'polar_enable_switch_wal_in_backup = on');
 $primary->start;
 
 my $stream_dir = $primary->basedir . '/archive_wal';

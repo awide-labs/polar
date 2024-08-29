@@ -1,0 +1,23 @@
+# ----------
+# src/test/regress/polar_check_schedule
+#
+# By convention, we put no more than twenty tests in any one parallel group;
+# this limits the number of connections needed to run the tests.
+# ----------
+
+# ----------
+# POLAR: set current testcases directory
+#
+# New test files created for PolarDB are added here. You should try to add tests to
+# the last parallel groups. Note, event triggers cannot run concurrently with any
+# test that runs DDL.
+# ----------
+polar_dir: polar
+
+# ----------
+# POLAR test, make them run as parallel as possible.
+# ----------
+test: force_unlogged_logged force_trans_ro_non_sup
+test: polar_parallel_bgwriter
+test: polar_invalid_memory_alloc_1 polar_shm_unused
+test: polar_support_gbk_encoding polar_copy_into_gbk polar_index_bulk_extend_for_coverage

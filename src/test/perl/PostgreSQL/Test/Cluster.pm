@@ -117,8 +117,12 @@ use PostgreSQL::Test::BackgroundPsql ();
 use Time::HiRes                      qw(usleep);
 use Scalar::Util                     qw(blessed);
 
+use POSIX qw(strftime);
+
 our ($use_tcp, $test_localhost, $test_pghost, $last_host_assigned,
 	$last_port_assigned, @all_nodes, $died, $portdir);
+
+our ($polar_global_hostid, $main_pid);
 
 # the minimum version we believe to be compatible with this package without
 # subclassing.
@@ -175,6 +179,8 @@ INIT
 	$portdir =~ s!\\!/!g;
 	# Make sure the directory exists
 	mkpath($portdir) unless -d $portdir;
+
+	$polar_global_hostid = 0;
 }
 
 =pod
@@ -529,8 +535,30 @@ sub init
 	mkdir $self->backup_dir;
 	mkdir $self->archive_dir;
 
-	PostgreSQL::Test::Utils::system_or_bail('initdb', '-D', $pgdata, '-A',
-		'trust', '-N', @{ $params{extra} });
+	if (defined $ENV{INITDB_TEMPLATE} && !defined $params{extra})
+	{
+		my $template_dir = $ENV{INITDB_TEMPLATE} . "-pg";
+		if (defined $params{init_polar_node} and $params{init_polar_node})
+		{
+			$template_dir = $ENV{INITDB_TEMPLATE} . "-chksum-pg";
+			$self->{_enable_data_checksums} = 1;
+		}
+		print "initializing database system by copying initdb template\n";
+		PostgreSQL::Test::Utils::system_or_bail('cp', '-RPp',
+			$template_dir, $pgdata);
+	}
+	else
+	{
+		print "initializing database system by running initdb\n";
+		if (defined $params{init_polar_node} and $params{init_polar_node})
+		{
+			$params{extra} = [] unless defined $params{extra};
+			push @{ $params{extra} }, '-k';
+			$self->{_enable_data_checksums} = 1;
+		}
+		PostgreSQL::Test::Utils::system_or_bail('initdb', '-D', $pgdata, '-A',
+			'trust', '-N', @{ $params{extra} });
+	}
 	PostgreSQL::Test::Utils::system_or_bail($ENV{PG_REGRESS},
 		'--config-auth', $pgdata, @{ $params{auth_extra} });
 
@@ -542,6 +570,9 @@ sub init
 	print $conf "log_statement = all\n";
 	print $conf "log_replication_commands = on\n";
 	print $conf "wal_retrieve_retry_interval = '500ms'\n";
+	print $conf "polar_enable_multi_syslogger = off\n";
+	print $conf "log_destination = stderr\n";
+	print $conf "polar_enable_output_search_path_to_log = off\n";
 
 	# If a setting tends to affect whether tests pass or fail, print it after
 	# TEMP_CONFIG.  Otherwise, print it before TEMP_CONFIG, thereby permitting
@@ -568,7 +599,7 @@ sub init
 		print $conf "shared_buffers = 1MB\n";
 		print $conf "max_connections = 10\n";
 		# limit disk space consumption, too:
-		print $conf "max_wal_size = 128MB\n";
+		print $conf "max_wal_size = 4GB\n";
 	}
 	else
 	{
@@ -587,6 +618,13 @@ sub init
 		print $conf "unix_socket_directories = '$host'\n";
 		print $conf "listen_addresses = ''\n";
 	}
+
+	if (defined $params{init_polar_node} and $params{init_polar_node})
+	{
+		$polar_global_hostid++;
+		print $conf $self->polar_default_conf;
+	}
+
 	close $conf;
 
 	chmod($self->group_access ? 0640 : 0600, "$pgdata/postgresql.conf")
@@ -701,6 +739,23 @@ sub backup
 		'fast', '--no-sync',
 		@{ $params{backup_options} });
 	print "# Backup finished\n";
+	return;
+}
+
+sub polar_backup
+{
+	my ($self, $backup_name, $polardata) = @_;
+	my $backup_path = $self->backup_dir . '/' . $backup_name;
+	my $name = $self->name;
+
+	print "# Taking polar_basebackup $backup_name from node \"$name\"\n";
+	PostgreSQL::Test::Utils::system_or_bail(
+		'polar_basebackup', '-D',
+		$backup_path, '-h',
+		$self->host, '-p',
+		$self->port, '--no-sync',
+		'--polardata=' . $polardata, '-v');
+	print "# Polar backup finished\n";
 	return;
 }
 
@@ -1046,6 +1101,9 @@ sub promote
 	print "### Promoting node \"$name\"\n";
 	PostgreSQL::Test::Utils::system_or_bail('pg_ctl', '-D', $pgdata, '-l',
 		$logfile, 'promote');
+
+	$self->polar_set_node_type('primary');
+	$self->polar_set_root_node($self);
 	return;
 }
 
@@ -1140,6 +1198,7 @@ sub set_recovery_mode
 	my ($self) = @_;
 
 	$self->append_conf('recovery.signal', '');
+	$self->polar_set_node_type('recovery');
 	return;
 }
 
@@ -1156,6 +1215,7 @@ sub set_standby_mode
 	my ($self) = @_;
 
 	$self->append_conf('standby.signal', '');
+	$self->polar_set_node_type('standby');
 	return;
 }
 
@@ -1314,8 +1374,17 @@ sub new
 		_logfile_base =>
 		  "$PostgreSQL::Test::Utils::log_path/${testname}_${name}",
 		_logfile =>
-		  "$PostgreSQL::Test::Utils::log_path/${testname}_${name}.log"
+		  "$PostgreSQL::Test::Utils::log_path/${testname}_${name}.log",
+		_testname => $testname,
+		_psql => {},
+		_polar_root_node => undef,
+		_polar_node_type => "unknown",
+		_polar_datadir =>
+		  "$PostgreSQL::Test::Utils::tmp_check/t_${testname}_${name}_polar_data",
+		_enable_data_checksums => 0,
 	};
+
+	$node->{_polar_root_node} = $node;
 
 	if ($params{install_path})
 	{
@@ -1624,16 +1693,77 @@ sub _reserve_port
 	return 1;
 }
 
+sub cancel_backend()
+{
+	my $server;
+	my ($node, $pid, $cancel_key) = @_;
+	my $host = $node->host();
+	my $port = $node->port();
+
+	if ($use_tcp)
+	{
+		socket($server, AF_INET, SOCK_STREAM, 0) || die "socket: $!";
+		connect($server, pack_sockaddr_in($port, inet_aton($host)))
+		  || die "connect: $!";
+	}
+	else
+	{
+		socket($server, AF_UNIX, SOCK_STREAM, 0) || die "socket: $!";
+		connect($server, sockaddr_un("$host/.s.PGSQL.$port"))
+		  || die "connect: $!";
+	}
+
+	my $len_p = pack "N", 16;
+	my $header_p = pack "N", 80877102;
+	my $pid_p = pack "N", $pid;
+	my $cancel_key_p = pack "N", $cancel_key;
+	print $server $len_p, $header_p, $pid_p, $cancel_key_p;
+
+	$server->autoflush;
+}
+
+BEGIN { $main_pid = $$ }
+
 # Automatically shut down any still-running nodes (in the same order the nodes
 # were created in) when the test script exits.
 END
 {
 
+	# only main process can do cleanup work
+	return $? if ($$ != $main_pid);
+
 	# take care not to change the script's exit value
 	my $exit_code = $?;
 
+	# POLAR: Add first loop to teardown and cleanup for
+	# Replica nodes and do checksums for other nodes.
 	foreach my $node (@all_nodes)
 	{
+		if ($node->polar_get_node_type ne 'replica')
+		{
+			my $datadir = $node->data_dir;
+			PostgreSQL::Test::Utils::system_or_bail('pg_checksums', '-D',
+				$datadir)
+			  if ( $datadir
+				&& -e `printf $datadir`
+				&& $node->{_enable_data_checksums});
+			next;
+		}
+
+		$node->teardown_node;
+
+		# skip clean if we are requested to retain the basedir
+		next if defined $ENV{'PG_TEST_NOCLEAN'};
+
+		# clean basedir on clean test invocation
+		$node->clean_node
+		  if $exit_code == 0 && PostgreSQL::Test::Utils::all_tests_passing();
+	}
+
+	foreach my $node (@all_nodes)
+	{
+		next if $node->polar_get_node_type eq 'replica';
+
 		$node->teardown_node;
 
 		# skip clean if we are requested to retain the basedir
@@ -1678,6 +1808,9 @@ sub clean_node
 	my $self = shift;
 
 	rmtree $self->{_basedir} unless defined $self->{_pid};
+	rmtree $self->{_polar_datadir}
+	  unless (defined $self->{_pid}
+		|| $self->polar_get_node_type eq 'replica');
 	return;
 }
 
@@ -2977,6 +3110,72 @@ sub pg_recvlogical_upto
 }
 
 =pod
+=item $node->pgbench_init(...)
+=cut
+
+sub pgbench_init
+{
+	my ($self, %params) = @_;
+	my $ret = 0;
+	my $pgbench = $self->installed_command('pgbench');
+
+	$params{dbname} = 'postgres' unless defined $params{dbname};
+	$params{scale} = 10 unless defined $params{scale};
+
+	my @cmd = (
+		$pgbench, '-n -i', '-s', $params{scale},
+		'-h', $self->host, '-p', $self->port,
+		$params{dbname});
+	print "### Pgbench on node " . $self->name . " with cmd: @cmd\n";
+	$ret = system("@cmd");
+
+	return $ret;
+}
+
+=pod
+=item $node->pgbench_test(...)
+=cut
+
+sub pgbench_test
+{
+	my ($self, %params) = @_;
+	my $ret = 0;
+	my $pgbench = $self->installed_command('pgbench');
+
+	$params{dbname} = 'postgres' unless defined $params{dbname};
+	$params{client} = 10 unless defined $params{client};
+	$params{job} = 2 unless defined $params{job};
+	$params{time} = 60 unless defined $params{time};
+	$params{script} = 'tpcb-like' unless defined $params{script};
+	$params{protocol} = 'prepared' unless defined $params{protocol};
+	$params{extra} = '' unless defined $params{extra};
+
+	if (!defined $params{async})
+	{
+		$params{async} = '';
+	}
+	else
+	{
+		$params{async} = '&';
+	}
+
+	my @cmd = (
+		$pgbench, '-n -r',
+		'-M', $params{protocol},
+		'-c', $params{client},
+		'-j', $params{job},
+		'-T', $params{time},
+		'-h', $self->host,
+		'-p', $self->port,
+		'-b', $params{script},
+		$params{dbname}, $params{extra},
+		$params{async});
+	print "### Pgbench on node " . $self->name . " with cmd: @cmd\n";
+	$ret = system("@cmd");
+	return $ret;
+}
+
+=pod
 
 =item $node->corrupt_page_checksum(self, file, page_offset)
 
@@ -3005,6 +3204,1080 @@ sub corrupt_page_checksum
 	close $fh;
 
 	return;
+}
+
+=pod
+
+=item $node->polar_default_conf(filename, str)
+
+default configure for polar node.
+
+=cut
+
+sub polar_default_conf
+{
+	my ($self) = @_;
+
+	my $polar_datadir = $self->polar_get_datadir;
+
+	my $default_conf = <<"default_conf";
+
+	# Added by PostgreSQL::Test::Cluster.pm for polar test case
+	polar_enable_shared_storage_mode = on
+	polar_hostid = $polar_global_hostid
+	full_page_writes=off
+	polar_vfs.localfs_mode = true
+	shared_preload_libraries = '\$libdir/polar_vfs,\$libdir/polar_io_stat,\$libdir/polar_worker'
+	polar_disk_name='tap_test'
+	polar_datadir='file-dio://$polar_datadir'
+	hot_standby_feedback=on
+	logging_collector=on
+	max_worker_processes=32
+	max_prepared_transactions=10
+	polar_logindex_mem_size=64MB
+	polar_xlog_queue_buffers=64MB
+	polar_xlog_page_buffers=64MB
+	wal_buffers=16MB
+	shared_buffers=128MB
+	max_connections=100
+	log_checkpoints=on
+	log_connections=on
+	log_disconnections=on
+	polar_force_unlogged_to_logged_table=on
+	huge_pages=off
+	polar_has_partial_write=on
+
+default_conf
+
+	return $default_conf;
+}
+
+sub polar_set_root_node
+{
+	my ($self, $root_node) = @_;
+	$self->{_polar_root_node} = $root_node;
+}
+
+sub polar_get_root_node
+{
+	my ($self) = @_;
+	return $self->{_polar_root_node};
+}
+
+sub polar_set_node_type
+{
+	my ($self, $type) = @_;
+	$self->{_polar_node_type} = $type;
+}
+
+sub polar_get_node_type
+{
+	my ($self) = @_;
+	return $self->{_polar_node_type};
+}
+
+sub polar_get_datadir
+{
+	my ($self) = @_;
+	return $self->{_polar_datadir};
+}
+
+sub polar_set_datadir
+{
+	my ($self, $polar_datadir) = @_;
+	$self->{_polar_datadir} = $polar_datadir;
+}
+
+=pod
+
+=item $node->polar_set_name($name)
+
+POLAR: Create a new name for this node.
+
+=cut
+
+sub polar_set_name
+{
+	my ($self, $name) = @_;
+	$self->{_name} = $name;
+}
+
+=pod
+=item $node->polar_crate_slot
+=cut
+
+sub polar_create_slot
+{
+	my ($self, $slot, $type) = @_;
+
+	if (defined $type and $type eq 'logical')
+	{
+		$self->psql(
+			'postgres',
+			"SELECT * FROM pg_create_logical_replication_slot('$slot', 'test_decoding')",
+			on_error_die => 1,
+			on_error_stop => 1);
+	}
+	else
+	{
+		$self->psql(
+			'postgres',
+			"SELECT * FROM pg_create_physical_replication_slot('$slot')",
+			on_error_die => 1,
+			on_error_stop => 1);
+	}
+}
+
+=pod
+
+=item $node->polar_drop_slot
+
+=cut
+
+sub polar_drop_slot
+{
+	my ($self, $slot) = @_;
+
+	$self->psql(
+		'postgres', "SELECT pg_drop_replication_slot('$slot')",
+		on_error_die => 1,
+		on_error_stop => 1);
+}
+
+=pod
+=item $node->polar_drop_all_slots
+=cut
+
+sub polar_drop_all_slots
+{
+	my ($self) = @_;
+	my $slots = $self->safe_psql('postgres',
+		qq[select slot_name from pg_replication_slots;]);
+	foreach my $slot (split('\n', $slots))
+	{
+		print $self->name . " delete slot [" . $slot . "]\n";
+		$self->polar_drop_slot($slot);
+	}
+}
+
+=pod
+
+=item $node->set_replica_mode()
+
+Place replica.signal file.
+
+=cut
+
+sub set_replica_mode
+{
+	my ($self) = @_;
+
+	$self->append_conf('replica.signal', '');
+	return;
+}
+
+=pod
+
+=item $node->polar_replica_set_recovery
+
+=cut
+
+sub polar_replica_set_recovery
+{
+	my ($self, $root_node) = @_;
+	$self->polar_set_node_type('replica');
+	$self->polar_set_root_node($root_node);
+	print "polar_replica_set_recovery set node("
+	  . $self->port
+	  . ") root_node("
+	  . $root_node->port . ")\n";
+	my $root_host = $root_node->host;
+	my $root_port = $root_node->port;
+	my $pgdata = $self->data_dir;
+
+	$self->append_conf('postgresql.conf',
+		"primary_conninfo='host=$root_host port=$root_port dbname=postgres application_name="
+		  . $self->name
+		  . "'");
+	$self->append_conf('postgresql.conf',
+		"recovery_target_timeline='latest'");
+	$self->append_conf('postgresql.conf',
+		"primary_slot_name='" . $self->name . "'");
+
+	$self->set_replica_mode();
+
+	# invalid current polar_datadir before appendind new one
+	PostgreSQL::Test::Utils::system_or_bail(
+		'sed', '-i',
+		's/^\\s*polar_datadir\\s*=/#polar_datadir=/g',
+		$self->data_dir . '/postgresql.conf');
+
+	my $polar_datadir = $self->polar_get_datadir;
+	print "before set, polar_datadir = $polar_datadir\n";
+	$polar_datadir = $root_node->polar_get_datadir;
+	print "after set, polar_datadir = $polar_datadir\n";
+	$self->append_conf('postgresql.conf',
+		"polar_datadir='file-dio://$polar_datadir'");
+	$self->polar_set_datadir($polar_datadir);
+	# delete polar_replica_booted for replica to make it working well with a new primary
+	PostgreSQL::Test::Utils::system_or_bail('rm', '-rf',
+		$self->data_dir . "/polar_replica_booted");
+}
+
+=pod
+=item $node->polar_standby_set_recovery
+=cut
+
+sub polar_standby_set_recovery
+{
+	my ($self, $root_node) = @_;
+	$self->polar_set_node_type('standby');
+	$self->polar_set_root_node($root_node);
+	print "polar_standby_set_recovery set node("
+	  . $self->port
+	  . ") root_node("
+	  . $root_node->port . ")\n";
+	my $root_host = $root_node->host;
+	my $root_port = $root_node->port;
+	my $pgdata = $self->data_dir;
+
+	$self->append_conf('postgresql.conf',
+		"primary_conninfo='host=$root_host port=$root_port dbname=postgres application_name="
+		  . $self->name
+		  . "'");
+	$self->append_conf('postgresql.conf',
+		"recovery_target_timeline='latest'");
+	$self->append_conf('postgresql.conf',
+		"primary_slot_name='" . $self->name . "'");
+
+	$self->set_standby_mode();
+}
+
+=pod
+
+=item $node->polar_drop_recovery
+
+After recovery file was deleted, we think this node is going to be 'primary' node.
+
+=cut
+
+sub polar_drop_recovery
+{
+	my ($self) = @_;
+	my $signal_file = "";
+	my $node_type = $self->polar_get_node_type();
+	if ($node_type eq 'replica')
+	{
+		$signal_file = 'replica.signal';
+	}
+	elsif ($node_type eq 'standby')
+	{
+		$signal_file = 'standby.signal';
+	}
+	else
+	{
+		die "Wrong node_type: $node_type\n";
+	}
+	print "drop signal file for node("
+	  . $self->port
+	  . "), root_node is ("
+	  . $self->polar_get_root_node->port . ")\n";
+	$self->polar_set_node_type('primary');
+	$self->polar_set_root_node($self);
+	my $pgdata = $self->data_dir;
+	PostgreSQL::Test::Utils::system_or_bail('rm', '-f',
+		"$pgdata/$signal_file");
+	PostgreSQL::Test::Utils::system_or_bail('rm', '-f',
+		"$pgdata/recovery.done");
+	PostgreSQL::Test::Utils::system_or_bail('rm', '-f',
+		"$pgdata/polar_node_static.conf");
+}
+
+=pod
+=item $node->polar_standby_build_data
+=cut
+
+sub polar_standby_build_data
+{
+	my ($self) = @_;
+	my $root_node = $self->polar_get_root_node;
+	my $src_polar_datadir = $root_node->polar_get_datadir;
+	my $dst_polar_datadir = $self->polar_get_datadir;
+	if ($src_polar_datadir ne $dst_polar_datadir)
+	{
+		if ($root_node->polar_postmaster_is_alive)
+		{
+			# polar_basebackup build standby's data when root_node is alive.
+			my $temp_datadir = $self->data_dir . "_tmp";
+			PostgreSQL::Test::Utils::system_or_bail(
+				'polar_basebackup', '-h',
+				$root_node->host, '-p',
+				$root_node->port, "-D",
+				$temp_datadir, "--polardata=$dst_polar_datadir");
+			PostgreSQL::Test::Utils::system_or_bail('rm', '-rf',
+				$temp_datadir);
+		}
+		else
+		{
+			PostgreSQL::Test::Utils::system_or_bail('cp', '-frp',
+				"$src_polar_datadir", "$dst_polar_datadir");
+		}
+		$self->append_conf('postgresql.conf',
+			"polar_datadir=\'file-dio://$dst_polar_datadir\'");
+		$self->polar_set_datadir($dst_polar_datadir);
+		print
+		  "Building standby datadir ($dst_polar_datadir) from primary datadir ($src_polar_datadir).\n";
+	}
+	else
+	{
+		die
+		  "Can not build standby datadir ($dst_polar_datadir) from primary datadir ($src_polar_datadir).\n";
+	}
+	return;
+}
+
+=pod
+=item $node->polar_get_system_identifier
+=cut
+
+sub polar_get_system_identifier
+{
+	my ($self) = @_;
+	my $polar_datadir = $self->polar_get_datadir;
+	my $system_identifier = readpipe(
+		"pg_controldata -D $polar_datadir | grep 'system identifier' | cut -d ':' -f 2"
+	);
+	print "get system_identifier: $system_identifier\n";
+	return $system_identifier;
+}
+
+=pod
+=item $node->polar_get_redo_location($data_dir)
+=cut
+
+sub polar_get_redo_location
+{
+	my ($self, $datadir) = @_;
+	my $name = $self->name;
+	my $redoptr = readpipe(
+		"pg_controldata -D $datadir | grep 'REDO location' | cut -d ':' -f 2"
+	);
+	print "get $name redo location: $redoptr";
+	chomp($redoptr);
+	$redoptr =~ s/^\s+|\s+$//g;
+	return $redoptr;
+}
+
+=pod
+
+=item $node->polar_init_primary(...)
+
+Initialize a new cluster for polar primary node.
+
+=cut
+
+sub polar_init_primary
+{
+	my ($self, %params) = @_;
+
+	my $pgdata = $self->data_dir;
+	my $polar_datadir = $self->polar_get_datadir;
+
+	$self->polar_set_node_type('primary');
+	$self->init(
+		allows_streaming => 1,
+		init_polar_node => 1,
+		%params);
+
+	mkdir $polar_datadir, 0700
+	  or BAIL_OUT("could not create polar data directory $polar_datadir");
+	PostgreSQL::Test::Utils::system_or_bail(
+		'polar-initdb.sh', "$pgdata/", "$polar_datadir/", 'primary',
+		'localfs');
+
+	return;
+}
+
+=pod
+
+=item $node->polar_init_replica(...)
+
+Initialize a new cluster for polar replica node.
+
+=cut
+
+sub polar_init_replica
+{
+	my ($self, $root_node, %params) = @_;
+
+	my $pgdata = $self->data_dir;
+	my $tmp_pgdata = $pgdata . "_tmp";
+	my $polar_datadir = $root_node->polar_get_datadir;
+	my @confs = ('postgresql.conf', 'pg_hba.conf', 'pg_ident.conf');
+
+	$self->polar_set_node_type('replica');
+	$self->init(
+		allows_streaming => 1,
+		init_polar_node => 1,
+		%params);
+
+	mkdir $tmp_pgdata, 0700
+	  or BAIL_OUT("could not create polar data directory $tmp_pgdata");
+	PostgreSQL::Test::Utils::system_or_bail(
+		'polar-initdb.sh', "$tmp_pgdata/",
+		"$polar_datadir/", 'replica',
+		'localfs');
+
+	# copy configure files
+	foreach my $conf (@confs)
+	{
+		PostgreSQL::Test::Utils::system_or_bail('cp', '-frp', "$pgdata/$conf",
+			"$tmp_pgdata/$conf");
+	}
+
+	# replace datadir with temp datadir
+	rmtree $pgdata;
+	PostgreSQL::Test::Utils::system_or_bail('mv', $tmp_pgdata, $pgdata);
+
+	$self->polar_replica_set_recovery($root_node);
+	return;
+}
+
+=pod
+
+=item $node->polar_init_standby(...)
+
+Initialize a new cluster for polar standby node.
+
+=cut
+
+sub polar_init_standby
+{
+	my ($self, $root_node, %params) = @_;
+
+	my $pgdata = $self->data_dir;
+	my $polar_datadir = $self->polar_get_datadir;
+
+	$self->polar_set_node_type('standby');
+	$self->init(
+		allows_streaming => 1,
+		init_polar_node => 1,
+		%params);
+
+	$self->polar_standby_set_recovery($root_node);
+	$self->polar_standby_build_data();
+	return;
+}
+
+
+=pod
+
+=item $node->restart_no_check()
+=cut
+
+sub restart_no_check
+{
+	my ($self) = @_;
+
+	my $port = $self->port;
+	my $pgdata = $self->data_dir;
+	my $logfile = $self->logfile;
+	my $name = $self->name;
+	print "### Restarting node \"$name\"\n";
+
+	my $ret =
+	  PostgreSQL::Test::Utils::system_log('pg_ctl', '-D', $pgdata, '-l',
+		$logfile, 'restart');
+
+	if ($ret != 0)
+	{
+		print "# pg_ctl start failed; logfile:\n";
+		print PostgreSQL::Test::Utils::slurp_file($self->logfile);
+	}
+
+	$self->_update_pid(1);
+
+	return $ret;
+}
+
+=pod
+
+=item $node->promote_async()
+
+Wrapper for pg_ctl promote in async mode
+
+=cut
+
+sub promote_async
+{
+	my ($self) = @_;
+	my $port = $self->port;
+	my $pgdata = $self->data_dir;
+	my $logfile = $self->logfile;
+	my $name = $self->name;
+	print "### Promoting node \"$name\"\n";
+	system("pg_ctl promote -D $pgdata -l $logfile &");
+	$self->polar_set_node_type('primary');
+	$self->polar_set_root_node($self);
+	return;
+}
+
+=pod
+
+=item $node->find_child(process_name)
+POLAR: Find child process base on process name
+
+=cut
+
+sub find_child
+{
+	my ($self, $process_name) = @_;
+	my $pid = 0;
+	my @childs = `ps -o pid,cmd --ppid $self->{_pid}`
+	  or die "can't run ps! $! \n";
+
+	foreach my $child (@childs)
+	{
+		$child =~ s/^\s+|\s+$//g;
+		my $pos = index($child, $process_name);
+		if ($pos > 0)
+		{
+			$pos = index($child, ' ');
+			$pid = substr($child, 0, $pos);
+			$pid =~ s/^\s+|\s+$//g;
+			print "### Found child process \"$pid\", \"$child\"\n";
+			last;
+		}
+	}
+
+	return $pid;
+}
+
+=pod
+
+=item $node->kill_child(process_name)
+POLAR: Kill child process base on process name
+
+=cut
+
+sub kill_child
+{
+	my ($self, $process_name) = @_;
+	my $pid = $self->find_child($process_name);
+
+	if ($pid != 0)
+	{
+		PostgreSQL::Test::Utils::system_or_bail('kill', '-9', $pid);
+	}
+}
+
+=pod
+
+=item $node->run_command(...)
+
+PostgreSQL::Test::Utils::run_command with our connection parameters. See
+command_ok(...)
+
+=cut
+
+sub run_command
+{
+	local $Test::Builder::Level = $Test::Builder::Level + 1;
+
+	my $self = shift;
+
+	local %ENV = $self->_get_env();
+
+	my ($stdout, $stderr);
+	($stdout, $stderr) = PostgreSQL::Test::Utils::run_command(@_);
+	return ($stdout, $stderr);
+}
+
+=pod
+
+=item $node->stop_child(process_name)
+POLAR: stop child process base on process name
+
+=cut
+
+sub stop_child
+{
+	my ($self, $process_name) = @_;
+	my $pid = $self->find_child($process_name);
+	my $timeout = 60;
+	my $time = 0;
+
+	if ($pid eq 0)
+	{
+		note "child $process_name's pid is 0!\n";
+		return;
+	}
+
+	PostgreSQL::Test::Utils::system_or_bail('kill', '-19', $pid);
+
+	my ($out, $err) = $self->run_command([ 'which', 'pstack' ]);
+	if ($err =~ qr/which:\s*no\s+pstack\s+in/i)
+	{
+		note "There's no pstack command!\n";
+		return;
+	}
+
+	# try to recheck whether process's stack is safe after sigstop
+	while ($time < $timeout)
+	{
+		($out, $err) = $self->run_command([ 'pstack', $pid ]);
+		note "stdout: $out\nstderr: $err\n";
+		# make sure that target process is stopped at right stack
+		if ($out =~ /WaitLatch/)
+		{
+			note "$process_name($pid)'s stack is safe after sigtop.\n";
+			last;
+		}
+		PostgreSQL::Test::Utils::system_or_bail('kill', '-18', $pid);
+		$time += 1;
+		sleep 1;
+		PostgreSQL::Test::Utils::system_or_bail('kill', '-19', $pid);
+	}
+}
+
+=pod
+
+=item $node->resume_child(process_name)
+POLAR: resume child process base on process name
+
+=cut
+
+sub resume_child
+{
+	my ($self, $process_name) = @_;
+	my $pid = $self->find_child($process_name);
+
+	if ($pid != 0)
+	{
+		PostgreSQL::Test::Utils::system_or_bail('kill', '-18', $pid);
+	}
+}
+
+=pod
+=item $node->wait_walstreaming_establish_timeout(timeout)
+wait for walstreaming establish during timeout
+=cut
+
+sub wait_walstreaming_establish_timeout
+{
+	my ($self, $timeout) = @_;
+	my $walstream_state = "";
+	my $walreceiver_pid = 0;
+	my $root_node = $self->polar_get_root_node;
+	my $name = $self->name;
+	my $i = 0;
+	for ($i = 0; $i < $timeout && $walreceiver_pid == 0; $i = $i + 1)
+	{
+		$walstream_state = $root_node->safe_psql('postgres',
+			qq[select state from pg_stat_replication where application_name = '$name';]
+		);
+		if ($walstream_state eq 'streaming')
+		{
+			$walreceiver_pid = $self->find_child('walreceiver');
+		}
+		sleep 1;
+	}
+	print "walreceiver_pid: $walreceiver_pid\n";
+	if ($walreceiver_pid == 0)
+	{
+		print "wal streaming haven't been established after $timeout secs\n";
+	}
+	return $walreceiver_pid;
+}
+
+=pod
+
+=item $node->polar_postmaster_is_alive()
+
+=cut
+
+sub polar_postmaster_is_alive
+{
+	my ($self) = @_;
+	if (defined $self->{_pid})
+	{
+		return 1;
+	}
+	else
+	{
+		return 0;
+	}
+}
+
+=pod
+	POLAR: connect postgresql server via psql
+=cut
+
+sub psql_connect
+{
+	my ($self, $database, $timeout, %params) = @_;
+	my $psql;
+	local %ENV = $self->_get_env();
+
+	if (defined $params{_psql})
+	{
+		$psql = $params{_psql};
+	}
+	else
+	{
+		$psql = $self->{_psql};
+	}
+	$psql->{single_step_mode} = 0;
+	$psql->{_psql_databsae} = $database;
+	$psql->{_psql_input} = "";
+	$psql->{_psql_stderr} = "";
+	$psql->{_psql_timeout} = $timeout;
+	$psql->{_psql_timer} = IPC::Run::timer($psql->{_psql_timeout});
+	if (defined $params{output_file})
+	{
+		$psql->{_psql_output_file} = $params{output_file};
+	}
+	else
+	{
+		$psql->{_psql_output_file} =
+		  "$PostgreSQL::Test::Utils::log_path/$$.out";
+	}
+
+	# Since the invoked psql will believe it's interactive, it will use
+	# readline/libedit if available.  We need to adjust some environment
+	# settings to prevent unwanted side-effects.
+
+	# Developers would not appreciate tests adding a bunch of junk to
+	# their ~/.psql_history, so redirect readline history somewhere else.
+	# If the calling script doesn't specify anything, just bit-bucket it.
+	$ENV{PSQL_HISTORY} = $params{history_file} || '/dev/null';
+
+	# Another pitfall for developers is that they might have a ~/.inputrc
+	# file that changes readline's behavior enough to affect the test.
+	# So ignore any such file.
+	$ENV{INPUTRC} = '/dev/null';
+
+	# Unset TERM so that readline/libedit won't use any terminal-dependent
+	# escape sequences; that leads to way too many cross-version variations
+	# in the output.
+	delete $ENV{TERM};
+	# Some versions of readline inspect LS_COLORS, so for luck unset that too.
+	delete $ENV{LS_COLORS};
+
+	# build output file and truncate it
+	open my $OUTPUT, '+>', $psql->{_psql_output_file}
+	  or die "failed to open $psql->{_psql_output_file}: $!";
+	truncate($OUTPUT, 0)
+	  or die "failed to truncate $psql->{_psql_output_file}: $!";
+	close $OUTPUT;
+
+	$psql->{_psql_output_index} = 0;
+
+	my @psql_params = (
+		$self->installed_command('psql'),
+		'-XAtq',
+		'-d',
+		$self->connstr($psql->{_psql_databsae}),
+		'--set=SORT_RESULT=on',
+		'-o',
+		$psql->{_psql_output_file});
+
+	my $banner = "psql_connect: ready";
+	if (defined $params{single_step_mode})
+	{
+		$banner =
+		  qr/\s*\*+\(press return to proceed or enter x and return to cancel\)\*+\s+/i;
+		push @psql_params, '-s';
+		$psql->{single_step_mode} = 1;
+		note "enter into single step mode!";
+	}
+
+	push @psql_params, @{ $params{extra_params} }
+	  if defined $params{extra_params};
+
+	$psql->{_psql_h} = IPC::Run::start \@psql_params,
+	  '<pty<', \$psql->{_psql_input},
+	  '>pty>', \$psql->{_psql_stderr},
+	  $psql->{_psql_timer};
+
+	# wait for connection establish
+	$psql->{_psql_input} .= "\\echo $banner\n"
+	  if (!defined $params{single_step_mode});
+
+	$psql->{_psql_h}->pump
+	  until $psql->{_psql_stderr} =~ /\n$banner/
+	  || $psql->{_psql_timer}->is_expired;
+
+	die "psql_connect timed out, stderr:\n$psql->{_psql_stderr}\n"
+	  if $psql->{_psql_timer}->is_expired;
+
+	return $psql;
+}
+
+sub psql_fetch_result
+{
+	my ($self, $psql) = @_;
+	my $psql_output_file = $psql->{_psql_output_file};
+	my $prev_size = $psql->{_psql_output_index};
+	my $cur_size = -s $psql_output_file;
+
+	open my $OUTPUT, '<', $psql_output_file
+	  or die "faile $psql_output_file open failed!";
+	seek($OUTPUT, $prev_size, SEEK_SET);
+	my @psql_stdout_array = <$OUTPUT>;
+	close $OUTPUT;
+	my $psql_stdout = "";
+	for (my $i = 0; $i < @psql_stdout_array; $i++)
+	{
+		$psql_stdout .= $psql_stdout_array[$i];
+	}
+
+	die "Unexpected prev_size = $prev_size, cur_size = $cur_size, length = "
+	  . length($psql_stdout)
+	  if (length($psql_stdout) ne ($cur_size - $prev_size));
+	$psql->{_psql_output_index} = $cur_size;
+
+	return $psql_stdout;
+}
+
+=pod
+	POLAR: single step mode for psql.
+=cut
+
+sub psql_step_forward
+{
+	my ($self, %params) = @_;
+	my $psql;
+	if (defined $params{_psql})
+	{
+		$psql = $params{_psql};
+	}
+	else
+	{
+		$psql = $self->{_psql};
+	}
+	my $timer = $psql->{_psql_timer};
+	my $timeout = $psql->{_psql_timeout};
+	my $psql_h = $psql->{_psql_h};
+
+	die "Only support single step mode" if ($psql->{single_step_mode} ne 1);
+
+	my $banner =
+	  qr/\s*\*+\(press return to proceed or enter x and return to cancel\)\*+\s+/i;
+
+	# reset timer and stderr for each step
+	$timer->start($timeout);
+	$psql->{_psql_stderr} = "";
+
+	# send
+	$psql->{_psql_input} .= "\n";
+	$psql_h->pump
+	  until ($psql->{_psql_stderr} =~ $banner
+		  || $timer->is_expired
+		  || !$psql_h->pumpable);
+
+	# check result
+	my $ret = 0;
+	if ($timer->is_expired)
+	{
+		note "##$$'s psql process exited!\n"
+		  . "Timer($timeout): "
+		  . $timer->is_expired . "\n"
+		  . "psql_stderr is:\n$psql->{_psql_stderr}\n"
+		  . "psql_input is:\n$psql->{_psql_input}\n";
+		$ret = 1;
+	}
+
+	return {
+		_ret => $ret,
+		_stdout => $self->psql_fetch_result($psql),
+		_stderr => $psql->{_psql_stderr}
+	};
+}
+
+=pod
+	POLAR: execute SQLs via psql.
+=cut
+
+sub psql_execute
+{
+	my ($self, $sql, %params) = @_;
+	my $psql;
+	if (defined $params{_psql})
+	{
+		$psql = $params{_psql};
+	}
+	else
+	{
+		$psql = $self->{_psql};
+	}
+	my $timer = $psql->{_psql_timer};
+	my $timeout = $psql->{_psql_timeout};
+	my $psql_h = $psql->{_psql_h};
+
+	die "Not support single step mode" if ($psql->{single_step_mode} eq 1);
+
+	# build input sql file
+	my $input_file = "$PostgreSQL::Test::Utils::log_path/$$.sql";
+	open my $INPUT, '+>', $input_file
+	  or die "failed to open $input_file open: $!";
+	$sql = $sql . "\n;\\echo One-Job-Done-for-CDC.\n";
+	print $INPUT $sql;
+	close $INPUT;
+
+	# reset timer and stderr for each query
+	$timer->start($timeout);
+	$psql->{_psql_stderr} = "";
+
+	# send
+	my $banner = qr/\nOne-Job-Done-for-CDC\.\s/;
+	$psql->{_psql_input} .= "\\i $input_file;\n";
+	$psql_h->pump
+	  until ($psql->{_psql_stderr} =~ $banner
+		  || $timer->is_expired
+		  || !$psql_h->pumpable);
+
+	# check result
+	my $ret = 0;
+	if ($timer->is_expired || !$psql_h->pumpable)
+	{
+		note "##$$'s psql process exited! SQL is:\n$sql\n"
+		  . "Timer($timeout): "
+		  . $timer->is_expired . "\n"
+		  . "psql_stderr is:\n$psql->{_psql_stderr}\n"
+		  . "psql_input is:\n$psql->{_psql_input}\n";
+		$ret = 1;
+	}
+
+	# fetch stderr
+	my $psql_stderr = "";
+	if ($psql->{_psql_stderr} =~ $banner)
+	{
+		$psql_stderr .= $`;
+	}
+	else
+	{
+		$psql_stderr = $psql->{_psql_stderr};
+	}
+
+	PostgreSQL::Test::Utils::system_or_bail('rm', '-f', $input_file);
+
+	return {
+		_ret => $ret,
+		_stdout => $self->psql_fetch_result($psql),
+		_stderr => $psql_stderr
+	};
+}
+
+sub psql_pumpable
+{
+	my ($self, %params) = @_;
+	my $psql;
+	if (defined $params{_psql})
+	{
+		$psql = $params{_psql};
+	}
+	else
+	{
+		$psql = $self->{_psql};
+	}
+	my $psql_h = $psql->{_psql_h};
+
+	return ($psql_h and $psql_h->pumpable);
+}
+
+=pod
+	POLAR: disconnect postgresql server
+=cut
+
+sub psql_close
+{
+	my ($self, %params) = @_;
+	my $psql;
+	if (defined $params{_psql})
+	{
+		$psql = $params{_psql};
+	}
+	else
+	{
+		$psql = $self->{_psql};
+	}
+	my $psql_h = $psql->{_psql_h};
+	if ($psql_h and $psql_h->pumpable)
+	{
+		$psql->{_psql_input} .= "\\q\n";
+		$psql_h->finish;
+	}
+	PostgreSQL::Test::Utils::system_or_bail('rm', '-f',
+		$psql->{_psql_output_file});
+	print "##$$'s psql close SUCC!\n";
+}
+
+=pod
+	POLAR: reconnect postgresql server
+=cut
+
+sub psql_reconnect
+{
+	my ($self, %params) = @_;
+	my $psql;
+	if (defined $params{_psql})
+	{
+		$psql = $params{_psql};
+	}
+	else
+	{
+		$psql = $self->{_psql};
+	}
+	$self->psql_close(_psql => $psql);
+	$self->psql_connect(
+		$psql->{_psql_databsae}, $psql->{_psql_timeout},
+		output_file => $psql->{_psql_output_file},
+		_psql => $psql);
+	print "##$$'s psql reconnect SUCC!\n";
+}
+
+=pod
+
+=item $node->polar_wait_for_startup($wait_timeout)
+Wait for the node to enter run or hot_standby state
+
+=cut
+
+sub polar_wait_for_startup
+{
+	my ($self, $wait_timeout) = @_;
+	my $result = 0;
+	my $start_time = strftime("%Y-%m-%d %H:%M:%S", localtime(time));
+	print("start time: $start_time\n");
+	for (my $i = 0; $i < $wait_timeout && $result != 1; $i = $i + 1)
+	{
+		my ($stdout, $stderr) = ('', '');
+
+		$self->psql(
+			'postgres', qq[SELECT pg_is_in_recovery()],
+			stdout => \$stdout,
+			stderr => \$stderr,
+			on_error_die => 0,
+			on_error_stop => 0);
+		print "stdout:$stdout, stderr:$stderr\n";
+
+		if ($stderr eq '')
+		{
+			if ($self->polar_get_node_type() eq 'primary')
+			{
+				$result = 1 if $stdout eq 'f';
+			}
+			else
+			{
+				$result = 1 if $stdout eq 't';
+			}
+		}
+		sleep 1;
+	}
+	my $end_time = strftime("%Y-%m-%d %H:%M:%S", localtime(time));
+	print "end time: $end_time, startup result: $result\n";
+	return $result;
 }
 
 =pod

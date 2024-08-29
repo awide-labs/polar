@@ -18,6 +18,7 @@
 #include "access/xlog.h"
 #include "access/xlog_internal.h"
 #include "catalog/pg_control.h"
+#include "storage/bufpage.h"
 #include "utils/guc.h"
 #include "utils/timestamp.h"
 
@@ -84,6 +85,15 @@ xlog_desc(StringInfo buf, XLogReaderState *record)
 	{
 		/* no further information to print */
 	}
+	/* POLAR: print fullpage_no */
+	else if (info == POLAR_WAL && *((PolarWalType *) XLogRecGetData(record)) == PWT_FPSI)
+	{
+		uint64		fullpage_no = 0;
+
+		/* get fullpage_no from record */
+		memcpy(&fullpage_no, XLogRecGetData(record) + sizeof(PolarWalType), sizeof(uint64));
+		appendStringInfo(buf, "%ld", fullpage_no);
+	}
 	else if (info == XLOG_BACKUP_END)
 	{
 		XLogRecPtr	startpoint;
@@ -148,6 +158,75 @@ xlog_desc(StringInfo buf, XLogReaderState *record)
 						 LSN_FORMAT_ARGS(xlrec.overwritten_lsn),
 						 timestamptz_to_str(xlrec.overwrite_time));
 	}
+	/* POLAR WAL */
+	else if (info == POLAR_WAL)
+	{
+		PolarWalType type;
+		bool		is_alter_cluster_reload = false;
+
+		/* Read header to get polar_wal type */
+		memcpy(&type, rec, sizeof(PolarWalType));
+
+		switch (type)
+		{
+				/* POLAR: ALTER SYSTEM FOR CLUSTER */
+			case PWT_ALTERSYSTEMFORCLUSTER_RELOAD:
+				is_alter_cluster_reload = true; /* fallthrough */
+			case PWT_ALTERSYSTEMFORCLUSTER:
+				{
+					PolarSettingWalHeader *header = (PolarSettingWalHeader *) rec;
+
+					switch (header->action)
+					{
+							/*
+							 * ALTER SYSTEM FOR CLUSTER SET folowing with both
+							 * name and value
+							 */
+						case POLAR_SETTING_SET:
+							{
+								char	   *name = rec + sizeof(PolarSettingWalHeader);
+								char	   *value = rec + sizeof(PolarSettingWalHeader) + strlen(name) + 1; /* +1 to skip '\0' */
+
+								appendStringInfo(buf, "ALTER SYSTEM FOR CLUSTER %s SET %s TO %s",
+												 is_alter_cluster_reload ? "RELOAD" : "", name, value);
+								break;
+							}
+
+							/*
+							 * ALTER SYSTEM FOR CLUSTER RESET only folowing
+							 * with name
+							 */
+						case POLAR_SETTING_RESET:
+							{
+								char	   *name = rec + sizeof(PolarSettingWalHeader);
+
+								appendStringInfo(buf, "ALTER SYSTEM FOR CLUSTER %s RESET %s",
+												 is_alter_cluster_reload ? "RELOAD" : "", name);
+								break;
+							}
+
+							/*
+							 * ALTER SYSTEM FOR CLUSTER RESET ALL contains
+							 * nothing
+							 */
+						case POLAR_SETTING_RESET_ALL:
+							appendStringInfo(buf, "ALTER SYSTEM FOR CLUSTER %s RESET ALL",
+											 is_alter_cluster_reload ? "RELOAD" : "");
+							break;
+
+						default:
+							appendStringInfo(buf, "unexpected ALTER SYSTEM FOR CLUSTER WAL action: %d", header->action);
+							break;
+					}
+					break;
+				}
+
+			default:
+				appendStringInfo(buf, "unexpected POLAR_WAL record type: %d", type);
+				break;
+		}
+	}
+	/* POLAR end */
 }
 
 const char *
@@ -196,6 +275,11 @@ xlog_identify(uint8 info)
 		case XLOG_FPI_FOR_HINT:
 			id = "FPI_FOR_HINT";
 			break;
+			/* POLAR WAL */
+		case POLAR_WAL:
+			id = "POLAR_WAL";
+			break;
+			/* POLAR end */
 	}
 
 	return id;

@@ -281,10 +281,7 @@ select column1::jsonb from (values (:value), (:long)) as q;
 ]
 	});
 my $log = PostgreSQL::Test::Utils::slurp_file($node->logfile);
-unlike(
-	$log,
-	qr[DETAIL:  parameters: \$1 = '\{ invalid ',],
-	"no parameters logged");
+unlike($log, qr[params: \$1 = '\{ invalid ',], "no parameters logged");
 $log = undef;
 
 # 2. Logging truncated parameters on error, full with statements
@@ -324,7 +321,7 @@ select column1::jsonb from (values (:value), (:long)) as q;
 $log = PostgreSQL::Test::Utils::slurp_file($node->logfile);
 like(
 	$log,
-	qr[DETAIL:  parameters: \$1 = '\{ invalid ', \$2 = '''Valame Dios!'' dijo Sancho; ''no le dije yo a vuestra merced que mirase bien lo que hacia\?'''],
+	qr[params: \$1 = '\{ invalid ', \$2 = '''Valame Dios!'' dijo Sancho; ''no le dije yo a vuestra merced que mirase bien lo que hacia\?'''],
 	"parameter report does not truncate");
 $log = undef;
 
@@ -369,7 +366,7 @@ select column1::jsonb from (values (:value), (:long)) as q;
 $log = PostgreSQL::Test::Utils::slurp_file($node->logfile);
 like(
 	$log,
-	qr[DETAIL:  parameters: \$1 = '\{ inval\.\.\.', \$2 = '''Valame\.\.\.'],
+	qr[params: \$1 = '\{ inval\.\.\.', \$2 = '''Valame\.\.\.'],
 	"parameter report truncates");
 $log = undef;
 

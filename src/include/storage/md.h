@@ -49,4 +49,9 @@ extern int	mdsyncfiletag(const FileTag *ftag, char *path);
 extern int	mdunlinkfiletag(const FileTag *ftag, char *path);
 extern bool mdfiletagmatches(const FileTag *ftag, const FileTag *candidate);
 
+/* POLAR: bulk io */
+extern void polar_mdbulkextend(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
+							   int blockCount, char *buffer, bool skipFsync);
+extern void polar_mdbulkread(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
+							 int blockCount, char *buffer);
 #endif							/* MD_H */

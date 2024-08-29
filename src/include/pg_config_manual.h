@@ -17,7 +17,7 @@
  * This is the default value for wal_segment_size to be used when initdb is run
  * without the --wal-segsize option.  It must be a valid segment size.
  */
-#define DEFAULT_XLOG_SEG_SIZE	(16*1024*1024)
+#define DEFAULT_XLOG_SEG_SIZE	(1024*1024*1024)
 
 /*
  * Maximum length for identifiers (e.g. table names, column names,
@@ -408,3 +408,8 @@
  * Enable tracing of syncscan operations (see also the trace_syncscan GUC var).
  */
 /* #define TRACE_SYNCSCAN */
+
+/*
+ * Enable debugging of LockBufHdr.
+ */
+/* #define LOCKBUFHDR_DEBUG */

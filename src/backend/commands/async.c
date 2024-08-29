@@ -154,6 +154,8 @@
 #include "utils/snapmgr.h"
 #include "utils/timestamp.h"
 
+/* POLAR */
+#include "utils/backend_status.h"
 
 /*
  * Maximum size of a NOTIFY payload, including terminating NULL.  This
@@ -441,6 +443,7 @@ static bool tryAdvanceTail = false;
 
 /* GUC parameter */
 bool		Trace_notify = false;
+int			polar_notify_buffer_slot_size = NUM_NOTIFY_BUFFERS;
 
 /* local function prototypes */
 static int	asyncQueuePageDiff(int p, int q);
@@ -521,7 +524,7 @@ AsyncShmemSize(void)
 	size = mul_size(MaxBackends + 1, sizeof(QueueBackendStatus));
 	size = add_size(size, offsetof(AsyncQueueControl, backend));
 
-	size = add_size(size, SimpleLruShmemSize(NUM_NOTIFY_BUFFERS, 0));
+	size = add_size(size, SimpleLruShmemSize(polar_notify_buffer_slot_size, 0));
 
 	return size;
 }
@@ -569,9 +572,9 @@ AsyncShmemInit(void)
 	 * Set up SLRU management of the pg_notify data.
 	 */
 	NotifyCtl->PagePrecedes = asyncQueuePagePrecedes;
-	SimpleLruInit(NotifyCtl, "Notify", NUM_NOTIFY_BUFFERS, 0,
+	SimpleLruInit(NotifyCtl, "Notify", polar_notify_buffer_slot_size, 0,
 				  NotifySLRULock, "pg_notify", LWTRANCHE_NOTIFY_BUFFER,
-				  SYNC_HANDLER_NONE);
+				  SYNC_HANDLER_NONE, false);
 
 	if (!found)
 	{
@@ -2286,6 +2289,8 @@ ProcessIncomingNotify(bool flush)
 void
 NotifyMyFrontEnd(const char *channel, const char *payload, int32 srcPid)
 {
+	srcPid = polar_get_session_id(srcPid);
+
 	if (whereToSendOutput == DestRemote)
 	{
 		StringInfoData buf;

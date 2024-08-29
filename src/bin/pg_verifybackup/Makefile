@@ -27,7 +27,7 @@ OBJS = \
 all: pg_verifybackup
 
 pg_verifybackup: $(OBJS) | submake-libpq submake-libpgport submake-libpgfeutils
-	$(CC) $(CFLAGS) $^ $(LDFLAGS) $(LDFLAGS_EX) $(LIBS) -o $@$(X)
+	$(CC) $(CFLAGS) $^ $(LDFLAGS) $(LDFLAGS_EX) $(LIBS) $(polar_libvfs) -o $@$(X)
 
 install: all installdirs
 	$(INSTALL_PROGRAM) pg_verifybackup$(X) '$(DESTDIR)$(bindir)/pg_verifybackup$(X)'

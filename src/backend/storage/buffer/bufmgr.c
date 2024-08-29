@@ -3,6 +3,7 @@
  * bufmgr.c
  *	  buffer manager interface routines
  *
+ * Portions Copyright (c) 2024, Alibaba Group Holding Limited
  * Portions Copyright (c) 1996-2022, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
@@ -57,10 +58,38 @@
 #include "utils/resowner_private.h"
 #include "utils/timestamp.h"
 
+/* POLAR */
+#include "access/polar_logindex_redo.h"
+#include "access/xlogrecovery.h"
+#include "access/polar_logindex.h"
+#include "storage/checksum.h"
+#include "storage/polar_bufmgr.h"
+#include "storage/polar_copybuf.h"
+#include "storage/polar_fd.h"
+#include "storage/polar_flush.h"
+#include "utils/guc.h"
+/* POLAR end */
 
-/* Note: these two macros only work on shared buffers, not local ones! */
-#define BufHdrGetBlock(bufHdr)	((Block) (BufferBlocks + ((Size) (bufHdr)->buf_id) * BLCKSZ))
-#define BufferGetLSN(bufHdr)	(PageGetLSN(BufHdrGetBlock(bufHdr)))
+/* POLAR redo action */
+typedef enum polar_redo_action
+{
+	POLAR_REDO_NO_ACTION,
+	POLAR_REDO_REPLAY_XLOG,
+	POLAR_REDO_MARK_OUTDATE
+} polar_redo_action;
+
+typedef enum polar_checksum_err_action
+{
+	POLAR_CHECKSUM_ERR_NO_ACTION,
+	POLAR_CHECKSUM_ERR_REPEAT_READ, /* Repeat read this block */
+	POLAR_CHECKSUM_ERR_CHECKPOINT_REDO, /* Iterate logindex for this page from
+										 * checkpoint and find the first FPI
+										 * xlog to replay */
+} polar_checksum_err_action;
+
+#define POLAR_REPEAT_READ_DELAY (10)
+#define POLAR_WARNING_REPEAT_TIMES (100)
+/* POLAR end */
 
 /* Note: this macro only works on local buffers, not shared ones! */
 #define LocalBufHdrGetBlock(bufHdr) \
@@ -163,6 +192,19 @@ int			backend_flush_after = 0;
 static BufferDesc *InProgressBuf = NULL;
 static bool IsForInput;
 
+/*
+ * POLAR: bulk io local state for StartBufferIO/TerminateBufferIO/AbortBufferIO and related functions.
+ *
+ * notice: bulk read io may be mixed with temporary write io, for flushing dirty evicted page.
+ *	       So polar_bulk_io_is_for_input[] is required for error recovery.
+ */
+bool		polar_bulk_io_is_in_progress = false;
+int			polar_bulk_io_in_progress_count = 0;
+BufferDesc **polar_bulk_io_in_progress_buf = NULL;
+static bool *polar_bulk_io_is_for_input = NULL;
+
+/* POLAR end */
+
 /* local state for LockBufferForCleanup */
 static BufferDesc *PinCountWaitBuf = NULL;
 
@@ -207,6 +249,19 @@ static PrivateRefCountEntry *NewPrivateRefCountEntry(Buffer buffer);
 static PrivateRefCountEntry *GetPrivateRefCountEntry(Buffer buffer, bool do_move);
 static inline int32 GetPrivateRefCount(Buffer buffer);
 static void ForgetPrivateRefCountEntry(PrivateRefCountEntry *ref);
+
+
+static bool polar_apply_io_locked_page(BufferDesc *bufHdr, XLogRecPtr replay_from,
+									   XLogRecPtr checkpoint_lsn, SMgrRelation smgr,
+									   ForkNumber forkNum, BlockNumber blockNum);
+static polar_redo_action polar_require_backend_redo(bool local_buf, ReadBufferMode mode,
+													ForkNumber fork_num, XLogRecPtr *replay_from);
+static polar_checksum_err_action polar_handle_read_error_block(Block bufBlock, SMgrRelation smgr,
+															   ForkNumber forkNum, BlockNumber blockNum,
+															   ReadBufferMode mode, polar_redo_action redo_action,
+															   uint32 *repeat_read_times);
+
+/* POLAR end */
 
 /*
  * Ensure that the PrivateRefCountArray has sufficient space to store one more
@@ -469,11 +524,8 @@ static void UnpinBuffer(BufferDesc *buf, bool fixOwner);
 static void BufferSync(int flags);
 static uint32 WaitBufHdrUnlocked(BufferDesc *buf);
 static int	SyncOneBuffer(int buf_id, bool skip_recently_used,
-						  WritebackContext *wb_context);
+						  WritebackContext *wb_context, int flags);
 static void WaitIO(BufferDesc *buf);
-static bool StartBufferIO(BufferDesc *buf, bool forInput);
-static void TerminateBufferIO(BufferDesc *buf, bool clear_dirty,
-							  uint32 set_flag_bits);
 static void shared_buffer_write_error_callback(void *arg);
 static void local_buffer_write_error_callback(void *arg);
 static BufferDesc *BufferAlloc(SMgrRelation smgr,
@@ -482,7 +534,8 @@ static BufferDesc *BufferAlloc(SMgrRelation smgr,
 							   BlockNumber blockNum,
 							   BufferAccessStrategy strategy,
 							   bool *foundPtr);
-static void FlushBuffer(BufferDesc *buf, SMgrRelation reln);
+static void FlushBuffer(BufferDesc *buf, SMgrRelation reln,
+						XLogRecPtr polar_oldest_apply_lsn, bool polar_skip_fullpage);
 static void FindAndDropRelFileNodeBuffers(RelFileNode rnode,
 										  ForkNumber forkNum,
 										  BlockNumber nForkBlock,
@@ -826,6 +879,12 @@ ReadBuffer_common(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 	bool		isExtend;
 	bool		isLocalBuf = SmgrIsTemp(smgr);
 
+	/* POLAR: start lsn to do replay */
+	XLogRecPtr	replay_from = InvalidXLogRecPtr;
+	XLogRecPtr	checkpoint_redo_lsn = InvalidXLogRecPtr;
+	polar_redo_action redo_action;
+	uint32		repeat_read_times = 0;
+
 	*hit = false;
 
 	/* Make sure we will have room to remember the buffer pin */
@@ -972,6 +1031,25 @@ ReadBuffer_common(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 		}
 	}
 
+repeat_read:
+
+	/*
+	 * POLAR: page-replay.
+	 *
+	 * Get consistent lsn which used by replay.
+	 *
+	 * Note: All modifications about replay-page must be applied to
+	 * polar_bulk_read_buffer_common() and ReadBuffer_common().
+	 */
+	redo_action = polar_require_backend_redo(isLocalBuf, mode, forkNum, &replay_from);
+
+	if (redo_action != POLAR_REDO_NO_ACTION)
+	{
+		checkpoint_redo_lsn = GetRedoRecPtr();
+		Assert(!XLogRecPtrIsInvalid(checkpoint_redo_lsn));
+	}
+	/* POLAR end */
+
 	/*
 	 * if we have gotten to this point, we have allocated a buffer for the
 	 * page but its contents are not yet valid.  IO_IN_PROGRESS is set for it,
@@ -1032,21 +1110,20 @@ ReadBuffer_common(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 			if (!PageIsVerifiedExtended((Page) bufBlock, blockNum,
 										PIV_LOG_WARNING | PIV_REPORT_STAT))
 			{
-				if (mode == RBM_ZERO_ON_ERROR || zero_damaged_pages)
+				polar_checksum_err_action err_act;
+
+				err_act = polar_handle_read_error_block(bufBlock, smgr, forkNum, blockNum,
+														mode, redo_action, &repeat_read_times);
+				if (err_act == POLAR_CHECKSUM_ERR_REPEAT_READ)
+					goto repeat_read;
+				else if (err_act == POLAR_CHECKSUM_ERR_CHECKPOINT_REDO)
 				{
+					replay_from = checkpoint_redo_lsn;
 					ereport(WARNING,
 							(errcode(ERRCODE_DATA_CORRUPTED),
-							 errmsg("invalid page in block %u of relation %s; zeroing out page",
-									blockNum,
-									relpath(smgr->smgr_rnode, forkNum))));
-					MemSet((char *) bufBlock, 0, BLCKSZ);
+							 errmsg("Replay from lastcheckpoint which is %X/%X",
+									LSN_FORMAT_ARGS(checkpoint_redo_lsn))));
 				}
-				else
-					ereport(ERROR,
-							(errcode(ERRCODE_DATA_CORRUPTED),
-							 errmsg("invalid page in block %u of relation %s",
-									blockNum,
-									relpath(smgr->smgr_rnode, forkNum))));
 			}
 		}
 	}
@@ -1077,6 +1154,35 @@ ReadBuffer_common(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 	}
 	else
 	{
+		/*
+		 * POLAR: page-replay.
+		 *
+		 * apply xlogs to this old page when read from disk.
+		 *
+		 * Note: All modifications about replay-page must be applied to
+		 * ReadBuffer_common().
+		 */
+		if (redo_action == POLAR_REDO_REPLAY_XLOG)
+		{
+			/*
+			 * POLAR: we want to do record replay on page only in non-Startup
+			 * process and consistency reached Startup process.
+			 */
+			polar_apply_io_locked_page(bufHdr, replay_from, checkpoint_redo_lsn, smgr, forkNum, blockNum);
+
+			POLAR_RESET_BACKEND_READ_MIN_LSN();
+		}
+		else if (redo_action == POLAR_REDO_MARK_OUTDATE)
+		{
+			uint32		redo_state = polar_lock_redo_state(bufHdr);
+
+			redo_state |= POLAR_REDO_OUTDATE;
+			polar_unlock_redo_state(bufHdr, redo_state);
+
+			POLAR_RESET_BACKEND_READ_MIN_LSN();
+		}
+		/* POLAR end */
+
 		/* Set BM_VALID, terminate IO, and wake up any waiters */
 		TerminateBufferIO(bufHdr, false, BM_VALID);
 	}
@@ -1114,6 +1220,9 @@ ReadBuffer_common(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
  * we keep it for simplicity in ReadBuffer.
  *
  * No locks are held either at entry or exit.
+ *
+ * POLAR: if reading bulk non-first page and most buffers are pinned, return NULL
+ * instead of log(error).
  */
 static BufferDesc *
 BufferAlloc(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
@@ -1132,6 +1241,10 @@ BufferAlloc(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 	BufferDesc *buf;
 	bool		valid;
 	uint32		buf_state;
+
+	/* POLAR */
+	XLogRecPtr	oldest_apply_lsn = InvalidXLogRecPtr;
+	uint32		redo_state;
 
 	/* create a tag so we can lookup the buffer */
 	INIT_BUFFERTAG(newTag, smgr->smgr_rnode.node, forkNum, blockNum);
@@ -1202,6 +1315,17 @@ BufferAlloc(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 		 */
 		buf = StrategyGetBuffer(strategy, &buf_state);
 
+		/*
+		 * POLAR: only in bulk read, StrategyGetBuffer can return NULL. If
+		 * reading bulk non-first page and most buffers are pinned, return
+		 * NULL instead of log(error).
+		 */
+		if (NULL == buf)
+		{
+			*foundPtr = false;
+			return NULL;
+		}
+
 		Assert(BUF_STATE_GET_REFCOUNT(buf_state) == 0);
 
 		/* Must copy buffer flags while we still hold the spinlock */
@@ -1246,15 +1370,8 @@ BufferAlloc(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 				 */
 				if (strategy != NULL)
 				{
-					XLogRecPtr	lsn;
-
-					/* Read the LSN while holding buffer header lock */
-					buf_state = LockBufHdr(buf);
-					lsn = BufferGetLSN(buf);
-					UnlockBufHdr(buf, buf_state);
-
-					if (XLogNeedsFlush(lsn) &&
-						StrategyRejectBuffer(strategy, buf))
+					/* POLAR: check page LSN in StrategyRejectBuffer */
+					if (StrategyRejectBuffer(strategy, buf))
 					{
 						/* Drop lock/pin and loop around for another buffer */
 						LWLockRelease(BufferDescriptorGetContentLock(buf));
@@ -1263,13 +1380,33 @@ BufferAlloc(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 					}
 				}
 
+				/* POLAR */
+				oldest_apply_lsn = polar_get_oldest_apply_lsn();
+				if (!polar_buffer_can_be_flushed(buf, oldest_apply_lsn, false))
+				{
+					/* Drop lock/pin and loop around for another buffer */
+					LWLockRelease(BufferDescriptorGetContentLock(buf));
+					UnpinBuffer(buf, true);
+
+					/*
+					 * POLAR: Check for interrupts if we can not flush buffer,
+					 * like buffer pool is full. Otherwise user can not
+					 * terminate this transaction.
+					 */
+					CHECK_FOR_INTERRUPTS();
+
+					continue;
+				}
+
 				/* OK, do the I/O */
 				TRACE_POSTGRESQL_BUFFER_WRITE_DIRTY_START(forkNum, blockNum,
 														  smgr->smgr_rnode.node.spcNode,
 														  smgr->smgr_rnode.node.dbNode,
 														  smgr->smgr_rnode.node.relNode);
 
-				FlushBuffer(buf, NULL);
+				polar_backend_flush_stat(strategy);
+
+				FlushBuffer(buf, NULL, oldest_apply_lsn, false);
 				LWLockRelease(BufferDescriptorGetContentLock(buf));
 
 				ScheduleBufferTagForWriteback(&BackendWritebackContext,
@@ -1439,7 +1576,16 @@ BufferAlloc(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 	else
 		buf_state |= BM_TAG_VALID | BUF_USAGECOUNT_ONE;
 
+	/* POLAR: clear polar_flags when buffer header is reused */
+	buf->polar_flags = 0;
+	/* POLAR end */
+
 	UnlockBufHdr(buf, buf_state);
+
+	/* POLAR: reset redo state for the new buffer. */
+	redo_state = polar_lock_redo_state(buf);
+	redo_state &= ~(POLAR_BUF_REDO_FLAG_MASK);
+	polar_unlock_redo_state(buf, redo_state);
 
 	if (oldPartitionLock != NULL)
 	{
@@ -1489,6 +1635,7 @@ InvalidateBuffer(BufferDesc *buf)
 	LWLock	   *oldPartitionLock;	/* buffer partition lock for it */
 	uint32		oldFlags;
 	uint32		buf_state;
+	uint32		redo_state;
 
 	/* Save the original buffer tag before dropping the spinlock */
 	oldTag = buf->tag;
@@ -1504,6 +1651,14 @@ InvalidateBuffer(BufferDesc *buf)
 	 */
 	oldHash = BufTableHashCode(&oldTag);
 	oldPartitionLock = BufMappingPartitionLock(oldHash);
+
+	/*
+	 * POLAR: Mark this buffer is invalidate in order to make background
+	 * process not to replay this buffer.
+	 */
+	redo_state = polar_lock_redo_state(buf);
+	redo_state |= POLAR_REDO_INVALIDATE;
+	polar_unlock_redo_state(buf, redo_state);
 
 retry:
 
@@ -1559,6 +1714,18 @@ retry:
 	if (oldFlags & BM_TAG_VALID)
 		BufTableDelete(&oldTag, oldHash);
 
+	/* POLAR: Clear all polar redo state flag */
+	redo_state = polar_lock_redo_state(buf);
+	redo_state &= ~(POLAR_BUF_REDO_FLAG_MASK);
+	polar_unlock_redo_state(buf, redo_state);
+
+	/* POLAR: free its copy buffer and remove it from flush list */
+	if (polar_enable_shared_storage_mode)
+	{
+		polar_free_copy_buffer(buf);
+		polar_reset_buffer_oldest_lsn(buf);
+	}
+
 	/*
 	 * Done with mapping lock.
 	 */
@@ -1582,6 +1749,17 @@ retry:
 void
 MarkBufferDirty(Buffer buffer)
 {
+	PolarMarkBufferDirty(buffer, InvalidXLogRecPtr);
+}
+
+/*
+ * POLAR: Copied from MarkBufferDirty. For primary node, oldest_lsn is always
+ * invalid, we will set a fake oldest lsn in this function. For replica or
+ * standby node, we will use the applying lsn as the oldest lsn.
+ */
+void
+PolarMarkBufferDirty(Buffer buffer, XLogRecPtr oldest_lsn)
+{
 	BufferDesc *bufHdr;
 	uint32		buf_state;
 	uint32		old_buf_state;
@@ -1598,8 +1776,16 @@ MarkBufferDirty(Buffer buffer)
 	bufHdr = GetBufferDescriptor(buffer - 1);
 
 	Assert(BufferIsPinned(buffer));
+
+	/*
+	 * POLAR: We will mark buffer dirty after reading buffer from storage and
+	 * replaying xlog when startup process does not do the real relaying work.
+	 * In some ReadBufferModes, there is no need to hold buffer's content
+	 * lock, but BM_IO_IN_PROGRESS must be set.
+	 */
 	Assert(LWLockHeldByMeInMode(BufferDescriptorGetContentLock(bufHdr),
-								LW_EXCLUSIVE));
+								LW_EXCLUSIVE) ||
+		   (pg_atomic_read_u32(&bufHdr->state) & BM_IO_IN_PROGRESS));
 
 	old_buf_state = pg_atomic_read_u32(&bufHdr->state);
 	for (;;)
@@ -1616,6 +1802,18 @@ MarkBufferDirty(Buffer buffer)
 										   buf_state))
 			break;
 	}
+
+	/*
+	 * POLAR: set oldest lsn and put buffer to flush list. When in parallel
+	 * replay, keep the same as MarkBufferDirty, set a fake oldest lsn rather
+	 * than using the applying lsn to keep oldest_lsn in ascending order.
+	 */
+	if (XLogRecPtrIsInvalid(oldest_lsn) ||
+		polar_bg_redo_state_is_parallel(polar_logindex_redo_instance) ||
+		polar_should_launch_standby_instant_recovery())
+		polar_set_buffer_fake_oldest_lsn(bufHdr);
+	else
+		polar_redo_set_buffer_oldest_lsn(buffer, oldest_lsn);
 
 	/*
 	 * If the buffer was not dirty already, do vacuum accounting.
@@ -1963,6 +2161,9 @@ BufferSync(int flags)
 	int			mask = BM_DIRTY;
 	WritebackContext wb_context;
 
+	/* POLAR */
+	XLogRecPtr	oldest_apply_lsn = polar_get_oldest_apply_lsn();
+
 	/* Make sure we can handle the pin inside SyncOneBuffer */
 	ResourceOwnerEnlargeBuffers(CurrentResourceOwner);
 
@@ -2002,7 +2203,13 @@ BufferSync(int flags)
 		 */
 		buf_state = LockBufHdr(bufHdr);
 
-		if ((buf_state & mask) == mask)
+		/*
+		 * POLAR: the lsn check here will reduce the list of buffer to be
+		 * qsort. Actually, there is another throttle against the lsn later in
+		 * SyncOneBuffer().
+		 */
+		if (((buf_state & mask) == mask) &&
+			polar_buffer_can_be_flushed_by_checkpoint(bufHdr, oldest_apply_lsn, flags))
 		{
 			CkptSortItem *item;
 
@@ -2161,7 +2368,7 @@ BufferSync(int flags)
 		 */
 		if (pg_atomic_read_u32(&bufHdr->state) & BM_CHECKPOINT_NEEDED)
 		{
-			if (SyncOneBuffer(buf_id, false, &wb_context) & BUF_WRITTEN)
+			if (SyncOneBuffer(buf_id, false, &wb_context, flags) & BUF_WRITTEN)
 			{
 				TRACE_POSTGRESQL_BUFFER_SYNC_WRITTEN(buf_id);
 				PendingCheckpointerStats.buf_written_checkpoints++;
@@ -2224,7 +2431,7 @@ BufferSync(int flags)
  * bgwriter_lru_maxpages to 0.)
  */
 bool
-BgBufferSync(WritebackContext *wb_context)
+BgBufferSync(WritebackContext *wb_context, int flags)
 {
 	/* info obtained from freelist.c */
 	int			strategy_buf_id;
@@ -2449,8 +2656,12 @@ BgBufferSync(WritebackContext *wb_context)
 	/* Execute the LRU scan */
 	while (num_to_scan > 0 && reusable_buffers < upcoming_alloc_est)
 	{
-		int			sync_state = SyncOneBuffer(next_to_clean, true,
-											   wb_context);
+		int			sync_state = 0;
+
+		sync_state = SyncOneBuffer(next_to_clean,
+								   true,
+								   wb_context,
+								   flags);
 
 		if (++next_to_clean >= NBuffers)
 		{
@@ -2527,12 +2738,18 @@ BgBufferSync(WritebackContext *wb_context)
  * Note: caller must have done ResourceOwnerEnlargeBuffers.
  */
 static int
-SyncOneBuffer(int buf_id, bool skip_recently_used, WritebackContext *wb_context)
+SyncOneBuffer(int buf_id,
+			  bool skip_recently_used,
+			  WritebackContext *wb_context,
+			  int flags)
 {
 	BufferDesc *bufHdr = GetBufferDescriptor(buf_id);
 	int			result = 0;
 	uint32		buf_state;
 	BufferTag	tag;
+
+	/* POLAR */
+	XLogRecPtr	polar_oldest_apply_lsn;
 
 	ReservePrivateRefCountEntry();
 
@@ -2566,6 +2783,9 @@ SyncOneBuffer(int buf_id, bool skip_recently_used, WritebackContext *wb_context)
 		return result;
 	}
 
+	/* POLAR */
+	polar_oldest_apply_lsn = polar_get_oldest_apply_lsn();
+
 	/*
 	 * Pin it, share-lock it, write it.  (FlushBuffer will do nothing if the
 	 * buffer is clean by the time we've locked it.)
@@ -2573,17 +2793,73 @@ SyncOneBuffer(int buf_id, bool skip_recently_used, WritebackContext *wb_context)
 	PinBuffer_Locked(bufHdr);
 	LWLockAcquire(BufferDescriptorGetContentLock(bufHdr), LW_SHARED);
 
-	FlushBuffer(bufHdr, NULL);
+	/* POLAR: if the buffer can be flushed, flush it. */
+	if (polar_buffer_can_be_flushed(bufHdr, polar_oldest_apply_lsn, false))
+	{
+		/* Flush buffer directly, if it has copy buffer, that will be freed */
+		FlushBuffer(bufHdr, NULL, polar_oldest_apply_lsn, false);
+		LWLockRelease(BufferDescriptorGetContentLock(bufHdr));
 
-	LWLockRelease(BufferDescriptorGetContentLock(bufHdr));
+		tag = bufHdr->tag;
 
-	tag = bufHdr->tag;
+		UnpinBuffer(bufHdr, true);
 
-	UnpinBuffer(bufHdr, true);
+		ScheduleBufferTagForWriteback(wb_context, &tag);
+		return result | BUF_WRITTEN;
+	}
 
-	ScheduleBufferTagForWriteback(wb_context, &tag);
+	/*
+	 * POLAR: try to write fullpage wal NOTE: shutdown checkpoint don't allow
+	 * write wal record
+	 */
+	else if (!(flags & CHECKPOINT_IS_SHUTDOWN) &&
+			 polar_buffer_need_fullpage_snapshot(bufHdr, polar_oldest_apply_lsn))
+	{
+		FlushBuffer(bufHdr, NULL, polar_oldest_apply_lsn, false);
+		LWLockRelease(BufferDescriptorGetContentLock(bufHdr));
+		UnpinBuffer(bufHdr, true);
+		return result | BUF_WRITTEN;
+	}
 
-	return result | BUF_WRITTEN;
+	/*
+	 * POLAR: if buffer has a copy buffer and the copy buffer can be flushed,
+	 * flush the copy buffer.
+	 */
+	else if (polar_buffer_can_be_flushed(bufHdr, polar_oldest_apply_lsn, true))
+	{
+		/* Flush copy buffer */
+		polar_flush_copy_buffer(bufHdr, NULL);
+		LWLockRelease(BufferDescriptorGetContentLock(bufHdr));
+		UnpinBuffer(bufHdr, true);
+		return result;
+	}
+
+	/*
+	 * POLAR: if buffer satisfy the copy condition, create a copy buffer for
+	 * it.
+	 */
+	else
+	{
+		/* Can not flush, can we copy the buffer? */
+		if (polar_buffer_copy_is_satisfied(bufHdr, polar_oldest_apply_lsn, true))
+			polar_buffer_copy_if_needed(bufHdr, polar_oldest_apply_lsn);
+		else if (unlikely(polar_enable_debug))
+			elog(DEBUG1,
+				 "Buffer ([%u,%u,%u], %u, %d) can not be copied, oldest apply %X/%X, oldest lsn %X/%X, latest lsn %X/%X, copied: %d",
+				 bufHdr->tag.rnode.spcNode,
+				 bufHdr->tag.rnode.dbNode,
+				 bufHdr->tag.rnode.relNode,
+				 bufHdr->tag.blockNum,
+				 bufHdr->tag.forkNum,
+				 LSN_FORMAT_ARGS(polar_oldest_apply_lsn),
+				 LSN_FORMAT_ARGS(polar_buffer_get_oldest_lsn(bufHdr)),
+				 LSN_FORMAT_ARGS(BufferGetLSN(bufHdr)),
+				 bufHdr->copy_buffer != NULL);
+
+		LWLockRelease(BufferDescriptorGetContentLock(bufHdr));
+		UnpinBuffer(bufHdr, true);
+		return result;
+	}
 }
 
 /*
@@ -2820,9 +3096,12 @@ BufferGetTag(Buffer buffer, RelFileNode *rnode, ForkNumber *forknum,
  *
  * If the caller has an smgr reference for the buffer's relation, pass it
  * as the second parameter.  If not, pass NULL.
+ *
+ * POLAR: If this buffer has copy buffer, that will be freed.
  */
 static void
-FlushBuffer(BufferDesc *buf, SMgrRelation reln)
+FlushBuffer(BufferDesc *buf, SMgrRelation reln,
+			XLogRecPtr polar_oldest_apply_lsn, bool polar_skip_fullpage)
 {
 	XLogRecPtr	recptr;
 	ErrorContextCallback errcallback;
@@ -2831,6 +3110,9 @@ FlushBuffer(BufferDesc *buf, SMgrRelation reln)
 	Block		bufBlock;
 	char	   *bufToWrite;
 	uint32		buf_state;
+
+	/* POLAR */
+	bool		polar_replica = polar_is_replica();
 
 	/*
 	 * Try to start an I/O operation.  If StartBufferIO returns false, then
@@ -2847,7 +3129,7 @@ FlushBuffer(BufferDesc *buf, SMgrRelation reln)
 	error_context_stack = &errcallback;
 
 	/* Find smgr relation for buffer */
-	if (reln == NULL)
+	if (!polar_replica && reln == NULL)
 		reln = smgropen(buf->tag.rnode, InvalidBackendId);
 
 	TRACE_POSTGRESQL_BUFFER_FLUSH_START(buf->tag.forkNum,
@@ -2867,6 +3149,20 @@ FlushBuffer(BufferDesc *buf, SMgrRelation reln)
 	/* To check if block content changes while flushing. - vadim 01/17/97 */
 	buf_state &= ~BM_JUST_DIRTIED;
 	UnlockBufHdr(buf, buf_state);
+
+	if (polar_enable_debug)
+	{
+		elog(DEBUG1,
+			 "Flush buffer %d page ([%u,%u,%u], %u), oldest lsn %X/%X, latest lsn %X/%X, oldest apply lsn %X/%X ",
+			 BufferDescriptorGetBuffer(buf),
+			 buf->tag.rnode.spcNode,
+			 buf->tag.rnode.dbNode,
+			 buf->tag.rnode.relNode,
+			 buf->tag.blockNum,
+			 LSN_FORMAT_ARGS(buf->oldest_lsn),
+			 LSN_FORMAT_ARGS(recptr),
+			 LSN_FORMAT_ARGS(polar_oldest_apply_lsn));
+	}
 
 	/*
 	 * Force XLOG flush up to buffer's LSN.  This implements the basic WAL
@@ -2905,14 +3201,28 @@ FlushBuffer(BufferDesc *buf, SMgrRelation reln)
 	if (track_io_timing)
 		INSTR_TIME_SET_CURRENT(io_start);
 
-	/*
-	 * bufToWrite is either the shared buffer or a copy, as appropriate.
-	 */
-	smgrwrite(reln,
-			  buf->tag.forkNum,
-			  buf->tag.blockNum,
-			  bufToWrite,
-			  false);
+	if (!polar_replica)
+	{
+		/* POLAR: write fullpage wal when flush a future page */
+		if (POLAR_LOGINDEX_ENABLE_FULLPAGE() &&
+			!polar_skip_fullpage && !PageIsNew(bufBlock) &&
+			!XLogRecPtrIsInvalid(polar_oldest_apply_lsn) &&
+			BufferGetLSN(buf) > polar_oldest_apply_lsn &&
+			buf->tag.forkNum == MAIN_FORKNUM)
+		{
+			polar_log_fullpage_snapshot_image(polar_logindex_redo_instance->fullpage_ctl,
+											  BufferDescriptorGetBuffer(buf), polar_oldest_apply_lsn);
+		}
+
+		/*
+		 * bufToWrite is either the shared buffer or a copy, as appropriate.
+		 */
+		smgrwrite(reln,
+				  buf->tag.forkNum,
+				  buf->tag.blockNum,
+				  bufToWrite,
+				  false);
+	}
 
 	if (track_io_timing)
 	{
@@ -2923,6 +3233,17 @@ FlushBuffer(BufferDesc *buf, SMgrRelation reln)
 	}
 
 	pgBufferUsage.shared_blks_written++;
+
+	/*
+	 * POLAR: The oldest_lsn should be cleared once it is flushed. It will be
+	 * set again when it is dirty.
+	 */
+	if (polar_enable_shared_storage_mode)
+	{
+		/* Free copy buffer if exists */
+		polar_free_copy_buffer(buf);
+		polar_reset_buffer_oldest_lsn(buf);
+	}
 
 	/*
 	 * Mark the buffer as clean (unless BM_JUST_DIRTIED has become set) and
@@ -3520,6 +3841,9 @@ FlushRelationBuffers(Relation rel)
 	int			i;
 	BufferDesc *bufHdr;
 
+	/* POLAR */
+	XLogRecPtr	oldest_apply_lsn = polar_get_oldest_apply_lsn();
+
 	if (RelationUsesLocalBuffers(rel))
 	{
 		for (i = 0; i < NLocBuffer; i++)
@@ -3584,9 +3908,18 @@ FlushRelationBuffers(Relation rel)
 			(buf_state & (BM_VALID | BM_DIRTY)) == (BM_VALID | BM_DIRTY))
 		{
 			PinBuffer_Locked(bufHdr);
-			LWLockAcquire(BufferDescriptorGetContentLock(bufHdr), LW_SHARED);
-			FlushBuffer(bufHdr, RelationGetSmgr(rel));
-			LWLockRelease(BufferDescriptorGetContentLock(bufHdr));
+			/* POLAR: Must use LockBuffer which try to replay buffer */
+			LockBuffer(BufferDescriptorGetBuffer(bufHdr), BUFFER_LOCK_SHARE);
+
+			/*
+			 * POLAR: it's no need to do buffer flush control for vacuum
+			 * full/rewrite table. AccessExclusiveLock of the target relation
+			 * has been held by the caller, and no backend in replica will
+			 * access the relation due to ddl synchronization, so it is ok to
+			 * flush the buffer directly.
+			 */
+			FlushBuffer(bufHdr, RelationGetSmgr(rel), oldest_apply_lsn, true);
+			LockBuffer(BufferDescriptorGetBuffer(bufHdr), BUFFER_LOCK_UNLOCK);
 			UnpinBuffer(bufHdr, true);
 		}
 		else
@@ -3609,6 +3942,9 @@ FlushRelationsAllBuffers(SMgrRelation *smgrs, int nrels)
 	int			i;
 	SMgrSortArray *srels;
 	bool		use_bsearch;
+
+	/* POLAR */
+	XLogRecPtr	oldest_apply_lsn = polar_get_oldest_apply_lsn();
 
 	if (nrels == 0)
 		return;
@@ -3679,9 +4015,15 @@ FlushRelationsAllBuffers(SMgrRelation *smgrs, int nrels)
 			(buf_state & (BM_VALID | BM_DIRTY)) == (BM_VALID | BM_DIRTY))
 		{
 			PinBuffer_Locked(bufHdr);
-			LWLockAcquire(BufferDescriptorGetContentLock(bufHdr), LW_SHARED);
-			FlushBuffer(bufHdr, srelent->srel);
-			LWLockRelease(BufferDescriptorGetContentLock(bufHdr));
+			/* POLAR: Must use LockBuffer which try to replay buffer */
+			LockBuffer(BufferDescriptorGetBuffer(bufHdr), BUFFER_LOCK_SHARE);
+
+			/*
+			 * POLAR: it's no need to do buffer flush control for vacuum
+			 * full/rewrite table, see comments in FlushRelationBuffers.
+			 */
+			FlushBuffer(bufHdr, srelent->srel, oldest_apply_lsn, true);
+			LockBuffer(BufferDescriptorGetBuffer(bufHdr), BUFFER_LOCK_UNLOCK);
 			UnpinBuffer(bufHdr, true);
 		}
 		else
@@ -3867,6 +4209,9 @@ FlushDatabaseBuffers(Oid dbid)
 	int			i;
 	BufferDesc *bufHdr;
 
+	/* POLAR */
+	XLogRecPtr	oldest_apply_lsn = polar_get_oldest_apply_lsn();
+
 	/* Make sure we can handle the pin inside the loop */
 	ResourceOwnerEnlargeBuffers(CurrentResourceOwner);
 
@@ -3890,9 +4235,15 @@ FlushDatabaseBuffers(Oid dbid)
 			(buf_state & (BM_VALID | BM_DIRTY)) == (BM_VALID | BM_DIRTY))
 		{
 			PinBuffer_Locked(bufHdr);
-			LWLockAcquire(BufferDescriptorGetContentLock(bufHdr), LW_SHARED);
-			FlushBuffer(bufHdr, NULL);
-			LWLockRelease(BufferDescriptorGetContentLock(bufHdr));
+			/* POLAR: Must use LockBuffer which try to replay buffer */
+			LockBuffer(BufferDescriptorGetBuffer(bufHdr), BUFFER_LOCK_SHARE);
+
+			/*
+			 * POLAR: it's no need to do buffer flush control for vacuum
+			 * full/rewrite table, see comments in FlushRelationBuffers.
+			 */
+			FlushBuffer(bufHdr, NULL, oldest_apply_lsn, true);
+			LockBuffer(BufferDescriptorGetBuffer(bufHdr), BUFFER_LOCK_UNLOCK);
 			UnpinBuffer(bufHdr, true);
 		}
 		else
@@ -3918,7 +4269,11 @@ FlushOneBuffer(Buffer buffer)
 
 	Assert(LWLockHeldByMe(BufferDescriptorGetContentLock(bufHdr)));
 
-	FlushBuffer(bufHdr, NULL);
+	/*
+	 * POLAR: FlushOneBuffer currently only used for hash xlog, do not care
+	 * about it
+	 */
+	FlushBuffer(bufHdr, NULL, InvalidXLogRecPtr, false);
 }
 
 /*
@@ -4009,6 +4364,10 @@ MarkBufferDirtyHint(Buffer buffer, bool buffer_std)
 		return;
 	}
 
+	/* POLAR: It does not make sense to set buffer dirty in Replica node */
+	if (polar_is_replica())
+		return;
+
 	bufHdr = GetBufferDescriptor(buffer - 1);
 
 	Assert(GetPrivateRefCount(buffer) > 0);
@@ -4044,7 +4403,8 @@ MarkBufferDirtyHint(Buffer buffer, bool buffer_std)
 		 * when we call XLogInsert() since the value changes dynamically.
 		 */
 		if (XLogHintBitIsNeeded() &&
-			(pg_atomic_read_u32(&bufHdr->state) & BM_PERMANENT))
+			(pg_atomic_read_u32(&bufHdr->state) & BM_PERMANENT) &&
+			(fullPageWrites || polar_has_partial_write))
 		{
 			/*
 			 * If we must not write WAL, due to a relfilenode-specific
@@ -4168,22 +4528,99 @@ UnlockBuffers(void)
 void
 LockBuffer(Buffer buffer, int mode)
 {
-	BufferDesc *buf;
+	/* POLAR: Call extended version when page outdate enabled */
+	polar_lock_buffer_ext(buffer, mode, polar_logindex_redo_instance);
+	/* POLAR end */
+}
+
+/*
+ * POLAR: An extended version LockBuffer. It can detect outdate status
+ * before obtaining the lock.
+ *
+ * If fresh_check is True, it will try to check flag of corresponding buffer
+ * descriptor and do replay, otherwise it will do what the origin one do.
+ */
+void
+polar_lock_buffer_ext(Buffer buffer, int mode, bool fresh_check)
+{
+	BufferDesc *buf_desc;
 
 	Assert(BufferIsPinned(buffer));
+
 	if (BufferIsLocal(buffer))
 		return;					/* local buffers need no lock */
 
-	buf = GetBufferDescriptor(buffer - 1);
+	buf_desc = GetBufferDescriptor(buffer - 1);
 
-	if (mode == BUFFER_LOCK_UNLOCK)
-		LWLockRelease(BufferDescriptorGetContentLock(buf));
-	else if (mode == BUFFER_LOCK_SHARE)
-		LWLockAcquire(BufferDescriptorGetContentLock(buf), LW_SHARED);
-	else if (mode == BUFFER_LOCK_EXCLUSIVE)
-		LWLockAcquire(BufferDescriptorGetContentLock(buf), LW_EXCLUSIVE);
-	else
-		elog(ERROR, "unrecognized buffer lock mode: %d", mode);
+	do
+	{
+		if (mode == BUFFER_LOCK_UNLOCK)
+		{
+			LWLockRelease(BufferDescriptorGetContentLock(buf_desc));
+			return;
+		}
+		else if (mode == BUFFER_LOCK_SHARE)
+			LWLockAcquire(BufferDescriptorGetContentLock(buf_desc), LW_SHARED);
+		else if (mode == BUFFER_LOCK_EXCLUSIVE)
+			LWLockAcquire(BufferDescriptorGetContentLock(buf_desc), LW_EXCLUSIVE);
+		else
+		{
+			elog(ERROR, "unrecognized buffer lock mode: %d", mode);
+			return;
+		}
+
+		/* Is this fresh buffer? */
+		if (!fresh_check || !polar_redo_check_state(buf_desc, POLAR_REDO_OUTDATE))
+			break;
+
+		switch (mode)
+		{
+			case BUFFER_LOCK_SHARE:
+				/* release s-lock and acquire x-lock for redo */
+				LWLockRelease(BufferDescriptorGetContentLock(buf_desc));
+				LWLockAcquire(BufferDescriptorGetContentLock(buf_desc), LW_EXCLUSIVE);
+				break;
+
+			case BUFFER_LOCK_EXCLUSIVE:
+				break;
+
+			default:
+				elog(ERROR, "unrecognized buffer lock mode: %d", mode);
+				return;
+		}
+
+		/*
+		 * Now, we hold exclusive lock. Because we released lock while
+		 * BUFFER_LOCK_SHARE mode, so we should re-check buffer outdate state.
+		 */
+		polar_logindex_lock_apply_buffer(polar_logindex_redo_instance, &buffer);
+
+		switch (mode)
+		{
+			case BUFFER_LOCK_SHARE:
+
+				/*
+				 * target lock mode is shared one, so we release exclusive
+				 * lock and try to hold shared one
+				 */
+				LWLockRelease(BufferDescriptorGetContentLock(buf_desc));
+
+				continue;
+
+			case BUFFER_LOCK_EXCLUSIVE:
+
+				/*
+				 * target lock mode is exclusive, so we are done here, just
+				 * return.
+				 */
+				return;
+
+			default:
+				elog(ERROR, "unrecognized buffer lock mode: %d", mode);
+				return;
+		}
+	}
+	while (true);
 }
 
 /*
@@ -4194,16 +4631,38 @@ LockBuffer(Buffer buffer, int mode)
 bool
 ConditionalLockBuffer(Buffer buffer)
 {
-	BufferDesc *buf;
+	/* POLAR: Call extended version when page outdate enabled */
+	return polar_conditional_lock_buffer_ext(buffer, polar_logindex_redo_instance);
+	/* POLAR end */
+}
+
+/*
+ * POLAR: An extended version ConditionalLockBuffer. It can detect outdate status
+ * before obtaining the lock.
+ *
+ * If fresh_check is True, it will try to check flag of corresponding buffer
+ * descriptor and redo the buffer, otherwise it will do what the origin one do.
+ */
+bool
+polar_conditional_lock_buffer_ext(Buffer buffer, bool fresh_check)
+{
+	BufferDesc *buf_desc;
+	bool		result;
 
 	Assert(BufferIsPinned(buffer));
+
 	if (BufferIsLocal(buffer))
 		return true;			/* act as though we got it */
 
-	buf = GetBufferDescriptor(buffer - 1);
+	buf_desc = GetBufferDescriptor(buffer - 1);
 
-	return LWLockConditionalAcquire(BufferDescriptorGetContentLock(buf),
-									LW_EXCLUSIVE);
+	result = LWLockConditionalAcquire(BufferDescriptorGetContentLock(buf_desc),
+									  LW_EXCLUSIVE);
+
+	if (fresh_check && result)
+		polar_logindex_lock_apply_buffer(polar_logindex_redo_instance, &buffer);
+
+	return result;
 }
 
 /*
@@ -4224,6 +4683,14 @@ ConditionalLockBuffer(Buffer buffer)
  */
 void
 LockBufferForCleanup(Buffer buffer)
+{
+	/* POLAR: Call extended version when page outdate enabled */
+	polar_lock_buffer_for_cleanup_ext(buffer, polar_logindex_redo_instance);
+	/* POLAR end */
+}
+
+void
+polar_lock_buffer_for_cleanup_ext(Buffer buffer, bool fresh_check)
 {
 	BufferDesc *bufHdr;
 	char	   *new_status = NULL;
@@ -4255,7 +4722,7 @@ LockBufferForCleanup(Buffer buffer)
 		uint32		buf_state;
 
 		/* Try to acquire lock */
-		LockBuffer(buffer, BUFFER_LOCK_EXCLUSIVE);
+		polar_lock_buffer_ext(buffer, BUFFER_LOCK_EXCLUSIVE, false);
 		buf_state = LockBufHdr(bufHdr);
 
 		Assert(BUF_STATE_GET_REFCOUNT(buf_state) > 0);
@@ -4263,6 +4730,9 @@ LockBufferForCleanup(Buffer buffer)
 		{
 			/* Successfully acquired exclusive lock with pincount 1 */
 			UnlockBufHdr(bufHdr, buf_state);
+
+			if (fresh_check)
+				polar_logindex_lock_apply_buffer(polar_logindex_redo_instance, &buffer);
 
 			/*
 			 * Emit the log message if recovery conflict on buffer pin was
@@ -4552,12 +5022,30 @@ WaitIO(BufferDesc *buf)
  * Returns true if we successfully marked the buffer as I/O busy,
  * false if someone else already did the work.
  */
-static bool
+bool
 StartBufferIO(BufferDesc *buf, bool forInput)
+{
+	return polar_start_buffer_io_extend(buf, forInput, false);
+}
+
+/*
+ * POLAR: base on the original StartBufferIO, it will be used by the copy buffer.
+ */
+bool
+polar_start_buffer_io_extend(BufferDesc *buf,
+							 bool forInput,
+							 bool polar_copy_buf)
 {
 	uint32		buf_state;
 
-	Assert(!InProgressBuf);
+	/* POLAR: bulk io */
+	if (!polar_bulk_io_is_in_progress)
+	{
+		/* single io */
+		Assert(!InProgressBuf);
+	}
+	/* POLAR end */
+
 
 	for (;;)
 	{
@@ -4569,9 +5057,25 @@ StartBufferIO(BufferDesc *buf, bool forInput)
 		WaitIO(buf);
 	}
 
+	/* POLAR: For copy buffer, maybe someone else already copy or flush it. */
+	if (polar_copy_buf)
+	{
+		if (!(buf_state & BM_VALID) ||
+			!(buf_state & BM_DIRTY) ||
+			(forInput && buf->copy_buffer != NULL) ||	/* Buffer has been
+														 * copied */
+			(!forInput && buf->copy_buffer == NULL))	/* Copy buffer has been
+														 * flushed */
+		{
+			/* someone else already did the I/O */
+			UnlockBufHdr(buf, buf_state);
+			ConditionVariableBroadcast(BufferDescriptorGetIOCV(buf));
+			return false;
+		}
+	}
 	/* Once we get here, there is definitely no I/O active on this buffer */
 
-	if (forInput ? (buf_state & BM_VALID) : !(buf_state & BM_DIRTY))
+	else if (forInput ? (buf_state & BM_VALID) : !(buf_state & BM_DIRTY))
 	{
 		/* someone else already did the I/O */
 		UnlockBufHdr(buf, buf_state);
@@ -4581,8 +5085,27 @@ StartBufferIO(BufferDesc *buf, bool forInput)
 	buf_state |= BM_IO_IN_PROGRESS;
 	UnlockBufHdr(buf, buf_state);
 
-	InProgressBuf = buf;
-	IsForInput = forInput;
+	/* POLAR: bulk io */
+	if (!polar_bulk_io_is_in_progress)
+	{
+		/* single io */
+		InProgressBuf = buf;
+		IsForInput = forInput;
+	}
+	else
+	{
+		/* bulk io */
+		polar_bulk_io_in_progress_buf[polar_bulk_io_in_progress_count] = buf;
+
+		/*
+		 * bulk read io may be mixed with temporary write io, for flushing
+		 * dirty evicted page. So polar_bulk_io_is_for_input[] is required for
+		 * error recovery.
+		 */
+		polar_bulk_io_is_for_input[polar_bulk_io_in_progress_count] = forInput;
+		polar_bulk_io_in_progress_count++;
+	}
+	/* POLAR end */
 
 	return true;
 }
@@ -4603,12 +5126,36 @@ StartBufferIO(BufferDesc *buf, bool forInput)
  * BM_IO_ERROR in a failure case.  For successful completion it could
  * be 0, or BM_VALID if we just finished reading in the page.
  */
-static void
+void
 TerminateBufferIO(BufferDesc *buf, bool clear_dirty, uint32 set_flag_bits)
 {
 	uint32		buf_state;
 
-	Assert(buf == InProgressBuf);
+	/* POLAR：bulk io */
+
+	/*
+	 * Because assert will be ignored during release mode, we only use
+	 * Assert()
+	 */
+	/* ----------------
+	 * single io:
+	 * if (!polar_bulk_io_is_in_progress)
+	   {  Assert(buf == InProgressBuf); }
+	 * ----------------
+	 */
+	Assert(polar_bulk_io_is_in_progress || buf == InProgressBuf);
+	/* ----------------
+	 * bulk io:
+	 * if (polar_bulk_io_is_in_progress)
+	 * {
+	 *   Assert(polar_bulk_io_in_progress_count > 0);
+	 *   Assert(buf == polar_bulk_io_in_progress_buf[polar_bulk_io_in_progress_count - 1]);
+	 * }
+	 * ----------------
+	 */
+	Assert(!polar_bulk_io_is_in_progress || polar_bulk_io_in_progress_count > 0);
+	Assert(!polar_bulk_io_is_in_progress || buf == polar_bulk_io_in_progress_buf[polar_bulk_io_in_progress_count - 1]);
+	/* POLAR end */
 
 	buf_state = LockBufHdr(buf);
 
@@ -4620,6 +5167,19 @@ TerminateBufferIO(BufferDesc *buf, bool clear_dirty, uint32 set_flag_bits)
 
 	buf_state |= set_flag_bits;
 	UnlockBufHdr(buf, buf_state);
+
+	/* POLAR: bulk io */
+	if (!polar_bulk_io_is_in_progress)
+	{
+		/* single io */
+		InProgressBuf = NULL;
+	}
+	else
+	{
+		/* bulk io */
+		polar_bulk_io_in_progress_count--;
+	}
+	/* POLAR end */
 
 	InProgressBuf = NULL;
 
@@ -4640,7 +5200,15 @@ AbortBufferIO(void)
 {
 	BufferDesc *buf = InProgressBuf;
 
-	if (buf)
+polar_bulk_read:
+
+	/*
+	 * POLAR: deal with local buffer(buf->buf_id < 0) local buffer doesn't
+	 * need to release source, just decrease io_in_progress_count
+	 */
+	if (buf && buf->buf_id < 0)
+		polar_bulk_io_in_progress_count--;
+	else if (buf)
 	{
 		uint32		buf_state;
 
@@ -4675,6 +5243,29 @@ AbortBufferIO(void)
 		}
 		TerminateBufferIO(buf, false, BM_IO_ERROR);
 	}
+
+	/* POLAR: bulk io recovery */
+	if (polar_bulk_io_is_in_progress)
+	{
+		if (polar_bulk_io_in_progress_count > 0)
+		{
+			buf = polar_bulk_io_in_progress_buf[polar_bulk_io_in_progress_count - 1];
+			IsForInput = polar_bulk_io_is_for_input[polar_bulk_io_in_progress_count - 1];
+
+			/*
+			 * In TerminateBufferIO(), polar_bulk_io_in_progress_count was
+			 * reduced by 1.
+			 */
+			goto polar_bulk_read;
+		}
+		polar_bulk_io_is_in_progress = false;
+	}
+
+	/*
+	 * POLAR: we must reset read_min_lsn where ERROR, otherwise bgwriter
+	 * cannot clean hashtable or logindex anymore
+	 */
+	POLAR_RESET_BACKEND_READ_MIN_LSN();
 }
 
 /*
@@ -4763,6 +5354,11 @@ LockBufHdr(BufferDesc *desc)
 		perform_spin_delay(&delayStatus);
 	}
 	finish_spin_delay(&delayStatus);
+
+#ifdef LOCKBUFHDR_DEBUG
+	desc->lockbufhdr_pid = MyProcPid;
+#endif
+
 	return old_buf_state | BM_LOCKED;
 }
 
@@ -5015,3 +5611,131 @@ TestForOldSnapshot_impl(Snapshot snapshot, Relation relation)
 				(errcode(ERRCODE_SNAPSHOT_TOO_OLD),
 				 errmsg("snapshot too old")));
 }
+
+/* POLAR: Replay buffer with io lock. Return true if page lsn changed after replay */
+static bool
+polar_apply_io_locked_page(BufferDesc *bufHdr, XLogRecPtr replay_from,
+						   XLogRecPtr checkpoint_redo_lsn, SMgrRelation smgr,
+						   ForkNumber forkNum, BlockNumber blockNum)
+{
+	/*
+	 * POLAR: It's better to use AmStartupProcess() than InRecovery to avoid
+	 * ambiguity.
+	 */
+	if (polar_logindex_redo_instance &&
+		(!AmStartupProcess() || reachedConsistency))
+	{
+		/*
+		 * Note: All modifications about replay-page must be applied to both
+		 * polar_bulk_read_buffer_common() and ReadBuffer_common().
+		 */
+		return polar_logindex_io_lock_apply(polar_logindex_redo_instance, bufHdr,
+											replay_from, checkpoint_redo_lsn);
+	}
+
+	return false;
+}
+
+static polar_redo_action
+polar_require_backend_redo(bool local_buf, ReadBufferMode mode,
+						   ForkNumber fork_num, XLogRecPtr *replay_from)
+{
+	polar_redo_action action = POLAR_REDO_NO_ACTION;
+	bool		redo_required = false;
+
+	/*
+	 * Skip to apply xlogs at the following cases: (1) local buffer doesn't
+	 * write any xlog records. (2) there's no need to apply xlogs if page is
+	 * not reading from storage.
+	 */
+	if (local_buf ||
+		mode == RBM_ZERO_AND_LOCK ||
+		mode == RBM_ZERO_AND_CLEANUP_LOCK)
+		return action;
+
+	redo_required = polar_logindex_require_backend_redo(polar_logindex_redo_instance,
+														fork_num, replay_from);
+	if (redo_required)
+	{
+		if (POLAR_IN_LOGINDEX_PARALLEL_REPLAY())
+			action = POLAR_REDO_MARK_OUTDATE;
+		else
+			action = POLAR_REDO_REPLAY_XLOG;
+	}
+
+	return action;
+}
+
+static polar_checksum_err_action
+polar_handle_read_error_block(Block bufBlock, SMgrRelation smgr, ForkNumber forkNum, BlockNumber blockNum,
+							  ReadBufferMode mode, polar_redo_action redo_action, uint32 *repeat_read_times)
+{
+	if (mode == RBM_ZERO_ON_ERROR || zero_damaged_pages)
+	{
+		char	   *relpath = relpath(smgr->smgr_rnode, forkNum);
+
+		ereport(WARNING,
+				(errcode(ERRCODE_DATA_CORRUPTED),
+				 errmsg("invalid page in block %u of relation %s; zeroing out page",
+						blockNum, relpath)));
+		pfree(relpath);
+
+		MemSet((char *) bufBlock, 0, BLCKSZ);
+		return POLAR_CHECKSUM_ERR_NO_ACTION;
+	}
+	else if (polar_has_partial_write && polar_is_replica())
+	{
+		/*
+		 * POLAR: We enable full_page_writes if filesystem doesn't support
+		 * atomic write. The primary could write part of the page while the
+		 * replica read this page and failed to verify checksum. So the
+		 * replica will delay some time and read this page again.
+		 */
+		(*repeat_read_times)++;
+		if (*repeat_read_times % POLAR_WARNING_REPEAT_TIMES == 0)
+		{
+			char	   *relpath = relpath(smgr->smgr_rnode, forkNum);
+
+			ereport(WARNING, (errmsg("%d times to repeat read block %u of relation %s",
+									 *repeat_read_times, blockNum, relpath)));
+			pfree(relpath);
+			CHECK_FOR_INTERRUPTS();
+		}
+
+		pg_usleep(POLAR_REPEAT_READ_DELAY);
+		return POLAR_CHECKSUM_ERR_REPEAT_READ;
+	}
+	else if (fullPageWrites && (redo_action != POLAR_REDO_NO_ACTION))
+	{
+		/*
+		 * POLAR: Try to replay from the last CheckPoint.redo to fix this
+		 * invalid page. It only occurs when fullPageWrites is on.
+		 */
+		char	   *relpath = relpath(smgr->smgr_rnode, forkNum);
+
+		ereport(WARNING,
+				(errcode(ERRCODE_DATA_CORRUPTED),
+				 errmsg("invalid page in block %u of relation %s; will replay from last checkpoint",
+						blockNum, relpath)));
+		MemSet((char *) bufBlock, 0, BLCKSZ);
+		pfree(relpath);
+
+		return POLAR_CHECKSUM_ERR_CHECKPOINT_REDO;
+	}
+	else
+		ereport(ERROR,
+				(errcode(ERRCODE_DATA_CORRUPTED),
+				 errmsg("invalid page in block %u of relation %s",
+						blockNum,
+						relpath(smgr->smgr_rnode, forkNum))));
+
+	return POLAR_CHECKSUM_ERR_NO_ACTION;
+}
+
+/* POLAR */
+#ifndef POLAR_BUFMGR_C
+#define POLAR_BUFMGR_C
+
+#include "polar_bufmgr.c"
+
+#endif

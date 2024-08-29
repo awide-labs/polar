@@ -1,0 +1,4 @@
+comment = 'Extension to provide operations about proxy.'
+default_version = '1.0'
+module_pathname = '$libdir/polar_proxy_utils'
+relocatable = true

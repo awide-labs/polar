@@ -1,0 +1,43 @@
+CREATE USER buffercache_puser superuser password '123456';
+DO LANGUAGE plpgsql
+$$
+begin
+	EXECUTE 'GRANT create ON database ' || current_database() || ' TO buffercache_puser';
+end
+$$;
+SET ROLE buffercache_puser;
+CREATE SCHEMA polar_buffercache;
+SET search_path to polar_buffercache;
+CREATE EXTENSION IF NOT EXISTS pg_buffercache;
+SET client_min_messages to error;
+CREATE TABLE test(c1 int,c2 int);
+INSERT INTO test SELECT generate_series(1,10000),generate_series(1,10000);
+SELECT COUNT(*) FROM test;
+ count 
+-------
+ 10000
+(1 row)
+
+-- Test polar_drop_relation_buffers
+SELECT polar_drop_relation_buffers('test', 'main');
+ polar_drop_relation_buffers 
+-----------------------------
+ 
+(1 row)
+
+--------------
+-- CLEAN UP
+--------------
+\c - postgres;
+DO LANGUAGE plpgsql
+$$
+begin
+	EXECUTE 'REVOKE create ON database ' || current_database() || ' FROM buffercache_puser';
+end
+$$;
+DROP TABLE polar_buffercache.test;
+DROP EXTENSION pg_buffercache;
+DROP SCHEMA polar_buffercache;
+DROP USER buffercache_puser;
+RESET search_path;
+RESET client_min_messages;

@@ -130,7 +130,7 @@ sub setup_cluster
 	# checkpoints in the tests.
 	$node_primary->append_conf(
 		'postgresql.conf', qq(
-wal_keep_size = 320MB
+wal_keep_size = 1GB
 ));
 	return;
 }

@@ -38,6 +38,9 @@
 #include "utils/guc.h"
 #include "utils/memutils.h"
 
+/* POLAR */
+#include "storage/polar_fd.h"
+
 PG_MODULE_MAGIC;
 
 void		_PG_init(void);
@@ -238,7 +241,7 @@ basic_archive_file_internal(const char *file, const char *path)
 	 * If the archive file already exists but has different contents,
 	 * something might be wrong, so we just fail.
 	 */
-	if (stat(destination, &st) == 0)
+	if (polar_stat(destination, &st) == 0)
 	{
 		if (compare_files(path, destination))
 		{
@@ -325,7 +328,7 @@ compare_files(const char *file1, const char *file2)
 
 		while (buf1_len < CMP_BUF_SIZE)
 		{
-			nbytes = read(fd1, buf1 + buf1_len, CMP_BUF_SIZE - buf1_len);
+			nbytes = polar_read(fd1, buf1 + buf1_len, CMP_BUF_SIZE - buf1_len);
 			if (nbytes < 0)
 				ereport(ERROR,
 						(errcode_for_file_access(),
@@ -338,7 +341,7 @@ compare_files(const char *file1, const char *file2)
 
 		while (buf2_len < CMP_BUF_SIZE)
 		{
-			nbytes = read(fd2, buf2 + buf2_len, CMP_BUF_SIZE - buf2_len);
+			nbytes = polar_read(fd2, buf2 + buf2_len, CMP_BUF_SIZE - buf2_len);
 			if (nbytes < 0)
 				ereport(ERROR,
 						(errcode_for_file_access(),

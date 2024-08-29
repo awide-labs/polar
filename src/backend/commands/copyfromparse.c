@@ -1125,6 +1125,7 @@ CopyReadLineText(CopyFromState cstate)
 				last_was_esc = false;
 	char		quotec = '\0';
 	char		escapec = '\0';
+	bool		non_escapec = false;
 
 	if (cstate->opts.csv_mode)
 	{
@@ -1227,11 +1228,11 @@ CopyReadLineText(CopyFromState cstate)
 			 * quoted field and immediately preceding a quote char, and not
 			 * the second in an escape-escape sequence.
 			 */
-			if (in_quote && c == escapec)
+			if (in_quote && c == escapec && !non_escapec)
 				last_was_esc = !last_was_esc;
 			if (c == quotec && !last_was_esc)
 				in_quote = !in_quote;
-			if (c != escapec)
+			if (c != escapec || non_escapec)
 				last_was_esc = false;
 
 			/*
@@ -1242,6 +1243,15 @@ CopyReadLineText(CopyFromState cstate)
 			 */
 			if (in_quote && c == (cstate->eol_type == EOL_NL ? '\n' : '\r'))
 				cstate->cur_lineno++;
+
+			/*
+			 * POLAR: According to the characteristics of GBK/GB18030, special
+			 * processing possible escape characters
+			 */
+			if (c < 0 && cstate->polar_disable_escape_inside_gbk && !non_escapec)
+				non_escapec = true;
+			else
+				non_escapec = false;
 		}
 
 		/* Process \r */
@@ -1775,6 +1785,7 @@ CopyReadAttributesCSV(CopyFromState cstate)
 		for (;;)
 		{
 			char		c;
+			bool		non_escapec = false;
 
 			/* Not in quote */
 			for (;;)
@@ -1811,7 +1822,7 @@ CopyReadAttributesCSV(CopyFromState cstate)
 				c = *cur_ptr++;
 
 				/* escape within a quoted field */
-				if (c == escapec)
+				if (c == escapec && !non_escapec)
 				{
 					/*
 					 * peek at the next char if available, and escape it if it
@@ -1840,6 +1851,15 @@ CopyReadAttributesCSV(CopyFromState cstate)
 
 				/* Add c to output string */
 				*output_ptr++ = c;
+
+				/*
+				 * POLAR: According to the characteristics of GBK/GB18030,
+				 * special processing possible escape characters
+				 */
+				if (c < 0 && cstate->polar_disable_escape_inside_gbk && !non_escapec)
+					non_escapec = true;
+				else
+					non_escapec = false;
 			}
 		}
 endfield:

@@ -312,6 +312,13 @@ SendProcSignal(pid_t pid, ProcSignalReason reason, BackendId backendId)
 	return -1;
 }
 
+/* POLAR: CheckProcSignal for POLAR */
+bool
+polar_check_proc_signal(ProcSignalReason reason)
+{
+	return CheckProcSignal(reason);
+}
+
 /*
  * EmitProcSignalBarrier
  *		Send a signal to every Postgres process
@@ -674,6 +681,13 @@ procsignal_sigusr1_handler(SIGNAL_ARGS)
 
 	if (CheckProcSignal(PROCSIG_RECOVERY_CONFLICT_BUFFERPIN))
 		RecoveryConflictInterrupt(PROCSIG_RECOVERY_CONFLICT_BUFFERPIN);
+
+	/*
+	 * POLAR: backend receives this signal to write the memory context in
+	 * shared memory
+	 */
+	if (polar_monitor_hook)
+		polar_monitor_hook(POLAR_SET_SIGNAL_MCTX);
 
 	SetLatch(MyLatch);
 

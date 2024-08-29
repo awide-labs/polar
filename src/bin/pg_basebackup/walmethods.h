@@ -20,6 +20,8 @@ typedef enum
 	CLOSE_NO_RENAME
 } WalCloseMethod;
 
+#define MAX_SEND_SIZE (XLOG_BLCKSZ * 16)
+
 /*
  * A WalWriteMethod structure represents the different methods used
  * to write the streaming WAL as it's received.
@@ -97,7 +99,7 @@ struct WalWriteMethod
  */
 WalWriteMethod *CreateWalDirectoryMethod(const char *basedir,
 										 pg_compress_algorithm compression_algo,
-										 int compression, bool sync);
+										 int compression, bool sync, bool use_pfs_to_write);
 WalWriteMethod *CreateWalTarMethod(const char *tarbase,
 								   pg_compress_algorithm compression_algo,
 								   int compression, bool sync);

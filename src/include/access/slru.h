@@ -16,6 +16,12 @@
 #include "access/xlogdefs.h"
 #include "storage/lwlock.h"
 #include "storage/sync.h"
+/* POLAR */
+#include "storage/polar_fd.h"
+#include "utils/hsearch.h"
+#include "utils/polar_local_cache.h"
+#include "utils/polar_successor_list.h"
+/* POLAR end */
 
 
 /*
@@ -68,6 +74,9 @@ typedef struct SlruSharedData
 	int		   *page_lru_count;
 	LWLockPadded *buffer_locks;
 
+	/* POLAR: the slru file put into shared storage */
+	bool		polar_file_in_shared_storage;
+
 	/*
 	 * Optional array of WAL flush LSNs associated with entries in the SLRU
 	 * pages.  If not zero/NULL, we must flush WAL before writing pages (true
@@ -99,6 +108,22 @@ typedef struct SlruSharedData
 
 	/* SLRU's index for statistics purposes (might not be unique) */
 	int			slru_stats_idx;
+	/* POLAR: we do not need to scan the whole hash table to find victim slot */
+	int			victim_pivot;
+	/* POLAR: SLRU Hash Index */
+	HTAB	   *polar_hash_index;
+
+	/* POLAR: record free slot number to this list */
+	polar_successor_list *polar_free_list;
+
+	/* POLAR: Save data to local file as remote files's cache */
+	polar_local_cache polar_cache;
+
+	/*
+	 * POLAR: set true when replica is doing online promote and allow this
+	 * slru to write data to shared storage
+	 */
+	bool		polar_replica_promoting;
 } SlruSharedData;
 
 typedef SlruSharedData *SlruShared;
@@ -142,7 +167,7 @@ typedef SlruCtlData *SlruCtl;
 extern Size SimpleLruShmemSize(int nslots, int nlsns);
 extern void SimpleLruInit(SlruCtl ctl, const char *name, int nslots, int nlsns,
 						  LWLock *ctllock, const char *subdir, int tranche_id,
-						  SyncRequestHandler sync_handler);
+						  SyncRequestHandler sync_handler, bool polar_shared_file);
 extern int	SimpleLruZeroPage(SlruCtl ctl, int pageno);
 extern int	SimpleLruReadPage(SlruCtl ctl, int pageno, bool write_ok,
 							  TransactionId xid);
@@ -170,5 +195,34 @@ extern bool SlruScanDirCbReportPresence(SlruCtl ctl, char *filename,
 										int segpage, void *data);
 extern bool SlruScanDirCbDeleteAll(SlruCtl ctl, char *filename, int segpage,
 								   void *data);
+
+/* POLAR */
+typedef struct polar_slru_hash_entry
+{
+	int			pageno;			/* hash key */
+	int			slotno;
+} polar_slru_hash_entry;
+
+/* io errcause for copy slru dir */
+typedef enum polar_io_errcause
+{
+	POLAR_DIR_NOT_EXISTS = 1,
+	POLAR_FILE_NOT_EXISTS,
+	POLAR_OPEN_DIR_FAILED,
+	POLAR_READ_FILE_FAILED
+} polar_io_errcause;
+
+extern bool polar_enable_slru_hash_index;
+extern void polar_slru_invalid_page(SlruCtl ctl, int pageno);
+extern void polar_slru_append_page(SlruCtl ctl, int slotno, bool update);
+extern void polar_slru_promote(SlruCtl ctl);
+extern void polar_slru_remove_local_cache_file(SlruCtl ctl);
+extern void polar_slru_reg_local_cache(SlruCtl ctl, polar_local_cache cache);
+extern bool polar_slru_page_physical_exists(SlruCtl ctl, int pageno);
+extern void polar_handle_init_local_dir_err(char *dir, int errcause);
+extern bool polar_trans_file_need_copy(SlruCtl ctl, char *filename, int segpage, void *data);
+extern int	polar_slru_copy_shared_dir(SlruCtl ctl, SlruScanCallback copy_condition, void *data);
+
+/* POLAR end */
 
 #endif							/* SLRU_H */

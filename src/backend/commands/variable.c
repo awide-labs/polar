@@ -508,6 +508,15 @@ check_transaction_read_only(bool *newval, void **extra, GucSource source)
 			GUC_check_errmsg("cannot set transaction read-write mode during recovery");
 			return false;
 		}
+
+		/* POLAR */
+		if (POLAR_FORCE_TXN_READ_ONLY())
+		{
+			GUC_check_errcode(ERRCODE_ACTIVE_SQL_TRANSACTION);
+			GUC_check_errmsg("cannot set transaction read-write mode while being locked as read-only globally");
+			return false;
+		}
+		/* POLAR end */
 	}
 
 	return true;

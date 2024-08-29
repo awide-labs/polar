@@ -161,4 +161,20 @@ extern const char *multixact_identify(uint8 info);
 extern char *mxid_to_string(MultiXactId multi, int nmembers,
 							MultiXactMember *members);
 
+/* POLAR */
+extern int	polar_mxact_offset_buffer_slot_size;
+extern int	polar_mxact_member_buffer_slot_size;
+
+/* POLAR: do online promote for multixact offsets */
+extern void polar_promote_multixact_offset(void);
+
+/* POLAR: do online promote for multixact members */
+extern void polar_promote_multixact_member(void);
+
+/* POLAR: remove multixact local cache file */
+extern void polar_remove_multixcat_local_cache_file(void);
+extern void polar_init_local_multixact(MultiXactId id, bool copy_all);
+
+/* POLAR end */
+
 #endif							/* MULTIXACT_H */

@@ -454,4 +454,9 @@ extern bool PageIndexTupleOverwrite(Page page, OffsetNumber offnum,
 extern char *PageSetChecksumCopy(Page page, BlockNumber blkno);
 extern void PageSetChecksumInplace(Page page, BlockNumber blkno);
 
+/* POLAR */
+extern bool polar_page_is_just_inited(Page page);
+
+/* POLAR end */
+
 #endif							/* BUFPAGE_H */

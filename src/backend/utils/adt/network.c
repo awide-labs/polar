@@ -1718,6 +1718,7 @@ inet_client_addr(PG_FUNCTION_ARGS)
 	Port	   *port = MyProcPort;
 	char		remote_host[NI_MAXHOST];
 	int			ret;
+	SockAddr	raddr;
 
 	if (port == NULL)
 		PG_RETURN_NULL();
@@ -1733,16 +1734,17 @@ inet_client_addr(PG_FUNCTION_ARGS)
 			PG_RETURN_NULL();
 	}
 
+	raddr = POLAR_PROXY_GET_CLIENT_RADDR(port);
 	remote_host[0] = '\0';
 
-	ret = pg_getnameinfo_all(&port->raddr.addr, port->raddr.salen,
+	ret = pg_getnameinfo_all(&raddr.addr, raddr.salen,
 							 remote_host, sizeof(remote_host),
 							 NULL, 0,
 							 NI_NUMERICHOST | NI_NUMERICSERV);
 	if (ret != 0)
 		PG_RETURN_NULL();
 
-	clean_ipv6_addr(port->raddr.addr.ss_family, remote_host);
+	clean_ipv6_addr(raddr.addr.ss_family, remote_host);
 
 	PG_RETURN_INET_P(network_in(remote_host, false));
 }
@@ -1757,6 +1759,7 @@ inet_client_port(PG_FUNCTION_ARGS)
 	Port	   *port = MyProcPort;
 	char		remote_port[NI_MAXSERV];
 	int			ret;
+	SockAddr	raddr;
 
 	if (port == NULL)
 		PG_RETURN_NULL();
@@ -1772,9 +1775,10 @@ inet_client_port(PG_FUNCTION_ARGS)
 			PG_RETURN_NULL();
 	}
 
+	raddr = POLAR_PROXY_GET_CLIENT_RADDR(port);
 	remote_port[0] = '\0';
 
-	ret = pg_getnameinfo_all(&port->raddr.addr, port->raddr.salen,
+	ret = pg_getnameinfo_all(&raddr.addr, raddr.salen,
 							 NULL, 0,
 							 remote_port, sizeof(remote_port),
 							 NI_NUMERICHOST | NI_NUMERICSERV);

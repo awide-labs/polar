@@ -71,6 +71,8 @@ const char *basic_diff_opts = "-w";
 const char *pretty_diff_opts = "-w -U3";
 #endif
 
+#define RR_RECORD_CMD (rr ? "\"rr\" record" : "")
+
 /* options settable from command line */
 _stringlist *dblist = NULL;
 bool		debug = false;
@@ -116,6 +118,8 @@ static bool postmaster_running = false;
 static int	success_count = 0;
 static int	fail_count = 0;
 static int	fail_ignore_count = 0;
+static bool rr = false;
+bool		polar_prepare_sql = false;
 
 static bool directory_exists(const char *dir);
 static void make_directory(const char *dir);
@@ -768,6 +772,29 @@ initialize_environment(void)
 	}
 
 	load_resultmap();
+
+	if (polar_prepare_sql)
+	{
+		const char *env_list[] = {
+			"PG_ABS_SRCDIR",
+			"PG_ABS_BUILDDIR",
+			"PG_LIBDIR",
+			"PG_DLSUFFIX",
+			NULL
+		};
+		int			i;
+
+		fprintf(stdout, "%s: initial environment dump:\n", progname);
+		fprintf(stdout, "-----------------------------------------\n");
+		for (i = 0; env_list[i]; i++)
+		{
+			char	   *p = getenv(env_list[i]);
+
+			if (p)
+				fprintf(stdout, "prepare env %s=%s\n", env_list[i], p);
+		}
+		fprintf(stdout, "-----------------------------------------\n");
+	}
 }
 
 #ifdef ENABLE_SSPI
@@ -1301,6 +1328,9 @@ results_differ(const char *testname, const char *resultsfile, const char *defaul
 	int			l;
 	const char *platform_expectfile;
 
+	if (polar_prepare_sql)
+		return false;
+
 	/*
 	 * We can pass either the resultsfile or the expectfile, they should have
 	 * the same type (filename.type) anyway.
@@ -1552,6 +1582,12 @@ run_schedule(const char *schedule, test_start_function startfunc,
 	FILE	   *scf;
 	int			line_num = 0;
 
+	/* POLAR */
+	char	   *polar_current_dir = NULL;
+	char		polar_tmp_path[MAXPGPATH];
+
+	/* POLAR end */
+
 	memset(tests, 0, sizeof(tests));
 	memset(resultfiles, 0, sizeof(resultfiles));
 	memset(expectfiles, 0, sizeof(expectfiles));
@@ -1589,7 +1625,16 @@ run_schedule(const char *schedule, test_start_function startfunc,
 			c = scbuf + 8;
 			while (*c && isspace((unsigned char) *c))
 				c++;
-			add_stringlist_item(&ignorelist, c);
+
+			/* POLAR */
+			if (polar_current_dir)
+			{
+				sprintf(polar_tmp_path, "%s/%s", polar_current_dir, c);
+				add_stringlist_item(&ignorelist, polar_tmp_path);
+			}
+			else
+				add_stringlist_item(&ignorelist, c);
+			/* POLAR end */
 
 			/*
 			 * Note: ignore: lines do not run the test, they just say that
@@ -1598,6 +1643,21 @@ run_schedule(const char *schedule, test_start_function startfunc,
 			 */
 			continue;
 		}
+		/* POLAR */
+		else if (strncmp(scbuf, "polar_dir: ", 11) == 0)
+		{
+			c = scbuf + 11;
+			while (*c && isspace((unsigned char) *c))
+				c++;
+			if (polar_current_dir != NULL)
+			{
+				pg_free(polar_current_dir);
+				polar_current_dir = NULL;
+			}
+			polar_current_dir = pg_strdup(c);
+			continue;
+		}
+		/* POLAR end */
 		else
 		{
 			fprintf(stderr, _("syntax error in schedule file \"%s\" line %d: %s\n"),
@@ -1624,7 +1684,17 @@ run_schedule(const char *schedule, test_start_function startfunc,
 					}
 					sav = *c;
 					*c = '\0';
-					tests[num_tests] = pg_strdup(test);
+
+					/* POLAR */
+					if (polar_current_dir)
+					{
+						sprintf(polar_tmp_path, "%s/%s", polar_current_dir, test);
+						tests[num_tests] = pg_strdup(polar_tmp_path);
+					}
+					else
+						tests[num_tests] = pg_strdup(test);
+					/* POLAR end */
+
 					num_tests++;
 					*c = sav;
 					inword = false;
@@ -1751,7 +1821,7 @@ run_schedule(const char *schedule, test_start_function startfunc,
 				}
 				else
 				{
-					status(_("FAILED"));
+					status(_("FAILED(%s)"), tests[i]);
 					fail_count++;
 				}
 			}
@@ -1835,7 +1905,7 @@ run_single_test(const char *test, test_start_function startfunc,
 
 	if (differ)
 	{
-		status(_("FAILED"));
+		status(_("FAILED(%s)"), test);
 		fail_count++;
 	}
 	else
@@ -2052,6 +2122,7 @@ regression_main(int argc, char *argv[],
 		{"load-extension", required_argument, NULL, 22},
 		{"config-auth", required_argument, NULL, 24},
 		{"max-concurrent-tests", required_argument, NULL, 25},
+		{"polar-prepare-sql", no_argument, NULL, 31},
 		{NULL, 0, NULL, 0}
 	};
 
@@ -2096,6 +2167,9 @@ regression_main(int argc, char *argv[],
 
 	if (getenv("PG_REGRESS_DIFF_OPTS"))
 		pretty_diff_opts = getenv("PG_REGRESS_DIFF_OPTS");
+
+	if (getenv("PGRR"))
+		rr = true;
 
 	while ((c = getopt_long(argc, argv, "hV", long_options, &option_index)) != -1)
 	{
@@ -2181,6 +2255,9 @@ regression_main(int argc, char *argv[],
 			case 25:
 				max_concurrent_tests = atoi(optarg);
 				break;
+			case 31:
+				polar_prepare_sql = true;
+				break;
 			default:
 				/* getopt_long already emitted a complaint */
 				fprintf(stderr, _("\nTry \"%s -h\" for more information.\n"),
@@ -2249,6 +2326,7 @@ regression_main(int argc, char *argv[],
 		FILE	   *pg_conf;
 		const char *env_wait;
 		int			wait_seconds;
+		const char *initdb_template_dir;
 
 		/*
 		 * Prepare the temp instance
@@ -2275,20 +2353,51 @@ regression_main(int argc, char *argv[],
 		if (!directory_exists(buf))
 			make_directory(buf);
 
-		/* initdb */
-		header(_("initializing database system"));
-		snprintf(buf, sizeof(buf),
-				 "\"%s%sinitdb\" -D \"%s/data\" --no-clean --no-sync%s%s > \"%s/log/initdb.log\" 2>&1",
-				 bindir ? bindir : "",
-				 bindir ? "/" : "",
-				 temp_instance,
-				 debug ? " --debug" : "",
-				 nolocale ? " --no-locale" : "",
-				 outputdir);
-		if (system(buf))
+		/*
+		 * Create data directory.
+		 *
+		 * If available, use a previously initdb'd cluster as a template by
+		 * copying it. For a lot of tests, that's substantially cheaper.
+		 */
+		initdb_template_dir = getenv("INITDB_TEMPLATE");
+
+		if (initdb_template_dir == NULL || nolocale || debug)
 		{
-			fprintf(stderr, _("\n%s: initdb failed\nExamine %s/log/initdb.log for the reason.\nCommand was: %s\n"), progname, outputdir, buf);
-			exit(2);
+			header("initializing database system by running initdb");
+
+			snprintf(buf, sizeof(buf),
+					 "\"%s%sinitdb\" -D \"%s/data\" --no-clean --no-sync%s%s > \"%s/log/initdb.log\" 2>&1",
+					 bindir ? bindir : "",
+					 bindir ? "/" : "",
+					 temp_instance,
+					 debug ? " --debug" : "",
+					 nolocale ? " --no-locale" : "",
+					 outputdir);
+			if (system(buf))
+			{
+				fprintf(stderr, "initdb failed\n"
+						"# Examine \"%s/log/initdb.log\" for the reason.\n"
+						"# Command was: %s",
+						outputdir, buf);
+				exit(2);
+			}
+		}
+		else
+		{
+			header("initializing database system by copying initdb template");
+
+			snprintf(buf, sizeof(buf),
+					 "cp -RPp \"%s-pg\" \"%s/data\" > \"%s/log/initdb.log\" 2>&1",
+					 initdb_template_dir, temp_instance, outputdir);
+
+			if (system(buf))
+			{
+				fprintf(stderr, "copying of initdb template failed\n"
+						"# Examine \"%s/log/initdb.log\" for the reason.\n"
+						"# Command was: %s",
+						outputdir, buf);
+				exit(2);
+			}
 		}
 
 		/*
@@ -2313,6 +2422,8 @@ regression_main(int argc, char *argv[],
 		fputs("log_lock_waits = on\n", pg_conf);
 		fputs("log_temp_files = 128kB\n", pg_conf);
 		fputs("max_prepared_transactions = 2\n", pg_conf);
+		if (rr)
+			fputs("huge_pages = off\n", pg_conf);
 
 		for (sl = temp_configs; sl != NULL; sl = sl->next)
 		{
@@ -2385,9 +2496,10 @@ regression_main(int argc, char *argv[],
 		 */
 		header(_("starting postmaster"));
 		snprintf(buf, sizeof(buf),
-				 "\"%s%spostgres\" -D \"%s/data\" -F%s "
+				 "%s \"%s%spostgres\" -D \"%s/data\" -F%s "
 				 "-c \"listen_addresses=%s\" -k \"%s\" "
 				 "> \"%s/log/postmaster.log\" 2>&1",
+				 RR_RECORD_CMD,
 				 bindir ? bindir : "",
 				 bindir ? "/" : "",
 				 temp_instance, debug ? " -d 5" : "",

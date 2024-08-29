@@ -1,0 +1,4 @@
+comment = 'Test code for coredump handler'
+default_version = '1.0'
+module_pathname = '$libdir/test_coredump_handler'
+relocatable = true

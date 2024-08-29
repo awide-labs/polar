@@ -24,4 +24,7 @@ extern bool bloom_lacks_element(bloom_filter *filter, unsigned char *elem,
 								size_t len);
 extern double bloom_prop_bits_set(bloom_filter *filter);
 
+extern bloom_filter *polar_bloom_init_struct(uint8 *bloom_buf, size_t bloom_buf_size,
+											 int64 total_elems, uint64 seed);
+
 #endif							/* BLOOMFILTER_H */

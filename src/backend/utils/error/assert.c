@@ -14,10 +14,53 @@
  */
 #include "postgres.h"
 
+/* POLAR */
+#include "utils/guc.h"
+
 #include <unistd.h>
 #ifdef HAVE_EXECINFO_H
 #include <execinfo.h>
 #endif
+
+#include "utils/polar_backtrace.h"
+
+/* POLAR: GUC */
+int			polar_release_assert_level;
+
+/*
+ * Options for release assert level.
+ */
+const struct config_enum_entry polar_release_assert_level_options[] = {
+	{"none", POLAR_RELEASE_ASSERT_L_NONE, false},
+	{"log", POLAR_RELEASE_ASSERT_L_LOG, false},
+	{"coredump", POLAR_RELEASE_ASSERT_L_COREDUMP, false},
+	{NULL, 0, false}
+};
+
+static void record_error_message(const char *conditionName,
+								 const char *errorType,
+								 const char *fileName,
+								 int lineNumber);
+
+/*
+ * polar_exceptional_condition - Handles the failure of release assert.
+ *
+ * The difference between this function and `ExceptionalCondition()` is
+ * that this function is not marked as `pg_attribute_noreturn()`.
+ * So this function may return to keep the program running, when the
+ * release assert level is lower than `POLAR_RELEASE_ASSERT_L_COREDUMP`.
+ */
+void
+polar_exceptional_condition(const char *conditionName,
+							const char *errorType,
+							const char *fileName,
+							int lineNumber)
+{
+	record_error_message(conditionName, errorType, fileName, lineNumber);
+
+	if (polar_release_assert_level == POLAR_RELEASE_ASSERT_L_COREDUMP)
+		abort();
+}
 
 /*
  * ExceptionalCondition - Handles the failure of an Assert()
@@ -28,6 +71,16 @@
  */
 void
 ExceptionalCondition(const char *conditionName,
+					 const char *errorType,
+					 const char *fileName,
+					 int lineNumber)
+{
+	record_error_message(conditionName, errorType, fileName, lineNumber);
+	abort();
+}
+
+void
+record_error_message(const char *conditionName,
 					 const char *errorType,
 					 const char *fileName,
 					 int lineNumber)
@@ -47,7 +100,10 @@ ExceptionalCondition(const char *conditionName,
 	fflush(stderr);
 
 	/* If we have support for it, dump a simple backtrace */
-#ifdef HAVE_BACKTRACE_SYMBOLS
+#ifdef USE_LIBUNWIND
+	POLAR_DUMP_BACKTRACE();
+	polar_reset_program_error_handler();
+#elif defined(HAVE_BACKTRACE_SYMBOLS)
 	{
 		void	   *buf[100];
 		int			nframes;
@@ -65,6 +121,4 @@ ExceptionalCondition(const char *conditionName,
 #ifdef SLEEP_ON_ASSERT
 	sleep(1000000);
 #endif
-
-	abort();
 }

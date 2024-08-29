@@ -35,6 +35,9 @@
 extern char **environ;
 bool		update_process_title = true;
 
+/* POLAR */
+extern PGDLLIMPORT int PostPortNumber;
+
 
 /*
  * Alternative ways of updating ps display:
@@ -338,20 +341,28 @@ init_ps_display(const char *fixed_part)
 	 */
 #define PROGRAM_NAME_PREFIX ""
 #else
-#define PROGRAM_NAME_PREFIX "postgres: "
+#define PROGRAM_NAME_PREFIX "postgres(%d): "
 #endif
 
 	if (*cluster_name == '\0')
 	{
 		snprintf(ps_buffer, ps_buffer_size,
 				 PROGRAM_NAME_PREFIX "%s ",
+#if defined(PS_USE_SETPROCTITLE) || defined(PS_USE_SETPROCTITLE_FAST)
 				 fixed_part);
+#else
+				 PostPortNumber, fixed_part);
+#endif
 	}
 	else
 	{
 		snprintf(ps_buffer, ps_buffer_size,
 				 PROGRAM_NAME_PREFIX "%s: %s ",
+#if defined(PS_USE_SETPROCTITLE) || defined(PS_USE_SETPROCTITLE_FAST)
 				 cluster_name, fixed_part);
+#else
+				 PostPortNumber, cluster_name, fixed_part);
+#endif
 	}
 
 	ps_buffer_cur_len = ps_buffer_fixed_size = strlen(ps_buffer);

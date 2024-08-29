@@ -16,6 +16,7 @@
 #include "nodes/parsenodes.h"
 #include "tcop/dest.h"
 #include "utils/array.h"
+#include "utils/polar_cluster_settings.h"
 
 
 /* upper limit for GUC variables measured in kilobytes of memory */
@@ -32,6 +33,9 @@
  * set by ALTER SYSTEM command.
  */
 #define PG_AUTOCONF_FILENAME		"postgresql.auto.conf"
+
+/* POLAR */
+#define POLAR_DEFAULT_MAX_AUDIT_LOG_LEN 2048
 
 /*
  * Certain options can only be set at certain times. The rules are
@@ -75,6 +79,13 @@ typedef enum
 	PGC_SUSET,
 	PGC_USERSET
 } GucContext;
+
+/*
+ * POLAR:
+ * Virtual GucContext to load cluster polar_settings.conf, treate as PGC_POSTMASTER
+ */
+#define PGC_POSTMASTER_ONLY_LOAD_POLAR_SETTINGS 0x7fff
+/* POLAR end */
 
 /*
  * The following type records the source of the current setting.  A
@@ -241,6 +252,28 @@ typedef enum
 
 #define GUC_UNIT				(GUC_UNIT_MEMORY | GUC_UNIT_TIME)
 
+/* POLAR defines start */
+#define MAX_NUM_OF_PARALLEL_BGWRITER	24
+/* POLAR end */
+
+/*
+ * POLAR: parameter manage
+ * flag for hints displayed in the DBass console.
+ * default value for no flags are is_visiabe = false and is_user_chanagable = true
+ */
+#define POLAR_GUC_IS_VISIBLE		0x1000000	/* visible for user */
+#define POLAR_GUC_IS_INVISIBLE		0x2000000	/* invisible for user */
+#define	POLAR_GUC_IS_CHANGABLE		0x4000000	/* changable for user or
+												 * manger */
+#define	POLAR_GUC_IS_UNCHANGABLE	0x8000000	/* unchangable for user or
+												 * manger */
+extern struct config_generic *polar_parameter_check_name_internal(const char *guc_name);
+
+/* POLAR end */
+
+/* POLAR */
+#define POLAR_MAX_BULK_IO_SIZE 64
+/* POLAR end */
 
 /* GUC vars that are actually declared in guc.c, rather than elsewhere */
 extern PGDLLIMPORT bool Debug_print_plan;
@@ -288,9 +321,106 @@ extern PGDLLIMPORT int tcp_keepalives_interval;
 extern PGDLLIMPORT int tcp_keepalives_count;
 extern PGDLLIMPORT int tcp_user_timeout;
 
+/* POLAR */
+extern int	polar_hostid;
+extern char *polar_datadir;
+extern bool polar_enable_shared_storage_mode;
+extern bool polar_enable_debug;
+
+extern char *polar_disk_name;
+extern char *polar_storage_cluster_name;
+extern bool polar_enable_sync_ddl;
+
+/* POLAR end */
+
 #ifdef TRACE_SORT
 extern PGDLLIMPORT bool trace_sort;
 #endif
+
+/* POLAR GUCs start */
+
+/* POLAR: buffer manager */
+extern bool polar_enable_strategy_reject_buffer;
+extern bool polar_hot_standby_enable_vm;
+extern bool polar_enable_control_vm_flush;
+extern bool polar_force_flush_buffer;
+extern bool polar_ignore_ro_latency;
+extern bool polar_enable_flushlist;
+
+extern bool polar_enable_flush_dispatcher;
+extern bool polar_enable_normal_bgwriter;
+extern bool polar_enable_dynamic_parallel_bgwriter;
+extern bool polar_enable_early_launch_parallel_bgwriter;
+extern bool polar_enable_lru_log;
+extern double polar_lru_works_threshold;
+extern int	polar_parallel_flush_workers;
+extern int	polar_parallel_bgwriter_check_interval;
+extern int	polar_new_bgwriter_flush_factor;
+extern int	polar_parallel_new_bgwriter_threshold_lag;
+extern int	polar_parallel_new_bgwriter_threshold_time;
+extern int	polar_bgwriter_flush_batch_size;
+extern int	polar_bgwriter_batch_size;
+extern int	polar_lru_bgwriter_max_pages;
+extern int	polar_lru_batch_pages;
+extern int	polar_parallel_bgwriter_delay;
+extern int	polar_bgwriter_sleep_lsn_lag;
+extern int	polar_bgwriter_sleep_lru_lap;
+
+extern int	polar_copy_buffers;
+extern int	polar_buffer_copy_min_modified_count;
+extern int	polar_buffer_copy_threshold_lag;
+
+extern bool polar_enable_incremental_checkpoint;
+extern bool polar_enable_inc_end_of_recovery_checkpoint;
+extern int	polar_check_checkpoint_interval;
+extern bool polar_enable_alloc_checkinterrupts;
+
+extern bool polar_enable_simply_redo_error_log;
+
+/* POLAR: buffer manager end */
+
+/* POLAR audit */
+extern int	polar_max_log_files;
+extern bool polar_log_statement_with_duration;
+extern int	polar_max_auditlog_files;
+extern int	polar_max_slowlog_files;
+extern int	polar_auditlog_max_query_length;
+extern int	polar_audit_log_flush_timeout;
+
+/* POLAR: GUCs for transaction rw-split */
+extern bool polar_enable_xact_split;
+extern bool polar_enable_xact_split_debug;
+
+extern bool polar_enable_using_reserved_name;
+extern bool polar_enable_send_stop;
+extern bool polar_enable_switch_wal_in_backup;
+
+/* POLAR end */
+
+extern bool polar_enable_ring_buffer;
+extern int	polar_ring_buffer_bulkread_size;
+extern int	polar_ring_buffer_bulkwrite_size;
+extern int	polar_ring_buffer_vacuum_size;
+
+/*
+ * POLAR
+ * instance specification for cpu and memory
+ */
+extern double polar_instance_spec_cpu;
+extern int	polar_instance_spec_mem;
+
+extern bool polar_enable_async_lock_replay;
+extern bool polar_enable_async_lock_replay_debug;
+
+/* POLAR GUCs end */
+
+extern bool polar_enable_coredump_print;
+extern bool polar_enable_coredump_cleanup;
+extern int	polar_save_stack_info_level;
+extern char *polar_ignore_coredump_functions;
+extern char *polar_ignore_coredump_function_list;
+extern int	polar_ignore_coredump_level;
+extern bool polar_ignore_coredump_fuzzy_match;
 
 /*
  * Functions exported by guc.c
@@ -372,7 +502,7 @@ extern char *convert_GUC_name_for_parameter_acl(const char *name);
 extern bool check_GUC_name_for_parameter_acl(const char *name);
 extern void InitializeGUCOptions(void);
 extern void InitializeWalConsistencyChecking(void);
-extern bool SelectConfigFiles(const char *userDoption, const char *progname);
+extern bool SelectConfigFiles(const char *userDoption, const char *progname, const bool polar_is_show_guc_mode);
 extern void ResetAllOptions(void);
 extern void AtStart_GUC(void);
 extern int	NewGUCNestLevel(void);
@@ -394,6 +524,10 @@ extern int	set_config_option_ext(const char *name, const char *value,
 								  GucAction action, bool changeVal, int elevel,
 								  bool is_reload);
 extern void AlterSystemSetConfigFile(AlterSystemStmt *altersysstmt);
+
+/* POLAR: ALTER SYSTEM FOR CLUSTER */
+extern void AlterSystemSetConfigFileInternal(char *name, char *value, bool resetall, bool polar_redo, int polar_options);	/* split from
+																															 * AlterSystemSetConfigFile */
 extern char *GetConfigOptionByName(const char *name, const char **varname,
 								   bool missing_ok);
 extern void GetConfigOptionByNum(int varnum, const char **values, bool *noshow);
@@ -465,5 +599,38 @@ extern void assign_xlog_sync_method(int new_sync_method, void *extra);
 /* in access/transam/xlogprefetcher.c */
 extern bool check_recovery_prefetch(int *new_value, void **extra, GucSource source);
 extern void assign_recovery_prefetch(int new_value, void *extra);
+
+/* POLAR */
+extern char *polar_commit;
+extern char *polar_version;
+extern char *polardb_version;
+extern char *polar_release_date;
+
+extern bool polar_allow_huge_alloc;
+extern bool polar_disable_escape_inside_gbk_character;
+extern bool polar_enable_stat_wait_info;
+extern bool polar_enable_track_lock_stat;
+extern bool polar_enable_track_lock_timing;
+extern bool polar_enable_track_network_stat;
+extern bool polar_enable_track_network_timing;
+
+/* POLAR: bulk io */
+extern int	polar_recovery_bulk_extend_size;
+extern int	polar_min_bulk_extend_table_size;
+extern bool polar_enable_primary_recovery_bulk_extend;
+extern int	polar_bulk_extend_size;
+extern int	polar_bulk_read_size;
+
+extern int	polar_index_bulk_extend_size;
+
+
+extern int	polar_index_create_bulk_extend_size;
+
+/* POLAR end */
+
+/* POLAR: partial write */
+extern bool polar_has_partial_write;
+extern bool polar_find_in_string_list(const char *itemname, const char *stringlist);
+
 
 #endif							/* GUC_H */

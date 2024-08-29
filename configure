@@ -723,6 +723,7 @@ with_krb_srvnam
 krb_srvtab
 with_gssapi
 with_python
+with_pfsd
 with_perl
 with_tcl
 ICU_LIBS
@@ -730,6 +731,10 @@ ICU_CFLAGS
 with_icu
 enable_thread_safety
 INCLUDES
+with_submodule
+with_libunwind
+enable_minimal
+enable_fault_injector
 autodepend
 PKG_CONFIG_LIBDIR
 PKG_CONFIG_PATH
@@ -851,11 +856,16 @@ with_CC
 with_llvm
 enable_depend
 enable_cassert
+enable_fault_injector
+enable_minimal
+with_libunwind
+with_submodule
 enable_thread_safety
 with_icu
 with_tcl
 with_tclconfig
 with_perl
+with_pfsd
 with_python
 with_gssapi
 with_krb_srvnam
@@ -1540,6 +1550,8 @@ Optional Features:
   --enable-tap-tests      enable TAP tests (requires Perl and IPC::Run)
   --enable-depend         turn on automatic dependency tracking
   --enable-cassert        enable assertion checks (for debugging)
+  --enable-fault-injector enable fault injector (for testing)
+  --enable-minimal        enable minimal compile (for development)
   --disable-thread-safety disable thread-safety in client libraries
   --disable-largefile     omit support for large files
 
@@ -1560,10 +1572,13 @@ Optional Packages:
                           set WAL block size in kB [8]
   --with-CC=CMD           set compiler (deprecated)
   --with-llvm             build with LLVM based JIT support
+  --with-libunwind        build with libunwind support
+  --with-submodule        build with submodule packages
   --with-icu              build with ICU support
   --with-tcl              build Tcl modules (PL/Tcl)
   --with-tclconfig=DIR    tclConfig.sh is in DIR
   --with-perl             build Perl modules (PL/Perl)
+  --with-pfsd             build with PFSD support
   --with-python           build Python modules (PL/Python)
   --with-gssapi           build with GSSAPI support
   --with-krb-srvnam=NAME  default service principal name in Kerberos (GSSAPI)
@@ -2878,6 +2893,39 @@ fi
 
 cat >>confdefs.h <<_ACEOF
 #define PG_VERSION "$PG_VERSION"
+_ACEOF
+
+
+POLAR_COMMIT=`git rev-parse --short=8 HEAD || echo unknown`
+POLAR_MAJORVERSION="2.0.$PG_MAJORVERSION"
+POLAR_MINORVERSION="2.0" # monthly-version.hotfix
+POLAR_RELEASE_DATE="20240815" # YYYYMMDD
+POLAR_VERSION="$POLAR_MAJORVERSION.$POLAR_MINORVERSION" # eg: 2.0.15.6.2
+POLAR_PG_VERSION="$PACKAGE_VERSION.$POLAR_MINORVERSION" # eg: 15.6.1.2
+POLARDB_VERSION="PolarDB V2.0.$PACKAGE_VERSION.$POLAR_MINORVERSION" # eg: 2.0.15.6.1.2
+
+cat >>confdefs.h <<_ACEOF
+#define POLAR_COMMIT "$POLAR_COMMIT"
+_ACEOF
+
+
+cat >>confdefs.h <<_ACEOF
+#define POLAR_VERSION "$POLAR_MAJORVERSION.$POLAR_MINORVERSION"
+_ACEOF
+
+
+cat >>confdefs.h <<_ACEOF
+#define POLAR_PG_VERSION "$PACKAGE_VERSION.$POLAR_MINORVERSION"
+_ACEOF
+
+
+cat >>confdefs.h <<_ACEOF
+#define POLARDB_VERSION "PolarDB V2.0.$PACKAGE_VERSION.$POLAR_MINORVERSION"
+_ACEOF
+
+
+cat >>confdefs.h <<_ACEOF
+#define POLAR_RELEASE_DATE "$POLAR_RELEASE_DATE"
 _ACEOF
 
 
@@ -8102,6 +8150,143 @@ fi
 
 
 
+#
+# Enable fault injector
+#
+{ $as_echo "$as_me:${as_lineno-$LINENO}: checking whether to build with fault injector enable" >&5
+$as_echo_n "checking whether to build with fault injector enable... " >&6; }
+
+
+# Check whether --enable-fault-injector was given.
+if test "${enable_fault_injector+set}" = set; then :
+  enableval=$enable_fault_injector;
+  case $enableval in
+    yes)
+
+$as_echo "#define FAULT_INJECTOR 1" >>confdefs.h
+
+      ;;
+    no)
+      :
+      ;;
+    *)
+      as_fn_error $? "no argument expected for --enable-fault-injector option" "$LINENO" 5
+      ;;
+  esac
+
+else
+  enable_fault_injector=no
+
+fi
+
+
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $enable_fault_injector" >&5
+$as_echo "$enable_fault_injector" >&6; }
+
+
+#
+# Enable minimal compile
+#
+{ $as_echo "$as_me:${as_lineno-$LINENO}: checking whether to build with minimal compile" >&5
+$as_echo_n "checking whether to build with minimal compile... " >&6; }
+
+
+# Check whether --enable-minimal was given.
+if test "${enable_minimal+set}" = set; then :
+  enableval=$enable_minimal;
+  case $enableval in
+    yes)
+
+$as_echo "#define USE_MINIMAL_COMPILE 0" >>confdefs.h
+
+      ;;
+    no)
+      :
+      ;;
+    *)
+      as_fn_error $? "no argument expected for --enable-minimal option" "$LINENO" 5
+      ;;
+  esac
+
+else
+  enable_minimal=no
+
+fi
+
+
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $enable_minimal" >&5
+$as_echo "$enable_minimal" >&6; }
+
+
+#
+# libunwind
+#
+{ $as_echo "$as_me:${as_lineno-$LINENO}: checking whether to build with libunwind" >&5
+$as_echo_n "checking whether to build with libunwind... " >&6; }
+
+
+
+# Check whether --with-libunwind was given.
+if test "${with_libunwind+set}" = set; then :
+  withval=$with_libunwind;
+  case $withval in
+    yes)
+
+$as_echo "#define USE_LIBUNWIND 1" >>confdefs.h
+
+      ;;
+    no)
+      :
+      ;;
+    *)
+      as_fn_error $? "no argument expected for --with-libunwind option" "$LINENO" 5
+      ;;
+  esac
+
+else
+  with_libunwind=no
+
+fi
+
+
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $with_libunwind" >&5
+$as_echo "$with_libunwind" >&6; }
+
+#
+# SUBMODULE
+#
+{ $as_echo "$as_me:${as_lineno-$LINENO}: checking whether to build with submodule packages" >&5
+$as_echo_n "checking whether to build with submodule packages... " >&6; }
+
+
+
+# Check whether --with-submodule was given.
+if test "${with_submodule+set}" = set; then :
+  withval=$with_submodule;
+  case $withval in
+    yes)
+
+$as_echo "#define USE_SUBMODULE 1" >>confdefs.h
+
+      ;;
+    no)
+      :
+      ;;
+    *)
+      as_fn_error $? "no argument expected for --with-submodule option" "$LINENO" 5
+      ;;
+  esac
+
+else
+  with_submodule=no
+
+fi
+
+
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $with_submodule" >&5
+$as_echo "$with_submodule" >&6; }
+
+
 
 #
 # Include directories
@@ -8392,6 +8577,41 @@ fi
 
 { $as_echo "$as_me:${as_lineno-$LINENO}: result: $with_perl" >&5
 $as_echo "$with_perl" >&6; }
+
+
+#
+# PFSD
+#
+{ $as_echo "$as_me:${as_lineno-$LINENO}: checking whether to build with PFSD support" >&5
+$as_echo_n "checking whether to build with PFSD support... " >&6; }
+
+
+
+# Check whether --with-pfsd was given.
+if test "${with_pfsd+set}" = set; then :
+  withval=$with_pfsd;
+  case $withval in
+    yes)
+
+$as_echo "#define USE_PFSD 1" >>confdefs.h
+
+      ;;
+    no)
+      :
+      ;;
+    *)
+      as_fn_error $? "no argument expected for --with-pfsd option" "$LINENO" 5
+      ;;
+  esac
+
+else
+  with_pfsd=no
+
+fi
+
+
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $with_pfsd" >&5
+$as_echo "$with_pfsd" >&6; }
 
 
 #
@@ -9416,6 +9636,57 @@ fi
     esac
   done
 fi
+
+if test "$with_libunwind" = yes; then
+  { $as_echo "$as_me:${as_lineno-$LINENO}: checking for unw_backtrace in -lunwind" >&5
+$as_echo_n "checking for unw_backtrace in -lunwind... " >&6; }
+if ${ac_cv_lib_unwind_unw_backtrace+:} false; then :
+  $as_echo_n "(cached) " >&6
+else
+  ac_check_lib_save_LIBS=$LIBS
+LIBS="-lunwind  $LIBS"
+cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+
+/* Override any GCC internal prototype to avoid an error.
+   Use char because int might match the return type of a GCC
+   builtin and then its argument prototype would still apply.  */
+#ifdef __cplusplus
+extern "C"
+#endif
+char unw_backtrace ();
+int
+main ()
+{
+return unw_backtrace ();
+  ;
+  return 0;
+}
+_ACEOF
+if ac_fn_c_try_link "$LINENO"; then :
+  ac_cv_lib_unwind_unw_backtrace=yes
+else
+  ac_cv_lib_unwind_unw_backtrace=no
+fi
+rm -f core conftest.err conftest.$ac_objext \
+    conftest$ac_exeext conftest.$ac_ext
+LIBS=$ac_check_lib_save_LIBS
+fi
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_cv_lib_unwind_unw_backtrace" >&5
+$as_echo "$ac_cv_lib_unwind_unw_backtrace" >&6; }
+if test "x$ac_cv_lib_unwind_unw_backtrace" = xyes; then :
+  cat >>confdefs.h <<_ACEOF
+#define HAVE_LIBUNWIND 1
+_ACEOF
+
+  LIBS="-lunwind $LIBS"
+
+else
+  as_fn_error $? "library 'unwind' is required for backtrace support" "$LINENO" 5
+fi
+
+fi
+
 #
 # Assignments
 #
@@ -12600,6 +12871,62 @@ if test "$ac_res" != no; then :
 fi
 
 # *BSD:
+{ $as_echo "$as_me:${as_lineno-$LINENO}: checking for library containing __backtrace" >&5
+$as_echo_n "checking for library containing __backtrace... " >&6; }
+if ${ac_cv_search___backtrace+:} false; then :
+  $as_echo_n "(cached) " >&6
+else
+  ac_func_search_save_LIBS=$LIBS
+cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+
+/* Override any GCC internal prototype to avoid an error.
+   Use char because int might match the return type of a GCC
+   builtin and then its argument prototype would still apply.  */
+#ifdef __cplusplus
+extern "C"
+#endif
+char __backtrace ();
+int
+main ()
+{
+return __backtrace ();
+  ;
+  return 0;
+}
+_ACEOF
+for ac_lib in '' execinfo; do
+  if test -z "$ac_lib"; then
+    ac_res="none required"
+  else
+    ac_res=-l$ac_lib
+    LIBS="-l$ac_lib  $ac_func_search_save_LIBS"
+  fi
+  if ac_fn_c_try_link "$LINENO"; then :
+  ac_cv_search___backtrace=$ac_res
+fi
+rm -f core conftest.err conftest.$ac_objext \
+    conftest$ac_exeext
+  if ${ac_cv_search___backtrace+:} false; then :
+  break
+fi
+done
+if ${ac_cv_search___backtrace+:} false; then :
+
+else
+  ac_cv_search___backtrace=no
+fi
+rm conftest.$ac_ext
+LIBS=$ac_func_search_save_LIBS
+fi
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_cv_search___backtrace" >&5
+$as_echo "$ac_cv_search___backtrace" >&6; }
+ac_res=$ac_cv_search___backtrace
+if test "$ac_res" != no; then :
+  test "$ac_res" = "none required" || LIBS="$ac_res $LIBS"
+
+fi
+
 { $as_echo "$as_me:${as_lineno-$LINENO}: checking for library containing backtrace_symbols" >&5
 $as_echo_n "checking for library containing backtrace_symbols... " >&6; }
 if ${ac_cv_search_backtrace_symbols+:} false; then :
@@ -16222,7 +16549,7 @@ fi
 LIBS_including_readline="$LIBS"
 LIBS=`echo "$LIBS" | sed -e 's/-ledit//g' -e 's/-lreadline//g'`
 
-for ac_func in backtrace_symbols clock_gettime copyfile fdatasync getifaddrs getpeerucred getrlimit inet_pton kqueue mbstowcs_l memset_s poll posix_fallocate ppoll pstat pthread_is_threaded_np readlink readv setproctitle setproctitle_fast setsid shm_open strchrnul strsignal symlink syncfs sync_file_range uselocale wcstombs_l writev
+for ac_func in __backtrace backtrace_symbols clock_gettime copyfile fdatasync getifaddrs getpeerucred getrlimit inet_pton kqueue mbstowcs_l memset_s poll posix_fallocate ppoll pstat pthread_is_threaded_np readlink readv setproctitle setproctitle_fast setsid shm_open strchrnul strsignal symlink syncfs sync_file_range uselocale wcstombs_l writev
 do :
   as_ac_var=`$as_echo "ac_cv_func_$ac_func" | $as_tr_sh`
 ac_fn_c_check_func "$LINENO" "$ac_func" "$as_ac_var"
@@ -20175,9 +20502,13 @@ else
   cc_string=$CC
 fi
 
+if test "$enable_debug" = yes; then
+  debug_string=" debug"
+fi
+
 
 cat >>confdefs.h <<_ACEOF
-#define PG_VERSION_STR "PostgreSQL $PG_VERSION on $host, compiled by $cc_string, `expr $ac_cv_sizeof_void_p \* 8`-bit"
+#define PG_VERSION_STR "PostgreSQL $PG_VERSION (PolarDB $POLAR_PG_VERSION build $POLAR_COMMIT$debug_string) on $host_cpu-$host_os"
 _ACEOF
 
 

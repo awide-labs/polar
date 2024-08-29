@@ -732,6 +732,17 @@ StreamConnection(pgsocket server_fd, Port *port)
 		return STATUS_ERROR;
 	}
 
+	/* POLAR: Get real client address of ALB. */
+	port->raddr.salen = sizeof(port->raddr.addr);
+	if (getpeername(port->sock,
+					(struct sockaddr *) &port->raddr.addr,
+					&port->raddr.salen) < 0)
+	{
+		ereport(LOG,
+				(errmsg("%s() failed: %m", "getpeername")));
+		return STATUS_ERROR;
+	}
+
 	/* fill in the server (local) address */
 	port->laddr.salen = sizeof(port->laddr.addr);
 	if (getsockname(port->sock,

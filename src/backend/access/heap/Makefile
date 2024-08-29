@@ -23,4 +23,6 @@ OBJS = \
 	vacuumlazy.o \
 	visibilitymap.o
 
+OBJS += polar_visibilitymap.o
+
 include $(top_srcdir)/src/backend/common.mk

@@ -1,0 +1,49 @@
+--
+-- Test polar_force_trans_ro_non_sup
+--
+SET client_min_messages TO error;
+DROP ROLE IF EXISTS regress_force_trans_ro_1;
+DROP ROLE IF EXISTS regress_force_trans_ro_2;
+CREATE ROLE regress_force_trans_ro_1 SUPERUSER LOGIN;
+CREATE ROLE regress_force_trans_ro_2 LOGIN;
+
+CREATE TABLE txnt (id int);
+ALTER TABLE txnt OWNER TO regress_force_trans_ro_2;
+
+\set prevuser :USER
+
+-- Superuser should always success.
+\c - regress_force_trans_ro_1
+SET polar_force_trans_ro_non_sup TO on;
+INSERT INTO txnt VALUES(1);
+SET polar_force_trans_ro_non_sup TO off;
+INSERT INTO txnt VALUES(1);
+\c - :prevuser
+
+-- Non-superuser
+ALTER ROLE regress_force_trans_ro_2 SET polar_force_trans_ro_non_sup TO off;
+\c - regress_force_trans_ro_2
+SET default_transaction_read_only TO OFF;
+INSERT INTO txnt VALUES(2);  --should success
+GRANT ALL ON TABLE txnt TO PUBLIC;  -- should success
+SET default_transaction_read_only TO ON;
+INSERT INTO txnt VALUES(2);  -- should fail
+GRANT ALL ON TABLE txnt TO PUBLIC;  -- should fail
+
+\c - :prevuser
+ALTER ROLE regress_force_trans_ro_2 SET polar_force_trans_ro_non_sup TO on;
+\c - regress_force_trans_ro_2
+SET default_transaction_read_only TO OFF;
+INSERT INTO txnt VALUES(2);  --should fail
+GRANT ALL ON TABLE txnt TO PUBLIC;  -- should success
+SET transaction_read_only TO OFF;  -- should fail
+SET default_transaction_read_only TO ON;
+INSERT INTO txnt VALUES(2);  -- should fail
+GRANT ALL ON TABLE txnt TO PUBLIC;  -- should success
+SET transaction_read_only TO OFF;  -- should fail
+
+\c - :prevuser
+DROP TABLE txnt;
+DROP ROLE regress_force_trans_ro_1;
+DROP ROLE regress_force_trans_ro_2;
+RESET client_min_messages;

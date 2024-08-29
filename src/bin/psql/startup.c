@@ -187,6 +187,8 @@ main(int argc, char *argv[])
 
 	pset.getPassword = TRI_DEFAULT;
 
+	pset.polar_cur_cstack = IFSTATE_NONE;
+
 	EstablishVariableSpace();
 
 	/* Create variables showing psql version number */

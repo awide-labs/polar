@@ -20,6 +20,24 @@
 #include "utils/snapshot.h"
 
 
+/* POLAR */
+typedef enum PolarTBlockState
+{
+	RM_TBLOCK_DEFAULT,			/* idle */
+	RM_TBLOCK_INPROGRESS,		/* live transaction */
+	RM_TBLOCK_PARALLEL_INPROGRESS	/* live transaction inside parallel worker */
+} PolarTBlockState;
+
+typedef struct PolarProcStatm
+{
+	int			pid;			/* the pid of current backend */
+	PolarTBlockState procstate; /* the state of current backend, see
+								 * PolarTBlockState */
+	int			backendId;		/* the backendId of current backend for
+								 * SendProcSignal */
+	Size	   *procnorss;		/* the point of backend RSS array */
+} PolarProcStatm;
+
 extern Size ProcArrayShmemSize(void);
 extern void CreateSharedProcArray(void);
 extern void ProcArrayAdd(PGPROC *proc);
@@ -95,5 +113,14 @@ extern void ProcArraySetReplicationSlotXmin(TransactionId xmin,
 
 extern void ProcArrayGetReplicationSlotXmin(TransactionId *xmin,
 											TransactionId *catalog_xmin);
+
+/* POLAR */
+extern void polar_get_nosuper_and_super_conn_count(int *nosupercount, int *supercount);
+extern void polar_get_all_backendid_memstatm(PolarProcStatm *allprocs, Size *procsrss, int *num_allprocs);
+extern PGPROC *polar_search_proc(pid_t pid);
+extern XLogRecPtr polar_get_backend_min_replay_lsn(void);
+extern XLogRecPtr polar_get_read_min_lsn(XLogRecPtr primary_consist_ptr);
+
+/* POLAR end */
 
 #endif							/* PROCARRAY_H */

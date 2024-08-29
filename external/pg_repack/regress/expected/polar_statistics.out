@@ -1,0 +1,91 @@
+CREATE TEMP TABLE repack_stats_tmp AS SELECT id, name, value FROM polar_feature_utils.polar_unique_feature_usage WHERE name LIKE 'Repack%' ORDER BY id;
+-- repack 1 normal table
+\! pg_repack -T 3600 -k -U polar_repack_superuser --dbname=contrib_regression_pg_repack --table=repack_normal.normal
+INFO: repacking table "repack_normal.normal"
+SELECT t.name, u.value - t.value AS increase FROM polar_feature_utils.polar_unique_feature_usage u, repack_stats_tmp t WHERE u.id = t.id;
+        name         | increase 
+---------------------+----------
+ RepackTableCount    |        1
+ RepackIndexCount    |        0
+ RepackApplyLogCount |        0
+(3 rows)
+
+-- repack 1 partitioned table, including multiple partitions
+DELETE FROM repack_stats_tmp;
+INSERT INTO repack_stats_tmp SELECT id, name, value FROM polar_feature_utils.polar_unique_feature_usage WHERE name LIKE 'Repack%' ORDER BY id;
+\! pg_repack -T 3600 -k -U polar_repack_superuser --dbname=contrib_regression_pg_repack --parent-table=repack_part_schema.prt
+INFO: repacking table "repack_part_schema.prt_p_0"
+INFO: repacking table "repack_part_schema.prt_p_1"
+INFO: repacking table "repack_part_schema.prt_p_2"
+INFO: repacking table "repack_part_schema.prt_p_def_p_0"
+INFO: repacking table "repack_part_schema.prt_p_def_p_1"
+INFO: repacking table "repack_part_schema."prt_p_def_P_2""
+SELECT t.name, u.value - t.value AS increase FROM polar_feature_utils.polar_unique_feature_usage u, repack_stats_tmp t WHERE u.id = t.id;
+        name         | increase 
+---------------------+----------
+ RepackTableCount    |        6
+ RepackIndexCount    |        0
+ RepackApplyLogCount |        0
+(3 rows)
+
+-- repack 1 normal index
+DELETE FROM repack_stats_tmp;
+INSERT INTO repack_stats_tmp SELECT id, name, value FROM polar_feature_utils.polar_unique_feature_usage WHERE name LIKE 'Repack%' ORDER BY id;
+\! pg_repack -T 3600 -k -U polar_repack_superuser --dbname=contrib_regression_pg_repack --index=repack_normal.normal_pkey
+INFO: repacking index "repack_normal.normal_pkey"
+SELECT t.name, u.value - t.value AS increase FROM polar_feature_utils.polar_unique_feature_usage u, repack_stats_tmp t WHERE u.id = t.id;
+        name         | increase 
+---------------------+----------
+ RepackTableCount    |        0
+ RepackIndexCount    |        1
+ RepackApplyLogCount |        0
+(3 rows)
+
+-- repack multiple indexes
+DELETE FROM repack_stats_tmp;
+INSERT INTO repack_stats_tmp SELECT id, name, value FROM polar_feature_utils.polar_unique_feature_usage WHERE name LIKE 'Repack%' ORDER BY id;
+\! pg_repack -T 3600 -k -U polar_repack_superuser --dbname=contrib_regression_pg_repack --index=repack_normal.normal_pkey --index=repack_normal.normal_idx_btree_a --index=repack_normal.normal_idx_gin_b --index=repack_normal.normal_idx_gist_c
+INFO: repacking index "repack_normal.normal_pkey"
+INFO: repacking index "repack_normal.normal_idx_btree_a"
+INFO: repacking index "repack_normal.normal_idx_gin_b"
+INFO: repacking index "repack_normal.normal_idx_gist_c"
+SELECT t.name, u.value - t.value AS increase FROM polar_feature_utils.polar_unique_feature_usage u, repack_stats_tmp t WHERE u.id = t.id;
+        name         | increase 
+---------------------+----------
+ RepackTableCount    |        0
+ RepackIndexCount    |        4
+ RepackApplyLogCount |        0
+(3 rows)
+
+-- repack all indexes of table
+DELETE FROM repack_stats_tmp;
+INSERT INTO repack_stats_tmp SELECT id, name, value FROM polar_feature_utils.polar_unique_feature_usage WHERE name LIKE 'Repack%' ORDER BY id;
+\! pg_repack -T 3600 -k -U polar_repack_superuser --dbname=contrib_regression_pg_repack --table=repack_normal.normal --only-indexes
+INFO: repacking indexes of "repack_normal.normal"
+INFO: repacking index "repack_normal.normal_idx_btree_a"
+INFO: repacking index "repack_normal.normal_idx_gin_b"
+INFO: repacking index "repack_normal.normal_idx_gist_c"
+INFO: repacking index "repack_normal.normal_pkey"
+SELECT t.name, u.value - t.value AS increase FROM polar_feature_utils.polar_unique_feature_usage u, repack_stats_tmp t WHERE u.id = t.id;
+        name         | increase 
+---------------------+----------
+ RepackTableCount    |        0
+ RepackIndexCount    |        4
+ RepackApplyLogCount |        0
+(3 rows)
+
+-- repack global index
+DELETE FROM repack_stats_tmp;
+INSERT INTO repack_stats_tmp SELECT id, name, value FROM polar_feature_utils.polar_unique_feature_usage WHERE name LIKE 'Repack%' ORDER BY id;
+\! pg_repack -T 3600 -k -U polar_repack_superuser --dbname=contrib_regression_pg_repack --index=repack_gi_schema.prt_gi_btree_b --polar-enable-global-index
+WARNING: ERROR:  schema "repack_gi_schema" does not exist
+CONTEXT:  unnamed portal parameter $1 = '...'
+SELECT t.name, u.value - t.value AS increase FROM polar_feature_utils.polar_unique_feature_usage u, repack_stats_tmp t WHERE u.id = t.id;
+        name         | increase 
+---------------------+----------
+ RepackTableCount    |        0
+ RepackIndexCount    |        0
+ RepackApplyLogCount |        0
+(3 rows)
+
+-- RepackApplyLogCount never increase because there's no concurrent DML during repacking. We cover it in test framework

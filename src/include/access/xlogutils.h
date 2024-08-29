@@ -57,6 +57,9 @@ extern PGDLLIMPORT HotStandbyState standbyState;
 #define InHotStandby (standbyState >= STANDBY_SNAPSHOT_PENDING)
 
 
+/* POLAR */
+#include "storage/polar_bufmgr.h"
+
 extern bool XLogHaveInvalidPages(void);
 extern void XLogCheckInvalidPages(void);
 

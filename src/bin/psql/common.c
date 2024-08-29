@@ -1233,6 +1233,21 @@ sendquery_cleanup:
 	/* reset \gexec trigger */
 	pset.gexec_flag = false;
 
+	if (pset.singlestep)
+	{
+		char	   *sqlstate = NULL;
+
+		if (!OK)
+			sqlstate = PQresultErrorField(pset.last_error_result, PG_DIAG_SQLSTATE);
+		fflush(stderr);
+		printf(_("***(File: %s, line number: %ld, PQTransactionStatus: %d, "
+				 "IFSTATE: %d, SQLSTATE: %s, CROSSTAB: %d)***\n"),
+			   pset.inputfile != NULL ? pset.inputfile : "",
+			   pset.lineno, PQtransactionStatus(pset.db), pset.polar_cur_cstack,
+			   sqlstate != NULL ? sqlstate : "", pset.crosstab_flag);
+		fflush(stdout);
+	}
+
 	/* reset \crosstabview trigger */
 	pset.crosstab_flag = false;
 	for (i = 0; i < lengthof(pset.ctv_args); i++)

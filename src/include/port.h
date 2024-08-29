@@ -356,8 +356,10 @@ extern int	gettimeofday(struct timeval *tp, struct timezone *tzp);
  */
 #ifndef WIN32
 #define PG_IOLBF	_IOLBF
+#define PG_IOFBF	_IOFBF		/* POLAR */
 #else
 #define PG_IOLBF	_IONBF
+#define PG_IOFBF	_IONBF		/* POLAR */
 #endif
 
 /*

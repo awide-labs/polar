@@ -8,6 +8,7 @@
 #ifndef SETTINGS_H
 #define SETTINGS_H
 
+#include "fe_utils/conditional.h"
 #include "fe_utils/print.h"
 #include "variables.h"
 
@@ -150,6 +151,9 @@ typedef struct _psqlSettings
 	PGVerbosity verbosity;		/* current error verbosity level */
 	bool		show_all_results;
 	PGContextVisibility show_context;	/* current context display level */
+
+	/* POLAR: current conditional stack state */
+	ifState		polar_cur_cstack;
 } PsqlSettings;
 
 extern PsqlSettings pset;

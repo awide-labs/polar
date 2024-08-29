@@ -37,6 +37,9 @@
 #include "utils/syscache.h"
 #include "utils/timestamp.h"
 
+/* POLAR */
+#include "storage/polar_fd.h"
+
 
 /*
  * Convert a "text" filename argument to C string, and check it's allowable.
@@ -403,7 +406,7 @@ pg_stat_file(PG_FUNCTION_ARGS)
 
 	filename = convert_and_check_filename(filename_t);
 
-	if (stat(filename, &fst) < 0)
+	if (polar_stat(filename, &fst) < 0)
 	{
 		if (missing_ok && errno == ENOENT)
 			PG_RETURN_NULL();
@@ -578,7 +581,7 @@ pg_ls_dir_files(FunctionCallInfo fcinfo, const char *dir, bool missing_ok)
 
 		/* Get the file info */
 		snprintf(path, sizeof(path), "%s/%s", dir, de->d_name);
-		if (stat(path, &attrib) < 0)
+		if (polar_stat(path, &attrib) < 0)
 		{
 			/* Ignore concurrently-deleted files, else complain */
 			if (errno == ENOENT)
@@ -615,7 +618,11 @@ pg_ls_logdir(PG_FUNCTION_ARGS)
 Datum
 pg_ls_waldir(PG_FUNCTION_ARGS)
 {
-	return pg_ls_dir_files(fcinfo, XLOGDIR, false);
+	char		walpath[MAXPGPATH] = {0};
+
+	polar_make_file_path_level2(walpath, XLOGDIR);
+
+	return pg_ls_dir_files(fcinfo, walpath, false);
 }
 
 /*

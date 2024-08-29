@@ -32,11 +32,15 @@
 #include "receivelog.h"
 #include "streamutil.h"
 
+#include "polar_vfs/polar_vfs_fe.h"
+
 /* Size of zlib buffer for .tar.gz */
 #define ZLIB_OUT_SIZE 4096
 
 /* Size of LZ4 input chunk for .lz4 */
 #define LZ4_IN_SIZE  4096
+
+static bool polar_is_write_pfs = false;
 
 /*-------------------------------------------------------------------------
  * WalDirectoryMethod - write wal to a directory looking like pg_wal
@@ -133,7 +137,7 @@ dir_open_for_write(const char *pathname, const char *temp_suffix, size_t pad_to_
 	 * does not do any system calls to fsync() to make changes permanent on
 	 * disk.
 	 */
-	fd = open(tmppath, O_WRONLY | O_CREAT | PG_BINARY, pg_file_create_mode);
+	fd = polar_open(tmppath, O_WRONLY | O_CREAT | PG_BINARY, pg_file_create_mode);
 	if (fd < 0)
 	{
 		dir_data->lasterrno = errno;
@@ -147,7 +151,7 @@ dir_open_for_write(const char *pathname, const char *temp_suffix, size_t pad_to_
 		if (gzfp == NULL)
 		{
 			dir_data->lasterrno = errno;
-			close(fd);
+			polar_close(fd);
 			return NULL;
 		}
 
@@ -209,28 +213,33 @@ dir_open_for_write(const char *pathname, const char *temp_suffix, size_t pad_to_
 	/* Do pre-padding on non-compressed files */
 	if (pad_to_size && dir_data->compression_algorithm == PG_COMPRESSION_NONE)
 	{
-		PGAlignedXLogBlock zerobuf;
+		char	   *data;
 		int			bytes;
+		int			write_once_bytes;
 
-		memset(zerobuf.data, 0, XLOG_BLCKSZ);
-		for (bytes = 0; bytes < pad_to_size; bytes += XLOG_BLCKSZ)
+		write_once_bytes = polar_is_write_pfs ? MAX_SEND_SIZE : XLOG_BLCKSZ;
+		data = (char *) pg_malloc0(write_once_bytes);
+		for (bytes = 0; bytes < pad_to_size; bytes += write_once_bytes)
 		{
 			errno = 0;
-			if (write(fd, zerobuf.data, XLOG_BLCKSZ) != XLOG_BLCKSZ)
+			if (polar_write(fd, data, write_once_bytes) != write_once_bytes)
 			{
 				/* If write didn't set errno, assume problem is no disk space */
 				dir_data->lasterrno = errno ? errno : ENOSPC;
-				close(fd);
+				pg_free(data);
+				polar_close(fd);
 				return NULL;
 			}
 		}
 
-		if (lseek(fd, 0, SEEK_SET) != 0)
+		if (polar_lseek(fd, 0, SEEK_SET) != 0)
 		{
 			dir_data->lasterrno = errno;
-			close(fd);
+			pg_free(data);
+			polar_close(fd);
 			return NULL;
 		}
+		pg_free(data);
 	}
 
 	/*
@@ -256,11 +265,11 @@ dir_open_for_write(const char *pathname, const char *temp_suffix, size_t pad_to_
 				(void) LZ4F_compressEnd(ctx, lz4buf, lz4bufsize, NULL);
 				(void) LZ4F_freeCompressionContext(ctx);
 				pg_free(lz4buf);
-				close(fd);
+				polar_close(fd);
 			}
 			else
 #endif
-				close(fd);
+				polar_close(fd);
 			return NULL;
 		}
 	}
@@ -341,7 +350,7 @@ dir_write(Walfile f, const void *buf, size_t count)
 			}
 
 			errno = 0;
-			if (write(df->fd, df->lz4buf, compressed) != compressed)
+			if (polar_write(df->fd, df->lz4buf, compressed) != compressed)
 			{
 				/* If write didn't set errno, assume problem is no disk space */
 				dir_data->lasterrno = errno ? errno : ENOSPC;
@@ -358,7 +367,7 @@ dir_write(Walfile f, const void *buf, size_t count)
 #endif
 	{
 		errno = 0;
-		r = write(df->fd, buf, count);
+		r = polar_write(df->fd, buf, count);
 		if (r != count)
 		{
 			/* If write didn't set errno, assume problem is no disk space */
@@ -426,7 +435,7 @@ dir_close(Walfile f, WalCloseMethod method)
 	}
 	else
 #endif
-		r = close(df->fd);
+		r = polar_close(df->fd);
 
 	if (r == 0)
 	{
@@ -471,7 +480,7 @@ dir_close(Walfile f, WalCloseMethod method)
 			snprintf(tmppath, sizeof(tmppath), "%s/%s",
 					 dir_data->basedir, filename);
 			pg_free(filename);
-			r = unlink(tmppath);
+			r = polar_unlink(tmppath);
 		}
 		else
 		{
@@ -552,7 +561,7 @@ dir_sync(Walfile f)
 	}
 #endif
 
-	r = fsync(((DirectoryMethodFile *) f)->fd);
+	r = polar_fsync(((DirectoryMethodFile *) f)->fd);
 	if (r < 0)
 		dir_data->lasterrno = errno;
 	return r;
@@ -567,7 +576,7 @@ dir_get_file_size(const char *pathname)
 	snprintf(tmppath, sizeof(tmppath), "%s/%s",
 			 dir_data->basedir, pathname);
 
-	if (stat(tmppath, &statbuf) != 0)
+	if (polar_stat(tmppath, &statbuf) != 0)
 	{
 		dir_data->lasterrno = errno;
 		return -1;
@@ -593,10 +602,10 @@ dir_existsfile(const char *pathname)
 	snprintf(tmppath, sizeof(tmppath), "%s/%s",
 			 dir_data->basedir, pathname);
 
-	fd = open(tmppath, O_RDONLY | PG_BINARY, 0);
+	fd = polar_open(tmppath, O_RDONLY | PG_BINARY, 0);
 	if (fd < 0)
 		return false;
-	close(fd);
+	polar_close(fd);
 	return true;
 }
 
@@ -624,10 +633,11 @@ dir_finish(void)
 WalWriteMethod *
 CreateWalDirectoryMethod(const char *basedir,
 						 pg_compress_algorithm compression_algorithm,
-						 int compression_level, bool sync)
+						 int compression_level, bool sync, bool use_pfs_to_write)
 {
 	WalWriteMethod *method;
 
+	polar_is_write_pfs = use_pfs_to_write;
 	method = pg_malloc0(sizeof(WalWriteMethod));
 	method->open_for_write = dir_open_for_write;
 	method->write = dir_write;

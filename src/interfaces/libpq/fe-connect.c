@@ -362,6 +362,31 @@ static const PQEnvironmentOption EnvironmentOptions[] =
 	{
 		"PGGEQO", "geqo"
 	},
+	/* PolarDB proxy settings */
+	{
+		"_polar_proxy_client_host", "_polar_proxy_client_host"
+	},
+	{
+		"_polar_proxy_client_port", "_polar_proxy_client_port"
+	},
+	{
+		"_polar_proxy_session_id", "_polar_proxy_session_id"
+	},
+	{
+		"_polar_proxy_cancel_key", "_polar_proxy_cancel_key"
+	},
+	{
+		"_polar_proxy_send_lsn", "_polar_proxy_send_lsn"
+	},
+	{
+		"_polar_proxy_use_ssl", "_polar_proxy_use_ssl"
+	},
+	{
+		"_polar_proxy_ssl_version", "_polar_proxy_ssl_version"
+	},
+	{
+		"_polar_proxy_ssl_cipher_name", "_polar_proxy_ssl_cipher_name"
+	},
 	{
 		NULL, NULL
 	}

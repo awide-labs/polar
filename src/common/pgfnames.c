@@ -26,6 +26,9 @@
 #include "common/logging.h"
 #endif
 
+/* POLAR */
+#include "storage/polar_fd.h"
+
 /*
  * pgfnames
  *
@@ -42,7 +45,7 @@ pgfnames(const char *path)
 	int			numnames = 0;
 	int			fnsize = 200;	/* enough for many small dbs */
 
-	dir = opendir(path);
+	dir = polar_opendir(path);
 	if (dir == NULL)
 	{
 		pg_log_warning("could not open directory \"%s\": %m", path);
@@ -51,7 +54,7 @@ pgfnames(const char *path)
 
 	filenames = (char **) palloc(fnsize * sizeof(char *));
 
-	while (errno = 0, (file = readdir(dir)) != NULL)
+	while (errno = 0, (file = polar_readdir(dir)) != NULL)
 	{
 		if (strcmp(file->d_name, ".") != 0 && strcmp(file->d_name, "..") != 0)
 		{
@@ -70,7 +73,7 @@ pgfnames(const char *path)
 
 	filenames[numnames] = NULL;
 
-	if (closedir(dir))
+	if (polar_closedir(dir))
 		pg_log_warning("could not close directory \"%s\": %m", path);
 
 	return filenames;

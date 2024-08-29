@@ -1303,7 +1303,9 @@ be_tls_get_cipher_bits(Port *port)
 const char *
 be_tls_get_version(Port *port)
 {
-	if (port->ssl)
+	if (port->polar_proxy_ssl_in_use)
+		return port->polar_proxy_ssl_version;
+	else if (port->ssl)
 		return SSL_get_version(port->ssl);
 	else
 		return NULL;
@@ -1312,7 +1314,9 @@ be_tls_get_version(Port *port)
 const char *
 be_tls_get_cipher(Port *port)
 {
-	if (port->ssl)
+	if (port->polar_proxy_ssl_in_use)
+		return port->polar_proxy_ssl_cipher_name;
+	else if (port->ssl)
 		return SSL_get_cipher(port->ssl);
 	else
 		return NULL;

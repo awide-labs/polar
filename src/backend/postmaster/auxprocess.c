@@ -33,6 +33,9 @@
 #include "utils/ps_status.h"
 #include "utils/rel.h"
 
+/* POLAR */
+#include "access/polar_logindex_redo.h"
+/* POLAR end */
 
 static void ShutdownAuxiliaryProcess(int code, Datum arg);
 
@@ -79,6 +82,9 @@ AuxiliaryProcessMain(AuxProcType auxtype)
 			break;
 		case WalReceiverProcess:
 			MyBackendType = B_WAL_RECEIVER;
+			break;
+		case LogIndexBgWriterProcess:
+			MyBackendType = B_BG_LOGINDEX;
 			break;
 		default:
 			elog(ERROR, "something has gone wrong");
@@ -160,6 +166,10 @@ AuxiliaryProcessMain(AuxProcType auxtype)
 		case WalReceiverProcess:
 			WalReceiverMain();
 			proc_exit(1);
+
+		case LogIndexBgWriterProcess:
+			polar_logindex_bg_worker_main();
+			proc_exit(1);		/* should never return */
 
 		default:
 			elog(PANIC, "unrecognized process type: %d", (int) MyAuxProcType);

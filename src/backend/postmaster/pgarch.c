@@ -47,7 +47,10 @@
 #include "utils/guc.h"
 #include "utils/memutils.h"
 #include "utils/ps_status.h"
+#include "utils/timeout.h"
 
+/* POLAR */
+#include "storage/polar_fd.h"
 
 /* ----------
  * Timer definitions.
@@ -225,6 +228,13 @@ PgArchiverMain(void)
 
 	/* Reset some signals that are accepted by postmaster but not here */
 	pqsignal(SIGCHLD, SIG_DFL);
+
+	/*
+	 * POLAR: Establishes SIGALRM handler and initialize parameters to
+	 * facilitate the running of scheduled tasks. Some scheduled tasks will
+	 * cause assertion errors when parameters are not initialized.
+	 */
+	InitializeTimeouts();
 
 	/* Unblock signals (they were blocked when the postmaster forked us) */
 	PG_SETMASK(&UnBlockSig);
@@ -433,13 +443,13 @@ pgarch_ArchiverCopyLoop(void)
 			 * would get removed, so there is no need to worry about
 			 * durability.
 			 */
-			snprintf(pathname, MAXPGPATH, XLOGDIR "/%s", xlog);
-			if (stat(pathname, &stat_buf) != 0 && errno == ENOENT)
+			polar_make_file_path_level3(pathname, XLOGDIR, xlog);
+			if (polar_stat(pathname, &stat_buf) != 0 && errno == ENOENT)
 			{
 				char		xlogready[MAXPGPATH];
 
 				StatusFilePath(xlogready, xlog, ".ready");
-				if (unlink(xlogready) == 0)
+				if (polar_unlink(xlogready) == 0)
 				{
 					ereport(WARNING,
 							(errmsg("removed orphan archive status file \"%s\"",
@@ -511,14 +521,16 @@ pgarch_archiveXlog(char *xlog)
 	char		pathname[MAXPGPATH];
 	char		activitymsg[MAXFNAMELEN + 16];
 	bool		ret;
+	const char *real_pathname;
 
-	snprintf(pathname, MAXPGPATH, XLOGDIR "/%s", xlog);
+	polar_make_file_path_level3(pathname, XLOGDIR, xlog);
+	real_pathname = polar_path_remove_protocol(pathname);
 
 	/* Report archive activity in PS display */
 	snprintf(activitymsg, sizeof(activitymsg), "archiving %s", xlog);
 	set_ps_display(activitymsg);
 
-	ret = ArchiveContext.archive_file_cb(xlog, pathname);
+	ret = ArchiveContext.archive_file_cb(xlog, real_pathname);
 	if (ret)
 		snprintf(activitymsg, sizeof(activitymsg), "last was %s", xlog);
 	else
@@ -558,6 +570,8 @@ pgarch_readyXlog(char *xlog)
 	struct dirent *rlde;
 	bool		force_dir_scan;
 
+	char		polar_path[MAXPGPATH];
+
 	/*
 	 * If a directory scan was requested, clear the stored file names and
 	 * proceed.
@@ -586,7 +600,7 @@ pgarch_readyXlog(char *xlog)
 		arch_file = arch_files->arch_files[arch_files->arch_files_size];
 		StatusFilePath(status_file, arch_file, ".ready");
 
-		if (stat(status_file, &st) == 0)
+		if (polar_stat(status_file, &st) == 0)
 		{
 			strcpy(xlog, arch_file);
 			return true;
@@ -605,9 +619,11 @@ pgarch_readyXlog(char *xlog)
 	 * with the .ready suffix, looking for the earliest files.
 	 */
 	snprintf(XLogArchiveStatusDir, MAXPGPATH, XLOGDIR "/archive_status");
-	rldir = AllocateDir(XLogArchiveStatusDir);
+	polar_make_file_path_level2(polar_path, XLogArchiveStatusDir);
 
-	while ((rlde = ReadDir(rldir, XLogArchiveStatusDir)) != NULL)
+	rldir = AllocateDir(polar_path);
+
+	while ((rlde = ReadDir(rldir, polar_path)) != NULL)
 	{
 		int			basenamelen = (int) strlen(rlde->d_name) - 6;
 		char		basename[MAX_XFN_CHARS + 1];

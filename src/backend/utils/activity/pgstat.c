@@ -107,6 +107,10 @@
 #include "utils/pgstat_internal.h"
 #include "utils/timestamp.h"
 
+/* POLAR */
+#include "storage/polar_io_stat.h"
+#include "tcop/tcopprot.h"
+POLAR_PROC_IO *PolarIOStatArray = NULL;
 
 /* ----------
  * Timer definitions.
@@ -129,6 +133,8 @@
 
 #define PGSTAT_SNAPSHOT_HASH_SIZE	512
 
+/* POLAR: stat function hook */
+polar_postmaster_child_init_register polar_stat_hook = NULL;
 
 /* hash table for statistics snapshots entry */
 typedef struct PgStat_SnapshotEntry
@@ -535,6 +541,11 @@ pgstat_initialize(void)
 
 	pgstat_init_wal();
 
+	/* POLAR: stat function hook */
+	if (polar_stat_hook)
+		polar_stat_hook();
+	/* POLAR end */
+
 	/* Set up a process-exit hook to clean up */
 	before_shmem_exit(pgstat_shutdown_hook, 0);
 
@@ -595,6 +606,10 @@ pgstat_report_stat(bool force)
 		Assert(pending_since == 0);
 		return 0;
 	}
+
+	/* POLAR: first init audit log status */
+	MemSet(&polar_audit_log, 0, sizeof(Pg_audit_log));
+	/* POLAR end */
 
 	/*
 	 * There should never be stats to report once stats are shut down. Can't
@@ -1679,4 +1694,65 @@ assign_stats_fetch_consistency(int newval, void *extra)
 	 */
 	if (pgstat_fetch_consistency != newval)
 		force_stats_snapshot_clear = true;
+}
+
+/*
+ * POLAR: polar_pgstat_get_current_examined_row_count
+ */
+PgStat_Counter
+polar_pgstat_get_current_examined_row_count(void)
+{
+	PgStat_Counter total_rows = 0;
+	PgStat_TableStatus *lstats = NULL;
+	dlist_node *cur = NULL;
+
+	/*
+	 * Need to be a bit careful iterating over the list of pending entries.
+	 * Processing a pending entry may queue further pending entries to the end
+	 * of the list that we want to process, so a simple iteration won't do.
+	 * Further complicating matters is that we want to delete the current
+	 * entry in each iteration from the list if we flushed successfully.
+	 *
+	 * So we just keep track of the next pointer in each loop iteration.
+	 */
+	if (!dlist_is_empty(&pgStatPending))
+		cur = dlist_head_node(&pgStatPending);
+
+	while (cur)
+	{
+		PgStat_EntryRef *entry_ref =
+			dlist_container(PgStat_EntryRef, pending_node, cur);
+		PgStat_HashKey key = entry_ref->shared_entry->key;
+		PgStat_Kind kind = key.kind;
+		dlist_node *next;
+
+		Assert(!pgstat_get_kind_info(kind)->fixed_amount);
+
+		if (kind == PGSTAT_KIND_RELATION)
+		{
+			lstats = (PgStat_TableStatus *) entry_ref->pending;
+			total_rows += lstats->t_counts.t_tuples_returned
+				+ lstats->t_counts.t_tuples_fetched;
+		}
+
+		/* determine next entry */
+		if (dlist_has_next(&pgStatPending, cur))
+			next = dlist_next_node(&pgStatPending, cur);
+		else
+			next = NULL;
+
+		cur = next;
+	}
+
+	return total_rows;
+}
+
+/*
+ * POLAR: for elog.c get polar audit log examined row count
+ */
+PgStat_Counter
+polar_get_audit_log_row_count(void)
+{
+	return polar_pgstat_get_current_examined_row_count()
+		- polar_audit_log.examined_row_count;
 }

@@ -39,6 +39,7 @@
  * specific parts are in the libpqwalreceiver module. It's loaded
  * dynamically to avoid linking the server with libpq.
  *
+ * Portions Copyright (c) 2024, Alibaba Group Holding Limited
  * Portions Copyright (c) 2010-2022, PostgreSQL Global Development Group
  *
  *
@@ -80,6 +81,12 @@
 #include "utils/ps_status.h"
 #include "utils/resowner.h"
 #include "utils/timestamp.h"
+#include "utils/timeout.h"
+
+/* POLAR */
+#include "access/polar_logindex_redo.h"
+#include "postmaster/polar_async_lock_replay.h"
+#include "storage/polar_fd.h"
 
 
 /*
@@ -132,6 +139,13 @@ static void XLogWalRcvClose(XLogRecPtr recptr, TimeLineID tli);
 static void XLogWalRcvSendReply(bool force, bool requestReply);
 static void XLogWalRcvSendHSFeedback(bool immed);
 static void ProcessWalSndrMessage(XLogRecPtr walEnd, TimestampTz sendTime);
+
+/* POLAR: callback function when waiting free space from polar_xlog_queue */
+static void polar_receiver_xlog_queue_callback(polar_ringbuf_t rbuf);
+static void polar_recv_push_storage_begin_callback(polar_ringbuf_t rbuf);
+static void polar_notify_read_wal_file(int code, Datum arg);
+
+/* POLAR end */
 
 /*
  * Process any interrupts the walreceiver process may have received.
@@ -253,9 +267,18 @@ WalReceiverMain(void)
 	/* Report the latch to use to awaken this process */
 	walrcv->latch = &MyProc->procLatch;
 
+	/*
+	 * POLAR: Reset consistent lsn received from primary node while starting
+	 * up walreceiver.
+	 */
+	WalRcv->curr_primary_consistent_lsn = InvalidXLogRecPtr;
+
 	SpinLockRelease(&walrcv->mutex);
 
 	pg_atomic_write_u64(&WalRcv->writtenUpto, 0);
+
+	/* POLAR:notify startup to read wal file instead of logindex queue */
+	before_shmem_exit(polar_notify_read_wal_file, 0);
 
 	/* Arrange to clean up at walreceiver exit */
 	on_shmem_exit(WalRcvDie, PointerGetDatum(&startpointTLI));
@@ -273,6 +296,13 @@ WalReceiverMain(void)
 
 	/* Reset some signals that are accepted by postmaster but not here */
 	pqsignal(SIGCHLD, SIG_DFL);
+
+	/*
+	 * POLAR: Establishes SIGALRM handler and initialize parameters to
+	 * facilitate the running of scheduled tasks. Some scheduled tasks will
+	 * cause assertion errors when parameters are not initialized.
+	 */
+	InitializeTimeouts();
 
 	/* Load the libpq-specific functions */
 	load_file("libpqwalreceiver", false);
@@ -323,6 +353,15 @@ WalReceiverMain(void)
 		char	   *primary_sysid;
 		char		standby_sysid[32];
 		WalRcvStreamOptions options;
+		bool		polar_replica = false;
+
+		/* POLAR: enable replica stream replication */
+		if (polar_is_replica())
+			polar_replica = true;
+
+		/* POLAR: force log */
+		if (polar_replica)
+			ereport(LOG, (errmsg("Start wal receiver on PolarDB")));
 
 		/*
 		 * Check that we're connected to a valid server using the
@@ -397,6 +436,10 @@ WalReceiverMain(void)
 		options.startpoint = startpoint;
 		options.slotname = slotname[0] != '\0' ? slotname : NULL;
 		options.proto.physical.startpointTLI = startpointTLI;
+
+		/* POLAR: Set current replication mode */
+		options.polar_repl_mode = polar_gen_replication_mode();
+
 		if (walrcv_startstreaming(wrconn, &options))
 		{
 			if (first_stream)
@@ -613,7 +656,7 @@ WalReceiverMain(void)
 
 			XLogWalRcvFlush(false, startpointTLI);
 			XLogFileName(xlogfname, recvFileTLI, recvSegNo, wal_segment_size);
-			if (close(recvFile) != 0)
+			if (polar_close(recvFile) != 0)
 				ereport(PANIC,
 						(errcode_for_file_access(),
 						 errmsg("could not close log segment %s: %m",
@@ -822,6 +865,9 @@ XLogWalRcvProcessMsg(unsigned char type, char *buf, Size len, TimeLineID tli)
 	TimestampTz sendTime;
 	bool		replyRequested;
 
+	/* POLAR */
+	XLogRecPtr	consistent_lsn;
+
 	resetStringInfo(&incoming_message);
 
 	switch (type)
@@ -869,6 +915,161 @@ XLogWalRcvProcessMsg(unsigned char type, char *buf, Size len, TimeLineID tli)
 					XLogWalRcvSendReply(true, false);
 				break;
 			}
+			/* POLAR: receive lsn info */
+		case 'p':
+			{
+				/*
+				 * POLAR: replica mode, does not contain any wal data, copy
+				 * message to StringInfo
+				 */
+				hdrlen = sizeof(int64) + sizeof(int64) + sizeof(int64) + sizeof(int64);
+				if (len < hdrlen)
+					ereport(ERROR,
+							(errcode(ERRCODE_PROTOCOL_VIOLATION),
+							 errmsg_internal("invalid consist lsn message received from primary")));
+				appendBinaryStringInfo(&incoming_message, buf, hdrlen);
+
+				dataStart = pq_getmsgint64(&incoming_message);
+				walEnd = pq_getmsgint64(&incoming_message);
+				consistent_lsn = pq_getmsgint64(&incoming_message);
+				sendTime = pq_getmsgint64(&incoming_message);
+				ProcessWalSndrMessage(walEnd, sendTime);
+
+				if (WalRcv->polar_use_xlog_queue)
+				{
+					Assert(polar_logindex_redo_instance);
+
+					polar_xlog_recv_queue_push_storage_begin(polar_logindex_redo_instance->xlog_queue, polar_recv_push_storage_begin_callback);
+
+					SpinLockAcquire(&WalRcv->mutex);
+					WalRcv->polar_use_xlog_queue = false;
+					SpinLockRelease(&WalRcv->mutex);
+
+					elog(LOG, "primary xlog queue is full, changed to send from file");
+				}
+
+				/*
+				 * POLAR: As a replica, we do not write the xlog, we just
+				 * update the LogstreamResult.write and call XLogWalRcvFlush
+				 * to update shared memory status as the case 'w'.
+				 */
+				LogstreamResult.Write = walEnd;
+				XLogWalRcvFlush(false, tli);
+
+				/* POLAR: Update consistent lsn */
+				polar_set_primary_consistent_lsn(consistent_lsn);
+
+				if (polar_enable_debug)
+				{
+					elog(LOG, "Receive primary on PolarDB flush xlog from %X/%X to %X/%X, ",
+						 LSN_FORMAT_ARGS(dataStart),
+						 LSN_FORMAT_ARGS(walEnd));
+				}
+				break;
+			}
+			/* POLAR: keepalive with consistent lsn */
+		case 'K':
+			{
+				hdrlen = sizeof(int64) + sizeof(int64) + sizeof(int64) + sizeof(char);
+				if (len != hdrlen)
+				{
+					ereport(ERROR,
+							(errcode(ERRCODE_PROTOCOL_VIOLATION),
+							 errmsg_internal("invalid keepalive message received from primary")));
+				}
+
+				appendBinaryStringInfo(&incoming_message, buf, hdrlen);
+
+				/* POLAR: Read the fields */
+				walEnd = pq_getmsgint64(&incoming_message);
+				consistent_lsn = pq_getmsgint64(&incoming_message);
+				sendTime = pq_getmsgint64(&incoming_message);
+				replyRequested = pq_getmsgbyte(&incoming_message);
+
+				ProcessWalSndrMessage(walEnd, sendTime);
+
+				/*
+				 * POLAR: As a PolarDB replica, we do not write the xlog, we
+				 * just update the LogstreamResult.write and call
+				 * XLogWalRcvFlush to update shared-memory status as the case
+				 * 'w'.
+				 */
+				LogstreamResult.Write = walEnd;
+				XLogWalRcvFlush(false, tli);
+
+				/* POLAR: Update consistent lsn */
+				polar_set_primary_consistent_lsn(consistent_lsn);
+
+				if (polar_enable_debug)
+				{
+					elog(LOG, "Receive primary on PolarDB keepalive with walEnd %X/%X and consistent lsn %X/%X",
+						 LSN_FORMAT_ARGS(walEnd),
+						 LSN_FORMAT_ARGS(consistent_lsn));
+				}
+
+				/*
+				 * POLAR: If the primary requested a reply, send one
+				 * immediately
+				 */
+				if (replyRequested)
+					XLogWalRcvSendReply(true, false);
+				break;
+			}
+			/* POLAR: streaming xlog meta */
+		case 'y':
+			{
+				/* POLAR: copy message to StringInfo */
+				hdrlen = sizeof(int64) + sizeof(int64) + sizeof(int64);
+				if (len < hdrlen)
+					ereport(ERROR,
+							(errcode(ERRCODE_PROTOCOL_VIOLATION),
+							 errmsg_internal("invalid WAL message received from primary")));
+				appendBinaryStringInfo(&incoming_message, buf, hdrlen);
+
+				/* POLAR: read the fields */
+				walEnd = pq_getmsgint64(&incoming_message);
+				consistent_lsn = pq_getmsgint64(&incoming_message);
+				sendTime = pq_getmsgint64(&incoming_message);
+				ProcessWalSndrMessage(walEnd, sendTime);
+
+				buf += hdrlen;
+				len -= hdrlen;
+
+				if (len > 0)
+				{
+					polar_xlog_recv_queue_push(polar_logindex_redo_instance->xlog_queue, buf, len,
+											   polar_receiver_xlog_queue_callback);
+
+					if (!WalRcv->polar_use_xlog_queue)
+					{
+						SpinLockAcquire(&WalRcv->mutex);
+						WalRcv->polar_use_xlog_queue = true;
+						SpinLockRelease(&WalRcv->mutex);
+
+						elog(LOG, "primary send data changed from file to queue");
+					}
+				}
+
+				/*
+				 * POLAR: As a polardb replica, we do not write the xlog, we
+				 * just update the LogstreamResult.write and call
+				 * XLogWalRcvFlush to update shared-memory status as the case
+				 * 'w'.
+				 */
+				LogstreamResult.Write = walEnd;
+				XLogWalRcvFlush(false, tli);
+
+				/* POLAR: Update new consistent lsn */
+				polar_set_primary_consistent_lsn(consistent_lsn);
+
+				if (polar_enable_debug)
+				{
+					elog(LOG, "Receive XLOG without payload, and end lsn is %X/%X",
+						 LSN_FORMAT_ARGS(walEnd));
+				}
+				break;
+			}
+			/* POLAR end */
 		default:
 			ereport(ERROR,
 					(errcode(ERRCODE_PROTOCOL_VIOLATION),
@@ -915,7 +1116,7 @@ XLogWalRcvWrite(char *buf, Size nbytes, XLogRecPtr recptr, TimeLineID tli)
 		/* OK to write the logs */
 		errno = 0;
 
-		byteswritten = pg_pwrite(recvFile, buf, segbytes, (off_t) startoff);
+		byteswritten = polar_pwrite(recvFile, buf, segbytes, (off_t) startoff);
 		if (byteswritten <= 0)
 		{
 			char		xlogfname[MAXFNAMELEN];
@@ -972,7 +1173,12 @@ XLogWalRcvFlush(bool dying, TimeLineID tli)
 	{
 		WalRcvData *walrcv = WalRcv;
 
-		issue_xlog_fsync(recvFile, recvSegNo, tli);
+		/* POLAR */
+		XLogRecPtr	consistent_lsn = InvalidXLogRecPtr;
+
+		/* POLAR: only replica mode not write data */
+		if (!polar_is_replica())
+			issue_xlog_fsync(recvFile, recvSegNo, tli);
 
 		LogstreamResult.Flush = LogstreamResult.Write;
 
@@ -983,6 +1189,9 @@ XLogWalRcvFlush(bool dying, TimeLineID tli)
 			walrcv->latestChunkStart = walrcv->flushedUpto;
 			walrcv->flushedUpto = LogstreamResult.Flush;
 			walrcv->receivedTLI = tli;
+
+			/* POLAR: set consistent lsn */
+			consistent_lsn = walrcv->curr_primary_consistent_lsn;
 		}
 		SpinLockRelease(&walrcv->mutex);
 
@@ -996,8 +1205,16 @@ XLogWalRcvFlush(bool dying, TimeLineID tli)
 		{
 			char		activitymsg[50];
 
-			snprintf(activitymsg, sizeof(activitymsg), "streaming %X/%X",
-					 LSN_FORMAT_ARGS(LogstreamResult.Write));
+			/* POLAR */
+			if (polar_is_replica())
+				snprintf(activitymsg,
+						 sizeof(activitymsg),
+						 "streaming %X/%X, consistent lsn %X/%X",
+						 LSN_FORMAT_ARGS(LogstreamResult.Write),
+						 LSN_FORMAT_ARGS(consistent_lsn));
+			else
+				snprintf(activitymsg, sizeof(activitymsg), "streaming %X/%X",
+						 LSN_FORMAT_ARGS(LogstreamResult.Write));
 			set_ps_display(activitymsg);
 		}
 
@@ -1039,7 +1256,7 @@ XLogWalRcvClose(XLogRecPtr recptr, TimeLineID tli)
 	 * so we don't advise the OS to release cache pages associated with the
 	 * file like XLogFileClose() does.
 	 */
-	if (close(recvFile) != 0)
+	if (polar_close(recvFile) != 0)
 		ereport(PANIC,
 				(errcode_for_file_access(),
 				 errmsg("could not close log segment %s: %m",
@@ -1118,6 +1335,60 @@ XLogWalRcvSendReply(bool force, bool requestReply)
 	pq_sendint64(&reply_message, applyPtr);
 	pq_sendint64(&reply_message, GetCurrentTimestamp());
 	pq_sendbyte(&reply_message, requestReply ? 1 : 0);
+
+	if (polar_is_replica())
+	{
+		XLogRecPtr	bg_replayed_lsn = InvalidXLogRecPtr;
+		XLogRecPtr	lockPtr = InvalidXLogRecPtr;
+
+		Assert(!XLogRecPtrIsInvalid(applyPtr));
+
+		/* POLAR: return the oldest ddl lock lsn if enable async lock */
+		lockPtr = polar_allow_alr() ? polar_alr_ctl->lsn : InvalidXLogRecPtr;
+
+		/*
+		 * POLAR: lockPtr is the next record begin position of the lock
+		 * record. If lockPtr is invalid, means there is no lock in replaying,
+		 * just return applyPtr as lockPtr. And lockPtr might be larger than
+		 * applyPtr, it's because async replay worker replay the lock but
+		 * startup has not read the next record. We don't allow it, for the
+		 * next time here, lockPtr might be invalid and use a smaller applyPtr
+		 * as lockPtr, making lockPtr not monotonically increasing.
+		 */
+		if (XLogRecPtrIsInvalid(lockPtr) || lockPtr > applyPtr)
+			lockPtr = applyPtr;
+
+		pq_sendint64(&reply_message, lockPtr);
+
+		/*
+		 * POLAR: Send background replay lsn. Even if page outdate is
+		 * disabled, it also send a lsn to keep protocol compatibility.
+		 */
+		if (polar_logindex_redo_instance)
+		{
+			static TimestampTz last_update_time = 0;
+			static XLogRecPtr last_bg_replayed_lsn = InvalidXLogRecPtr;
+			TimestampTz now;
+
+			now = GetCurrentTimestamp();
+
+			/*
+			 * POLAR: Page replay in backend process need xlog after
+			 * consistent lsn, so we should keep xlog after consisten lsn. To
+			 * avoid holding ProcArrayLock too frequently, we call
+			 * polar_get_read_min_lsn() every second.
+			 */
+			if (TimestampDifferenceExceeds(last_update_time, now, POLAR_UPDATE_BACKEND_LSN_INTERVAL))
+			{
+				last_bg_replayed_lsn = polar_get_read_min_lsn(polar_get_primary_consistent_lsn());
+				last_update_time = now;
+			}
+			bg_replayed_lsn = last_bg_replayed_lsn;
+		}
+		else
+			bg_replayed_lsn = InvalidXLogRecPtr;
+		pq_sendint64(&reply_message, bg_replayed_lsn);
+	}
 
 	/* Send it */
 	elog(DEBUG2, "sending write %X/%X flush %X/%X apply %X/%X%s",
@@ -1466,4 +1737,82 @@ pg_stat_get_wal_receiver(PG_FUNCTION_ARGS)
 
 	/* Returns the record as Datum */
 	PG_RETURN_DATUM(HeapTupleGetDatum(heap_form_tuple(tupdesc, values, nulls)));
+}
+
+/* POLAR */
+
+/* Set new consistent lsn received from primary node */
+void
+polar_set_primary_consistent_lsn(XLogRecPtr new_consistent_lsn)
+{
+	if (WalRcv->curr_primary_consistent_lsn < new_consistent_lsn)
+	{
+		SpinLockAcquire(&WalRcv->mutex);
+		WalRcv->curr_primary_consistent_lsn = new_consistent_lsn;
+		SpinLockRelease(&WalRcv->mutex);
+	}
+}
+
+/*
+ * Primary node send the consistent lsn by walsender process,
+ * replica walreceiver process receives consistent lsn, and saves
+ * it in WalRcv->curr_primary_consistent_lsn
+ */
+XLogRecPtr
+polar_get_primary_consistent_lsn(void)
+{
+	XLogRecPtr	curr_primary_consistent_lsn = InvalidXLogRecPtr;
+
+	SpinLockAcquire(&WalRcv->mutex);
+	curr_primary_consistent_lsn = WalRcv->curr_primary_consistent_lsn;
+	SpinLockRelease(&WalRcv->mutex);
+
+	return curr_primary_consistent_lsn;
+}
+
+/*
+ * POLAR: get lastMsgReceiptTime
+ */
+TimestampTz
+polar_get_walrcv_last_msg_receipt_time(void)
+{
+	WalRcvData *walrcv = WalRcv;
+	TimestampTz last_msg_receipt_time = 0;
+
+	SpinLockAcquire(&walrcv->mutex);
+	last_msg_receipt_time = walrcv->lastMsgReceiptTime;
+	SpinLockRelease(&walrcv->mutex);
+	return last_msg_receipt_time;
+}
+
+/*
+ * POLAR: This is callback function used when waiting free space from
+ * polar_xlog_queue.It will send feedback and handle interrupts
+ */
+static void
+polar_receiver_xlog_queue_callback(polar_ringbuf_t rbuf)
+{
+	ProcessWalRcvInterrupts();
+	XLogWalRcvSendReply(false, false);
+	XLogWalRcvSendHSFeedback(false);
+}
+
+static inline void
+polar_recv_push_storage_begin_callback(polar_ringbuf_t rbuf)
+{
+	ProcessWalRcvInterrupts();
+}
+
+static void
+polar_notify_read_wal_file(int code, Datum arg)
+{
+	/*
+	 * POLAR: The wal receiver is exiting, tell startup to read from file if
+	 * it want to read more xlog.
+	 */
+	if (!ShutdownRequestPending && polar_is_replica() && polar_logindex_redo_instance)
+	{
+		elog(LOG, "PolarDB replica exit wal receiver and request to read from WAL file");
+		polar_xlog_recv_queue_push_storage_begin(polar_logindex_redo_instance->xlog_queue, polar_recv_push_storage_begin_callback);
+	}
 }

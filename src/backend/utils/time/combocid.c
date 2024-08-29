@@ -208,6 +208,9 @@ GetComboCommandId(CommandId cmin, CommandId cmax)
 	ComboCidEntry entry;
 	bool		found;
 
+	/* POLAR: split xact: use combocid, mark this xact unsplittable */
+	polar_xact_split_mark_unsplittable(POLAR_UNSPLITTABLE_FOR_COMBOCID);
+
 	/*
 	 * Create the hash table and array the first time we need to use combo
 	 * cids in the transaction.

@@ -91,9 +91,11 @@ extern PGDLLIMPORT volatile sig_atomic_t InterruptPending;
 extern PGDLLIMPORT volatile sig_atomic_t QueryCancelPending;
 extern PGDLLIMPORT volatile sig_atomic_t ProcDiePending;
 extern PGDLLIMPORT volatile sig_atomic_t IdleInTransactionSessionTimeoutPending;
+extern PGDLLIMPORT volatile sig_atomic_t TransactionTimeoutPending;
 extern PGDLLIMPORT volatile sig_atomic_t IdleSessionTimeoutPending;
 extern PGDLLIMPORT volatile sig_atomic_t ProcSignalBarrierPending;
 extern PGDLLIMPORT volatile sig_atomic_t LogMemoryContextPending;
+extern PGDLLIMPORT volatile sig_atomic_t MemoryContextDumpPending;
 extern PGDLLIMPORT volatile sig_atomic_t IdleStatsUpdateTimeoutPending;
 
 extern PGDLLIMPORT volatile sig_atomic_t CheckClientConnectionPending;
@@ -153,6 +155,27 @@ do { \
 	CritSectionCount--; \
 } while(0)
 
+/*
+ * POLAR
+ * To respond to interrupt signals more efficiently, detect interrupts
+ * during memory allocation.
+ * When there are too many interrupts in memory allocation detection,
+ * interrupt detection will no longer be performed to prevent PANIC
+ * caused by excessive errordata_stack_depth.
+ */
+#define POLAR_INTERRUPTS_FOR_ALLOC() \
+do { \
+	if (polar_enable_alloc_checkinterrupts && \
+		polar_alloc_interrupt_num < 2) \
+	{ \
+		if (unlikely(InterruptPending)) \
+		{ \
+			polar_alloc_interrupt_num++; \
+			ProcessInterrupts(); \
+		} \
+	} \
+} while(0)
+
 
 /*****************************************************************************
  *	  globals.h --															 *
@@ -190,6 +213,13 @@ extern PGDLLIMPORT char OutputFileName[];
 extern PGDLLIMPORT char my_exec_path[];
 extern PGDLLIMPORT char pkglib_path[];
 
+/* POLAR */
+extern PGDLLIMPORT int polar_shm_limit;
+extern PGDLLIMPORT int polar_shm_reserved;
+extern PGDLLIMPORT int polar_shm_unused;
+
+/* POLAR end */
+
 #ifdef EXEC_BACKEND
 extern PGDLLIMPORT char postgres_exec_path[];
 #endif
@@ -202,6 +232,9 @@ extern PGDLLIMPORT char postgres_exec_path[];
 extern PGDLLIMPORT Oid MyDatabaseId;
 
 extern PGDLLIMPORT Oid MyDatabaseTableSpace;
+
+/* POLAR */
+extern PGDLLIMPORT int polar_alloc_interrupt_num;
 
 /*
  * Date/Time Configuration
@@ -336,6 +369,7 @@ typedef enum BackendType
 	B_WAL_WRITER,
 	B_ARCHIVER,
 	B_LOGGER,
+	B_BG_LOGINDEX,
 } BackendType;
 
 extern PGDLLIMPORT BackendType MyBackendType;
@@ -368,6 +402,10 @@ extern void SetCurrentRoleId(Oid roleid, bool is_superuser);
 /* in utils/misc/superuser.c */
 extern bool superuser(void);	/* current user is superuser */
 extern bool superuser_arg(Oid roleid);	/* given user is superuser */
+
+
+/* POLAR */
+extern char *polar_get_database_path(Oid dbNode, Oid spcNode);
 
 
 /*****************************************************************************
@@ -435,6 +473,7 @@ typedef enum
 	CheckpointerProcess,
 	WalWriterProcess,
 	WalReceiverProcess,
+	LogIndexBgWriterProcess,
 
 	NUM_AUXPROCTYPES			/* Must be last! */
 } AuxProcType;
@@ -447,6 +486,7 @@ extern PGDLLIMPORT AuxProcType MyAuxProcType;
 #define AmCheckpointerProcess()		(MyAuxProcType == CheckpointerProcess)
 #define AmWalWriterProcess()		(MyAuxProcType == WalWriterProcess)
 #define AmWalReceiverProcess()		(MyAuxProcType == WalReceiverProcess)
+#define AmLogIndexBgWriterProcess() (MyAuxProcType == LogIndexBgWriterProcess)
 
 
 /*****************************************************************************
@@ -464,6 +504,18 @@ extern void InitPostgres(const char *in_dbname, Oid dboid,
 						 char *out_dbname);
 extern void BaseInit(void);
 
+/* POLAR */
+extern const char *polar_max_connections_show_hook(void);
+
+/* POLAR end */
+
+/* POLAR: GUC */
+extern PGDLLIMPORT bool polar_apply_global_guc_for_super;
+extern PGDLLIMPORT int polar_max_non_super_conns;
+extern PGDLLIMPORT int polar_max_super_conns;
+
+/* POLAR end */
+
 /* in utils/init/miscinit.c */
 extern PGDLLIMPORT bool IgnoreSystemIndexes;
 extern PGDLLIMPORT bool process_shared_preload_libraries_in_progress;
@@ -472,6 +524,11 @@ extern PGDLLIMPORT bool process_shmem_requests_in_progress;
 extern PGDLLIMPORT char *session_preload_libraries_string;
 extern PGDLLIMPORT char *shared_preload_libraries_string;
 extern PGDLLIMPORT char *local_preload_libraries_string;
+
+/* POLAR */
+extern PGDLLIMPORT char *polar_internal_shared_preload_libraries;
+
+/* POLAR end */
 
 extern void CreateDataDirLockFile(bool amPostmaster);
 extern void CreateSocketLockFile(const char *socketfile, bool amPostmaster,
@@ -492,4 +549,29 @@ extern PGDLLIMPORT shmem_request_hook_type shmem_request_hook;
 /* in executor/nodeHash.c */
 extern size_t get_hash_memory_limit(void);
 
+extern void polar_load_vfs(void);
+
+extern void polar_remove_file_in_dir(const char *dirname);
+#define POLAR_DATA_DIR() (polar_enable_shared_storage_mode ? polar_datadir : DataDir)
+
+/* POLAR: delay dml */
+extern void polar_delay_dml_wait(void);
+
+/* POLAR: dynamic bgworker init */
+extern void polar_init_dynamic_bgworker_in_backends(void);
+
+extern void polar_init_local_dir(void);
+
+/* POLAR: file identify whether replica node has booted before */
+#define POLAR_REPLICA_BOOTED_FILE	"polar_replica_booted"
+extern void polar_create_replica_booted_file(void);
+extern void polar_remove_replica_booted_file(void);
+extern void polar_init_global_dir_for_replica_or_standby(void);
+
+/* POLAR: for RO, copy some directories from shared storage to local. */
+extern void polar_copy_dirs_from_shared_storage_to_local(void);
+
+extern PGDLLIMPORT bool polar_enable_replica_copydata_optimization;
+
+/* POLAR end */
 #endif							/* MISCADMIN_H */

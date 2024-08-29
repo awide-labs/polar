@@ -23,6 +23,7 @@
  * for aborts (whether sync or async), since the post-crash assumption would
  * be that such transactions failed anyway.
  *
+ * Portions Copyright (c) 2024, Alibaba Group Holding Limited
  * Portions Copyright (c) 1996-2022, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
@@ -88,6 +89,10 @@ static SlruCtlData XactCtlData;
 
 #define XactCtl (&XactCtlData)
 
+/* POLAR: Check whether clog local file cache is enabled */
+#define POLAR_ENABLE_CLOG_LOCAL_CACHE() \
+	(polar_clog_max_local_cache_segments > 0 && polar_enable_shared_storage_mode)
+int			polar_clog_slot_size = 128;
 
 static int	ZeroCLOGPage(int pageno, bool writeXlog);
 static bool CLOGPagePrecedes(int page1, int page2);
@@ -681,6 +686,20 @@ TransactionIdGetStatus(TransactionId xid, XLogRecPtr *lsn)
 Size
 CLOGShmemBuffers(void)
 {
+	if (polar_enable_shared_storage_mode)
+	{
+		/*
+		 * POLAR: we can enlarge clog max size because we optimize clog search
+		 * time complexity to O(1)
+		 */
+		int			max_clog_slot_size = Max(4, NBuffers / 512 * 8);
+		int			clog_slot_size = Min(polar_clog_slot_size, max_clog_slot_size);
+
+		elog(LOG, "clog buffer max slot size is %d, and it will be set to %d",
+			 max_clog_slot_size, clog_slot_size);
+		return clog_slot_size;
+	}
+
 	return Min(128, Max(4, NBuffers / 512));
 }
 
@@ -690,7 +709,13 @@ CLOGShmemBuffers(void)
 Size
 CLOGShmemSize(void)
 {
-	return SimpleLruShmemSize(CLOGShmemBuffers(), CLOG_LSNS_PER_PAGE);
+	Size		sz = SimpleLruShmemSize(CLOGShmemBuffers(), CLOG_LSNS_PER_PAGE);
+
+	/* POLAR: Add size for local cache segments */
+	if (POLAR_ENABLE_CLOG_LOCAL_CACHE())
+		sz = add_size(MAXALIGN(sz), polar_local_cache_shmem_size(polar_clog_max_local_cache_segments));
+
+	return sz;
 }
 
 void
@@ -699,8 +724,26 @@ CLOGShmemInit(void)
 	XactCtl->PagePrecedes = CLOGPagePrecedes;
 	SimpleLruInit(XactCtl, "Xact", CLOGShmemBuffers(), CLOG_LSNS_PER_PAGE,
 				  XactSLRULock, "pg_xact", LWTRANCHE_XACT_BUFFER,
-				  SYNC_HANDLER_CLOG);
+				  SYNC_HANDLER_CLOG, (polar_enable_shared_storage_mode && !polar_is_replica()));
 	SlruPagePrecedesUnitTests(XactCtl, CLOG_XACTS_PER_PAGE);
+
+	/* POLAR: Create local segment file cache manager */
+	if (POLAR_ENABLE_CLOG_LOCAL_CACHE())
+	{
+		uint32		io_permission = POLAR_CACHE_LOCAL_FILE_READ | POLAR_CACHE_LOCAL_FILE_WRITE;
+		polar_local_cache cache;
+
+		if (!polar_is_replica())
+			io_permission |= (POLAR_CACHE_SHARED_FILE_READ | POLAR_CACHE_SHARED_FILE_WRITE);
+
+		cache = polar_create_local_cache("clog", "pg_xact",
+										 polar_clog_max_local_cache_segments,
+										 SLRU_PAGES_PER_SEGMENT * BLCKSZ,
+										 LWTRANCHE_POLAR_CLOG_LOCAL_CACHE,
+										 io_permission, NULL);
+
+		polar_slru_reg_local_cache(XactCtl, cache);
+	}
 }
 
 /*
@@ -1027,4 +1070,40 @@ int
 clogsyncfiletag(const FileTag *ftag, char *path)
 {
 	return SlruSyncFileTag(XactCtl, ftag, path);
+}
+
+void
+polar_promote_clog(void)
+{
+	polar_slru_promote(XactCtl);
+}
+
+/* POLAR: remove clog local cache file */
+void
+polar_remove_clog_local_cache_file(void)
+{
+	polar_slru_remove_local_cache_file(XactCtl);
+}
+
+/* POLAR: copy clog files from shared storage to local when replica start */
+void
+polar_init_local_clog(TransactionId xid, bool copy_all)
+{
+	int			start_pageno = 0,
+				res;
+	SlruScanCallback copy_condition = NULL;
+
+	Assert(polar_is_replica());
+
+	if (TransactionIdIsNormal(xid) && !copy_all)
+	{
+		start_pageno = TransactionIdToPage(xid);
+		start_pageno -= start_pageno % SLRU_PAGES_PER_SEGMENT;
+		copy_condition = polar_trans_file_need_copy;
+	}
+
+	res = polar_slru_copy_shared_dir(XactCtl, copy_condition, &start_pageno);
+
+	if (res)
+		polar_handle_init_local_dir_err(XactCtl->Dir, res);
 }

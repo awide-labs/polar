@@ -24,6 +24,9 @@
 #include "utils/hsearch.h"
 #include "utils/memutils.h"
 
+/* POLAR */
+#include "storage/polar_fd.h"
+
 static void ResetUnloggedRelationsInTablespaceDir(const char *tsdirname,
 												  int op);
 static void ResetUnloggedRelationsInDbspaceDir(const char *dbspacedirname,
@@ -51,6 +54,7 @@ ResetUnloggedRelations(int op)
 	struct dirent *spc_de;
 	MemoryContext tmpctx,
 				oldctx;
+	char		polar_path[MAXPGPATH];
 
 	/* Log it. */
 	elog(DEBUG1, "resetting unlogged relations: cleanup %d init %d",
@@ -72,21 +76,23 @@ ResetUnloggedRelations(int op)
 	/*
 	 * First process unlogged files in pg_default ($PGDATA/base)
 	 */
-	ResetUnloggedRelationsInTablespaceDir("base", op);
+	polar_make_file_path_level2(polar_path, "base");
+	ResetUnloggedRelationsInTablespaceDir(polar_path, op);
 
 	/*
 	 * Cycle through directories for all non-default tablespaces.
 	 */
-	spc_dir = AllocateDir("pg_tblspc");
+	polar_make_file_path_level2(polar_path, "pg_tblspc");
+	spc_dir = AllocateDir(polar_path);
 
-	while ((spc_de = ReadDir(spc_dir, "pg_tblspc")) != NULL)
+	while ((spc_de = ReadDir(spc_dir, polar_path)) != NULL)
 	{
 		if (strcmp(spc_de->d_name, ".") == 0 ||
 			strcmp(spc_de->d_name, "..") == 0)
 			continue;
 
-		snprintf(temp_path, sizeof(temp_path), "pg_tblspc/%s/%s",
-				 spc_de->d_name, TABLESPACE_VERSION_DIRECTORY);
+		snprintf(temp_path, sizeof(temp_path), "%s/%s/%s",
+				 polar_path, spc_de->d_name, TABLESPACE_VERSION_DIRECTORY);
 		ResetUnloggedRelationsInTablespaceDir(temp_path, op);
 	}
 
@@ -256,7 +262,7 @@ ResetUnloggedRelationsInDbspaceDir(const char *dbspacedirname, int op)
 			{
 				snprintf(rm_path, sizeof(rm_path), "%s/%s",
 						 dbspacedirname, de->d_name);
-				if (unlink(rm_path) < 0)
+				if (polar_unlink(rm_path) < 0)
 					ereport(ERROR,
 							(errcode_for_file_access(),
 							 errmsg("could not remove file \"%s\": %m",
@@ -312,7 +318,7 @@ ResetUnloggedRelationsInDbspaceDir(const char *dbspacedirname, int op)
 
 			/* OK, we're ready to perform the actual copy. */
 			elog(DEBUG2, "copying %s to %s", srcpath, dstpath);
-			copy_file(srcpath, dstpath);
+			polar_copy_file(srcpath, dstpath, false);
 		}
 
 		FreeDir(dbspace_dir);

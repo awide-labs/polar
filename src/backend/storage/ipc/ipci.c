@@ -3,6 +3,7 @@
  * ipci.c
  *	  POSTGRES inter-process communication initialization code.
  *
+ * Portions Copyright (c) 2024, Alibaba Group Holding Limited
  * Portions Copyright (c) 1996-2022, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
@@ -48,13 +49,39 @@
 #include "storage/sinvaladt.h"
 #include "storage/spin.h"
 #include "utils/snapmgr.h"
+#include "utils/polar_features.h"
+
+/* POLAR */
+#include "access/polar_logindex_redo.h"
+#include "postmaster/polar_async_lock_replay.h"
+#include "storage/polar_rsc.h"
+#include "storage/polar_xlogbuf.h"
+/* POLAR end */
 
 /* GUCs */
 int			shared_memory_type = DEFAULT_SHARED_MEMORY_TYPE;
 
+/* POLAR */
+#include "common/file_perm.h"
+#include "pg_config.h"
+#include "postmaster/polar_parallel_bgwriter.h"
+#include <sys/stat.h>
+#include "utils/faultinjector.h"
+#include <unistd.h>
+/* POLAR end */
+
 shmem_startup_hook_type shmem_startup_hook = NULL;
 
+/* POLAR: used for polar_monitor hook */
+polar_monitor_hook_type polar_monitor_hook = NULL;
+
 static Size total_addin_request = 0;
+
+/* POLAR */
+static char *polar_shmem_stat_file = "polar_shmem_stat_file";
+static void polar_output_shmem_stat(Size size);
+
+/* POLAR end */
 
 /*
  * RequestAddinShmemSpace
@@ -141,15 +168,129 @@ CalculateShmemSize(int *num_semaphores)
 	size = add_size(size, SyncScanShmemSize());
 	size = add_size(size, AsyncShmemSize());
 	size = add_size(size, StatsShmemSize());
+#ifdef FAULT_INJECTOR
+	size = add_size(size, FaultInjector_ShmemSize());
+#endif
+
 #ifdef EXEC_BACKEND
 	size = add_size(size, ShmemBackendArraySize());
 #endif
 
+	/* POLAR: add parallel background writer shared memory size */
+	size = add_size(size, polar_parallel_bgwriter_shmem_size());
+
+	/* POLAR: Add logindex share memory size */
+	size = add_size(size, polar_logindex_redo_shmem_size());
+
+	/* POLAR: add PolarDB xlog buffer share memory size */
+	size = add_size(size, polar_xlog_buffer_shmem_size());
+
+	/* POLAR: add async lock replay related share memory size */
+	size = add_size(size, polar_alr_shmem_size());
+
 	/* include additional requested shmem from preload libraries */
 	size = add_size(size, total_addin_request);
 
+	size = add_size(size, (Size) polar_shm_unused * BLCKSZ);
+
+	/* POLAR: add RSC shared memory size */
+	size = add_size(size, polar_rsc_shmem_size());
+
+	/*
+	 * NOTE NOTE NOTE: DO NOT ADD YOUR ADD_SIZE FUNCTION BELOW ME !!!
+	 *
+	 * ALL new add_size functions should be placed before the final round up
+	 * operation. We add an assert to gurantee this. No one can stop you to
+	 * put it behind the assert, of course ...
+	 */
+
 	/* might as well round it off to a multiple of a typical page size */
 	size = add_size(size, 8192 - (size % 8192));
+	Assert(size % 8192 == 0);
+
+	return size;
+}
+
+static Size
+polar_get_shared_mem_total_size(int *numSemas)
+{
+	int			low;
+	int			high;
+	Size		size;
+	int			tmp_huge_page_total;
+
+	/*
+	 * POLAR: we control the total hugepage size by a binary-search of
+	 * NBuffers. We use binary search to get last element in the range [0,
+	 * polar_shm_limit) which CalculateShmemSize(numSemas) / BLCKSZ does not
+	 * compare more than polar_shm_limit. We use upper_bound and minus 1 to
+	 * get final target.
+	 */
+	tmp_huge_page_total = polar_shm_limit - polar_shm_reserved;
+	if (tmp_huge_page_total <= 0)
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("reserved huge pages cannot exceed total huge pages"),
+				 errdetail("polar_shm_reserved should be less than polar_shm_limit")));
+
+	/* POLAR: we must ensure polar_shm_limit >= NBuffers */
+	NBuffers = tmp_huge_page_total;
+	low = 0;
+	high = NBuffers;
+
+	/*
+	 * POLAR: we must call CalculateShmemSize() here, because wal_buffers is
+	 * based on NBuffers. And xlog_buffer is set in
+	 * CalculateShmemSize()->XLOGShmemSize()->XLOGChooseNumBuffers().
+	 */
+	size = CalculateShmemSize(numSemas);
+	/* POLAR: upper_bound */
+	while (low < high)
+	{
+		int			num;
+
+		NBuffers = low + ((high - low) >> 1);
+		size = CalculateShmemSize(numSemas);
+		num = size / BLCKSZ;
+
+		/*
+		 * POLAR: we can break with the first matched element, which is
+		 * different with upper_bound.
+		 */
+		if (num == tmp_huge_page_total)
+		{
+			low = NBuffers + 1;
+			break;
+		}
+		else if (num < tmp_huge_page_total)
+			low = NBuffers + 1;
+		else
+			high = NBuffers;
+	}
+	NBuffers = low;
+
+	/* ----------------
+	 * POLAR: to ensure that NBuffers is precise.
+	 * 1. CalculateShmemSize(numSemas) will be more than
+	 * 	  polar_shm_limit with NBuffers.
+	 * 2. CalculateShmemSize(numSemas) will be not more than
+	 * 	  polar_shm_limit with NBuffers--.
+	 * ----------------
+	 */
+	size = CalculateShmemSize(numSemas);
+	Assert(size / BLCKSZ > tmp_huge_page_total);
+	NBuffers--;
+
+	if (NBuffers < 16)
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("Too less shared buffers to start up PolarDB"),
+				 errhint("Consider increasing polar_shm_limit or decreasing polar_shm_reserved, "
+						 "or decreasing memory usage of other components")));
+	size = CalculateShmemSize(numSemas);
+	Assert(size / BLCKSZ <= tmp_huge_page_total);
+
+	size = add_size(size, polar_feature_shmem_size());
 
 	return size;
 }
@@ -181,7 +322,12 @@ CreateSharedMemoryAndSemaphores(void)
 		int			numSemas;
 
 		/* Compute the size of the shared-memory block */
-		size = CalculateShmemSize(&numSemas);
+
+		if (polar_shm_limit)
+			size = polar_get_shared_mem_total_size(&numSemas);
+		else
+			size = CalculateShmemSize(&numSemas);
+
 		elog(DEBUG3, "invoking IpcMemoryCreate(size=%zu)", size);
 
 		/*
@@ -190,6 +336,10 @@ CreateSharedMemoryAndSemaphores(void)
 		seghdr = PGSharedMemoryCreate(size, &shim);
 
 		InitShmemAccess(seghdr);
+
+		/* POLAR: output shared memory size to a world readable file */
+		polar_output_shmem_stat(size);
+		/* POLAR end */
 
 		/*
 		 * Create semaphores
@@ -246,6 +396,25 @@ CreateSharedMemoryAndSemaphores(void)
 	MultiXactShmemInit();
 	InitBufferPool();
 
+#ifdef FAULT_INJECTOR
+	FaultInjector_ShmemInit();
+#endif
+
+	/* POLAR: init parallel background writer */
+	polar_init_parallel_bgwriter();
+
+	/* POLAR: Setup logindex */
+	polar_logindex_redo_shmem_init();
+
+	/* POLAR: init xlog buffer share memory */
+	polar_init_xlog_buffer("XLog Block Buffer");
+
+	/* POLAR: init RSC shared memory */
+	polar_rsc_shmem_init();
+
+	/* POLAR: init async lock replay share memory */
+	polar_alr_shmem_init();
+
 	/*
 	 * Set up lock manager
 	 */
@@ -293,6 +462,8 @@ CreateSharedMemoryAndSemaphores(void)
 	SyncScanShmemInit();
 	AsyncShmemInit();
 	StatsShmemInit();
+
+	polar_feature_shmem_init();
 
 #ifdef EXEC_BACKEND
 
@@ -350,4 +521,37 @@ InitializeShmemGUCs(void)
 		SetConfigOption("shared_memory_size_in_huge_pages", buf,
 						PGC_INTERNAL, PGC_S_DYNAMIC_DEFAULT);
 	}
+}
+
+/*
+ * POLAR: output shared memory size to file
+ */
+static void
+polar_output_shmem_stat(Size size)
+{
+	FILE	   *fshmemfile = fopen(polar_shmem_stat_file, "w");
+	int			save_errno = errno;
+
+	if (fshmemfile)
+	{
+		fprintf(fshmemfile, "%zu", size);
+		fclose(fshmemfile);
+		/* Make file world readable with mode as same as other files */
+		if (chmod(polar_shmem_stat_file, pg_file_create_mode) != 0)
+		{
+			save_errno = errno;
+			elog(ERROR, "could not change permissions of shmem_total_size file: %s", strerror(save_errno));
+		}
+	}
+	else
+		elog(ERROR, "could not write shmem_total_size file: %s", strerror(save_errno));
+}
+
+/*
+ * POLAR: on_proc_exit callback to delete shared memory stat file
+ */
+void
+polar_unlink_shmem_stat_file(int status, Datum arg)
+{
+	unlink(polar_shmem_stat_file);
 }

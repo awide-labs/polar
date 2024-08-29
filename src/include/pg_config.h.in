@@ -55,6 +55,9 @@
    (--enable-thread-safety) */
 #undef ENABLE_THREAD_SAFETY
 
+/* Define to 1 to build with fault injector. (--enable-fault-injector) */
+#undef FAULT_INJECTOR
+
 /* Define to 1 if gettimeofday() takes only 1 argument. */
 #undef GETTIMEOFDAY_1ARG
 
@@ -342,6 +345,9 @@
 
 /* Define to 1 if you have the `ssl' library (-lssl). */
 #undef HAVE_LIBSSL
+
+/* Define to 1 if you have the `unwind' library (-lunwind). */
+#undef HAVE_LIBUNWIND
 
 /* Define to 1 if you have the `wldap32' library (-lwldap32). */
 #undef HAVE_LIBWLDAP32
@@ -775,6 +781,9 @@
 /* Define to 1 if your compiler understands _Static_assert. */
 #undef HAVE__STATIC_ASSERT
 
+/* Define to 1 if you have the `__backtrace' function. */
+#undef HAVE___BACKTRACE
+
 /* Define to 1 if you have the `__strtoll' function. */
 #undef HAVE___STRTOLL
 
@@ -846,8 +855,24 @@
 /* PostgreSQL version as a number */
 #undef PG_VERSION_NUM
 
-/* A string containing the version number, platform, and C compiler */
+/* A string containing the PostgreSQL version number, PolarDB version number,
+   PolarDB version commit */
 #undef PG_VERSION_STR
+
+/* PolarDB version as a string */
+#undef POLARDB_VERSION
+
+/* PolarDB commit as a string */
+#undef POLAR_COMMIT
+
+/* PolarDB PG internal version as a string */
+#undef POLAR_PG_VERSION
+
+/* PolarDB release date as a string */
+#undef POLAR_RELEASE_DATE
+
+/* PolarDB internal version as a string */
+#undef POLAR_VERSION
 
 /* Define to 1 to allow profiling output to be saved separately for each
    process. */
@@ -912,6 +937,9 @@
 /* Define to 1 to build with LDAP support. (--with-ldap) */
 #undef USE_LDAP
 
+/* Define to 1 to build with libunwind support. (--with-libunwind) */
+#undef USE_LIBUNWIND
+
 /* Define to 1 to build with XML support. (--with-libxml) */
 #undef USE_LIBXML
 
@@ -925,6 +953,9 @@
 /* Define to 1 to build with LZ4 support. (--with-lz4) */
 #undef USE_LZ4
 
+/* Define to 1 to build with minimal compile. (--enable-minimal) */
+#undef USE_MINIMAL_COMPILE
+
 /* Define to select named POSIX semaphores. */
 #undef USE_NAMED_POSIX_SEMAPHORES
 
@@ -934,6 +965,9 @@
 /* Define to 1 to build with PAM support. (--with-pam) */
 #undef USE_PAM
 
+/* Define to 1 to build with PFSD support. (--with-pfsd) */
+#undef USE_PFSD
+
 /* Define to 1 to use software CRC-32C implementation (slicing-by-8). */
 #undef USE_SLICING_BY_8_CRC32C
 
@@ -942,6 +976,9 @@
 
 /* Define to 1 to use Intel SSE 4.2 CRC instructions with a runtime check. */
 #undef USE_SSE42_CRC32C_WITH_RUNTIME_CHECK
+
+/* Define to 1 to build with submodule packages. (--with-submodule) */
+#undef USE_SUBMODULE
 
 /* Define to build with systemd support. (--with-systemd) */
 #undef USE_SYSTEMD

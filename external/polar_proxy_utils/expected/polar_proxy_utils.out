@@ -1,0 +1,130 @@
+-- test for polar_proxy_utils extension
+create extension polar_proxy_utils;
+select name, type, rw_mode from polar_list_proxy_routing_strategy();
+ name | type | rw_mode 
+------+------+---------
+(0 rows)
+
+-- corner case
+select polar_add_proxy_routing_strategy('', 't', 'r');
+ polar_add_proxy_routing_strategy 
+----------------------------------
+ 
+(1 row)
+
+-- invalid type
+select polar_add_proxy_routing_strategy('test', 'x', 'r');
+ERROR:  type is out of valid range (t for table name, f for function name).
+CONTEXT:  PL/pgSQL function polar_add_proxy_routing_strategy(character varying,character,character) line 12 at RAISE
+-- invalid rw mode
+select polar_add_proxy_routing_strategy('test', 'f', 'x');
+ERROR:  rw_mode is out of valid range (w for wite, r for read).
+CONTEXT:  PL/pgSQL function polar_add_proxy_routing_strategy(character varying,character,character) line 20 at RAISE
+-- add ok
+select polar_add_proxy_routing_strategy('test', 'f', 'r');
+ polar_add_proxy_routing_strategy 
+----------------------------------
+ 
+(1 row)
+
+select polar_add_proxy_routing_strategy('test1', 't', 'r');
+ polar_add_proxy_routing_strategy 
+----------------------------------
+ 
+(1 row)
+
+select polar_add_proxy_routing_strategy('test2', 'f', 'w');
+ polar_add_proxy_routing_strategy 
+----------------------------------
+ 
+(1 row)
+
+select name, type, rw_mode from polar_list_proxy_routing_strategy();
+ name  |   type   | rw_mode 
+-------+----------+---------
+       | table    | read
+ test  | function | read
+ test1 | table    | read
+ test2 | function | write
+(4 rows)
+
+select name, type, rw_mode from polar_proxy_all_routing_strategy;
+ name  |   type   | rw_mode 
+-------+----------+---------
+       | table    | read
+ test  | function | read
+ test1 | table    | read
+ test2 | function | write
+(4 rows)
+
+-- duplicated name, diff type
+select polar_add_proxy_routing_strategy('test', 't', 'r');
+ polar_add_proxy_routing_strategy 
+----------------------------------
+ 
+(1 row)
+
+-- duplicated name, error
+select polar_add_proxy_routing_strategy('test', 'f', 'r');
+ERROR:  duplicated name.
+CONTEXT:  PL/pgSQL function polar_add_proxy_routing_strategy(character varying,character,character) line 35 at RAISE
+-- too long name
+select polar_add_proxy_routing_strategy('12345678901234567890123456789012345678901234567890123456789012345', 't', 'r');
+ERROR:  value too long for type character varying(64)
+CONTEXT:  SQL statement "INSERT INTO
+		polar_proxy_routing_strategy(name, type, rw_mode)
+		VALUES (_name, __type, rw)"
+PL/pgSQL function polar_add_proxy_routing_strategy(character varying,character,character) line 30 at SQL statement
+select name, type, rw_mode from polar_list_proxy_routing_strategy();
+ name  |   type   | rw_mode 
+-------+----------+---------
+       | table    | read
+ test  | function | read
+ test1 | table    | read
+ test2 | function | write
+ test  | table    | read
+(5 rows)
+
+-- no exist
+select polar_delete_proxy_routing_strategy('xxx', 'f');
+ polar_delete_proxy_routing_strategy 
+-------------------------------------
+ 
+(1 row)
+
+-- delete ok
+select polar_delete_proxy_routing_strategy('test', 'f');
+ polar_delete_proxy_routing_strategy 
+-------------------------------------
+ 
+(1 row)
+
+select name, type, rw_mode from polar_list_proxy_routing_strategy();
+ name  |   type   | rw_mode 
+-------+----------+---------
+       | table    | read
+ test1 | table    | read
+ test2 | function | write
+ test  | table    | read
+(4 rows)
+
+-- truncate ok
+select polar_truncate_proxy_routing_strategy();
+ polar_truncate_proxy_routing_strategy 
+---------------------------------------
+ 
+(1 row)
+
+-- empty table
+select name, type, rw_mode from polar_list_proxy_routing_strategy();
+ name | type | rw_mode 
+------+------+---------
+(0 rows)
+
+-- insert 1w entry
+insert into polar_proxy_routing_strategy(name, type, rw_mode) (select id as name, 0 as type, 0 as rw_mode from generate_series(1,10000) as id);
+-- overflow
+select polar_add_proxy_routing_strategy('test', 'f', 'r');
+ERROR:  beyond table limit(10000), try to remove some entry.
+CONTEXT:  PL/pgSQL function polar_add_proxy_routing_strategy(character varying,character,character) line 26 at RAISE
+drop extension polar_proxy_utils;

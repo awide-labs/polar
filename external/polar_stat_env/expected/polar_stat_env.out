@@ -1,0 +1,53 @@
+--
+-- Test cases for polar_stat_env.
+--
+CREATE EXTENSION IF NOT EXISTS polar_stat_env;
+SELECT position('CPU' IN s) != 0 FROM polar_stat_env() s;
+ ?column? 
+----------
+ t
+(1 row)
+
+SELECT position('CPU' IN s) != 0 FROM polar_stat_env_no_format() s;
+ ?column? 
+----------
+ t
+(1 row)
+
+SELECT position('CPU' IN s) != 0 FROM polar_stat_env('json') s;
+ ?column? 
+----------
+ t
+(1 row)
+
+SELECT position('CPU' IN s) != 0 FROM polar_stat_env_no_format('json') s;
+ ?column? 
+----------
+ t
+(1 row)
+
+SELECT position('CPU' IN s) != 0 FROM polar_stat_env('text') s;
+ ?column? 
+----------
+ t
+(1 row)
+
+SELECT position('CPU' IN s) != 0 FROM polar_stat_env_no_format('text') s;
+ ?column? 
+----------
+ t
+(1 row)
+
+SELECT position('CPU' IN s) != 0 FROM polar_stat_env('yaml') s;
+ ?column? 
+----------
+ t
+(1 row)
+
+SELECT position('CPU' IN s) != 0 FROM polar_stat_env_no_format('yaml') s;
+ ?column? 
+----------
+ t
+(1 row)
+
+DROP EXTENSION polar_stat_env;

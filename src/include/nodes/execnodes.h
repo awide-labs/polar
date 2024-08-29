@@ -569,7 +569,7 @@ typedef struct ResultRelInfoExtra
 
 	/* For INSERT/UPDATE, attnums of generated columns to be computed */
 	Bitmapset  *ri_extraUpdatedCols;
-}			ResultRelInfoExtra;
+} ResultRelInfoExtra;
 
 /* ----------------
  *	  AsyncRequest
@@ -1222,7 +1222,7 @@ typedef struct EPQStateExtra
 	 * passed to EvalPlanQual().
 	 */
 	bool	   *relsubs_blocked;
-}			EPQStateExtra;
+} EPQStateExtra;
 
 /* ----------------
  *	 ResultState information

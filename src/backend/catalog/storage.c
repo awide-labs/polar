@@ -36,6 +36,7 @@
 
 /* GUC variables */
 int			wal_skip_threshold = 2048;	/* in kilobytes */
+bool		polar_hold_truncate_interrupt = false;
 
 /*
  * We keep a list of all relations (represented as RelFileNode values)
@@ -294,6 +295,9 @@ RelationTruncate(Relation rel, BlockNumber nblocks)
 	int			nforks = 0;
 	SMgrRelation reln;
 
+	/* POLAR: If this flag is true,we will disable cancel signal */
+	bool		disable_cancel = false;
+
 	/*
 	 * Make sure smgr_targblock etc aren't pointing somewhere past new end.
 	 * (Note: don't rely on this reln pointer below this loop.)
@@ -368,6 +372,18 @@ RelationTruncate(Relation rel, BlockNumber nblocks)
 		XLogRecPtr	lsn;
 		xl_smgr_truncate xlrec;
 
+		/*
+		 * POLAR: Disable cancel signal during writing truacte XLOG and
+		 * truncating. If standby receive truncate log but master failed to
+		 * trucate file, standby will crash when master write to these blocks
+		 * which truncated in standby node.
+		 */
+		if (polar_hold_truncate_interrupt)
+		{
+			disable_cancel = true;
+			HOLD_INTERRUPTS();
+		}
+
 		xlrec.blkno = nblocks;
 		xlrec.rnode = rel->rd_node;
 		xlrec.flags = SMGR_TRUNCATE_ALL;
@@ -398,6 +414,13 @@ RelationTruncate(Relation rel, BlockNumber nblocks)
 
 	/* We've done all the critical work, so checkpoints are OK now. */
 	MyProc->delayChkptFlags &= ~DELAY_CHKPT_COMPLETE;
+
+	/* POLAR: Resume to enable cancel signal */
+	if (disable_cancel)
+	{
+		RESUME_INTERRUPTS();
+		CHECK_FOR_INTERRUPTS();
+	}
 
 	/*
 	 * Update upper-level FSM pages to account for the truncation. This is
@@ -961,6 +984,11 @@ smgr_redo(XLogReaderState *record)
 
 	/* Backup blocks are not used in smgr records */
 	Assert(!XLogRecHasAnyBlockRefs(record));
+
+	/* replica do not create or truncate files */
+	if ((info == XLOG_SMGR_CREATE || info == XLOG_SMGR_TRUNCATE) &&
+		polar_is_replica())
+		return;
 
 	if (info == XLOG_SMGR_CREATE)
 	{

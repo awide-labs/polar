@@ -417,4 +417,9 @@ extern void heap_execute_freeze_tuple(HeapTupleHeader tuple,
 extern XLogRecPtr log_heap_visible(RelFileNode rnode, Buffer heap_buffer,
 								   Buffer vm_buffer, TransactionId cutoff_xid, uint8 flags);
 
+/* POLAR */
+extern void fix_infomask_from_infobits(uint8 infobits, uint16 *infomask, uint16 *infomask2);
+
+/* POLAR end */
+
 #endif							/* HEAPAM_XLOG_H */

@@ -1,0 +1,21 @@
+CREATE EXTENSION test_slru;
+-- See README for explanation of arguments:
+SELECT test_slru();
+WARNING:  Failed to do io for local cache, file_type=1, io_permission=F
+ test_slru 
+-----------
+ 
+(1 row)
+
+SELECT test_slru_hash_index(10, 256, 10000);
+ test_slru_hash_index 
+----------------------
+ 
+(1 row)
+
+SELECT test_slru_slot_size_config();
+ test_slru_slot_size_config 
+----------------------------
+ 
+(1 row)
+

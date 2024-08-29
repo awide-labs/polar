@@ -1,0 +1,108 @@
+CREATE EXTENSION test_polar_rsc;
+-- create table
+CREATE TABLE test_rsc (id int, txt text);
+-- cache not loaded
+SELECT in_cache, main_cache
+    FROM test_polar_rsc_stat_entries()
+    WHERE rel_node = (SELECT relfilenode FROM pg_class WHERE relname = 'test_rsc');
+ in_cache | main_cache 
+----------+------------
+(0 rows)
+
+-- cache loaded
+SELECT * FROM test_rsc;
+ id | txt 
+----+-----
+(0 rows)
+
+SELECT in_cache, main_cache
+    FROM test_polar_rsc_stat_entries()
+    WHERE rel_node = (SELECT relfilenode FROM pg_class WHERE relname = 'test_rsc');
+ in_cache | main_cache 
+----------+------------
+ t        |          0
+(1 row)
+
+-- cache updated due to extension
+INSERT INTO test_rsc VALUES (1, 'cause page extend');
+SELECT in_cache, main_cache
+    FROM test_polar_rsc_stat_entries()
+    WHERE rel_node = (SELECT relfilenode FROM pg_class WHERE relname = 'test_rsc');
+ in_cache | main_cache 
+----------+------------
+ t        |          1
+(1 row)
+
+-- cache hit by searching ref
+SELECT * FROM test_rsc;
+ id |        txt        
+----+-------------------
+  1 | cause page extend
+(1 row)
+
+SELECT test_polar_rsc_search_by_ref(relfilenode)
+    FROM pg_class WHERE relname = 'test_rsc';
+ test_polar_rsc_search_by_ref 
+------------------------------
+                            1
+(1 row)
+
+-- cache hit by searching mapping
+SELECT test_polar_rsc_search_by_mapping(relfilenode)
+    FROM pg_class WHERE relname = 'test_rsc';
+ test_polar_rsc_search_by_mapping 
+----------------------------------
+                                1
+(1 row)
+
+-- cache invalidation
+TRUNCATE test_rsc;
+SELECT in_cache, main_cache
+    FROM test_polar_rsc_stat_entries()
+    WHERE rel_node = (SELECT relfilenode FROM pg_class WHERE relname = 'test_rsc') AND in_cache = true;
+ in_cache | main_cache 
+----------+------------
+(0 rows)
+
+-- cache miss by searching ref
+SELECT test_polar_rsc_search_by_ref(relfilenode)
+    FROM pg_class WHERE relname = 'test_rsc';
+ test_polar_rsc_search_by_ref 
+------------------------------
+                           -1
+(1 row)
+
+-- cache miss by searching mapping
+SELECT test_polar_rsc_search_by_mapping(relfilenode)
+    FROM pg_class WHERE relname = 'test_rsc';
+ test_polar_rsc_search_by_mapping 
+----------------------------------
+                               -1
+(1 row)
+
+-- reload cache
+SELECT test_polar_rsc_update_entry(relfilenode)
+    FROM pg_class WHERE relname = 'test_rsc';
+ test_polar_rsc_update_entry 
+-----------------------------
+                           0
+(1 row)
+
+SELECT in_cache, main_cache
+    FROM test_polar_rsc_stat_entries()
+    WHERE rel_node = (SELECT relfilenode FROM pg_class WHERE relname = 'test_rsc') AND in_cache = true;
+ in_cache | main_cache 
+----------+------------
+ t        |          0
+(1 row)
+
+-- cache hit by searching mapping
+SELECT test_polar_rsc_search_by_mapping(relfilenode)
+    FROM pg_class WHERE relname = 'test_rsc';
+ test_polar_rsc_search_by_mapping 
+----------------------------------
+                                0
+(1 row)
+
+DROP TABLE test_rsc;
+DROP EXTENSION test_polar_rsc;

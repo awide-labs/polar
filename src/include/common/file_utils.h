@@ -27,6 +27,7 @@ typedef enum PGFileType
 #ifdef FRONTEND
 extern int	fsync_fname(const char *fname, bool isdir);
 extern void fsync_pgdata(const char *pg_data, int serverVersion);
+extern void polar_fsync_pgdata(const char *pg_data, int serverVersion);
 extern void fsync_dir_recurse(const char *dir);
 extern int	durable_rename(const char *oldfile, const char *newfile);
 extern int	fsync_parent_path(const char *fname);

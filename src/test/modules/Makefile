@@ -19,6 +19,7 @@ SUBDIRS = \
 		  test_extensions \
 		  test_ginpostinglist \
 		  test_integerset \
+		  test_lfind \
 		  test_misc \
 		  test_oat_hooks \
 		  test_parser \
@@ -29,7 +30,15 @@ SUBDIRS = \
 		  test_rls_hooks \
 		  test_shm_mq \
 		  unsafe_tests \
-		  worker_spi
+		  worker_spi \
+		  test_polar_bulk_read
+
+# POLAR
+SUBDIRS += test_buffer
+SUBDIRS += test_logindex test_slru test_local_cache test_procpool
+SUBDIRS += test_polar_rsc
+SUBDIRS += test_coredump_handler
+# POLAR end
 
 ifeq ($(with_ssl),openssl)
 SUBDIRS += ssl_passphrase_callback

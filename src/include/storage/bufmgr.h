@@ -21,6 +21,9 @@
 #include "utils/relcache.h"
 #include "utils/snapmgr.h"
 
+/* POLAR: for code compile */
+typedef struct BufferDesc BufferDesc;
+
 typedef void *Block;
 
 /* Possible arguments for GetAccessStrategy() */
@@ -42,8 +45,10 @@ typedef enum
 	RBM_ZERO_AND_CLEANUP_LOCK,	/* Like RBM_ZERO_AND_LOCK, but locks the page
 								 * in "cleanup" mode */
 	RBM_ZERO_ON_ERROR,			/* Read, but return an all-zeros page on error */
-	RBM_NORMAL_NO_LOG			/* Don't log page as invalid during WAL
+	RBM_NORMAL_NO_LOG,			/* Don't log page as invalid during WAL
 								 * replay; otherwise same as RBM_NORMAL */
+	RBM_NORMAL_VALID			/* POLAR: Don't read from disk, buffer is
+								 * valid */
 } ReadBufferMode;
 
 /*
@@ -84,6 +89,12 @@ extern PGDLLIMPORT int NLocBuffer;
 extern PGDLLIMPORT Block *LocalBufferBlockPointers;
 extern PGDLLIMPORT int32 *LocalRefCount;
 
+/* POLAR: bulk read */
+extern bool polar_bulk_io_is_in_progress;
+extern int	polar_bulk_io_in_progress_count;
+
+/* POLAR end */
+
 /* upper limit for effective_io_concurrency */
 #define MAX_IO_CONCURRENCY 1000
 
@@ -96,6 +107,14 @@ extern PGDLLIMPORT int32 *LocalRefCount;
 #define BUFFER_LOCK_UNLOCK		0
 #define BUFFER_LOCK_SHARE		1
 #define BUFFER_LOCK_EXCLUSIVE	2
+
+/*
+ * Note: these two macros only work on shared buffers, not local ones!
+ *
+ * POLAR: these two macros are moved from bufmgr.c.
+ */
+#define BufHdrGetBlock(bufHdr)	((Block) (BufferBlocks + ((Size) (bufHdr)->buf_id) * BLCKSZ))
+#define BufferGetLSN(bufHdr)	(PageGetLSN(BufHdrGetBlock(bufHdr)))
 
 /*
  * These routines are beaten on quite heavily, hence the macroization.
@@ -239,7 +258,7 @@ extern bool HoldingBufferPinThatDelaysRecovery(void);
 extern void AbortBufferIO(void);
 
 extern void BufmgrCommit(void);
-extern bool BgBufferSync(struct WritebackContext *wb_context);
+extern bool BgBufferSync(struct WritebackContext *wb_context, int flags);
 
 extern void AtProcExit_LocalBuffers(void);
 
@@ -249,6 +268,20 @@ extern void TestForOldSnapshot_impl(Snapshot snapshot, Relation relation);
 extern BufferAccessStrategy GetAccessStrategy(BufferAccessStrategyType btype);
 extern void FreeAccessStrategy(BufferAccessStrategy strategy);
 
+/* POLAR */
+extern void PolarMarkBufferDirty(Buffer buffer, XLogRecPtr oldest_lsn);
+extern bool polar_try_to_wake_bgwriter(void);
+extern bool polar_start_buffer_io_extend(BufferDesc *buf,
+										 bool forInput,
+										 bool polar_copy_buf);
+
+/* POLAR: change static to extern */
+extern void TerminateBufferIO(BufferDesc *buf, bool clear_dirty, uint32 set_flag_bits);
+extern bool StartBufferIO(BufferDesc *buf, bool forInput);
+
+/* POLAR: bulk read */
+extern int	polar_get_buffer_access_strategy_ring_size(BufferAccessStrategy strategy);
+extern BufferDesc **polar_bulk_io_in_progress_buf;
 
 /* inline functions */
 
@@ -291,6 +324,13 @@ TestForOldSnapshot(Snapshot snapshot, Relation relation, Page page)
 		&& PageGetLSN(page) > (snapshot)->lsn)
 		TestForOldSnapshot_impl(snapshot, relation);
 }
+
+/* POLAR */
+extern void polar_lock_buffer_for_cleanup_ext(Buffer buffer, bool fresh_check);
+extern void polar_lock_buffer_ext(Buffer buffer, int mode, bool fresh_check);
+extern bool polar_conditional_lock_buffer_ext(Buffer buffer, bool fresh_check);
+
+/* POLAR end */
 
 #endif							/* FRONTEND */
 

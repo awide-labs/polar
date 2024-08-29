@@ -19,6 +19,7 @@ OBJS = \
 	lock.o \
 	lwlock.o \
 	lwlocknames.o \
+	polar_lock_stats.o \
 	predicate.o \
 	proc.o \
 	s_lock.o \

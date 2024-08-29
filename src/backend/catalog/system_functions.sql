@@ -381,11 +381,28 @@ CREATE OR REPLACE FUNCTION
   RETURNS pg_lsn STRICT VOLATILE LANGUAGE internal AS 'pg_backup_start'
   PARALLEL RESTRICTED;
 
+CREATE OR REPLACE FUNCTION
+  pg_start_backup(label text, fast boolean DEFAULT false, exclusive boolean DEFAULT false)
+  RETURNS pg_lsn STRICT VOLATILE LANGUAGE sql
+  PARALLEL RESTRICTED
+BEGIN ATOMIC
+  SELECT pg_backup_start($1, $2);
+END;
+
 CREATE OR REPLACE FUNCTION pg_backup_stop (
         wait_for_archive boolean DEFAULT true, OUT lsn pg_lsn,
         OUT labelfile text, OUT spcmapfile text)
   RETURNS record STRICT VOLATILE LANGUAGE internal as 'pg_backup_stop'
   PARALLEL RESTRICTED;
+
+CREATE OR REPLACE FUNCTION pg_stop_backup (
+        exclusive boolean, wait_for_archive boolean DEFAULT true,
+        OUT lsn pg_lsn, OUT labelfile text, OUT spcmapfile text)
+  RETURNS SETOF record STRICT VOLATILE LANGUAGE sql
+  PARALLEL RESTRICTED
+BEGIN ATOMIC
+  SELECT pg_backup_stop($2);
+END;
 
 CREATE OR REPLACE FUNCTION
   pg_promote(wait boolean DEFAULT true, wait_seconds integer DEFAULT 60)

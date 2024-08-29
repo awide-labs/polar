@@ -127,6 +127,8 @@ NOEXPORT_SNAPSHOT	{ return K_NOEXPORT_SNAPSHOT; }
 USE_SNAPSHOT		{ return K_USE_SNAPSHOT; }
 WAIT				{ return K_WAIT; }
 
+POLAR_REPL_MODE		{ return K_POLAR_REPL_MODE; }
+
 {space}+		{ /* do nothing */ }
 
 {digit}+		{

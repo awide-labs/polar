@@ -22,6 +22,9 @@
 #include "utils/memdebug.h"
 #include "utils/memutils.h"
 
+/* POLAR */
+#include "storage/polar_fd.h"
+#include "utils/guc.h"
 
 /* GUC variable */
 bool		ignore_checksum_failure = false;
@@ -1522,7 +1525,7 @@ PageSetChecksumCopy(Page page, BlockNumber blkno)
 	 * and second to avoid wasting space in processes that never call this.
 	 */
 	if (pageCopy == NULL)
-		pageCopy = MemoryContextAlloc(TopMemoryContext, BLCKSZ);
+		pageCopy = MemoryContextAllocIOAligned(TopMemoryContext, BLCKSZ, 0);
 
 	memcpy(pageCopy, (char *) page, BLCKSZ);
 	((PageHeader) pageCopy)->pd_checksum = pg_checksum_page(pageCopy, blkno);
@@ -1544,3 +1547,67 @@ PageSetChecksumInplace(Page page, BlockNumber blkno)
 
 	((PageHeader) page)->pd_checksum = pg_checksum_page((char *) page, blkno);
 }
+
+/*
+ * POLAR: polar_page_is_just_inited -- check if page is just inited by PageInit()
+ * and it has no more modifications.
+ *
+ * return true, if just-inited page.
+ */
+bool
+polar_page_is_just_inited(Page page)
+{
+	PageHeader	p = (PageHeader) page;
+	XLogRecPtr	lsn;
+	size_t	   *pagebytes;
+	int			zero_space_lower;
+	int			zero_space_upper;
+
+	/*
+	 * check lsn first for performance. Most pages aren't just-inited page,
+	 * return fastly. For just-inited page, lsn should be 0.
+	 */
+	lsn = PageGetLSN(page);
+	if (lsn != 0)
+		return false;
+
+	/* check pagesize and version */
+	if (PageSizeIsValid(PageGetPageSize(page)) != true ||
+		PageGetPageLayoutVersion(page) != PG_PAGE_LAYOUT_VERSION)
+		return false;
+
+	if (p->pd_flags != 0 || p->pd_prune_xid != 0)
+		return false;
+
+	if (p->pd_lower != SizeOfPageHeaderData)
+		return false;
+
+	if (!(p->pd_upper > p->pd_lower && p->pd_upper <= BLCKSZ))
+		return false;
+
+	if (p->pd_special != p->pd_upper)
+		return false;
+
+	pagebytes = (size_t *) page;
+
+	/*
+	 * Check [p->pd_lower, p->pd_upper) bytes are all zero. Have checked that
+	 * (p->pd_lower == SizeOfPageHeaderData) && (p->pd_upper > p->pd_lower &&
+	 * p->pd_upper <= BLCKSZ)
+	 *
+	 * If p->pd_lower is not sizeof(size_t) aligned, [p->pd_lower,
+	 * TYPEALIGN(sizeof(size_t), p->pd_lower) is not checked. We think it is
+	 * OK. It's the same with p->pd_upper.
+	 */
+	zero_space_lower = TYPEALIGN(sizeof(size_t), SizeOfPageHeaderData) / sizeof(size_t);
+	zero_space_upper = p->pd_upper / sizeof(size_t);
+	for (; zero_space_lower < zero_space_upper; zero_space_lower++)
+	{
+		if (pagebytes[zero_space_lower] != 0)
+			return false;
+	}
+
+	return true;
+}
+
+/* POLAR end */

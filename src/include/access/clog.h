@@ -60,4 +60,16 @@ extern void clog_redo(XLogReaderState *record);
 extern void clog_desc(StringInfo buf, XLogReaderState *record);
 extern const char *clog_identify(uint8 info);
 
+/* POLAR */
+extern int	polar_clog_slot_size;
+
+/* POLAR: do online promote for clog */
+extern void polar_promote_clog(void);
+
+/* POLAR: remove clog local cache file */
+extern void polar_remove_clog_local_cache_file(void);
+extern void polar_init_local_clog(TransactionId xid, bool copy_all);
+
+/* POLAR end */
+
 #endif							/* CLOG_H */

@@ -77,6 +77,12 @@
 #define BM_MAX_USAGE_COUNT	5
 
 /*
+ * POLAR: polar_flags
+ */
+#define POLAR_BUF_OLDEST_LSN_IS_FAKE		1
+#define POLAR_BUF_FIRST_TOUCHED_AFTER_COPY	(1U << 1)
+
+/*
  * Buffer tag identifies which disk block the buffer contains.
  *
  * Note: the BufferTag data must be sufficient to determine where to write the
@@ -131,6 +137,9 @@ typedef struct buftag
 		BufTableHashPartition(hashcode)].lock)
 #define BufMappingPartitionLockByIndex(i) \
 	(&MainLWLockArray[BUFFER_MAPPING_LWLOCK_OFFSET + (i)].lock)
+
+/* POLAR */
+typedef struct CopyBufferDesc CopyBufferDesc;
 
 /*
  *	BufferDesc -- shared descriptor/state data for a single shared buffer.
@@ -190,6 +199,28 @@ typedef struct BufferDesc
 	int			wait_backend_pgprocno;	/* backend of pin-count waiter */
 	int			freeNext;		/* link in freelist chain */
 	LWLock		content_lock;	/* to lock access to buffer contents */
+
+#ifdef LOCKBUFHDR_DEBUG
+	int			lockbufhdr_pid;
+#endif
+	/* POLAR */
+	int			flush_next;		/* link to next dirty buffer */
+	int			flush_prev;		/* link to prev dirty buffer */
+	XLogRecPtr	oldest_lsn;		/* the first lsn which marked this buffer
+								 * dirty */
+
+	/*
+	 * If a buffer can not be flushed on primary because its latest
+	 * modification lsn > oldest apply lsn, in order to advance the consistent
+	 * lsn, a copy is made. So copy_buffer is used to point to its copied
+	 * buffer of the buffer.
+	 */
+	CopyBufferDesc *copy_buffer;
+	uint8		polar_flags;
+	uint16		recently_modified_count;
+	/* POLAR: record buffer redo state */
+	pg_atomic_uint32 polar_redo_state;
+	/* POLAR end */
 } BufferDesc;
 
 /*
@@ -244,11 +275,20 @@ extern PGDLLIMPORT ConditionVariableMinimallyPadded *BufferIOCVArray;
  * not apply these to local buffers!
  */
 extern uint32 LockBufHdr(BufferDesc *desc);
+#ifdef LOCKBUFHDR_DEBUG
+#define UnlockBufHdr(desc, s)	\
+	do {	\
+		pg_write_barrier(); \
+		pg_atomic_write_u32(&(desc)->state, (s) & (~BM_LOCKED)); \
+		desc->lockbufhdr_pid = 0; \
+	} while (0)
+#else
 #define UnlockBufHdr(desc, s)	\
 	do {	\
 		pg_write_barrier(); \
 		pg_atomic_write_u32(&(desc)->state, (s) & (~BM_LOCKED)); \
 	} while (0)
+#endif
 
 
 /*
@@ -321,6 +361,11 @@ extern void StrategyNotifyBgWriter(int bgwprocno);
 extern Size StrategyShmemSize(void);
 extern void StrategyInitialize(bool init);
 extern bool have_free_buffer(void);
+
+/* POLAR */
+extern void polar_backend_flush_stat(BufferAccessStrategy strategy);
+
+/* POLAR end */
 
 /* buf_table.c */
 extern Size BufTableShmemSize(int size);

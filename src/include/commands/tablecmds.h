@@ -103,4 +103,9 @@ extern void RangeVarCallbackOwnsRelation(const RangeVar *relation,
 extern bool PartConstraintImpliedByRelConstraint(Relation scanrel,
 												 List *partConstraint);
 
+/* POLAR: GUC */
+extern PGDLLIMPORT bool polar_force_unlogged_to_logged_table;
+
+/* POLAR end */
+
 #endif							/* TABLECMDS_H */

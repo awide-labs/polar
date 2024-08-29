@@ -34,6 +34,7 @@
  * happen, it would tie up KnownAssignedXids indefinitely, so we protect
  * ourselves by pruning the array when a valid list of running XIDs arrives.
  *
+ * Portions Copyright (c) 2024, Alibaba Group Holding Limited
  * Portions Copyright (c) 1996-2022, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
@@ -58,6 +59,7 @@
 #include "commands/dbcommands.h"
 #include "miscadmin.h"
 #include "pgstat.h"
+#include "port/pg_lfind.h"
 #include "storage/proc.h"
 #include "storage/procarray.h"
 #include "storage/spin.h"
@@ -65,6 +67,11 @@
 #include "utils/builtins.h"
 #include "utils/rel.h"
 #include "utils/snapmgr.h"
+
+/* POLAR */
+#include "access/xlogrecovery.h"
+#include "access/polar_logindex_redo.h"
+/* POLAR end */
 
 #define UINT32_ACCESS_ONCE(var)		 ((uint32)(*((volatile uint32 *)&(var))))
 
@@ -265,8 +272,7 @@ typedef enum KAXCompressReason
 	KAX_PRUNE,					/* we just pruned old entries */
 	KAX_TRANSACTION_END,		/* we just committed/removed some XIDs */
 	KAX_STARTUP_PROCESS_IDLE	/* startup process is about to sleep */
-}			KAXCompressReason;
-
+} KAXCompressReason;
 
 static ProcArrayStruct *procArray;
 
@@ -582,6 +588,16 @@ ProcArrayRemove(PGPROC *proc, TransactionId latestXid)
 	/* See ProcGlobal comment explaining why both locks are held */
 	LWLockAcquire(ProcArrayLock, LW_EXCLUSIVE);
 	LWLockAcquire(XidGenLock, LW_EXCLUSIVE);
+
+	/*
+	 * POLAR: ordinary users reuse the PGPROC structure of the last superuser
+	 * connection. After MyProc is added and before proc->issuper is reset,
+	 * the connection will be counted into the superuser connections. This
+	 * will trigger an alarm that the superuser connections exceed the limit.
+	 * We set proc->issuper false when removing proc to avoid this problem.
+	 */
+	proc->issuper = false;
+	/* POLAR end */
 
 	myoff = proc->pgxactoff;
 
@@ -1612,14 +1628,9 @@ TransactionIdIsInProgress(TransactionId xid)
 	 */
 	topxid = SubTransGetTopmostTransaction(xid);
 	Assert(TransactionIdIsValid(topxid));
-	if (!TransactionIdEquals(topxid, xid))
-	{
-		for (int i = 0; i < nxids; i++)
-		{
-			if (TransactionIdEquals(xids[i], topxid))
-				return true;
-		}
-	}
+	if (!TransactionIdEquals(topxid, xid) &&
+		pg_lfind32(topxid, xids, nxids))
+		return true;
 
 	cachedXidIsNotInProgress = xid;
 	return false;
@@ -2297,6 +2308,29 @@ GetSnapshotData(Snapshot snapshot)
 			ereport(ERROR,
 					(errcode(ERRCODE_OUT_OF_MEMORY),
 					 errmsg("out of memory")));
+	}
+
+	/* POLAR: wait for replay if polar_xact_split_wait_lsn is set */
+	if (!XLogRecPtrIsInvalid(polar_xact_split_wait_lsn))
+	{
+		static XLogRecPtr replay_lsn = InvalidXLogRecPtr;
+		int			delay = 0;
+		int			total_wait = 0;
+
+		while (replay_lsn < polar_xact_split_wait_lsn)
+		{
+			total_wait += delay;
+
+			if (delay == 0)
+				delay = 5;
+			else
+				pg_usleep(delay);
+
+			delay = delay > 1000 ? 1000 : delay * 2;	/* 1ms at most */
+			replay_lsn = polar_get_xlog_replay_recptr_nolock();
+			if (total_wait != 0 && (total_wait / 1000) % 10000 == 0)	/* log every 10 seconds */
+				elog(LOG, "polar xact split wait replay for %ds", total_wait / 1000000);
+		}
 	}
 
 	/*
@@ -3283,7 +3317,7 @@ BackendXidGetPid(TransactionId xid)
 
 	LWLockRelease(ProcArrayLock);
 
-	return result;
+	return polar_get_session_id(result);
 }
 
 /*
@@ -5320,4 +5354,174 @@ KnownAssignedXidsReset(void)
 	pArray->headKnownAssignedXids = 0;
 
 	LWLockRelease(ProcArrayLock);
+}
+
+/*
+ * polar_get_nosuper_and_super_conn_count
+ *
+ * Count non-superuser and superuser backends. However, nosupercount and
+ * supercount may be incorrect, because we can alter superuser to non-superuser,
+ * but it does not modify MyProc->issuper. But we do not alter role superuser to
+ * non-superuser or alter non-superuser to superuser in PolarDB.
+ */
+void
+polar_get_nosuper_and_super_conn_count(int *nosupercount, int *supercount)
+{
+	ProcArrayStruct *arrayP = procArray;
+	int			index;
+
+	Assert(nosupercount != NULL && supercount != NULL);
+	*nosupercount = *supercount = 0;
+	LWLockAcquire(ProcArrayLock, LW_SHARED);
+
+	for (index = 0; index < arrayP->numProcs; index++)
+	{
+		int			pgprocno = arrayP->pgprocnos[index];
+		volatile PGPROC *proc = &allProcs[pgprocno];
+
+		/*
+		 * Do not count non-connection procs and prepared trans. See
+		 * InitProcGlobal() for meaning of offset in
+		 * allProcs.arrayP->pgprocnos[] is sorted by arrayP->pgprocnos inc, so
+		 * we can break if arrayP->pgprocnos[index] >= MaxConnections
+		 */
+		if (arrayP->pgprocnos[index] >= MaxConnections)
+			break;
+		if (proc->issuper)
+			(*supercount)++;
+		else
+			(*nosupercount)++;
+	}
+
+	LWLockRelease(ProcArrayLock);
+}
+
+/*
+ * POLAR: search all active backend to get pid, backendId.
+ */
+void
+polar_get_all_backendid_memstatm(PolarProcStatm *allprocs, Size *procsrss, int *num_allprocs)
+{
+	ProcArrayStruct *arrayP = procArray;
+	int			index;
+
+	LWLockAcquire(ProcArrayLock, LW_SHARED);
+	for (index = 0; index < arrayP->numProcs; index++)
+	{
+		int			pgprocno = arrayP->pgprocnos[index];
+		volatile PGPROC *proc = &allProcs[pgprocno];
+		PolarProcStatm *pids = &allprocs[*num_allprocs];
+
+		/* Ignore background workers except parallel background workers */
+		if (proc->databaseId != InvalidOid && proc->roleId != InvalidOid && !(proc->issuper))
+		{
+			pids->pid = proc->pid;
+			pids->backendId = proc->backendId;
+			pids->procnorss = &procsrss[proc->polar_master_pgprocno];
+
+			/*
+			 * lxid is the local transaction id, which can indicate whether
+			 * there is a transaction
+			 */
+			if (proc->lxid == InvalidLocalTransactionId)
+				pids->procstate = RM_TBLOCK_DEFAULT;
+			else if (proc->isBackgroundWorker)
+				pids->procstate = RM_TBLOCK_PARALLEL_INPROGRESS;
+			else
+				pids->procstate = RM_TBLOCK_INPROGRESS;
+
+			(*num_allprocs)++;
+		}
+	}
+	LWLockRelease(ProcArrayLock);
+}
+
+PGPROC *
+polar_search_proc(pid_t pid)
+{
+	int			i;
+	PGPROC	   *proc = NULL;
+
+	LWLockAcquire(ProcArrayLock, LW_SHARED);
+
+	for (i = 0; i < ProcGlobal->allProcCount; i++)
+	{
+		if (ProcGlobal->allProcs[i].pid == pid)
+		{
+			proc = &ProcGlobal->allProcs[i];
+			break;
+		}
+	}
+
+	LWLockRelease(ProcArrayLock);
+
+	return proc;
+}
+
+/*
+ * POLAR: Return the minimum lsn that backends process are replaying
+ * Note:
+ * Please be careful to use the return value which is non-linearly increasing.
+ */
+XLogRecPtr
+polar_get_backend_min_replay_lsn(void)
+{
+	int			i;
+	XLogRecPtr	result = InvalidXLogRecPtr;
+	ProcArrayStruct *arrayP = procArray;
+
+	LWLockAcquire(ProcArrayLock, LW_SHARED);
+	for (i = 0; i < arrayP->numProcs; i++)
+	{
+		int			pgprocno = arrayP->pgprocnos[i];
+		volatile PGPROC *proc = &allProcs[pgprocno];
+		XLogRecPtr	read_min_lsn = InvalidXLogRecPtr;
+
+		if (proc->pid == 0)
+			continue;			/* do not count prepared xacts */
+
+		/*
+		 * prevent the CPU from reordering memory access for pid and
+		 * polar_read_min_lsn
+		 */
+		pg_read_barrier();
+
+		read_min_lsn = (XLogRecPtr) pg_atomic_read_u64(&(proc->polar_read_min_lsn));
+		if (XLogRecPtrIsInvalid(result) ||
+			(!XLogRecPtrIsInvalid(read_min_lsn) && read_min_lsn < result))
+			result = read_min_lsn;
+	}
+	LWLockRelease(ProcArrayLock);
+
+	return result;
+}
+
+/*
+ * polar_get_min_read_lsn --- get minimum database backends polar_read_min_lsn
+ */
+XLogRecPtr
+polar_get_read_min_lsn(XLogRecPtr primary_consist_ptr)
+{
+	XLogRecPtr	result = primary_consist_ptr;
+	XLogRecPtr	redo_min_lsn = polar_get_backend_min_replay_lsn();
+	XLogRecPtr	last_replayed_lsn;
+
+	if (!XLogRecPtrIsInvalid(redo_min_lsn) && redo_min_lsn < result)
+		result = redo_min_lsn;
+
+	/* This replay lsn can avoid clearing last pending parsing redo log */
+	last_replayed_lsn = polar_get_xlog_replay_recptr_nolock();
+
+	/* Note: this can happen when last some logs don't be involved buffers */
+	if (!XLogRecPtrIsInvalid(result) &&
+		!XLogRecPtrIsInvalid(last_replayed_lsn) &&
+		last_replayed_lsn < result)
+		result = last_replayed_lsn;
+
+	redo_min_lsn = polar_logindex_redo_get_min_replay_from_lsn(polar_logindex_redo_instance, primary_consist_ptr);
+
+	if (!XLogRecPtrIsInvalid(redo_min_lsn) && redo_min_lsn < result)
+		result = redo_min_lsn;
+
+	return result;
 }

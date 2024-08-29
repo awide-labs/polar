@@ -202,6 +202,7 @@
 #include "access/xlog.h"
 #include "miscadmin.h"
 #include "pgstat.h"
+#include "port/pg_lfind.h"
 #include "storage/bufmgr.h"
 #include "storage/predicate.h"
 #include "storage/predicate_internals.h"
@@ -366,6 +367,7 @@ static SERIALIZABLEXACT *OldCommittedSxact;
 int			max_predicate_locks_per_xact;	/* set by guc.c */
 int			max_predicate_locks_per_relation;	/* set by guc.c */
 int			max_predicate_locks_per_page;	/* set by guc.c */
+int			polar_serial_buffer_slot_size = NUM_SERIAL_BUFFERS;
 
 /*
  * This provides a list of objects in order to track transactions
@@ -872,8 +874,8 @@ SerialInit(void)
 	 */
 	SerialSlruCtl->PagePrecedes = SerialPagePrecedesLogically;
 	SimpleLruInit(SerialSlruCtl, "Serial",
-				  NUM_SERIAL_BUFFERS, 0, SerialSLRULock, "pg_serial",
-				  LWTRANCHE_SERIAL_BUFFER, SYNC_HANDLER_NONE);
+				  polar_serial_buffer_slot_size, 0, SerialSLRULock, "pg_serial",
+				  LWTRANCHE_SERIAL_BUFFER, SYNC_HANDLER_NONE, false);
 #ifdef USE_ASSERT_CHECKING
 	SerialPagePrecedesLogicallyUnitTests();
 #endif
@@ -1396,7 +1398,7 @@ PredicateLockShmemSize(void)
 
 	/* Shared memory structures for SLRU tracking of old committed xids. */
 	size = add_size(size, sizeof(SerialControlData));
-	size = add_size(size, SimpleLruShmemSize(NUM_SERIAL_BUFFERS, 0));
+	size = add_size(size, SimpleLruShmemSize(polar_serial_buffer_slot_size, 0));
 
 	return size;
 }
@@ -4086,7 +4088,6 @@ static bool
 XidIsConcurrent(TransactionId xid)
 {
 	Snapshot	snap;
-	uint32		i;
 
 	Assert(TransactionIdIsValid(xid));
 	Assert(!TransactionIdEquals(xid, GetTopTransactionIdIfAny()));
@@ -4099,13 +4100,7 @@ XidIsConcurrent(TransactionId xid)
 	if (TransactionIdFollowsOrEquals(xid, snap->xmax))
 		return true;
 
-	for (i = 0; i < snap->xcnt; i++)
-	{
-		if (xid == snap->xip[i])
-			return true;
-	}
-
-	return false;
+	return pg_lfind32(xid, snap->xip, snap->xcnt);
 }
 
 bool

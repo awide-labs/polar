@@ -55,6 +55,12 @@ extern PGDLLIMPORT int XactIsoLevel;
 extern PGDLLIMPORT bool DefaultXactReadOnly;
 extern PGDLLIMPORT bool XactReadOnly;
 
+/* POLAR: GUC */
+extern PGDLLIMPORT bool polar_force_trans_ro_non_sup;
+
+#define POLAR_FORCE_TXN_READ_ONLY() (polar_force_trans_ro_non_sup && !MyProc->issuper)
+/* POLAR end */
+
 /* flag for logging statements in this transaction */
 extern PGDLLIMPORT bool xact_is_sampled;
 
@@ -526,5 +532,30 @@ extern void ParsePrepareRecord(uint8 info, xl_xact_prepare *xlrec, xl_xact_parse
 extern void EnterParallelMode(void);
 extern void ExitParallelMode(void);
 extern bool IsInParallelMode(void);
+
+/* POLAR */
+
+/* Unsplittable reasons, none means splittable */
+typedef enum polar_unsplittable_reason_t
+{
+	POLAR_UNSPLITTABLE_FOR_NONE,
+	POLAR_UNSPLITTABLE_FOR_ERROR,
+	POLAR_UNSPLITTABLE_FOR_LOCK,
+	POLAR_UNSPLITTABLE_FOR_COMBOCID,
+	POLAR_UNSPLITTABLE_FOR_CREATEENUM,
+	POLAR_UNSPLITTABLE_FOR_AUTOXACT,
+} polar_unsplittable_reason_t;
+
+extern polar_unsplittable_reason_t polar_unsplittable_reason;
+extern XLogRecPtr polar_xact_split_wait_lsn;
+
+extern void polar_xact_split_begin(const char *newval, void *extra);
+extern void polar_xact_split_end(void);
+extern char *polar_xact_split_xact_info(void);
+extern void polar_xact_split_mark_unsplittable(polar_unsplittable_reason_t reason);
+extern bool polar_is_split_xact(void);
+extern void polar_stat_update_xact_split_info(void);
+
+/* POLAR end */
 
 #endif							/* XACT_H */

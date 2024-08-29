@@ -34,6 +34,9 @@
 
 #include <sys/stat.h>
 
+/* POLAR */
+#include "storage/polar_fd.h"
+
 
 /*
  * pg_mkdir_p --- create a directory and, if necessary, parent directories
@@ -120,7 +123,7 @@ pg_mkdir_p(char *path, int omode)
 			(void) umask(oumask);
 
 		/* check for pre-existing directory */
-		if (stat(path, &sb) == 0)
+		if (polar_stat(path, &sb) == 0)
 		{
 			if (!S_ISDIR(sb.st_mode))
 			{
@@ -132,7 +135,7 @@ pg_mkdir_p(char *path, int omode)
 				break;
 			}
 		}
-		else if (mkdir(path, last ? omode : S_IRWXU | S_IRWXG | S_IRWXO) < 0)
+		else if (polar_mkdir(path, last ? omode : S_IRWXU | S_IRWXG | S_IRWXO) < 0)
 		{
 			retval = -1;
 			break;

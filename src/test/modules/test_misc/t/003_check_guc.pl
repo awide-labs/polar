@@ -1,3 +1,22 @@
+# 003_check_guc.pl
+#
+# Copyright (c) 2024, Alibaba Group Holding Limited
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# IDENTIFICATION
+#	  src/test/modules/test_misc/t/003_check_guc.pl
+
 # Tests to cross-check the consistency of GUC parameters with
 # postgresql.conf.sample.
 
@@ -21,6 +40,7 @@ my $all_params = $node->safe_psql(
      FROM pg_settings
    WHERE NOT 'NOT_IN_SAMPLE' = ANY (pg_settings_get_flags(name)) AND
        name <> 'config_file' AND category <> 'Customized Options'
+	   AND name not like 'polar%' -- POLAR: skip check polar guc.
      ORDER BY 1");
 # Note the lower-case conversion, for consistency.
 my @all_params_array = split("\n", lc($all_params));
@@ -62,6 +82,9 @@ while (my $line = <$contents>)
 		next if $param_name eq "include";
 		next if $param_name eq "include_dir";
 		next if $param_name eq "include_if_exists";
+
+		# POLAR: skip check polar guc.
+		next if $param_name =~ /^polar/;
 
 		# Update the list of GUCs found in the sample file, for the
 		# follow-up tests.

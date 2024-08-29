@@ -36,6 +36,11 @@
 #include "utils/ps_status.h"
 #include "utils/timeout.h"
 
+/* POLAR */
+#include "access/polar_logindex_redo.h"
+#include "postmaster/polar_async_lock_replay.h"
+#include "postmaster/polar_parallel_bgwriter.h"
+
 /*
  * The postmaster's list of registered background workers, in private memory.
  */
@@ -101,12 +106,6 @@ typedef struct BackgroundWorkerArray
 	BackgroundWorkerSlot slot[FLEXIBLE_ARRAY_MEMBER];
 } BackgroundWorkerArray;
 
-struct BackgroundWorkerHandle
-{
-	int			slot;
-	uint64		generation;
-};
-
 static BackgroundWorkerArray *BackgroundWorkerData;
 
 /*
@@ -128,7 +127,22 @@ static const struct
 	},
 	{
 		"ApplyWorkerMain", ApplyWorkerMain
+	},
+
+	/* POLAR */
+	{
+		"polar_parallel_bgwriter_worker_main", polar_parallel_bgwriter_worker_main
+	},
+	{
+		"polar_sub_task_main", polar_sub_task_main
+	},
+	{
+		"polar_logindex_saver_main", polar_logindex_saver_main
+	},
+	{
+		"polar_alr_worker_main", polar_alr_worker_main
 	}
+	/* POLAR end */
 };
 
 /* Private functions. */
@@ -1167,6 +1181,20 @@ WaitForBackgroundWorkerStartup(BackgroundWorkerHandle *handle, pid_t *pidp)
 BgwHandleStatus
 WaitForBackgroundWorkerShutdown(BackgroundWorkerHandle *handle)
 {
+	/* POLAR: Wait for postmaster notify that this worker is shutdown. */
+	return polar_wait_bg_worker_shutdown(handle, false);
+}
+
+/*
+ * POLAR: If timeout_loop is true, we will check background work's status every 100ms,
+ * otherwise we will wait until postmaster send signal.
+ * When postmaster receive shutdown request, it will not notify that worker is shutdown.
+ * If process want to check whether woker is shutdown after postmaster receive shutdown
+ * request, it has to set timeout_loop to be true.
+ */
+BgwHandleStatus
+polar_wait_bg_worker_shutdown(BackgroundWorkerHandle *handle, bool timeout_loop)
+{
 	BgwHandleStatus status;
 	int			rc;
 
@@ -1180,9 +1208,18 @@ WaitForBackgroundWorkerShutdown(BackgroundWorkerHandle *handle)
 		if (status == BGWH_STOPPED)
 			break;
 
-		rc = WaitLatch(MyLatch,
-					   WL_LATCH_SET | WL_POSTMASTER_DEATH, 0,
-					   WAIT_EVENT_BGWORKER_SHUTDOWN);
+		if (timeout_loop)
+		{
+			rc = WaitLatch(MyLatch,
+						   WL_LATCH_SET | WL_POSTMASTER_DEATH | WL_TIMEOUT, 100,	/* ms */
+						   WAIT_EVENT_BGWORKER_SHUTDOWN);
+		}
+		else
+		{
+			rc = WaitLatch(MyLatch,
+						   WL_LATCH_SET | WL_POSTMASTER_DEATH, 0,
+						   WAIT_EVENT_BGWORKER_SHUTDOWN);
+		}
 
 		if (rc & WL_POSTMASTER_DEATH)
 		{

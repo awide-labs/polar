@@ -34,7 +34,7 @@ ginRedoClearIncompleteSplit(XLogReaderState *record, uint8 block_id)
 		GinPageGetOpaque(page)->flags &= ~GIN_INCOMPLETE_SPLIT;
 
 		PageSetLSN(page, lsn);
-		MarkBufferDirty(buffer);
+		PolarMarkBufferDirty(buffer, record->ReadRecPtr);
 	}
 	if (BufferIsValid(buffer))
 		UnlockReleaseBuffer(buffer);
@@ -63,11 +63,11 @@ ginRedoCreatePTree(XLogReaderState *record)
 
 	PageSetLSN(page, lsn);
 
-	MarkBufferDirty(buffer);
+	PolarMarkBufferDirty(buffer, record->ReadRecPtr);
 	UnlockReleaseBuffer(buffer);
 }
 
-static void
+void
 ginRedoInsertEntry(Buffer buffer, bool isLeaf, BlockNumber rightblkno, void *rdata)
 {
 	Page		page = BufferGetPage(buffer);
@@ -113,7 +113,7 @@ ginRedoInsertEntry(Buffer buffer, bool isLeaf, BlockNumber rightblkno, void *rda
  * versions of segments.  Thanks to that we don't bother about moving page data
  * in-place.
  */
-static void
+void
 ginRedoRecompress(Page page, ginxlogRecompressDataLeaf *data)
 {
 	int			actionno;
@@ -315,7 +315,7 @@ ginRedoRecompress(Page page, ginxlogRecompressDataLeaf *data)
 	GinDataPageSetDataSize(page, totalsize);
 }
 
-static void
+void
 ginRedoInsertData(Buffer buffer, bool isLeaf, BlockNumber rightblkno, void *rdata)
 {
 	Page		page = BufferGetPage(buffer);
@@ -392,7 +392,7 @@ ginRedoInsert(XLogReaderState *record)
 		}
 
 		PageSetLSN(page, lsn);
-		MarkBufferDirty(buffer);
+		PolarMarkBufferDirty(buffer, record->ReadRecPtr);
 	}
 	if (BufferIsValid(buffer))
 		UnlockReleaseBuffer(buffer);
@@ -467,7 +467,7 @@ ginRedoVacuumDataLeafPage(XLogReaderState *record)
 
 		ginRedoRecompress(page, &xlrec->data);
 		PageSetLSN(page, lsn);
-		MarkBufferDirty(buffer);
+		PolarMarkBufferDirty(buffer, record->ReadRecPtr);
 	}
 	if (BufferIsValid(buffer))
 		UnlockReleaseBuffer(buffer);
@@ -493,7 +493,7 @@ ginRedoDeletePage(XLogReaderState *record)
 		Assert(GinPageIsData(page));
 		GinPageGetOpaque(page)->rightlink = data->rightLink;
 		PageSetLSN(page, lsn);
-		MarkBufferDirty(lbuffer);
+		PolarMarkBufferDirty(lbuffer, record->ReadRecPtr);
 	}
 
 	if (XLogReadBufferForRedo(record, 0, &dbuffer) == BLK_NEEDS_REDO)
@@ -503,7 +503,7 @@ ginRedoDeletePage(XLogReaderState *record)
 		GinPageSetDeleted(page);
 		GinPageSetDeleteXid(page, data->deleteXid);
 		PageSetLSN(page, lsn);
-		MarkBufferDirty(dbuffer);
+		PolarMarkBufferDirty(dbuffer, record->ReadRecPtr);
 	}
 
 	if (XLogReadBufferForRedo(record, 1, &pbuffer) == BLK_NEEDS_REDO)
@@ -513,7 +513,7 @@ ginRedoDeletePage(XLogReaderState *record)
 		Assert(!GinPageIsLeaf(page));
 		GinPageDeletePostingItem(page, data->parentOffset);
 		PageSetLSN(page, lsn);
-		MarkBufferDirty(pbuffer);
+		PolarMarkBufferDirty(pbuffer, record->ReadRecPtr);
 	}
 
 	if (BufferIsValid(lbuffer))
@@ -545,7 +545,7 @@ ginRedoUpdateMetapage(XLogReaderState *record)
 	GinInitMetabuffer(metabuffer);
 	memcpy(GinPageGetMeta(metapage), &data->metadata, sizeof(GinMetaPageData));
 	PageSetLSN(metapage, lsn);
-	MarkBufferDirty(metabuffer);
+	PolarMarkBufferDirty(metabuffer, record->ReadRecPtr);
 
 	if (data->ntuples > 0)
 	{
@@ -590,7 +590,7 @@ ginRedoUpdateMetapage(XLogReaderState *record)
 			GinPageGetOpaque(page)->maxoff++;
 
 			PageSetLSN(page, lsn);
-			MarkBufferDirty(buffer);
+			PolarMarkBufferDirty(buffer, record->ReadRecPtr);
 		}
 		if (BufferIsValid(buffer))
 			UnlockReleaseBuffer(buffer);
@@ -607,7 +607,7 @@ ginRedoUpdateMetapage(XLogReaderState *record)
 			GinPageGetOpaque(page)->rightlink = data->newRightlink;
 
 			PageSetLSN(page, lsn);
-			MarkBufferDirty(buffer);
+			PolarMarkBufferDirty(buffer, record->ReadRecPtr);
 		}
 		if (BufferIsValid(buffer))
 			UnlockReleaseBuffer(buffer);
@@ -666,7 +666,7 @@ ginRedoInsertListPage(XLogReaderState *record)
 	Assert((char *) tuples == payload + totaltupsize);
 
 	PageSetLSN(page, lsn);
-	MarkBufferDirty(buffer);
+	PolarMarkBufferDirty(buffer, record->ReadRecPtr);
 
 	UnlockReleaseBuffer(buffer);
 }
@@ -688,7 +688,7 @@ ginRedoDeleteListPages(XLogReaderState *record)
 
 	memcpy(GinPageGetMeta(metapage), &data->metadata, sizeof(GinMetaPageData));
 	PageSetLSN(metapage, lsn);
-	MarkBufferDirty(metabuffer);
+	PolarMarkBufferDirty(metabuffer, record->ReadRecPtr);
 
 	/*
 	 * In normal operation, shiftList() takes exclusive lock on all the
@@ -715,7 +715,7 @@ ginRedoDeleteListPages(XLogReaderState *record)
 		GinInitBuffer(buffer, GIN_DELETED);
 
 		PageSetLSN(page, lsn);
-		MarkBufferDirty(buffer);
+		PolarMarkBufferDirty(buffer, record->ReadRecPtr);
 
 		UnlockReleaseBuffer(buffer);
 	}

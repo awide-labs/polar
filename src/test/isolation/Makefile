@@ -17,6 +17,11 @@ OBJS = \
 	isolationtester.o \
 	specparse.o
 
+# POLAR: make timeout large enough to provent query from canceling
+# The default timeout is 300s, we beleive 600s is enough for current
+# test pressure.
+export PGISOLATIONTIMEOUT=600
+
 all: isolationtester$(X) pg_isolation_regress$(X)
 
 install: all installdirs
@@ -37,10 +42,10 @@ pg_regress.o: | submake-regress
 	rm -f $@ && $(LN_S) $(top_builddir)/src/test/regress/pg_regress.o .
 
 pg_isolation_regress$(X): isolation_main.o pg_regress.o $(WIN32RES)
-	$(CC) $(CFLAGS) $^ $(LDFLAGS) $(LDFLAGS_EX) $(LIBS) -o $@
+	$(CC) $(CFLAGS) $^ $(LDFLAGS) $(LDFLAGS_EX) $(LIBS) $(polar_libvfs) -o $@
 
 isolationtester$(X): $(OBJS) | submake-libpq submake-libpgport
-	$(CC) $(CFLAGS) $^ $(libpq_pgport) $(LDFLAGS) $(LDFLAGS_EX) $(LIBS) -o $@
+	$(CC) $(CFLAGS) $^ $(libpq_pgport) $(LDFLAGS) $(LDFLAGS_EX) $(LIBS) $(polar_libpfsd) -o $@
 
 distprep: specparse.c specscanner.c
 
@@ -71,3 +76,6 @@ installcheck-prepared-txns: all temp-install
 
 check-prepared-txns: all temp-install
 	$(pg_isolation_regress_check) --schedule=$(srcdir)/isolation_schedule prepared-transactions prepared-transactions-cic
+
+check-timeouts: all temp-install
+	$(pg_isolation_regress_check) timeouts timeouts-long

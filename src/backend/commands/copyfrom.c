@@ -1561,6 +1561,13 @@ BeginCopyFrom(ParseState *pstate,
 		cstate->raw_fields = (char **) palloc(attr_count * sizeof(char *));
 	}
 
+	/*
+	 * POLAR: disable escape second character in GBk/GB18030 (to solve
+	 * conficts with ASCII)
+	 */
+	cstate->polar_disable_escape_inside_gbk = polar_disable_escape_inside_gbk_character &&
+		(strcmp(GetDatabaseEncodingName(), "GBK") == 0 || strcmp(GetDatabaseEncodingName(), "GB18030") == 0);
+
 	MemoryContextSwitchTo(oldcontext);
 
 	return cstate;

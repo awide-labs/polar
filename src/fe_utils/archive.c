@@ -23,7 +23,8 @@
 #include "common/logging.h"
 #include "fe_utils/archive.h"
 
-
+/* POLAR */
+#include "storage/polar_fd.h"
 /*
  * RestoreArchivedFile
  *
@@ -64,7 +65,7 @@ RestoreArchivedFile(const char *path, const char *xlogfname,
 		 * Command apparently succeeded, but let's make sure the file is
 		 * really there now and has the correct size.
 		 */
-		if (stat(xlogpath, &stat_buf) == 0)
+		if (polar_stat(xlogpath, &stat_buf) == 0)
 		{
 			if (expectedSize > 0 && stat_buf.st_size != expectedSize)
 				pg_fatal("unexpected file size for \"%s\": %lld instead of %lld",

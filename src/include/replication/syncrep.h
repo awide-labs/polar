@@ -27,6 +27,10 @@
 
 #define NUM_SYNC_REP_WAIT_MODE	3
 
+/* POLAR: Sync DDL */
+#define POLAR_SYNC_DDL_WAIT_APPLY	3
+#define POLAR_NUM_ALL_REP_WAIT_MODE	4
+
 /* syncRepState */
 #define SYNC_REP_NOT_WAITING		0
 #define SYNC_REP_WAITING			1
@@ -82,7 +86,7 @@ extern PGDLLIMPORT char *syncrep_parse_error_msg;
 extern PGDLLIMPORT char *SyncRepStandbyNames;
 
 /* called by user backend */
-extern void SyncRepWaitForLSN(XLogRecPtr lsn, bool commit);
+extern void SyncRepWaitForLSN(XLogRecPtr lsn, bool commit, bool polar_force_wait_apply);
 
 /* called at backend exit */
 extern void SyncRepCleanupAtProcExit(void);
@@ -111,5 +115,10 @@ extern int	syncrep_yylex(void);
 extern void syncrep_yyerror(const char *str);
 extern void syncrep_scanner_init(const char *query_string);
 extern void syncrep_scanner_finish(void);
+
+/*
+ * POLAR: called by walsender & drop replication slot
+ */
+extern bool polar_release_ddl_waiters(void);
 
 #endif							/* _SYNCREP_H */

@@ -2,6 +2,7 @@
  * backend_status.h
  *	  Definitions related to backend status reporting
  *
+ * Portions Copyright (c) 2024, Alibaba Group Holding Limited
  * Copyright (c) 2001-2022, PostgreSQL Global Development Group
  *
  * src/include/utils/backend_status.h
@@ -168,6 +169,21 @@ typedef struct PgBackendStatus
 
 	/* query identifier, optionally computed using post_parse_analyze_hook */
 	uint64		st_query_id;
+	/* POLAR: this backend index in backend array */
+	int			backendid;
+
+	/*
+	 * POLAR: proxy infomations. Including whether using proxy, client raddr,
+	 * session id, cancel key, and ssl infomation.
+	 */
+	bool		polar_proxy;
+	SockAddr	polar_proxy_client_raddr;
+	int			polar_proxy_session_id;
+	int32		polar_proxy_cancel_key;
+	bool		polar_proxy_ssl_in_use;
+	char		polar_proxy_ssl_cipher_name[NAMEDATALEN];
+	char		polar_proxy_ssl_version[NAMEDATALEN];
+	/* POLAR end */
 } PgBackendStatus;
 
 
@@ -268,6 +284,9 @@ typedef struct LocalPgBackendStatus
 extern PGDLLIMPORT bool pgstat_track_activities;
 extern PGDLLIMPORT int pgstat_track_activity_query_size;
 
+/* POLAR */
+extern bool polar_enable_debug_proxy;
+extern int	polar_session_id_display_method;
 
 /* ----------
  * Other global variables
@@ -317,5 +336,71 @@ extern PgBackendStatus *pgstat_fetch_stat_beentry(int beid);
 extern LocalPgBackendStatus *pgstat_fetch_stat_local_beentry(int beid);
 extern char *pgstat_clip_activity(const char *raw_activity);
 
+/* ----------
+ * POLAR: Support functions for the proxy
+ *
+ * NOTE: three are 3 ids: pid, session id, proxy session id.
+ *	Pid is the processs id, which is from OS
+ *	Session id is the id identifies a session, which shows up in all kinds of views
+ *	Proxy session id, is the session id used in proxy.
+ *
+ * So, session id can be a pid or a proxy session id depends on the display method.
+ *
+ * SID/sid is the abbreviation of session id.
+ * ----------
+ */
+#define POLAR_BASE_PROXY_SID		10000000
+#define POLAR_IS_PID(pid)			((pid) > 0 && (pid) < POLAR_BASE_PROXY_SID)
+#define POLAR_IS_PROXY_SID(pid)		((pid) > POLAR_BASE_PROXY_SID)
+#define POLAR_IS_VALID_SID(pid)		(POLAR_IS_PID(pid) || POLAR_IS_PROXY_SID(pid))
+
+typedef enum polar_session_id_display_enum
+{
+	POLAR_SID_DISPLAY_PROXY,
+	POLAR_SID_DISPLAY_FORCE_PROXY,
+	POLAR_SID_DISPLAY_LOCAL
+} polar_session_id_display_enum;
+
+extern int	polar_proxy_get_pid(int proxy_sid, int32 cancel_key, bool auth_cancel_key);
+extern int	polar_proxy_get_sid(int real_pid, int32 *cancel_key);
+extern int	polar_get_session_id(int sid);
+extern int	polar_get_session_id_by_beentry(PgBackendStatus *beentry);
+extern void polar_proxy_set_sid(int proxy_sid, PgBackendStatus *lbeentry);
+extern void polar_proxy_set_cancel_key(int32 cancel_key, PgBackendStatus *lbeentry);
+
+/* ----------
+ * PolarStat_Proxy
+ *
+ * Stats for proxy, including reason and count.
+ * ----------
+ */
+/* Global stats for proxy, not atomic variables but that's fine */
+typedef struct PolarStat_Proxy
+{
+	uint64		proxy_total;	/* Total count of SQL */
+	uint64		proxy_splittable;	/* Total count of splittable SQL */
+	uint64		proxy_disablesplit; /* Total count of disablesplit SQL */
+	uint64		proxy_unsplittable; /* Total count of unsplittable SQL */
+	uint64		proxy_error;	/* Total count of unsplittable for error SQL */
+	uint64		proxy_lock;		/* Total count of unsplittable for lock SQL */
+	uint64		proxy_combocid; /* Total count of unsplittable for combocid
+								 * SQL */
+	uint64		proxy_createenum;	/* Total count of unsplittable for create
+									 * enum SQL */
+	uint64		proxy_autoxact; /* Total count of unsplittable for autoxact
+								 * SQL */
+	uint64		proxy_implicit; /* Total count of proxy implicit xact SQL */
+	uint64		proxy_readbeforewrite;	/* Total count of proxy
+										 * readbeforewrite SQL */
+	uint64		proxy_readafterwrite;	/* Total count of proxy readafterwrite
+										 * SQL */
+} PolarStat_Proxy;
+
+/* POLAR: proxy stats */
+extern PolarStat_Proxy *polar_stat_proxy;
+extern bool polar_stat_need_update_proxy_info;
+#define polar_stat_update_proxy_info(variable) \
+{if (polar_stat_need_update_proxy_info) {(variable)++;}}
+/* POLAR: end */
 
 #endif							/* BACKEND_STATUS_H */

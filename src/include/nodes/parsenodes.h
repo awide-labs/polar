@@ -3394,6 +3394,9 @@ typedef struct AlterSystemStmt
 {
 	NodeTag		type;
 	VariableSetStmt *setstmt;	/* SET subcommand */
+	/* POLAR: ALTER SYSTEM [FOR CLUSTER] [RELOAD] [FORCE] option */
+	int			polar_options;	/* OR of PolarAlterOption flags */
+	/* POLAR end */
 } AlterSystemStmt;
 
 /* ----------------------

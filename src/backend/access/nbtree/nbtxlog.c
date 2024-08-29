@@ -34,7 +34,7 @@ static MemoryContext opCtx;		/* working memory for operations */
  * tuples had been added to the page in item-number order, and therefore
  * the one with highest item number appears first (lowest on the page).
  */
-static void
+void
 _bt_restore_page(Page page, char *from, int len)
 {
 	IndexTupleData itupdata;
@@ -127,7 +127,7 @@ _bt_restore_meta(XLogReaderState *record, uint8 block_id)
 		((char *) md + sizeof(BTMetaPageData)) - (char *) metapg;
 
 	PageSetLSN(metapg, lsn);
-	MarkBufferDirty(metabuf);
+	PolarMarkBufferDirty(metabuf, record->ReadRecPtr);
 	UnlockReleaseBuffer(metabuf);
 }
 
@@ -152,7 +152,7 @@ _bt_clear_incomplete_split(XLogReaderState *record, uint8 block_id)
 		pageop->btpo_flags &= ~BTP_INCOMPLETE_SPLIT;
 
 		PageSetLSN(page, lsn);
-		MarkBufferDirty(buf);
+		PolarMarkBufferDirty(buf, record->ReadRecPtr);
 	}
 	if (BufferIsValid(buf))
 		UnlockReleaseBuffer(buf);
@@ -233,7 +233,7 @@ btree_xlog_insert(bool isleaf, bool ismeta, bool posting,
 		}
 
 		PageSetLSN(page, lsn);
-		MarkBufferDirty(buffer);
+		PolarMarkBufferDirty(buffer, record->ReadRecPtr);
 	}
 	if (BufferIsValid(buffer))
 		UnlockReleaseBuffer(buffer);
@@ -303,7 +303,7 @@ btree_xlog_split(bool newitemonleft, XLogReaderState *record)
 	_bt_restore_page(rpage, datapos, datalen);
 
 	PageSetLSN(rpage, lsn);
-	MarkBufferDirty(rbuf);
+	PolarMarkBufferDirty(rbuf, record->ReadRecPtr);
 
 	/* Now reconstruct original page (left half of split) */
 	if (XLogReadBufferForRedo(record, 0, &buf) == BLK_NEEDS_REDO)
@@ -431,7 +431,7 @@ btree_xlog_split(bool newitemonleft, XLogReaderState *record)
 		oopaque->btpo_cycleid = 0;
 
 		PageSetLSN(origpage, lsn);
-		MarkBufferDirty(buf);
+		PolarMarkBufferDirty(buf, record->ReadRecPtr);
 	}
 
 	/* Fix left-link of the page to the right of the new right sibling */
@@ -447,7 +447,7 @@ btree_xlog_split(bool newitemonleft, XLogReaderState *record)
 			spageop->btpo_prev = rightpagenumber;
 
 			PageSetLSN(spage, lsn);
-			MarkBufferDirty(sbuf);
+			PolarMarkBufferDirty(sbuf, record->ReadRecPtr);
 		}
 		if (BufferIsValid(sbuf))
 			UnlockReleaseBuffer(sbuf);
@@ -548,14 +548,14 @@ btree_xlog_dedup(XLogReaderState *record)
 
 		PageRestoreTempPage(newpage, page);
 		PageSetLSN(page, lsn);
-		MarkBufferDirty(buf);
+		PolarMarkBufferDirty(buf, record->ReadRecPtr);
 	}
 
 	if (BufferIsValid(buf))
 		UnlockReleaseBuffer(buf);
 }
 
-static void
+void
 btree_xlog_updates(Page page, OffsetNumber *updatedoffsets,
 				   xl_btree_update *updates, int nupdated)
 {
@@ -643,7 +643,7 @@ btree_xlog_vacuum(XLogReaderState *record)
 		opaque->btpo_flags &= ~BTP_HAS_GARBAGE;
 
 		PageSetLSN(page, lsn);
-		MarkBufferDirty(buffer);
+		PolarMarkBufferDirty(buffer, record->ReadRecPtr);
 	}
 	if (BufferIsValid(buffer))
 		UnlockReleaseBuffer(buffer);
@@ -703,7 +703,7 @@ btree_xlog_delete(XLogReaderState *record)
 		opaque->btpo_flags &= ~BTP_HAS_GARBAGE;
 
 		PageSetLSN(page, lsn);
-		MarkBufferDirty(buffer);
+		PolarMarkBufferDirty(buffer, record->ReadRecPtr);
 	}
 	if (BufferIsValid(buffer))
 		UnlockReleaseBuffer(buffer);
@@ -753,7 +753,7 @@ btree_xlog_mark_page_halfdead(uint8 info, XLogReaderState *record)
 		PageIndexTupleDelete(page, nextoffset);
 
 		PageSetLSN(page, lsn);
-		MarkBufferDirty(buffer);
+		PolarMarkBufferDirty(buffer, record->ReadRecPtr);
 	}
 
 	/*
@@ -789,7 +789,7 @@ btree_xlog_mark_page_halfdead(uint8 info, XLogReaderState *record)
 		elog(ERROR, "could not add dummy high key to half-dead page");
 
 	PageSetLSN(page, lsn);
-	MarkBufferDirty(buffer);
+	PolarMarkBufferDirty(buffer, record->ReadRecPtr);
 	UnlockReleaseBuffer(buffer);
 }
 
@@ -837,7 +837,7 @@ btree_xlog_unlink_page(uint8 info, XLogReaderState *record)
 			pageop->btpo_next = rightsib;
 
 			PageSetLSN(page, lsn);
-			MarkBufferDirty(leftbuf);
+			PolarMarkBufferDirty(leftbuf, record->ReadRecPtr);
 		}
 	}
 	else
@@ -859,7 +859,7 @@ btree_xlog_unlink_page(uint8 info, XLogReaderState *record)
 	pageop->btpo_cycleid = 0;
 
 	PageSetLSN(page, lsn);
-	MarkBufferDirty(target);
+	PolarMarkBufferDirty(target, record->ReadRecPtr);
 
 	/* Fix left-link of right sibling */
 	if (XLogReadBufferForRedo(record, 2, &rightbuf) == BLK_NEEDS_REDO)
@@ -869,7 +869,7 @@ btree_xlog_unlink_page(uint8 info, XLogReaderState *record)
 		pageop->btpo_prev = leftsib;
 
 		PageSetLSN(page, lsn);
-		MarkBufferDirty(rightbuf);
+		PolarMarkBufferDirty(rightbuf, record->ReadRecPtr);
 	}
 
 	/* Release siblings */
@@ -924,7 +924,7 @@ btree_xlog_unlink_page(uint8 info, XLogReaderState *record)
 			elog(ERROR, "could not add dummy high key to half-dead page");
 
 		PageSetLSN(page, lsn);
-		MarkBufferDirty(leafbuf);
+		PolarMarkBufferDirty(leafbuf, record->ReadRecPtr);
 		UnlockReleaseBuffer(leafbuf);
 	}
 
@@ -967,7 +967,7 @@ btree_xlog_newroot(XLogReaderState *record)
 	}
 
 	PageSetLSN(page, lsn);
-	MarkBufferDirty(buffer);
+	PolarMarkBufferDirty(buffer, record->ReadRecPtr);
 	UnlockReleaseBuffer(buffer);
 
 	_bt_restore_meta(record, 2);

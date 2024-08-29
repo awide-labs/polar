@@ -2,6 +2,7 @@
  * backend_status.c
  *	  Backend status reporting infrastructure.
  *
+ * Portions Copyright (c) 2024, Alibaba Group Holding Limited
  * Copyright (c) 2001-2022, PostgreSQL Global Development Group
  *
  *
@@ -25,6 +26,9 @@
 #include "utils/guc.h"			/* for application_name */
 #include "utils/memutils.h"
 
+/* POLAR */
+#include "access/xlog.h"
+#include "tcop/tcopprot.h"
 
 /* ----------
  * Total number of backends including auxiliary
@@ -45,6 +49,14 @@
 bool		pgstat_track_activities = false;
 int			pgstat_track_activity_query_size = 1024;
 
+/* POLAR */
+/* GUCs for proxy */
+bool		polar_enable_debug_proxy;
+int			polar_session_id_display_method;
+
+/* stats for proxy */
+PolarStat_Proxy *polar_stat_proxy = NULL;
+bool		polar_stat_need_update_proxy_info;
 
 /* exposed so that backend_progress.c can access it */
 PgBackendStatus *MyBEEntry = NULL;
@@ -357,6 +369,36 @@ pgstat_bestart(void)
 	else
 		MemSet(&lbeentry.st_clientaddr, 0, sizeof(lbeentry.st_clientaddr));
 
+	/* POLAR */
+	if (MyProcPort && MyProcPort->polar_proxy)
+	{
+		lbeentry.polar_proxy = true;
+		lbeentry.polar_proxy_client_raddr = MyProcPort->polar_proxy_client_raddr;
+		if (MyProcPort->polar_proxy_session_id != 0)
+		{
+			polar_proxy_set_sid(MyProcPort->polar_proxy_session_id, &lbeentry);
+			polar_proxy_set_cancel_key(MyProcPort->polar_proxy_cancel_key, &lbeentry);
+		}
+		else if (polar_is_primary())
+		{
+			lbeentry.polar_proxy_session_id = MyProcPid + POLAR_BASE_PROXY_SID;
+			lbeentry.polar_proxy_cancel_key = MyCancelKey;
+		}
+		else
+		{
+			lbeentry.polar_proxy_session_id = 0;
+			lbeentry.polar_proxy_cancel_key = 0;
+		}
+	}
+	else
+	{
+		lbeentry.polar_proxy = false;
+		memset(&lbeentry.polar_proxy_client_raddr, 0, sizeof(SockAddr));
+		lbeentry.polar_proxy_session_id = 0;
+		lbeentry.polar_proxy_cancel_key = 0;
+	}
+	/* POLAR end */
+
 #ifdef USE_SSL
 	if (MyProcPort && MyProcPort->ssl_in_use)
 	{
@@ -554,6 +596,14 @@ pgstat_report_activity(BackendState state, const char *cmd_str)
 		}
 		return;
 	}
+
+	/* POLAR: count audit log information */
+	if (state == STATE_RUNNING)
+	{
+		MemSet(&polar_audit_log, 0, sizeof(Pg_audit_log));
+		polar_audit_log.examined_row_count = polar_pgstat_get_current_examined_row_count();
+	}
+	/* POLAR end */
 
 	/*
 	 * To minimize the time spent modifying the entry, and avoid risk of
@@ -831,6 +881,9 @@ pgstat_read_current_status(void)
 					localentry->backendStatus.st_gssstatus = localgssstatus;
 				}
 #endif
+				/* POLAR: we must know backend id here for stat */
+				localentry->backendStatus.backendid = i;
+				/* POLAR end */
 			}
 
 			pgstat_end_read_activity(beentry, after_changecount);
@@ -1148,4 +1201,326 @@ pgstat_clip_activity(const char *raw_activity)
 	activity[cliplen] = '\0';
 
 	return activity;
+}
+
+/*
+ * POLAR: log beentry infomation of proxy for debug purpose.
+ * Just log, no changecount check here.
+ */
+static void
+polar_proxy_log_beentry_state(volatile PgBackendStatus *beentry, const char *func)
+{
+	if (!polar_enable_debug_proxy)
+		return;
+	if (beentry)
+		elog(LOG, "[Proxy] %s: pid: %d, in_proxy: %d, proxy sid: %d, cancel key: %d",
+			 func, beentry->st_procpid, beentry->polar_proxy,
+			 beentry->polar_proxy_session_id, beentry->polar_proxy_cancel_key);
+	else
+		elog(LOG, "[Proxy] %s: beentry is NULL", func);
+}
+
+/*
+ * POLAR: check and set proxy sid.
+ */
+void
+polar_proxy_set_sid(int proxy_sid, PgBackendStatus *lbeentry)
+{
+	volatile PgBackendStatus *beentry = NULL;
+	int			i;
+
+	if (lbeentry == NULL)
+		lbeentry = MyBEEntry;
+
+	if (proxy_sid == 0)
+		return;
+
+	if (!lbeentry->polar_proxy)
+		elog(ERROR, "POLAR: Unable to set proxy sid when not under proxy mode");
+	if (!POLAR_IS_PROXY_SID(proxy_sid))
+		elog(ERROR, "POLAR: Invalid proxy sid: %d, should between (10^7, INT_MAX]", proxy_sid);
+
+	polar_proxy_log_beentry_state(lbeentry, PG_FUNCNAME_MACRO);
+	if (polar_enable_debug_proxy)
+		elog(LOG, "[Proxy] %s: new proxy sid: %d", PG_FUNCNAME_MACRO, proxy_sid);
+
+	/* The proxy sid has already been set to this session */
+	if (lbeentry->polar_proxy_session_id == proxy_sid)
+		return;
+
+	beentry = BackendStatusArray;
+	for (i = 1; i <= MaxBackends; i++)
+	{
+		int			save_procpid = 0;
+		int			save_polar_proxy_sid = InvalidPid;
+
+		/*
+		 * Follow the protocol of retrying if st_changecount changes while we
+		 * copy the entry, or if it's odd.  (The check for odd is needed to
+		 * cover the case where we are able to completely copy the entry while
+		 * the source backend is between increment steps.)	We use a volatile
+		 * pointer here to ensure the compiler doesn't try to get cute.
+		 */
+		for (;;)
+		{
+			int			before_changecount;
+			int			after_changecount;
+
+			pgstat_begin_read_activity(beentry, before_changecount);
+			save_procpid = beentry->st_procpid;
+			save_polar_proxy_sid = beentry->polar_proxy_session_id;
+			pgstat_end_read_activity(beentry, after_changecount);
+
+			if (pgstat_read_activity_complete(before_changecount, after_changecount))
+				break;
+
+			/* Make sure we can break out of loop if stuck... */
+			CHECK_FOR_INTERRUPTS();
+		}
+
+		/*
+		 * Found a conflict proxy sid, report ERROR.
+		 */
+		if (save_procpid > 0 && unlikely(save_polar_proxy_sid == proxy_sid))
+		{
+			polar_proxy_log_beentry_state(beentry, PG_FUNCNAME_MACRO);
+			elog(ERROR, "POLAR: The proxy sid %d is already in use", proxy_sid);
+		}
+		beentry++;
+	}
+
+	PGSTAT_BEGIN_WRITE_ACTIVITY(lbeentry);
+	lbeentry->polar_proxy_session_id = proxy_sid;
+	PGSTAT_END_WRITE_ACTIVITY(lbeentry);
+}
+
+/*
+ * POLAR: set proxy cancel key.
+ */
+void
+polar_proxy_set_cancel_key(int32 cancel_key, PgBackendStatus *lbeentry)
+{
+	if (lbeentry == NULL)
+		lbeentry = MyBEEntry;
+
+	if (!lbeentry->polar_proxy)
+		elog(ERROR, "POLAR: Unable to set cancel key when not under proxy mode");
+
+	polar_proxy_log_beentry_state(lbeentry, PG_FUNCNAME_MACRO);
+	if (polar_enable_debug_proxy)
+		elog(LOG, "[Proxy] %s: new cancel key: %d", PG_FUNCNAME_MACRO, cancel_key);
+
+	PGSTAT_BEGIN_WRITE_ACTIVITY(lbeentry);
+	lbeentry->polar_proxy_cancel_key = cancel_key;
+	PGSTAT_END_WRITE_ACTIVITY(lbeentry);
+}
+
+/*
+ * POLAR: get pid for proxy.
+ * Search proxy session id in PgBackendStatus.
+ * Every proc can get the pid through it's proxy sid, which
+ * means every proc can cancel/terminate a proxy sid.
+ *
+ * Return:	= 0 stand for not find pid through this proxy sid
+ * 			= -1 (InvalidPid) stand for the cancel_key is not correct!
+ * 			> 0 stand for a pid
+ */
+int
+polar_proxy_get_pid(int proxy_sid, int32 cancel_key, bool auth_cancel_key)
+{
+	volatile PgBackendStatus *beentry = NULL;
+	int			i = 0;
+	int			save_procpid = 0;
+	long		save_polar_cancel_key = 0;
+	int			save_polar_proxy_sid = InvalidPid;
+
+	if (polar_enable_debug_proxy)
+		elog(LOG, "[Proxy] %s, proxy_sid: %d, cancel_key: %d, auth_cancel_key: %d",
+			 PG_FUNCNAME_MACRO, proxy_sid, cancel_key, auth_cancel_key);
+
+	Assert(POLAR_IS_VALID_SID(proxy_sid));
+
+	beentry = BackendStatusArray;
+	for (i = 1; i <= MaxBackends; i++)
+	{
+		/*
+		 * Follow the protocol of retrying if st_changecount changes while we
+		 * copy the entry, or if it's odd.  (The check for odd is needed to
+		 * cover the case where we are able to completely copy the entry while
+		 * the source backend is between increment steps.)	We use a volatile
+		 * pointer here to ensure the compiler doesn't try to get cute.
+		 */
+		for (;;)
+		{
+			int			before_changecount;
+			int			after_changecount;
+
+			pgstat_begin_read_activity(beentry, before_changecount);
+			save_procpid = beentry->st_procpid;
+			save_polar_proxy_sid = beentry->polar_proxy_session_id;
+			save_polar_cancel_key = beentry->polar_proxy_cancel_key;
+			pgstat_end_read_activity(beentry, after_changecount);
+
+			if (pgstat_read_activity_complete(before_changecount, after_changecount))
+				break;
+
+			/* Make sure we can break out of loop if stuck... */
+			CHECK_FOR_INTERRUPTS();
+		}
+
+		/*
+		 * Found a match process id, but cancel key is wrong, so we return -1,
+		 * mark it
+		 */
+		if (save_procpid > 0 && save_polar_proxy_sid == proxy_sid)
+		{
+			polar_proxy_log_beentry_state(beentry, PG_FUNCNAME_MACRO);
+			/* Found a match, return the pid, also check cancel key here */
+			if (!auth_cancel_key || save_polar_cancel_key == cancel_key)
+				return save_procpid;
+
+			return InvalidPid;
+		}
+		beentry++;
+	}
+	/* Not found, so we return 0 which is not a correct pid , mark it */
+	return 0;
+}
+
+/*
+ * POLAR: get proxy sid.
+ * Search pid in PgBackendStatus, and return the proxy sid.
+ * If not found, return original pid.
+ *
+ * Return:	< 10000000 and > 1 stand for pid
+ *			> 10000000 stand for a proxy sid
+ */
+int
+polar_proxy_get_sid(int pid, int32 *cancel_key)
+{
+	volatile PgBackendStatus *my_beentry = MyBEEntry;
+	volatile PgBackendStatus *beentry = NULL;
+	int			i = 0;
+
+	polar_proxy_log_beentry_state(my_beentry, PG_FUNCNAME_MACRO);
+	if (polar_enable_debug_proxy)
+		elog(LOG, "[Proxy] %s, pid: %d", PG_FUNCNAME_MACRO, pid);
+
+	Assert(POLAR_IS_PID(pid));
+
+	/* This is the proc, no need for search */
+	if (my_beentry && pid == MyProcPid)
+	{
+		if (my_beentry->polar_proxy && my_beentry->polar_proxy_session_id != 0)
+		{
+			if (cancel_key)
+				*cancel_key = my_beentry->polar_proxy_cancel_key;
+			return my_beentry->polar_proxy_session_id;
+		}
+		else
+			return pid;
+	}
+
+	beentry = BackendStatusArray;
+	for (i = 1; i <= MaxBackends; i++)
+	{
+		int			save_procpid = 0;
+		int			save_polar_proxy_cancel_key = 0;
+		int			save_polar_proxy_sid = InvalidPid;
+
+		/*
+		 * Follow the protocol of retrying if st_changecount changes while we
+		 * copy the entry, or if it's odd.  (The check for odd is needed to
+		 * cover the case where we are able to completely copy the entry while
+		 * the source backend is between increment steps.)	We use a volatile
+		 * pointer here to ensure the compiler doesn't try to get cute.
+		 */
+		for (;;)
+		{
+			int			before_changecount;
+			int			after_changecount;
+
+			pgstat_begin_read_activity(beentry, before_changecount);
+			save_procpid = beentry->st_procpid;
+			save_polar_proxy_cancel_key = beentry->polar_proxy_cancel_key;
+			save_polar_proxy_sid = beentry->polar_proxy_session_id;
+			pgstat_end_read_activity(beentry, after_changecount);
+
+			if (pgstat_read_activity_complete(before_changecount, after_changecount))
+				break;
+
+			/* Make sure we can break out of loop if stuck... */
+			CHECK_FOR_INTERRUPTS();
+		}
+		/* find process id, so return */
+		if (save_procpid > 0 && save_procpid == pid)
+		{
+			polar_proxy_log_beentry_state(beentry, PG_FUNCNAME_MACRO);
+
+			/* Found a match; return current proxy session id */
+			if (save_polar_proxy_sid != 0)
+			{
+				if (cancel_key)
+					*cancel_key = save_polar_proxy_cancel_key;
+				return save_polar_proxy_sid;
+			}
+			return pid;
+		}
+		beentry++;
+	}
+	/* Not found, we return the original pid */
+	return pid;
+}
+
+/*
+ * POLAR: get proper session id by display method.
+ */
+int
+polar_get_session_id(int sid)
+{
+	if (!POLAR_IS_VALID_SID(sid))
+		return sid;
+
+	if (polar_session_id_display_method == POLAR_SID_DISPLAY_PROXY && superuser())
+		polar_session_id_display_method = POLAR_SID_DISPLAY_LOCAL;
+
+	switch (polar_session_id_display_method)
+	{
+		case POLAR_SID_DISPLAY_PROXY:
+		case POLAR_SID_DISPLAY_FORCE_PROXY:
+			return POLAR_IS_PROXY_SID(sid) ? sid : polar_proxy_get_sid(sid, NULL);
+		case POLAR_SID_DISPLAY_LOCAL:
+			return POLAR_IS_PID(sid) ? sid : polar_proxy_get_pid(sid, 0, false);
+	}
+
+	/* should not reach here */
+	Assert(false);
+	return 0;
+}
+
+/*
+ * POLAR: get proxy sid for proxy by beentry.
+ */
+int
+polar_get_session_id_by_beentry(PgBackendStatus *beentry)
+{
+	Assert(beentry != NULL);
+
+	polar_proxy_log_beentry_state(beentry, PG_FUNCNAME_MACRO);
+
+	if (polar_session_id_display_method == POLAR_SID_DISPLAY_PROXY && superuser())
+		polar_session_id_display_method = POLAR_SID_DISPLAY_LOCAL;
+
+	switch (polar_session_id_display_method)
+	{
+		case POLAR_SID_DISPLAY_PROXY:
+		case POLAR_SID_DISPLAY_FORCE_PROXY:
+			return beentry->polar_proxy_session_id != 0 ? beentry->polar_proxy_session_id : beentry->st_procpid;
+		case POLAR_SID_DISPLAY_LOCAL:
+			return beentry->st_procpid;
+	}
+
+	/* should not reach here */
+	Assert(false);
+	return 0;
 }

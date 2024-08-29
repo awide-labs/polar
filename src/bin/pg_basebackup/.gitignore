@@ -1,5 +1,6 @@
 /pg_basebackup
 /pg_receivewal
 /pg_recvlogical
+/polar_basebackup
 
 /tmp_check/

@@ -1,0 +1,53 @@
+-- Some options are forbidden because they are dangerous or useless in PolarDB
+-- Test them in this file.
+--
+-- tablespace option is forbidden because user cannot create tablespace in PolarDB
+--
+\! pg_repack -T 3600 -k -U polar_repack_superuser --dbname=contrib_regression_pg_repack --no-order --table=testts1 --tablespace testts
+ERROR: cannot specify --tablespace (-s) in PolarDB
+\! pg_repack -T 3600 -k -U polar_repack_superuser --dbname=contrib_regression_pg_repack --no-order --table=testts1 -s testts
+ERROR: cannot specify --tablespace (-s) in PolarDB
+--
+-- --moveidx/-S option has to be used together with --tablespace option and it's forbidden since --tablespace is forbidden
+--
+\! pg_repack -T 3600 -k -U polar_repack_superuser --dbname=contrib_regression_pg_repack --no-order --table=testts1 --moveidx
+ERROR: cannot specify --moveidx (-S) without --tablespace (-s)
+\! pg_repack -T 3600 -k -U polar_repack_superuser --dbname=contrib_regression_pg_repack --no-order --table=testts1 -S
+ERROR: cannot specify --moveidx (-S) without --tablespace (-s)
+\! pg_repack -T 3600 -k -U polar_repack_superuser --dbname=contrib_regression_pg_repack --no-order --table=testts1 --tablespace testts --moveidx
+ERROR: cannot specify --tablespace (-s) in PolarDB
+\! pg_repack -T 3600 -k -U polar_repack_superuser --dbname=contrib_regression_pg_repack --no-order --table=testts1 -s testts -S
+ERROR: cannot specify --tablespace (-s) in PolarDB
+--
+-- It's dangerous to repack all databases
+--
+\! pg_repack -T 3600 -k -U polar_repack_superuser --dbname=contrib_regression_pg_repack -a
+ERROR: cannot repack all databases with --all (-a) in PolarDB
+\! pg_repack -T 3600 -k -U polar_repack_superuser --dbname=contrib_regression_pg_repack --all --only-indexes
+ERROR: cannot repack all databases with --all (-a) in PolarDB
+\! pg_repack -T 3600 -k -U polar_repack_superuser --dbname=contrib_regression_pg_repack -a --schema=test_schema1
+ERROR: cannot repack all databases with --all (-a) in PolarDB
+\! pg_repack -T 3600 -k -U polar_repack_superuser --dbname=contrib_regression_pg_repack --all --schema=test_schema1 --only-indexes
+ERROR: cannot repack all databases with --all (-a) in PolarDB
+\! pg_repack -T 3600 -k -U polar_repack_superuser --dbname=contrib_regression_pg_repack --all --table=t1
+ERROR: cannot repack all databases with --all (-a) in PolarDB
+\! pg_repack -T 3600 -k -U polar_repack_superuser --dbname=contrib_regression_pg_repack -a --table=t1 --only-indexes
+ERROR: cannot repack all databases with --all (-a) in PolarDB
+--
+-- It's dangerous to repack the whole database
+--
+\! pg_repack -T 3600 -k -U polar_repack_superuser --dbname=contrib_regression_pg_repack
+ERROR: cannot repack database without specifying table or index in PolarDB
+\! pg_repack -T 3600 -k -U polar_repack_superuser --dbname=contrib_regression_pg_repack --only-indexes
+ERROR: cannot repack all indexes of database, specify the table(s)via --table (-t) or --parent-table (-I)
+--
+-- It's dangerous to repack schema
+--
+\! pg_repack -T 3600 -k -U polar_repack_superuser --dbname=contrib_regression_pg_repack -c=test_schema1 --schema=test_schema2
+ERROR: cannot repack schema with --schema (-c) in PolarDB
+\! pg_repack -T 3600 -k -U polar_repack_superuser --dbname=contrib_regression_pg_repack --schema=test_schema1 --only-indexes
+ERROR: cannot repack all indexes of database, specify the table(s)via --table (-t) or --parent-table (-I)
+\! pg_repack -T 3600 -k -U polar_repack_superuser --dbname=contrib_regression_pg_repack -c=test_schema1 --table=tbl1
+ERROR: cannot repack specific table(s) in schema, use schema.table notation instead
+\! pg_repack -T 3600 -k -U polar_repack_superuser --dbname=contrib_regression_pg_repack --schema=exclude_extension_schema --exclude-extension=dummy_extension --exclude-extension=dummy_extension
+ERROR: cannot repack schema with --schema (-c) in PolarDB

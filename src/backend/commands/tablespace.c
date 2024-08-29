@@ -85,6 +85,9 @@
 #include "utils/rel.h"
 #include "utils/varlena.h"
 
+/* POLAR */
+#include "storage/polar_fd.h"
+
 /* GUC variables */
 char	   *default_tablespace = NULL;
 char	   *temp_tablespaces = NULL;
@@ -130,9 +133,9 @@ TablespaceCreateDbspace(Oid spcNode, Oid dbNode, bool isRedo)
 	Assert(OidIsValid(spcNode));
 	Assert(OidIsValid(dbNode));
 
-	dir = GetDatabasePath(dbNode, spcNode);
+	dir = polar_get_database_path(dbNode, spcNode);
 
-	if (stat(dir, &st) < 0)
+	if (polar_stat(dir, &st) < 0)
 	{
 		/* Directory does not exist? */
 		if (errno == ENOENT)
@@ -147,7 +150,7 @@ TablespaceCreateDbspace(Oid spcNode, Oid dbNode, bool isRedo)
 			 * Recheck to see if someone created the directory while we were
 			 * waiting for lock.
 			 */
-			if (stat(dir, &st) == 0 && S_ISDIR(st.st_mode))
+			if (polar_stat(dir, &st) == 0 && S_ISDIR(st.st_mode))
 			{
 				/* Directory was created */
 			}
@@ -495,6 +498,13 @@ DropTableSpace(DropTableSpaceStmt *stmt)
 	 * Remove dependency on owner.
 	 */
 	deleteSharedDependencyRecordsFor(TableSpaceRelationId, tablespaceoid, 0);
+
+	/*
+	 * POLAR RSC: clean up entries which belong to tablespace.
+	 */
+	if (POLAR_RSC_ENABLED())
+		polar_rsc_drop_entries(InvalidOid, tablespaceoid);
+	/* POLAR end */
 
 	/*
 	 * Acquire TablespaceCreateLock to ensure that no TablespaceCreateDbspace
@@ -1589,6 +1599,13 @@ tblspc_redo(XLogReaderState *record)
 								xlrec->ts_id),
 						 errhint("You can remove the directories manually if necessary.")));
 		}
+
+		/*
+		 * POLAR RSC: clean up entries which belong to tablespace.
+		 */
+		if (POLAR_RSC_PRIMARY_ENABLED() || POLAR_RSC_STANDBY_ENABLED())
+			polar_rsc_drop_entries(InvalidOid, xlrec->ts_id);
+		/* POLAR end */
 	}
 	else
 		elog(PANIC, "tblspc_redo: unknown op code %u", info);

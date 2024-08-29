@@ -2,6 +2,7 @@
 CREATE EXTENSION pg_stat_statements WITH VERSION '1.4';
 -- Execution of pg_stat_statements_reset() is granted only to
 -- superusers in 1.4, so this fails.
+SET pg_stat_statements.enable_superuser_track = ON;
 SET SESSION AUTHORIZATION pg_read_all_stats;
 SELECT pg_stat_statements_reset();
 ERROR:  permission denied for function pg_stat_statements_reset

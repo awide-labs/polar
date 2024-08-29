@@ -1,0 +1,5 @@
+# polar_stat_env extension
+comment = 'env stat functions for PolarDB'
+default_version = '1.0'
+module_pathname = '$libdir/polar_stat_env'
+relocatable = true

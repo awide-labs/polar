@@ -16,4 +16,8 @@ OBJS = \
 	md.o \
 	smgr.o
 
+# POLAR
+OBJS += polar_rsc.o
+OBJS += polar_rsc_replica.o
+
 include $(top_srcdir)/src/backend/common.mk

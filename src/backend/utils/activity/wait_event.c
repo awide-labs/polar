@@ -2,6 +2,7 @@
  * wait_event.c
  *	  Wait event reporting infrastructure.
  *
+ * Portions Copyright (c) 2024, Alibaba Group Holding Limited
  * Copyright (c) 2001-2022, PostgreSQL Global Development Group
  *
  *
@@ -245,6 +246,20 @@ pgstat_get_wait_activity(WaitEventActivity w)
 		case WAIT_EVENT_WAL_WRITER_MAIN:
 			event_name = "WalWriterMain";
 			break;
+			/* POLAR logindex */
+		case WAIT_EVENT_LOGINDEX_BG_MAIN:
+			event_name = "LogIndexBgMain";
+			break;
+		case WAIT_EVENT_POLAR_SUB_TASK_MAIN:
+			event_name = "PolarSubTaskMain";
+			break;
+		case WAIT_EVENT_LOGINDEX_SAVER_MAIN:
+			event_name = "LogIndexSaverMain";
+			break;
+		case WAIT_EVENT_ASYNC_LOCK_REPLAY_MAIN:
+			event_name = "AsyncLockReplayMain";
+			break;
+			/* POLAR end */
 			/* no default case, so that compiler will warn */
 	}
 
@@ -744,7 +759,94 @@ pgstat_get_wait_io(WaitEventIO w)
 		case WAIT_EVENT_WAL_WRITE:
 			event_name = "WALWrite";
 			break;
-
+			/* POLAR: io wait event */
+		case WAIT_EVENT_DATA_VFS_FILE_OPEN:
+			event_name = "PolarVfsFileOpen";
+			break;
+		case WAIT_EVENT_DATA_VFS_FILE_LSEEK:
+			event_name = "PolarVfsFileSeek";
+			break;
+			/* POLAR end */
+			/* POLAR: Wait Events - logindex */
+		case WAIT_EVENT_LOGINDEX_META_WRITE:
+			event_name = "LogIndexMetaWrite";
+			break;
+		case WAIT_EVENT_LOGINDEX_META_READ:
+			event_name = "LogIndexMetaRead";
+			break;
+		case WAIT_EVENT_LOGINDEX_META_FLUSH:
+			event_name = "LogIndexMetaFlush";
+			break;
+		case WAIT_EVENT_LOGINDEX_TBL_WRITE:
+			event_name = "LogIndexTblWrite";
+			break;
+		case WAIT_EVENT_LOGINDEX_TBL_READ:
+			event_name = "LogIndexTblRead";
+			break;
+		case WAIT_EVENT_LOGINDEX_TBL_FLUSH:
+			event_name = "LogIndexTblFlush";
+			break;
+		case WAIT_EVENT_LOGINDEX_QUEUE_SPACE:
+			event_name = "LogIndexQueueFreeup";
+			break;
+		case WAIT_EVENT_LOGINDEX_WAIT_ACTIVE:
+			event_name = "LogIndexWaitActive";
+			break;
+		case WAIT_EVENT_LOGINDEX_WAIT_FULLPAGE:
+			event_name = "LogIndexWaitFullpage";
+			break;
+		case WAIT_EVENT_FULLPAGE_FILE_INIT_WRITE:
+			event_name = "FullpageFileInitWrite";
+			break;
+		case WAIT_EVENT_REL_SIZE_CACHE_WRITE:
+			event_name = "RelSizeCacheWrite";
+			break;
+		case WAIT_EVENT_REL_SIZE_CACHE_READ:
+			event_name = "RelSizeCacheRead";
+			break;
+		case WAIT_EVENT_CACHE_LOCAL_OPEN:
+			event_name = "PolarCacheLocalOpen";
+			break;
+		case WAIT_EVENT_CACHE_LOCAL_READ:
+			event_name = "PolarCacheLocalRead";
+			break;
+		case WAIT_EVENT_CACHE_LOCAL_WRITE:
+			event_name = "PolarCacheLocalWrite";
+			break;
+		case WAIT_EVENT_CACHE_LOCAL_LSEEK:
+			event_name = "PolarCacheLocalLSeek";
+			break;
+		case WAIT_EVENT_CACHE_LOCAL_UNLINK:
+			event_name = "PolarCacheLocalUnlink";
+			break;
+		case WAIT_EVENT_CACHE_LOCAL_SYNC:
+			event_name = "PolarCacheLocalSync";
+			break;
+		case WAIT_EVENT_CACHE_LOCAL_STAT:
+			event_name = "PolarCacheLocalStat";
+			break;
+		case WAIT_EVENT_CACHE_SHARED_OPEN:
+			event_name = "PolarCacheSharedOpen";
+			break;
+		case WAIT_EVENT_CACHE_SHARED_READ:
+			event_name = "PolarCacheSharedRead";
+			break;
+		case WAIT_EVENT_CACHE_SHARED_WRITE:
+			event_name = "PolarCacheSharedWrite";
+			break;
+		case WAIT_EVENT_CACHE_SHARED_LSEEK:
+			event_name = "PolarCacheSharedLSeek";
+			break;
+		case WAIT_EVENT_CACHE_SHARED_UNLINK:
+			event_name = "PolarCacheSharedUnlink";
+			break;
+		case WAIT_EVENT_CACHE_SHARED_SYNC:
+			event_name = "PolarCacheSharedSync";
+			break;
+		case WAIT_EVENT_CACHE_SHARED_STAT:
+			event_name = "PolarCacheSharedStat";
+			break;
+			/* POLAR end */
 			/* no default case, so that compiler will warn */
 	}
 

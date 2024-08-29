@@ -5,6 +5,7 @@
  *	  commands.  At one time acted as an interface between the Lisp and C
  *	  systems.
  *
+ * Portions Copyright (c) 2024, Alibaba Group Holding Limited
  * Portions Copyright (c) 1996-2022, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
@@ -87,6 +88,30 @@ static void ProcessUtilitySlow(ParseState *pstate,
 							   DestReceiver *dest,
 							   QueryCompletion *qc);
 static void ExecDropStmt(DropStmt *stmt, bool isTopLevel);
+
+/* POLAR */
+static bool
+polar_force_txn_ro_allow_stmt(NodeTag type)
+{
+	switch (type)
+	{
+		case T_DropStmt:
+		case T_DropdbStmt:
+		case T_DropTableSpaceStmt:
+		case T_DropRoleStmt:
+		case T_GrantStmt:
+		case T_GrantRoleStmt:
+		case T_TruncateStmt:
+		case T_DropOwnedStmt:
+		case T_DropUserMappingStmt:
+		case T_DropSubscriptionStmt:
+			return true;
+		default:
+			return false;
+	}
+}
+
+/* POLAR end */
 
 /*
  * CommandIsReadOnly: is an executable query read-only?
@@ -410,7 +435,8 @@ ClassifyUtilityCommandAsReadOnly(Node *parsetree)
 void
 PreventCommandIfReadOnly(const char *cmdname)
 {
-	if (XactReadOnly)
+	/* POLAR */
+	if (XactReadOnly || POLAR_FORCE_TXN_READ_ONLY())
 		ereport(ERROR,
 				(errcode(ERRCODE_READ_ONLY_SQL_TRANSACTION),
 		/* translator: %s is name of a SQL command, eg CREATE */
@@ -577,7 +603,8 @@ standard_ProcessUtility(PlannedStmt *pstmt,
 	/* Prohibit read/write commands in read-only states. */
 	readonly_flags = ClassifyUtilityCommandAsReadOnly(parsetree);
 	if (readonly_flags != COMMAND_IS_STRICTLY_READ_ONLY &&
-		(XactReadOnly || IsInParallelMode()))
+		(XactReadOnly || IsInParallelMode()) &&
+		!(POLAR_FORCE_TXN_READ_ONLY() && polar_force_txn_ro_allow_stmt(nodeTag(parsetree))))
 	{
 		CommandTag	commandtag = CreateCommandTag(parsetree);
 

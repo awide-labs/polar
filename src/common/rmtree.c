@@ -26,7 +26,8 @@
 #include "common/logging.h"
 #endif
 
-
+/* POLAR */
+#include "storage/polar_fd.h"
 /*
  *	rmtree
  *
@@ -72,7 +73,7 @@ rmtree(const char *path, bool rmtopdir)
 		 * requests, but because that's asynchronous, it's not guaranteed that
 		 * the bgwriter receives the message in time.
 		 */
-		if (lstat(pathbuf, &statbuf) != 0)
+		if (polar_lstat(pathbuf, &statbuf) != 0)
 		{
 			if (errno != ENOENT)
 			{
@@ -94,7 +95,7 @@ rmtree(const char *path, bool rmtopdir)
 		}
 		else
 		{
-			if (unlink(pathbuf) != 0)
+			if (polar_unlink(pathbuf) != 0)
 			{
 				if (errno != ENOENT)
 				{
@@ -108,7 +109,7 @@ rmtree(const char *path, bool rmtopdir)
 
 	if (rmtopdir)
 	{
-		if (rmdir(path) != 0)
+		if (polar_rmdir(path) != 0)
 		{
 			pg_log_warning("could not remove file or directory \"%s\": %m",
 						   path);

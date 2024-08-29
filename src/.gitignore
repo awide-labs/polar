@@ -1,3 +1,4 @@
 /Makefile.global
 /Makefile.port
 /Makefile.custom
+/Makefile.precheck

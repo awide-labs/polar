@@ -190,12 +190,15 @@ with_systemd	= @with_systemd@
 with_gssapi	= @with_gssapi@
 with_krb_srvnam	= @with_krb_srvnam@
 with_ldap	= @with_ldap@
+with_libunwind = @with_libunwind@
 with_libxml	= @with_libxml@
 with_libxslt	= @with_libxslt@
 with_llvm	= @with_llvm@
+with_pfsd	= @with_pfsd@
 with_system_tzdata = @with_system_tzdata@
 with_uuid	= @with_uuid@
 with_zlib	= @with_zlib@
+with_submodule	= @with_submodule@
 enable_rpath	= @enable_rpath@
 enable_nls	= @enable_nls@
 enable_debug	= @enable_debug@
@@ -203,7 +206,8 @@ enable_dtrace	= @enable_dtrace@
 enable_coverage	= @enable_coverage@
 enable_tap_tests	= @enable_tap_tests@
 enable_thread_safety	= @enable_thread_safety@
-
+enable_minimal		= @enable_minimal@
+enable_fault_injector = @enable_fault_injector@
 python_includespec	= @python_includespec@
 python_libdir		= @python_libdir@
 python_libspec		= @python_libspec@
@@ -402,6 +406,25 @@ check: temp-install
 
 .PHONY: temp-install
 
+
+# prepend to path if already set, else just set it
+define add_to_path
+$(1)="$(if $($(1)),$(2):$$$(1),$(2))"
+endef
+
+# platform-specific environment variable to set shared library path
+# individual ports can override this later, this is the default name
+ld_library_path_var = LD_LIBRARY_PATH
+
+# with_temp_install_extra is for individual ports to define if they
+# need something more here. If not defined then the expansion does
+# nothing.
+with_temp_install = \
+	PATH="$(abs_top_builddir)/tmp_install$(bindir):$(CURDIR):$$PATH" \
+	$(call add_to_path,$(strip $(ld_library_path_var)),$(abs_top_builddir)/tmp_install$(libdir)) \
+	INITDB_TEMPLATE='$(abs_top_builddir)'/tmp_install/initdb-template \
+	$(with_temp_install_extra)
+
 temp-install: | submake-generated-headers
 ifndef NO_TEMP_INSTALL
 ifneq ($(abs_top_builddir),)
@@ -409,7 +432,12 @@ ifeq ($(MAKELEVEL),0)
 	rm -rf '$(abs_top_builddir)'/tmp_install
 	$(MKDIR_P) '$(abs_top_builddir)'/tmp_install/log
 	$(MAKE) -C '$(top_builddir)' DESTDIR='$(abs_top_builddir)'/tmp_install install >'$(abs_top_builddir)'/tmp_install/log/install.log 2>&1
+	$(MAKE) -C '$(top_builddir)/contrib' DESTDIR='$(abs_top_builddir)'/tmp_install install >>'$(abs_top_builddir)'/tmp_install/log/install.log 2>&1	
+	$(MAKE) -C '$(top_builddir)/external' DESTDIR='$(abs_top_builddir)'/tmp_install install >>'$(abs_top_builddir)'/tmp_install/log/install.log 2>&1
 	$(MAKE) -j1 $(if $(CHECKPREP_TOP),-C $(CHECKPREP_TOP),) checkprep >>'$(abs_top_builddir)'/tmp_install/log/install.log 2>&1
+
+	$(with_temp_install) initdb -A trust -N --no-instructions '$(abs_top_builddir)'/tmp_install/initdb-template-pg >>'$(abs_top_builddir)'/tmp_install/log/initdb-template-pg.log 2>&1
+	$(with_temp_install) initdb -A trust -N --no-instructions -k '$(abs_top_builddir)'/tmp_install/initdb-template-chksum-pg >>'$(abs_top_builddir)'/tmp_install/log/initdb-template-chksum-pg.log 2>&1
 endif
 endif
 endif
@@ -427,24 +455,7 @@ PG_PROVE_FLAGS = -I $(top_srcdir)/src/test/perl/ -I $(srcdir)
 # User-supplied prove flags such as --verbose can be provided in PROVE_FLAGS.
 PROVE_FLAGS =
 
-# prepend to path if already set, else just set it
-define add_to_path
-$(1)="$(if $($(1)),$(2):$$$(1),$(2))"
-endef
-
-# platform-specific environment variable to set shared library path
-# individual ports can override this later, this is the default name
-ld_library_path_var = LD_LIBRARY_PATH
-
-# with_temp_install_extra is for individual ports to define if they
-# need something more here. If not defined then the expansion does
-# nothing.
-with_temp_install = \
-	PATH="$(abs_top_builddir)/tmp_install$(bindir):$(CURDIR):$$PATH" \
-	$(call add_to_path,$(strip $(ld_library_path_var)),$(abs_top_builddir)/tmp_install$(libdir)) \
-	$(with_temp_install_extra)
-
-ifeq ($(enable_tap_tests),yes)
+ifeq ($(enable_tap_tests)$(NO_TAP_TESTS),yes)
 
 ifndef PGXS
 define prove_installcheck
@@ -621,6 +632,21 @@ ifeq ($(PORTNAME),cygwin)
 libpq_pgport += $(LDAP_LIBS_FE)
 endif
 
+##########################################################################
+#
+# PolarDB vfs and pfsd lib
+
+ifeq ($(with_pfsd),yes)
+polar_libpfsd = -L/usr/local/polarstore/pfsd/lib -lpfsd -lpthread
+polar_flagpfsd = -I/usr/local/polarstore/pfsd/include -fPIC
+endif
+
+ifdef PGXS
+polar_libvfs = -L$(libdir) -lpolarvfs $(polar_libpfsd)
+else
+polar_libvfs = -L$(top_builddir)/src/polar_vfs -lpolarvfs $(polar_libpfsd)
+endif
+
 
 ##########################################################################
 #
@@ -643,6 +669,12 @@ submake-libpgfeutils: | submake-generated-headers
 
 ##########################################################################
 #
+# Include our local precheck configuration file Makefile.precheck
+
+-include $(top_srcdir)/src/Makefile.precheck
+
+##########################################################################
+#
 # Testing support
 
 ifneq ($(USE_MODULE_DB),)
@@ -655,8 +687,13 @@ ifneq ($(USE_MODULE_DB),)
       CONTRIB_TESTDB=contrib_regression_$(word 1,$(MODULES))
       ISOLATION_TESTDB=isolation_regression_$(word 1,$(MODULES))
     else
-      CONTRIB_TESTDB=contrib_regression_$(word 1,$(REGRESS))
-      ISOLATION_TESTDB=isolation_regression_$(word 1,$(ISOLATION))
+      ifneq ($(EXTENSION),)
+        CONTRIB_TESTDB=contrib_regression_$(word 1,$(EXTENSION))
+        ISOLATION_TESTDB=isolation_regression_$(word 1,$(EXTENSION))
+      else
+        CONTRIB_TESTDB=contrib_regression_$(word 1,$(REGRESS))
+        ISOLATION_TESTDB=isolation_regression_$(word 1,$(ISOLATION))
+      endif
     endif
   endif
 else
@@ -687,12 +724,17 @@ pg_regress_check = \
     --bindir= \
     $(TEMP_CONF) \
     $(pg_regress_locale_flags) $(EXTRA_REGRESS_OPTS)
+ifdef PGPORT
 pg_regress_installcheck = \
     echo "+++ regress install-check in $(subdir) +++" && \
     $(top_builddir)/src/test/regress/pg_regress \
     --inputdir=$(srcdir) \
     --bindir='$(bindir)' \
-    $(pg_regress_locale_flags) $(EXTRA_REGRESS_OPTS)
+    $(pg_regress_locale_flags) $(EXTRA_REGRESS_OPTS) \
+    --port=$(PGPORT)
+else
+pg_regress_installcheck = @echo "REGRESS install tests not enabled"
+endif # PGPORT
 
 pg_isolation_regress_check = \
     echo "+++ isolation check in $(subdir) +++" && \
@@ -703,12 +745,17 @@ pg_isolation_regress_check = \
     --bindir= \
     $(TEMP_CONF) \
     $(pg_regress_locale_flags) $(EXTRA_REGRESS_OPTS)
+ifdef PGPORT
 pg_isolation_regress_installcheck = \
     echo "+++ isolation install-check in $(subdir) +++" && \
     $(top_builddir)/src/test/isolation/pg_isolation_regress \
     --inputdir=$(srcdir) --outputdir=output_iso \
     --bindir='$(bindir)' \
-    $(pg_regress_locale_flags) $(EXTRA_REGRESS_OPTS)
+    $(pg_regress_locale_flags) $(EXTRA_REGRESS_OPTS) \
+    --port=$(PGPORT)
+else
+pg_isolation_regress_installcheck = @echo "ISOLATION install tests not enabled"
+endif # PGPORT
 
 ##########################################################################
 #

@@ -18,6 +18,8 @@
 #include "utils/backend_status.h"	/* for backward compatibility */
 #include "utils/relcache.h"
 #include "utils/wait_event.h"	/* for backward compatibility */
+#include "utils/guc.h"
+#include "storage/proc.h"
 
 
 /* ----------
@@ -184,6 +186,19 @@ typedef struct PgStat_TableCounts
 
 	PgStat_Counter t_blocks_fetched;
 	PgStat_Counter t_blocks_hit;
+
+	/* POLAR: bulk io */
+	/* bulk extend */
+	PgStat_Counter polar_t_bulk_extend_times;
+	PgStat_Counter polar_t_bulk_extend_blocks;
+	/* bulk read */
+	PgStat_Counter polar_t_bulk_read_calls;
+	PgStat_Counter polar_t_bulk_read_calls_IO;
+	PgStat_Counter polar_t_bulk_read_blocks_IO;
+	/* POLAR end */
+
+	/* bulk create index extend times */
+	PgStat_Counter polar_t_bulk_create_index_extends_times;
 } PgStat_TableCounts;
 
 /* ----------
@@ -242,7 +257,7 @@ typedef struct PgStat_TableXactStatus
  * ------------------------------------------------------------
  */
 
-#define PGSTAT_FILE_FORMAT_ID	0x01A5BCA7
+#define PGSTAT_FILE_FORMAT_ID	0x01A5BCA9
 
 typedef struct PgStat_ArchiverStats
 {
@@ -309,6 +324,7 @@ typedef struct PgStat_StatDBEntry
 	PgStat_Counter n_sessions_killed;
 
 	TimestampTz stat_reset_timestamp;
+
 } PgStat_StatDBEntry;
 
 typedef struct PgStat_StatFuncEntry
@@ -384,6 +400,22 @@ typedef struct PgStat_StatTabEntry
 	PgStat_Counter analyze_count;
 	TimestampTz autovac_analyze_timestamp;	/* autovacuum initiated */
 	PgStat_Counter autovac_analyze_count;
+
+	/* POLAR: bulk io */
+	PgStat_Counter polar_bulk_extend_times;
+	PgStat_Counter polar_bulk_extend_blocks;
+	/* bulk read */
+	/* all bulk read calls count */
+	PgStat_Counter polar_bulk_read_calls;
+	/* bulk read calls times which has IO read */
+	PgStat_Counter polar_bulk_read_calls_IO;
+	/* bulk read calls, IO read blocks counts */
+	PgStat_Counter polar_bulk_read_blocks_IO;
+	/* POLAR end */
+
+	/* POLAR: bulk extend */
+	PgStat_Counter polar_bulk_create_index_extends_times;
+	/* POLAR end */
 } PgStat_StatTabEntry;
 
 typedef struct PgStat_WalStats
@@ -526,6 +558,61 @@ extern void pgstat_report_analyze(Relation rel,
 	(likely((rel)->pgstat_info != NULL) ? true :                    \
 	 ((rel)->pgstat_enabled ? pgstat_assoc_relation(rel), true : false))
 
+extern char *pgstat_clip_activity(const char *raw_activity);
+
+/*
+ * POLAR: stat wait_object and wait_time start
+ */
+static inline void
+polar_stat_wait_obj_and_time_set(int id, const instr_time *start_time, const int8 type)
+{
+	if (!polar_enable_stat_wait_info)
+		return;
+
+	if (!pgstat_track_activities || !MyProc)
+		return;
+
+	MyProc->cur_wait_stack_index++;
+	/* push stack if not overflow */
+	if (MyProc->cur_wait_stack_index > -1 && MyProc->cur_wait_stack_index < PGPROC_WAIT_STACK_LEN)
+	{
+		/*
+		 * POLAR:  We do not use pid 0 because it belongs to the root process.
+		 * We think -1 is an invalid pid.
+		 */
+		if (type == PGPROC_WAIT_PID && id == 0)
+			id = PGPROC_INVAILD_WAIT_OBJ;
+		MyProc->wait_object[MyProc->cur_wait_stack_index] = id;
+		MyProc->wait_type[MyProc->cur_wait_stack_index] = type;
+		INSTR_TIME_SET_ZERO(MyProc->wait_time[MyProc->cur_wait_stack_index]);
+		if (!INSTR_TIME_IS_ZERO(*start_time))
+		{
+			INSTR_TIME_ADD(MyProc->wait_time[MyProc->cur_wait_stack_index], *start_time);
+		}
+	}
+}
+static inline void
+polar_stat_wait_obj_and_time_clear(void)
+{
+	if (!polar_enable_stat_wait_info)
+		return;
+
+	if (!pgstat_track_activities || !MyProc)
+		return;
+
+	/* pop stack if not overflow */
+	if (MyProc->cur_wait_stack_index > -1 && MyProc->cur_wait_stack_index < PGPROC_WAIT_STACK_LEN)
+	{
+		MyProc->wait_object[MyProc->cur_wait_stack_index] = PGPROC_INVAILD_WAIT_OBJ;
+		MyProc->wait_type[MyProc->cur_wait_stack_index] = PGPROC_INVAILD_WAIT_OBJ;
+		INSTR_TIME_SET_ZERO(MyProc->wait_time[MyProc->cur_wait_stack_index]);
+
+	}
+	MyProc->cur_wait_stack_index--;
+}
+
+/* POLAR: stat wait_object and wait_time end */
+
 /* nontransactional event counts are simple enough to inline */
 
 #define pgstat_count_heap_scan(rel)									\
@@ -563,6 +650,48 @@ extern void pgstat_report_analyze(Relation rel,
 		if (pgstat_should_count_relation(rel))						\
 			(rel)->pgstat_info->t_counts.t_blocks_hit++;			\
 	} while (0)
+
+/* POLAR: bulk extend times counter */
+#define polar_pgstat_count_bulk_extend_times(rel)					\
+	do {															\
+		if ((rel)->pgstat_info != NULL)								\
+			(rel)->pgstat_info->t_counts.polar_t_bulk_extend_times++;	\
+	} while(0)
+
+/* POLAR: bulk extend blocks counter */
+#define polar_pgstat_count_bulk_extend_blocks(rel, n)					\
+	do {															\
+		if ((rel)->pgstat_info != NULL)								\
+			(rel)->pgstat_info->t_counts.polar_t_bulk_extend_blocks += (n);	\
+	} while(0)
+/* POLAR: end */
+
+/* POLAR: bulk read stats */
+#define polar_pgstat_count_bulk_read_calls(rel)                             \
+	do {															        \
+		if ((rel)->pgstat_info != NULL)								        \
+			(rel)->pgstat_info->t_counts.polar_t_bulk_read_calls++;			\
+	} while (0)
+#define polar_pgstat_count_bulk_read_calls_IO(rel)                              \
+	do {															            \
+		if ((rel)->pgstat_info != NULL)								            \
+			(rel)->pgstat_info->t_counts.polar_t_bulk_read_calls_IO++;			\
+	} while (0)
+#define polar_pgstat_count_bulk_read_blocks_IO(rel, n)				        	\
+	do {															            \
+		if ((rel)->pgstat_info != NULL)								            \
+		  (rel)->pgstat_info->t_counts.polar_t_bulk_read_blocks_IO += (n);      \
+	} while (0)
+/* POLAR: end */
+
+
+/* POLAR: bulk create index extend stats */
+#define polar_pgstat_count_bulk_create_index_extend_times(rel)							\
+	do {																				\
+		if ((rel)->pgstat_info != NULL)													\
+			(rel)->pgstat_info->t_counts.polar_t_bulk_create_index_extends_times++;		\
+	} while (0)
+/* POLAR end */
 
 extern void pgstat_count_heap_insert(Relation rel, PgStat_Counter n);
 extern void pgstat_count_heap_update(Relation rel, bool hot);
@@ -697,5 +826,11 @@ extern PGDLLIMPORT SessionEndType pgStatSessionEndCause;
 /* updated directly by backends and background processes */
 extern PGDLLIMPORT PgStat_WalStats PendingWalStats;
 
+/* POLAR */
+extern PgStat_Counter polar_get_audit_log_row_count(void);
+extern PgStat_Counter polar_pgstat_get_current_examined_row_count(void);
+
+typedef void (*polar_postmaster_child_init_register) (void);
+extern polar_postmaster_child_init_register polar_stat_hook;
 
 #endif							/* PGSTAT_H */

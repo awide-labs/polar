@@ -651,7 +651,8 @@ StreamLog(void)
 	stream.walmethod = CreateWalDirectoryMethod(basedir,
 												compression_algorithm,
 												compresslevel,
-												stream.do_sync);
+												stream.do_sync,
+												false);
 	stream.partial_suffix = ".partial";
 	stream.replication_slot = replication_slot;
 	stream.sysidentifier = sysidentifier;

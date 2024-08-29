@@ -25,6 +25,7 @@
 extern PGDLLIMPORT int max_predicate_locks_per_xact;
 extern PGDLLIMPORT int max_predicate_locks_per_relation;
 extern PGDLLIMPORT int max_predicate_locks_per_page;
+extern PGDLLIMPORT int polar_serial_buffer_slot_size;
 
 
 /* Number of SLRU buffers to use for Serial SLRU */

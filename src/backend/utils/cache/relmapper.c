@@ -56,6 +56,9 @@
 #include "utils/inval.h"
 #include "utils/relmapper.h"
 
+/* POLAR */
+#include "storage/polar_fd.h"
+
 
 /*
  * The map file is critical data: we have no automatic method for recovering
@@ -782,13 +785,17 @@ read_relmap_file(RelMapFile *map, char *dbpath, bool lock_held, int elevel)
 	pg_crc32c	crc;
 	int			fd;
 	int			r;
+	char		polar_mapfilename[MAXPGPATH];
 
 	Assert(elevel >= ERROR);
 
 	/* Open the target file. */
 	snprintf(mapfilename, sizeof(mapfilename), "%s/%s", dbpath,
 			 RELMAPPER_FILENAME);
-	fd = OpenTransientFile(mapfilename, O_RDONLY | PG_BINARY);
+
+	polar_make_file_path_level2(polar_mapfilename, mapfilename);
+
+	fd = OpenTransientFile(polar_mapfilename, O_RDONLY | PG_BINARY);
 	if (fd < 0)
 		ereport(elevel,
 				(errcode_for_file_access(),
@@ -807,7 +814,7 @@ read_relmap_file(RelMapFile *map, char *dbpath, bool lock_held, int elevel)
 
 	/* Now read the data. */
 	pgstat_report_wait_start(WAIT_EVENT_RELATION_MAP_READ);
-	r = read(fd, map, sizeof(RelMapFile));
+	r = polar_read(fd, map, sizeof(RelMapFile));
 	if (r != sizeof(RelMapFile))
 	{
 		if (r < 0)
@@ -878,6 +885,7 @@ write_relmap_file(RelMapFile *newmap, bool write_wal, bool send_sinval,
 {
 	int			fd;
 	char		mapfilename[MAXPGPATH];
+	char		polar_mapfilename[MAXPGPATH];
 
 	/*
 	 * Even without concurrent use of this map, CheckPointRelationMap() relies
@@ -905,12 +913,14 @@ write_relmap_file(RelMapFile *newmap, bool write_wal, bool send_sinval,
 	 */
 	snprintf(mapfilename, sizeof(mapfilename), "%s/%s",
 			 dbpath, RELMAPPER_FILENAME);
-	fd = OpenTransientFile(mapfilename, O_WRONLY | O_CREAT | PG_BINARY);
+	polar_make_file_path_level2(polar_mapfilename, mapfilename);
+
+	fd = OpenTransientFile(polar_mapfilename, O_WRONLY | O_CREAT | PG_BINARY);
 	if (fd < 0)
 		ereport(ERROR,
 				(errcode_for_file_access(),
 				 errmsg("could not open file \"%s\": %m",
-						mapfilename)));
+						polar_mapfilename)));
 
 	if (write_wal)
 	{
@@ -936,7 +946,7 @@ write_relmap_file(RelMapFile *newmap, bool write_wal, bool send_sinval,
 
 	errno = 0;
 	pgstat_report_wait_start(WAIT_EVENT_RELATION_MAP_WRITE);
-	if (write(fd, newmap, sizeof(RelMapFile)) != sizeof(RelMapFile))
+	if (polar_write(fd, newmap, sizeof(RelMapFile)) != sizeof(RelMapFile))
 	{
 		/* if write didn't set errno, assume problem is no disk space */
 		if (errno == 0)
@@ -955,7 +965,7 @@ write_relmap_file(RelMapFile *newmap, bool write_wal, bool send_sinval,
 	 * CheckPointRelationMap.
 	 */
 	pgstat_report_wait_start(WAIT_EVENT_RELATION_MAP_SYNC);
-	if (pg_fsync(fd) != 0)
+	if (polar_fsync(fd) != 0)
 		ereport(data_sync_elevel(ERROR),
 				(errcode_for_file_access(),
 				 errmsg("could not fsync file \"%s\": %m",
@@ -1093,25 +1103,33 @@ relmap_redo(XLogReaderState *record)
 		/* We need to construct the pathname for this database */
 		dbpath = GetDatabasePath(xlrec->dbid, xlrec->tsid);
 
-		/*
-		 * Write out the new map and send sinval, but of course don't write a
-		 * new WAL entry.  There's no surrounding transaction to tell to
-		 * preserve files, either.
-		 *
-		 * There shouldn't be anyone else updating relmaps during WAL replay,
-		 * but grab the lock to interlock against load_relmap_file().
-		 *
-		 * Note that we use the same WAL record for updating the relmap of an
-		 * existing database as we do for creating a new database. In the
-		 * latter case, taking the relmap log and sending sinval messages is
-		 * unnecessary, but harmless. If we wanted to avoid it, we could add a
-		 * flag to the WAL record to indicate which operation is being
-		 * performed.
-		 */
-		LWLockAcquire(RelationMappingLock, LW_EXCLUSIVE);
-		write_relmap_file(&newmap, false, true, false,
-						  xlrec->dbid, xlrec->tsid, dbpath);
-		LWLockRelease(RelationMappingLock);
+		if (polar_is_replica())
+		{
+			CacheInvalidateRelmap(xlrec->dbid);
+		}
+		else
+		{
+			/*
+			 * Write out the new map and send sinval, but of course don't
+			 * write a new WAL entry.  There's no surrounding transaction to
+			 * tell to preserve files, either.
+			 *
+			 * There shouldn't be anyone else updating relmaps during WAL
+			 * replay, but grab the lock to interlock against
+			 * load_relmap_file().
+			 *
+			 * Note that we use the same WAL record for updating the relmap of
+			 * an existing database as we do for creating a new database. In
+			 * the latter case, taking the relmap log and sending sinval
+			 * messages is unnecessary, but harmless. If we wanted to avoid
+			 * it, we could add a flag to the WAL record to indicate which
+			 * operation is being performed.
+			 */
+			LWLockAcquire(RelationMappingLock, LW_EXCLUSIVE);
+			write_relmap_file(&newmap, false, true, false,
+							  xlrec->dbid, xlrec->tsid, dbpath);
+			LWLockRelease(RelationMappingLock);
+		}
 
 		pfree(dbpath);
 	}

@@ -32,6 +32,9 @@
 #include "storage/checksum.h"
 #include "storage/checksum_impl.h"
 
+/* POLAR */
+#include "polar_vfs/polar_vfs_fe.h"
+
 
 static int64 files_scanned = 0;
 static int64 files_written = 0;
@@ -121,6 +124,8 @@ static const struct exclude_list_item skip[] = {
 #ifdef EXEC_BACKEND
 	{"config_exec_params", true},
 #endif
+	/* POLAR: Do not checksum for polar_settings */
+	{"polar_settings.conf", false},
 	{NULL, false}
 };
 
@@ -194,7 +199,7 @@ scan_file(const char *fn, int segmentno)
 		   mode == PG_MODE_CHECK);
 
 	flags = (mode == PG_MODE_ENABLE) ? O_RDWR : O_RDONLY;
-	f = open(fn, PG_BINARY | flags, 0);
+	f = polar_open(fn, PG_BINARY | flags, 0);
 
 	if (f < 0)
 		pg_fatal("could not open file \"%s\": %m", fn);
@@ -204,7 +209,7 @@ scan_file(const char *fn, int segmentno)
 	for (blockno = 0;; blockno++)
 	{
 		uint16		csum;
-		int			r = read(f, buf.data, BLCKSZ);
+		int			r = polar_read(f, buf.data, BLCKSZ);
 
 		if (r == 0)
 			break;
@@ -259,11 +264,11 @@ scan_file(const char *fn, int segmentno)
 			header->pd_checksum = csum;
 
 			/* Seek back to beginning of block */
-			if (lseek(f, -BLCKSZ, SEEK_CUR) < 0)
+			if (polar_lseek(f, -BLCKSZ, SEEK_CUR) < 0)
 				pg_fatal("seek failed for block %u in file \"%s\": %m", blockno, fn);
 
 			/* Write block with checksum */
-			w = write(f, buf.data, BLCKSZ);
+			w = polar_write(f, buf.data, BLCKSZ);
 			if (w != BLCKSZ)
 			{
 				if (w < 0)
@@ -294,7 +299,7 @@ scan_file(const char *fn, int segmentno)
 		blocks_written += blocks_written_in_file;
 	}
 
-	close(f);
+	polar_close(f);
 }
 
 /*
@@ -313,10 +318,10 @@ scan_directory(const char *basedir, const char *subdir, bool sizeonly)
 	struct dirent *de;
 
 	snprintf(path, sizeof(path), "%s/%s", basedir, subdir);
-	dir = opendir(path);
+	dir = polar_opendir(path);
 	if (!dir)
 		pg_fatal("could not open directory \"%s\": %m", path);
-	while ((de = readdir(dir)) != NULL)
+	while ((de = polar_readdir(dir)) != NULL)
 	{
 		char		fn[MAXPGPATH];
 		struct stat st;
@@ -342,7 +347,7 @@ scan_directory(const char *basedir, const char *subdir, bool sizeonly)
 			continue;
 
 		snprintf(fn, sizeof(fn), "%s/%s", path, de->d_name);
-		if (lstat(fn, &st) < 0)
+		if (polar_lstat(fn, &st) < 0)
 			pg_fatal("could not stat file \"%s\": %m", fn);
 		if (S_ISREG(st.st_mode))
 		{
@@ -415,7 +420,7 @@ scan_directory(const char *basedir, const char *subdir, bool sizeonly)
 				snprintf(tblspc_path, sizeof(tblspc_path), "%s/%s/%s",
 						 path, de->d_name, TABLESPACE_VERSION_DIRECTORY);
 
-				if (lstat(tblspc_path, &tblspc_st) < 0)
+				if (polar_lstat(tblspc_path, &tblspc_st) < 0)
 					pg_fatal("could not stat file \"%s\": %m",
 							 tblspc_path);
 
@@ -437,7 +442,7 @@ scan_directory(const char *basedir, const char *subdir, bool sizeonly)
 			}
 		}
 	}
-	closedir(dir);
+	polar_closedir(dir);
 	return dirsize;
 }
 
@@ -460,6 +465,7 @@ main(int argc, char *argv[])
 	int			c;
 	int			option_index;
 	bool		crc_ok;
+	char	   *polar_tmp_dir = NULL;
 
 	pg_logging_init(argv[0]);
 	set_pglocale_pgservice(argv[0], PG_TEXTDOMAIN("pg_checksums"));
@@ -551,6 +557,30 @@ main(int argc, char *argv[])
 		exit(1);
 	}
 
+	/*
+	 * POLAR: save argv[0] so do_start() can look for the postmaster if
+	 * necessary. we don't look for postmaster here because in many cases we
+	 * won't need it.
+	 */
+	polar_argv0 = argv[0];
+	if (polar_in_replica_mode_fe(DataDir) && mode != PG_MODE_CHECK)
+	{
+		pg_log_error("option --enable/--disable can not be used at replica node");
+		fprintf(stderr, _("Try \"%s --help\" for more information.\n"),
+				progname);
+		exit(1);
+	}
+	if (polar_in_replica_mode_fe(DataDir))
+		polar_vfs_init_simple_fe(DataDir, DataDir, POLAR_VFS_RD);
+	else
+		polar_vfs_init_simple_fe(DataDir, DataDir, POLAR_VFS_RDWR);
+
+	/*
+	 * POLAR: force to make pg_checksums to check file at shared storage, even
+	 * at replica node
+	 */
+	polar_local_node_type = POLAR_PRIMARY;
+
 	/* Read the control file and check compatibility */
 	ControlFile = get_controlfile(DataDir, &crc_ok);
 	if (!crc_ok)
@@ -588,6 +618,11 @@ main(int argc, char *argv[])
 		mode == PG_MODE_ENABLE)
 		pg_fatal("data checksums are already enabled in cluster");
 
+	if (polar_enable_shared_storage_mode)
+		polar_tmp_dir = polar_datadir;
+	else
+		polar_tmp_dir = DataDir;
+
 	/* Operate on all files if checking or enabling checksums */
 	if (mode == PG_MODE_CHECK || mode == PG_MODE_ENABLE)
 	{
@@ -598,14 +633,14 @@ main(int argc, char *argv[])
 		 */
 		if (showprogress)
 		{
-			total_size = scan_directory(DataDir, "global", true);
-			total_size += scan_directory(DataDir, "base", true);
-			total_size += scan_directory(DataDir, "pg_tblspc", true);
+			total_size = scan_directory(polar_tmp_dir, "global", true);
+			total_size += scan_directory(polar_tmp_dir, "base", true);
+			total_size += scan_directory(polar_tmp_dir, "pg_tblspc", true);
 		}
 
-		(void) scan_directory(DataDir, "global", false);
-		(void) scan_directory(DataDir, "base", false);
-		(void) scan_directory(DataDir, "pg_tblspc", false);
+		(void) scan_directory(polar_tmp_dir, "global", false);
+		(void) scan_directory(polar_tmp_dir, "base", false);
+		(void) scan_directory(polar_tmp_dir, "pg_tblspc", false);
 
 		if (showprogress)
 			progress_report(true);
@@ -641,7 +676,7 @@ main(int argc, char *argv[])
 		if (do_sync)
 		{
 			pg_log_info("syncing data directory");
-			fsync_pgdata(DataDir, PG_VERSION_NUM);
+			fsync_pgdata(polar_tmp_dir, PG_VERSION_NUM);
 		}
 
 		pg_log_info("updating control file");
@@ -654,6 +689,8 @@ main(int argc, char *argv[])
 		else
 			printf(_("Checksums disabled in cluster\n"));
 	}
+
+	polar_vfs_destory_simple_fe();
 
 	return 0;
 }

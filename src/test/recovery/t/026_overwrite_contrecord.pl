@@ -16,7 +16,7 @@ use Test::More;
 # file and the standby promotes successfully.
 
 my $node = PostgreSQL::Test::Cluster->new('primary');
-$node->init(allows_streaming => 1);
+$node->init(allows_streaming => 1, extra => ['--wal-segsize=16']);
 # We need these settings for stability of WAL behavior.
 $node->append_conf(
 	'postgresql.conf', qq(

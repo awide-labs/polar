@@ -8,7 +8,7 @@
  *	  of the frontend interface libraries --- so we don't worry much about
  *	  polluting the namespace with lots of stuff...
  *
- *
+ * Portions Copyright (c) 2024, Alibaba Group Holding Limited
  * Portions Copyright (c) 1996-2022, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
@@ -358,6 +358,18 @@ typedef void (*pg_funcptr_t) (void);
 #else
 #define PG_FUNCNAME_MACRO	NULL
 #endif
+#endif
+
+/* Suppress incorrect diagnostic by GCC. */
+#if defined __GNUC__ && 407 <= __GNUC__ * 100 + __GNUC_MINOR__
+#define GCC_IGNORE_BEGIN(warning) \
+	_Pragma("GCC diagnostic push") \
+	_Pragma(CppAsString(GCC diagnostic ignored warning))
+#define GCC_IGNORE_END() \
+	_Pragma("GCC diagnostic pop")
+#else
+#define GCC_IGNORE_BEGIN(warning)
+#define GCC_IGNORE_END()
 #endif
 
 /*
@@ -823,6 +835,24 @@ typedef NameData *Name;
  */
 
 /*
+ * POLAR: release assert level definition.
+ *
+ * 'NONE' stands for disabling all assert checkings.
+ * 'LOG' stands for enabling all assert checkings, but only writes to the error
+ * log when assertion failure, not making the program core dump.
+ * 'COREDUMP' stands for enabling all assert checkings, writes to the error
+ * log, and abort the program and generate a core dump.
+ */
+typedef enum
+{
+	POLAR_RELEASE_ASSERT_L_NONE = 0,
+	POLAR_RELEASE_ASSERT_L_LOG,
+	POLAR_RELEASE_ASSERT_L_COREDUMP = 31,
+} PolarReleaseAssertLevel;
+
+extern int	polar_release_assert_level;
+
+/*
  * Assert() can be used in both frontend and backend code. In frontend code it
  * just calls the standard assert, if it's available. If use of assertions is
  * not configured, it does nothing.
@@ -836,6 +866,54 @@ typedef NameData *Name;
 #define AssertPointerAlignment(ptr, bndr)	((void)true)
 #define Trap(condition, errorType)	((void)true)
 #define TrapMacro(condition, errorType) (true)
+
+#define PolarReleaseAssert(condition)										\
+	do {																	\
+		if (polar_release_assert_level != POLAR_RELEASE_ASSERT_L_NONE &&	\
+			unlikely(!(condition)))											\
+		{																	\
+			polar_exceptional_condition(#condition, "FailedAssertion",		\
+										__FILE__, __LINE__);				\
+		}																	\
+	} while (0)
+
+#define PolarReleaseAssertMacro(condition)									\
+	((void) (polar_release_assert_level != POLAR_RELEASE_ASSERT_L_NONE &&	\
+			 (likely(condition) ||											\
+			  (polar_exceptional_condition(#condition, "FailedAssertion",	\
+										   __FILE__, __LINE__), 0))))
+
+#define PolarReleaseAssertArg(condition)									\
+	do {																	\
+		if (polar_release_assert_level != POLAR_RELEASE_ASSERT_L_NONE &&	\
+			unlikely(!(condition)))											\
+			polar_exceptional_condition(#condition, "BadArgument",			\
+										__FILE__, __LINE__);				\
+	} while (0)
+
+#define PolarReleaseAssertState(condition)									\
+	do {																	\
+		if (polar_release_assert_level != POLAR_RELEASE_ASSERT_L_NONE &&	\
+			unlikely(!(condition)))											\
+			polar_exceptional_condition(#condition, "BadState",				\
+										__FILE__, __LINE__);				\
+	} while (0)
+
+#define PolarReleaseTrap(condition, errorType)								\
+	do {																	\
+		if (condition)														\
+			polar_exceptional_condition(#condition, (errorType),			\
+										__FILE__, __LINE__);				\
+	} while (0)
+
+#define PolarReleaseTrapMacro(condition, errorType)							\
+	((bool) (! (condition) ||												\
+			 (polar_exceptional_condition(#condition, (errorType),			\
+										  __FILE__, __LINE__), 0)))
+
+#define PolarReleaseAssertPointerAlignment(ptr, bndr)						\
+	PolarReleaseTrap(TYPEALIGN(bndr, (uintptr_t)(ptr)) != (uintptr_t)(ptr),	\
+					 "UnalignedPointer")
 
 #elif defined(FRONTEND)
 
@@ -904,6 +982,14 @@ typedef NameData *Name;
 	Trap(TYPEALIGN(bndr, (uintptr_t)(ptr)) != (uintptr_t)(ptr), \
 		 "UnalignedPointer")
 
+#define PolarReleaseAssert(condition) Assert(condition)
+#define PolarReleaseAssertMacro(condition) AssertMacro(condition)
+#define PolarReleaseAssertArg(condition) AssertArg(condition)
+#define PolarReleaseAssertState(condition) AssertState(condition)
+#define PolarReleaseTrap(condition, errorType) Trap(condition, errorType)
+#define PolarReleaseTrapMacro(condition, errorType) TrapMacro(condition, errorType)
+#define PolarReleaseAssertPointerAlignment(ptr, bndr) AssertPointerAlignment(ptr, bndr)
+
 #endif							/* USE_ASSERT_CHECKING && !FRONTEND */
 
 /*
@@ -916,6 +1002,12 @@ typedef NameData *Name;
 extern void ExceptionalCondition(const char *conditionName,
 								 const char *errorType,
 								 const char *fileName, int lineNumber) pg_attribute_noreturn();
+
+/* POLAR: release assert */
+extern void polar_exceptional_condition(const char *conditionName,
+										const char *errorType,
+										const char *fileName,
+										int lineNumber);
 #endif
 
 /*
@@ -1166,6 +1258,11 @@ extern void ExceptionalCondition(const char *conditionName,
  */
 typedef union PGAlignedBlock
 {
+#ifdef pg_attribute_aligned
+	pg_attribute_aligned(4096)
+#else
+	__declspec(align(4096))
+#endif
 	char		data[BLCKSZ];
 	double		force_align_d;
 	int64		force_align_i64;
@@ -1174,6 +1271,11 @@ typedef union PGAlignedBlock
 /* Same, but for an XLOG_BLCKSZ-sized buffer */
 typedef union PGAlignedXLogBlock
 {
+#ifdef pg_attribute_aligned
+	pg_attribute_aligned(4096)
+#else
+	__declspec(align(4096))
+#endif
 	char		data[XLOG_BLCKSZ];
 	double		force_align_d;
 	int64		force_align_i64;
@@ -1351,6 +1453,11 @@ extern unsigned long long strtoull(const char *str, char **endptr, int base);
 #else
 #define strtoi64(str, endptr, base) ((int64) strtoll(str, endptr, base))
 #define strtou64(str, endptr, base) ((uint64) strtoull(str, endptr, base))
+#endif
+
+#if defined(HAVE___BACKTRACE)
+#define backtrace __backtrace
+extern int	__backtrace(void **__array, int __size);
 #endif
 
 /*

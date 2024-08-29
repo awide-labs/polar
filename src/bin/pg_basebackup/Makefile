@@ -27,7 +27,7 @@ export TAR
 export GZIP_PROGRAM=$(GZIP)
 
 override CPPFLAGS := -I$(libpq_srcdir) $(CPPFLAGS)
-LDFLAGS_INTERNAL += -L$(top_builddir)/src/fe_utils -lpgfeutils $(libpq_pgport)
+LDFLAGS_INTERNAL += -L$(top_builddir)/src/fe_utils -lpgfeutils $(libpq_pgport) $(polar_libvfs)
 
 OBJS = \
 	$(WIN32RES) \
@@ -47,10 +47,12 @@ BBOBJS = \
 	bbstreamer_zstd.o \
 	bbstreamer_tar.o
 
-all: pg_basebackup pg_receivewal pg_recvlogical
+all: polar_basebackup pg_receivewal pg_recvlogical
 
-pg_basebackup: $(BBOBJS) $(OBJS) | submake-libpq submake-libpgport submake-libpgfeutils
+polar_basebackup: $(BBOBJS) $(OBJS) | submake-libpq submake-libpgport submake-libpgfeutils
 	$(CC) $(CFLAGS) $(BBOBJS) $(OBJS) $(LDFLAGS) $(LDFLAGS_EX) $(LIBS) -o $@$(X)
+	rm -f pg_basebackup$(X)
+	$(LN_S) polar_basebackup$(X) pg_basebackup$(X)
 
 pg_receivewal: pg_receivewal.o $(OBJS) | submake-libpq submake-libpgport submake-libpgfeutils
 	$(CC) $(CFLAGS) pg_receivewal.o $(OBJS) $(LDFLAGS) $(LDFLAGS_EX) $(LIBS) -o $@$(X)
@@ -59,23 +61,26 @@ pg_recvlogical: pg_recvlogical.o $(OBJS) | submake-libpq submake-libpgport subma
 	$(CC) $(CFLAGS) pg_recvlogical.o $(OBJS) $(LDFLAGS) $(LDFLAGS_EX) $(LIBS) -o $@$(X)
 
 install: all installdirs
-	$(INSTALL_PROGRAM) pg_basebackup$(X) '$(DESTDIR)$(bindir)/pg_basebackup$(X)'
+	$(INSTALL_PROGRAM) polar_basebackup$(X) '$(DESTDIR)$(bindir)/polar_basebackup$(X)'
 	$(INSTALL_PROGRAM) pg_receivewal$(X) '$(DESTDIR)$(bindir)/pg_receivewal$(X)'
 	$(INSTALL_PROGRAM) pg_recvlogical$(X) '$(DESTDIR)$(bindir)/pg_recvlogical$(X)'
+	cp -frp pg_basebackup$(X) '$(DESTDIR)$(bindir)/pg_basebackup$(X)'
 
 installdirs:
 	$(MKDIR_P) '$(DESTDIR)$(bindir)'
 
 uninstall:
-	rm -f '$(DESTDIR)$(bindir)/pg_basebackup$(X)'
+	rm -f '$(DESTDIR)$(bindir)/polar_basebackup$(X)'
 	rm -f '$(DESTDIR)$(bindir)/pg_receivewal$(X)'
 	rm -f '$(DESTDIR)$(bindir)/pg_recvlogical$(X)'
+	rm -f '$(DESTDIR)$(bindir)/pg_basebackup$(X)'
 
 clean distclean maintainer-clean:
-	rm -f pg_basebackup$(X) pg_receivewal$(X) pg_recvlogical$(X) \
+	rm -f polar_basebackup$(X) pg_receivewal$(X) pg_recvlogical$(X) \
 		$(BBOBJS) pg_receivewal.o pg_recvlogical.o \
 		$(OBJS)
 	rm -rf tmp_check
+	rm -f pg_basebackup
 
 check:
 	$(prove_check)

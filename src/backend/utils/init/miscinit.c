@@ -3,6 +3,7 @@
  * miscinit.c
  *	  miscellaneous initialization support stuff
  *
+ * Portions Copyright (c) 2024, Alibaba Group Holding Limited
  * Portions Copyright (c) 1996-2022, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
@@ -55,6 +56,25 @@
 #include "utils/syscache.h"
 #include "utils/varlena.h"
 
+/* POLAR */
+#include "access/clog.h"
+#include "access/commit_ts.h"
+#include "access/multixact.h"
+#include "storage/polar_fd.h"
+#include "utils/acl.h"
+#include "catalog/pg_control.h"
+#include "utils/polar_local_cache.h"
+#include "access/xlog.h"
+#include "access/xlog_internal.h"
+#include "commands/user.h"
+/* POLAR end */
+
+/* POLAR: save local pg_control when replica start and copy pg_control from shared storage */
+#define POLAR_REPLICA_LOCAL_CONTROL	"pg_control.local"
+bool		polar_enable_replica_copydata_optimization = true;
+
+static void polar_remove_local_cache(void);
+static void polar_copy_pg_control_from_shared_storage_to_local(void);
 
 #define DIRECTORY_LOCK_FILE		"postmaster.pid"
 
@@ -128,6 +148,12 @@ InitPostmasterChild(void)
 	/* We don't want the postmaster's proc_exit() handlers */
 	on_exit_reset();
 
+	/*
+	 * POLAR: pfs tls init when subprocess forked we need set cleanup
+	 * function.
+	 */
+	polar_register_tls_cleanup();
+
 	/* In EXEC_BACKEND case we will not have inherited BlockSig etc values */
 #ifdef EXEC_BACKEND
 	pqinitmask();
@@ -164,6 +190,11 @@ InitPostmasterChild(void)
 
 	/* Request a signal if the postmaster dies, if possible. */
 	PostmasterDeathSignalInit();
+
+#ifdef USE_LIBUNWIND
+	/* POLAR: register for coredump handling */
+	polar_set_program_error_handler(0);
+#endif
 }
 
 /*
@@ -290,6 +321,9 @@ GetBackendTypeDesc(BackendType backendType)
 			break;
 		case B_LOGGER:
 			backendDesc = "logger";
+			break;
+		case B_BG_LOGINDEX:
+			backendDesc = "background logindex writer";
 			break;
 	}
 
@@ -746,6 +780,10 @@ InitializeSessionUserId(const char *rolename, Oid roleid)
 	/* Also mark our PGPROC entry with the authenticated user id */
 	/* (We assume this is an atomic store so no lock is needed) */
 	MyProc->roleId = roleid;
+
+	/* POLAR: is role a superuser? */
+	MyProc->issuper = rform->rolsuper;
+	/* POLAR end */
 
 	/*
 	 * These next checks are not enforced when in standalone mode, so that
@@ -1566,6 +1604,10 @@ ValidatePgVersion(const char *path)
 	char		file_version_string[64];
 	const char *my_version_string = PG_VERSION;
 
+	/* POLAR: FIXME not support fopen */
+	if (polar_enable_shared_storage_mode)
+		return;
+
 	my_major = strtol(my_version_string, &endptr, 10);
 
 	snprintf(full_path, sizeof(full_path), "%s/PG_VERSION", path);
@@ -1621,6 +1663,11 @@ ValidatePgVersion(const char *path)
 char	   *session_preload_libraries_string = NULL;
 char	   *shared_preload_libraries_string = NULL;
 char	   *local_preload_libraries_string = NULL;
+
+/* POLAR: GUC used for updating shared libraries during binary upgrade */
+char	   *polar_internal_shared_preload_libraries = NULL;
+
+/* POLAR end */
 
 /* Flag telling that we are loading shared_preload_libraries */
 bool		process_shared_preload_libraries_in_progress = false;
@@ -1691,6 +1738,19 @@ void
 process_shared_preload_libraries(void)
 {
 	process_shared_preload_libraries_in_progress = true;
+
+	/*
+	 * POLAR: load the internal libraries with high priority. It doesn't
+	 * matter if an internal library has presented in
+	 * shared_preload_libraries, since it allows to call load_libraries with
+	 * the same library many times, load_libraries will skip loading a library
+	 * which has been loaded already.
+	 */
+	load_libraries(polar_internal_shared_preload_libraries,
+				   "polar_internal_shared_preload_libraries",
+				   false);
+	/* POLAR end */
+
 	load_libraries(shared_preload_libraries_string,
 				   "shared_preload_libraries",
 				   false);
@@ -1737,4 +1797,362 @@ pg_bindtextdomain(const char *domain)
 		pg_bind_textdomain_codeset(domain);
 	}
 #endif
+}
+
+/*
+ * POLAR: construct path to a database directory
+ * include shared storage dir
+ */
+char *
+polar_get_database_path(Oid dbNode, Oid spcNode)
+{
+	char	   *path = NULL;
+
+	path = GetDatabasePath(dbNode, spcNode);
+
+	if (polar_enable_shared_storage_mode)
+	{
+		char	   *polar_path = psprintf("%s/%s", polar_datadir, path);
+
+		pfree(path);
+		return polar_path;
+	}
+
+	return path;
+}
+
+
+/*
+ * POLAR: load polar_vfs plugin for shared storage mode.
+ */
+void
+polar_load_vfs(void)
+{
+	process_shared_preload_libraries_in_progress = true;
+	load_file("polar_vfs", false);
+	process_shared_preload_libraries_in_progress = false;
+}
+
+/*
+ * Remove all subdirectories and files in a directory
+ */
+void
+polar_remove_file_in_dir(const char *dirname)
+{
+	DIR		   *dir;
+	struct dirent *de;
+	char		rm_path[MAXPGPATH * 2];
+	struct stat statbuf;
+
+	dir = AllocateDir(dirname);
+
+	if (dir == NULL)
+		ereport(ERROR,
+				(errcode_for_file_access(),
+				 errmsg("could not open directory \"%s\": %m", dirname)));
+
+	while ((de = ReadDir(dir, dirname)) != NULL)
+	{
+		if (strcmp(de->d_name, ".") == 0 ||
+			strcmp(de->d_name, "..") == 0)
+			continue;
+
+		snprintf(rm_path, sizeof(rm_path), "%s/%s", dirname, de->d_name);
+		if (lstat(rm_path, &statbuf) < 0)
+			ereport(LOG,
+					(errcode_for_file_access(),
+					 errmsg("could not stat file \"%s\": %m", rm_path)));
+
+		if (S_ISDIR(statbuf.st_mode))
+		{
+			/* recursively remove contents, then directory itself */
+			polar_remove_file_in_dir(rm_path);
+
+			if (rmdir(rm_path) < 0)
+				ereport(LOG,
+						(errcode_for_file_access(),
+						 errmsg("could not remove directory \"%s\": %m", rm_path)));
+		}
+		else
+		{
+			if (unlink(rm_path) < 0)
+				ereport(LOG,
+						(errcode_for_file_access(),
+						 errmsg("could not remove file \"%s\": %m", rm_path)));
+		}
+	}
+
+	FreeDir(dir);
+}
+
+/*
+ * POLAR: Initialize the local directories
+ * for primary and standby, remove local cache file
+ * for replica, do not remove local cache file, copy dirs from shared storage to local
+ */
+void
+polar_init_local_dir(void)
+{
+	if (IsUnderPostmaster && polar_enable_shared_storage_mode)
+	{
+		if (polar_is_replica())
+		{
+			elog(LOG, "copy dirs from shared storage to local for replica");
+			polar_copy_dirs_from_shared_storage_to_local();
+		}
+		else
+			polar_remove_local_cache();
+	}
+}
+
+/*
+ * POLAR: copy pg_control file from shared storage to local for replica or standby
+ * for standby, maintain local copy of control file to ensure promote
+ * can be triggered successfully.
+ */
+static void
+polar_copy_pg_control_from_shared_storage_to_local(void)
+{
+	char	   *global = "global";
+	char	   *control = "pg_control";
+	char		ss_path[MAXPGPATH * 2];
+	char		to_path[MAXPGPATH * 2];
+	char		backup_path[MAXPGPATH * 2];
+	struct stat stat_info;
+
+	snprintf(to_path, sizeof(to_path), "%s/%s", global, control);
+
+	/* save local pg_control when in replica mode */
+	if (polar_is_replica())
+	{
+		snprintf(backup_path, sizeof(backup_path), "%s", POLAR_REPLICA_LOCAL_CONTROL);
+
+		if (polar_stat(to_path, &stat_info) == 0 &&
+			polar_rename(to_path, backup_path) != 0)
+			ereport(ERROR,
+					(errcode_for_file_access(),
+					 errmsg("could not rename file: \"%s\" to file: \"%s\": %m", to_path, backup_path)));
+	}
+
+	/* For global directory, if exists, clean it and copy the pg_control file */
+	if (mkdir(global, S_IRWXU) != 0)
+	{
+		if (EEXIST == errno)
+			polar_remove_file_in_dir(global);
+		else
+			ereport(ERROR,
+					(errcode_for_file_access(),
+					 errmsg("could not create directory \"%s\": %m", global)));
+	}
+
+	/* Copy the pg_control file */
+	polar_make_file_path_level2(ss_path, to_path);
+	polar_copy_file(ss_path, to_path, false);
+}
+
+/*
+ * POLAR: Initialize the local global directories for replica or standby node
+ * copy pg_control file from shared storage to local, called by postmaster
+ */
+void
+polar_init_global_dir_for_replica_or_standby(void)
+{
+	if (!IsUnderPostmaster
+		&& polar_enable_shared_storage_mode
+		&& (polar_is_replica() || polar_is_standby()))
+	{
+		elog(LOG, "copy pg_control file from shared storage to local");
+		polar_copy_pg_control_from_shared_storage_to_local();
+	}
+}
+
+/* POLAR: remove local cache */
+static void
+polar_remove_local_cache(void)
+{
+	polar_remove_clog_local_cache_file();
+	polar_remove_commit_ts_local_cache_file();
+	polar_remove_multixcat_local_cache_file();
+}
+
+/*
+ * POLAR: create the POLAR_REPLICA_BOOTED_FILE file so that we could
+ * copy trans files depend on the local pg_control next time when replica starts
+ */
+void
+polar_create_replica_booted_file()
+{
+	struct stat stat;
+	char		path[MAXPGPATH];
+	int			fd;
+
+	snprintf((path), MAXPGPATH, "%s/%s", DataDir, POLAR_REPLICA_BOOTED_FILE);
+	if (polar_stat(path, &stat) != 0)
+	{
+		fd = OpenTransientFile(path, O_RDWR | O_CREAT | O_EXCL | PG_BINARY);
+		if (fd < 0)
+			ereport(WARNING,
+					(errcode_for_file_access(),
+					 errmsg("could not create file \"%s\": %m, " \
+							"local dir initialization will be executed next " \
+							"time when replica start regardless of the redoptr gap",
+							path)));
+		else
+		{
+			CloseTransientFile(fd);
+			elog(LOG, "create file \"%s\"", POLAR_REPLICA_BOOTED_FILE);
+		}
+	}
+}
+
+/*
+ * POLAR: detele POLAR_REPLICA_BOOTED_FILE if current node is not replica
+ * so that we can execute local dir initilization when primary demote to a replica
+ */
+void
+polar_remove_replica_booted_file()
+{
+	struct stat stat;
+	char		path[MAXPGPATH];
+
+	snprintf((path), MAXPGPATH, "%s/%s", DataDir, POLAR_REPLICA_BOOTED_FILE);
+	if (polar_stat(path, &stat) == 0)
+	{
+		if (polar_unlink(path) != 0)
+			ereport(FATAL,
+					(errcode_for_file_access(),
+					 errmsg("could not remove file \"%s\": %m", path)));
+		else
+			elog(LOG, "remove file \"%s\"", POLAR_REPLICA_BOOTED_FILE);
+	}
+}
+
+static void
+polar_copy_shared_trans_dirs(void)
+{
+	char		local_ctlfile_path[MAXPGPATH],
+				booted_file[MAXPGPATH];
+	ControlFileData local_ctlfile;
+	ControlFileData *control_file = polar_get_control_file();
+	struct stat stat_info;
+	bool		copy_all = false;
+	int			saved_errno;
+
+	MemSet(&local_ctlfile, 0, sizeof(ControlFileData));
+	snprintf(local_ctlfile_path, MAXPGPATH, "%s", POLAR_REPLICA_LOCAL_CONTROL);
+	snprintf(booted_file, MAXPGPATH, "%s", POLAR_REPLICA_BOOTED_FILE);
+
+	/*
+	 * copy all files when: 1. copydata optimization is disabled 2.
+	 * POLAR_REPLICA_BOOTED_FILE doesn't exist, which indicates it is the
+	 * first time for replica to boot after initdb or demote from a primary 3.
+	 * local control file doesn't exist 4. primary's redo is smaller than
+	 * replica's redo, which may occur when in backup and recovery scene.
+	 */
+	if (!polar_enable_replica_copydata_optimization ||
+		polar_stat(booted_file, &stat_info) != 0 ||
+		(!polar_read_control_file(local_ctlfile_path, &local_ctlfile, LOG, &saved_errno) && saved_errno == ENOENT) ||
+		control_file->checkPointCopy.redo < local_ctlfile.checkPointCopy.redo)
+		copy_all = true;
+
+	/* copy trans status files */
+	elog(LOG, "copy shared trans dirs for replica, copy_all: %d", copy_all);
+	polar_init_local_clog(local_ctlfile.checkPointCopy.oldestXid, copy_all);
+	polar_init_local_commit_ts(local_ctlfile.checkPointCopy.oldestCommitTsXid, copy_all);
+	polar_init_local_multixact(local_ctlfile.checkPointCopy.oldestMulti, copy_all);
+
+	polar_unlink(local_ctlfile_path);
+}
+
+/*
+ * POLAR: copy base dirs and other trans status log files from shared storage to local for replica
+ * called by startup process
+ */
+void
+polar_copy_dirs_from_shared_storage_to_local(void)
+{
+	char	   *base = "base";
+	char		ss_path[MAXPGPATH * 2];
+	char		to_path[MAXPGPATH * 2];
+	DIR		   *dir;
+	struct dirent *de;
+	int			read_dir_err;
+
+	/* For base directory, copy the new files from shared storage */
+	if (mkdir(base, S_IRWXU) != 0 && EEXIST != errno)
+		ereport(ERROR,
+				(errcode_for_file_access(),
+				 errmsg("could not create directory \"%s\": %m", base)));
+
+	/* Copy base subdirectories to local */
+	polar_make_file_path_level2(ss_path, base);
+
+	/*
+	 * For polar store, the readdir will cache a dir entry, if the dir is
+	 * deleted when readdir, it will fail. So we should retry.
+	 */
+read_dir_failed:
+
+	read_dir_err = 0;
+	dir = AllocateDir(ss_path);
+	if (dir == NULL)
+		ereport(ERROR,
+				(errcode_for_file_access(),
+				 errmsg("could not open directory \"%s\": %m", ss_path)));
+
+	while ((de = polar_read_dir_ext(dir, ss_path, WARNING, &read_dir_err)) != NULL)
+	{
+		struct stat fst;
+
+		/* If we got a cancel signal during the copy of the directory, quit */
+		CHECK_FOR_INTERRUPTS();
+
+		if (strcmp(de->d_name, ".") == 0 ||
+			strcmp(de->d_name, "..") == 0)
+			continue;
+
+		snprintf(to_path, sizeof(to_path), "%s/%s", base, de->d_name);
+		polar_make_file_path_level2(ss_path, to_path);
+
+		if (polar_stat(ss_path, &fst) < 0)
+		{
+			/* May be deleted after ReadDir */
+			ereport(INFO,
+					(errcode_for_file_access(),
+					 errmsg("could not stat file \"%s\": %m", ss_path)));
+
+			/* Skip it, continue to deal with other directories */
+			continue;
+		}
+
+		if (S_ISDIR(fst.st_mode))
+		{
+			/* If it is nonexistent, create one, if has error, skip it */
+			if (mkdir(to_path, S_IRWXU) != 0 && EEXIST != errno)
+				ereport(INFO,
+						(errcode_for_file_access(),
+						 errmsg("could not create directory \"%s\": %m", to_path)));
+		}
+	}
+
+	if (read_dir_err == ENOENT)
+	{
+		ereport(LOG,
+				(errcode_for_file_access(),
+				 errmsg("When readdir, some entries were deleted, retry.")));
+		goto read_dir_failed;
+	}
+
+	/* Copy all pg_twophase files */
+	polar_make_file_path_level2(ss_path, "pg_twophase");
+	polar_copydir(ss_path, "pg_twophase", true, true, true);
+
+	/*
+	 * copy trans status files, include pg_xact, pg_csnlog, pg_commit_ts,
+	 * pg_multixact
+	 */
+	polar_copy_shared_trans_dirs();
+
+	/* create the polar_replica_booted file after copy is done */
+	polar_create_replica_booted_file();
 }

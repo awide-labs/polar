@@ -116,4 +116,10 @@ extern void DescribeLockTag(StringInfo buf, const LOCKTAG *tag);
 
 extern const char *GetLockNameFromTagType(uint16 locktag_type);
 
+/* POLAR */
+extern void polar_acquire_relfile_lock(RelFileNode rnode, ForkNumber forknum, LOCKMODE lockmode);
+extern void polar_release_relfile_lock(RelFileNode rnode, ForkNumber forknum, LOCKMODE lockmode);
+
+/* POLAR end */
+
 #endif							/* LMGR_H */

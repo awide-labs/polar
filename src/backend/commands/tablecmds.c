@@ -637,6 +637,11 @@ static List *GetParentedForeignKeyRefs(Relation partition);
 static void ATDetachCheckNoForeignKeyRefs(Relation partition);
 static char GetAttributeCompression(Oid atttypid, char *compression);
 
+/* POLAR: GUC */
+bool		polar_force_unlogged_to_logged_table;
+
+/* POLAR end */
+
 
 /* ----------------------------------------------------------------
  *		DefineRelation
@@ -681,6 +686,23 @@ DefineRelation(CreateStmt *stmt, char relkind, Oid ownerId,
 	LOCKMODE	parentLockmode;
 	const char *accessMethod = NULL;
 	Oid			accessMethodId = InvalidOid;
+
+	/*
+	 * POLAR: change unlogged table to logged table. Since unlogged table does
+	 * not support primary-replica mode, it does not write WAL. We must do it
+	 * before creating table.
+	 *
+	 * We do it in DefineRelation() because not only creating unlogged table
+	 * but also SELECT INTO XXX un-logged table, both call DefineRelation().
+	 */
+	if (polar_force_unlogged_to_logged_table &&
+		stmt->relation->relpersistence == RELPERSISTENCE_UNLOGGED)
+	{
+		stmt->relation->relpersistence = RELPERSISTENCE_PERMANENT;
+		elog(WARNING, "change unlogged table to logged table, "
+			 "because unlogged table does not support primary-replica mode");
+	}
+	/* POLAR end */
 
 	/*
 	 * Truncate relname to appropriate length (probably a waste of time, as
@@ -16487,6 +16509,15 @@ ATPrepChangePersistence(Relation rel, bool toLogged)
 				 errmsg("cannot change table \"%s\" to unlogged because it is part of a publication",
 						RelationGetRelationName(rel)),
 				 errdetail("Unlogged relations cannot be replicated.")));
+
+	/* POLAR: forbid ALTER TABLE to unlogged table. */
+	if (polar_force_unlogged_to_logged_table && !toLogged)
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_TABLE_DEFINITION),
+				 errmsg("cannot change table \"%s\" to unlogged",
+						RelationGetRelationName(rel)),
+				 errdetail("Unlogged table does not support primary-replica mode.")));
+	/* POLAR end */
 
 	/*
 	 * Check existing foreign key constraints to preserve the invariant that

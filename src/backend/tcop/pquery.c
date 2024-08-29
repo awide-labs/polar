@@ -168,21 +168,29 @@ ProcessQuery(PlannedStmt *plan,
 		{
 			case CMD_SELECT:
 				SetQueryCompletion(qc, CMDTAG_SELECT, queryDesc->estate->es_processed);
+				/* POLAR */
+				polar_audit_log.select_row_count += queryDesc->estate->es_processed;
 				break;
 			case CMD_INSERT:
 				SetQueryCompletion(qc, CMDTAG_INSERT, queryDesc->estate->es_processed);
 				break;
 			case CMD_UPDATE:
 				SetQueryCompletion(qc, CMDTAG_UPDATE, queryDesc->estate->es_processed);
+				/* POLAR */
+				polar_audit_log.update_row_count += queryDesc->estate->es_processed;
 				break;
 			case CMD_DELETE:
 				SetQueryCompletion(qc, CMDTAG_DELETE, queryDesc->estate->es_processed);
+				/* POLAR */
+				polar_audit_log.delete_row_count += queryDesc->estate->es_processed;
 				break;
 			case CMD_MERGE:
 				SetQueryCompletion(qc, CMDTAG_MERGE, queryDesc->estate->es_processed);
 				break;
 			default:
 				SetQueryCompletion(qc, CMDTAG_UNKNOWN, queryDesc->estate->es_processed);
+				/* POLAR */
+				polar_audit_log.examined_row_count += queryDesc->estate->es_processed;
 				break;
 		}
 	}
@@ -766,6 +774,9 @@ PortalRun(Portal portal, long count, bool isTopLevel, bool run_once,
 				 * Now fetch desired portion of results.
 				 */
 				nprocessed = PortalRunSelect(portal, true, count, dest);
+
+				/* POLAR */
+				polar_audit_log.select_row_count += nprocessed;
 
 				/*
 				 * If the portal result contains a command tag and the caller

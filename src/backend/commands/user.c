@@ -3,6 +3,7 @@
  * user.c
  *	  Commands for manipulating roles (formerly called users).
  *
+ * Portions Copyright (c) 2024, Alibaba Group Holding Limited
  * Portions Copyright (c) 1996-2022, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *

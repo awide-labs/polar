@@ -42,10 +42,22 @@
 #include "storage/buf.h"
 
 /* WALOpenSegment represents a WAL segment being read. */
+/*
+ * POLAR: There are some issues with xlog buffer and xlog queue.
+ * These two buffers are inside shared memory and save some XLOG records
+ * or XLOG records' meta information. Therefore, they could push forward
+ * XLogReaderState's seg.ws_segno without segment_open and segment_close。
+ * As a result, it could cause XLogReaderState's seg.ws_file and
+ * seg.ws_segno to be inconsistent. So, we save the previous opened segno
+ * in prev_ws_segno and reopen the new segment after the previous opened
+ * segment was closed when XLogReaderState's seg.prev_ws_segno is different
+ * with seg.ws_segno.
+ */
 typedef struct WALOpenSegment
 {
 	int			ws_file;		/* segment file descriptor */
-	XLogSegNo	ws_segno;		/* segment number */
+	XLogSegNo	ws_segno;		/* POLAR: segment number which is accessing */
+	XLogSegNo	prev_ws_segno;	/* POLAR: segment number which has been opened */
 	TimeLineID	ws_tli;			/* timeline ID of the currently open file */
 } WALOpenSegment;
 
@@ -169,6 +181,15 @@ typedef struct DecodedXLogRecord
 	char	   *main_data;		/* record's main data portion */
 	uint32		main_data_len;	/* main data portion's length */
 	int			max_block_id;	/* highest block_id in use (-1 if none) */
+
+	/*
+	 * POLAR: the first part of xlog meta which includes XLogRecordHeader,
+	 * XLogRecordBlockHeader and XLogRecordDataHaeder and it's length. In
+	 * order to reserve XLOG queue space to store the whole xlog meta only for
+	 * standby node.
+	 */
+	char	   *polar_xlog_meta;
+	uint32		polar_xlog_meta_size;
 	DecodedBkpBlock blocks[FLEXIBLE_ARRAY_MEMBER];
 } DecodedXLogRecord;
 
@@ -267,6 +288,15 @@ struct XLogReaderState
 	char	   *readBuf;
 	uint32		readLen;
 
+	/*
+	 * POLAR: fields for bulk reading xlog pages.
+	 */
+	char	   *bulk_read_buffer;	/* WAL page buffer */
+	uint32		bulk_read_buffer_len;	/* # of valid pages in the page buffer */
+	uint32		bulk_read_buffer_size;	/* # of capacity for the page buffer */
+	XLogRecPtr	bulk_read_buffer_start; /* LSN of the first page in buffer */
+	/* POLAR end */
+
 	/* last read XLOG position for data currently in readBuf */
 	WALSegmentContext segcxt;
 	WALOpenSegment seg;
@@ -316,6 +346,9 @@ struct XLogReaderState
 	 * data.
 	 */
 	bool		nonblocking;
+
+	/* POLAR: whether save xlog meta or not */
+	bool		polar_save_xlog_meta;
 };
 
 /*
@@ -418,13 +451,20 @@ extern bool DecodeXLogRecord(XLogReaderState *state,
 #define XLogRecHasAnyBlockRefs(decoder) ((decoder)->record->max_block_id >= 0)
 #define XLogRecMaxBlockId(decoder) ((decoder)->record->max_block_id)
 #define XLogRecGetBlock(decoder, i) (&(decoder)->record->blocks[(i)])
+#define XLogRecHasBlockRefInUse(decoder, block_id)		\
+	((decoder)->record->blocks[block_id].in_use)
 #define XLogRecHasBlockRef(decoder, block_id)			\
 	(((decoder)->record->max_block_id >= (block_id)) &&	\
-	 ((decoder)->record->blocks[block_id].in_use))
+	 XLogRecHasBlockRefInUse(decoder, block_id))
 #define XLogRecHasBlockImage(decoder, block_id)		\
 	((decoder)->record->blocks[block_id].has_image)
 #define XLogRecBlockImageApply(decoder, block_id)		\
 	((decoder)->record->blocks[block_id].apply_image)
+
+/* POLAR: provide access to xlog meta */
+#define PolarXLogRecGetMeta(decoder) ((decoder)->record->polar_xlog_meta)
+#define PolarXLogRecGetMetaLen(decoder) ((decoder)->record->polar_xlog_meta_size)
+/* POLAR end */
 
 #ifndef FRONTEND
 extern FullTransactionId XLogRecGetFullXid(XLogReaderState *record);
@@ -439,5 +479,64 @@ extern bool XLogRecGetBlockTagExtended(XLogReaderState *record, uint8 block_id,
 									   RelFileNode *rnode, ForkNumber *forknum,
 									   BlockNumber *blknum,
 									   Buffer *prefetch_buffer);
+
+/*
+ * POLAR WAL
+ * Use the 'header' of wal content to identify subtypes of POLARWAL
+ * In this way, multiple our's wal types can be extended without
+ * affecting the compatibility between new and old version.
+ *
+ * Common Usage
+ * 1. Add your subtype in enum PolarWalType.
+ ​* 2. Make sure PolarWalType is the first element in your wal struct
+ * 3. Write WAL：
+ * XLogBeginInsert -> XLogRegisterData -> XLogInsert(RM_XLOG_ID, POLAR_WAL) -> XLogFlush.
+ * Please make sure the wal content header PolarWalType is set.
+ * 3. Read WAL: XLogRecGetData
+ * the record include PolarWalType header.
+ */
+typedef enum PolarWalType
+{
+	PWT_ALTERSYSTEMFORCLUSTER = 3,
+	PWT_ALTERSYSTEMFORCLUSTER_RELOAD = 11,
+	PWT_FPSI = 13,				/* Fullpage Snapshot */
+	PWT_TOTAL
+} PolarWalType;
+
+/* POLAR: polar xlog reader state */
+typedef struct polar_xlog_reader_state
+{
+	XLogRecPtr	ReadRecPtr;
+	XLogRecPtr	EndRecPtr;
+	XLogRecPtr	currRecPtr;
+	XLogRecPtr	DecodeRecPtr;
+	XLogRecPtr	NextRecPtr;
+	XLogRecPtr	PrevRecPtr;
+} polar_xlog_reader_state;
+
+#define POLAR_COPY_XLOG_READER_STATE(dst, src) \
+do \
+{ \
+	(dst)->ReadRecPtr = (src)->ReadRecPtr; \
+	(dst)->EndRecPtr = (src)->EndRecPtr; \
+	(dst)->currRecPtr = (src)->currRecPtr; \
+	(dst)->DecodeRecPtr = (src)->DecodeRecPtr; \
+	(dst)->NextRecPtr = (src)->NextRecPtr; \
+	(dst)->PrevRecPtr = (src)->PrevRecPtr; \
+} while (0)
+
+#define POLAR_XLOG_READER_STATE_FORMAT \
+	"'currRecPtr: %X/%X, read record: (%X/%X, %X/%X), decoded record: (%X/%X, %X/%X, %X/%X)'"
+#define POLAR_XLOG_READER_STATE_ARGS(state) \
+	LSN_FORMAT_ARGS((state)->currRecPtr), LSN_FORMAT_ARGS((state)->ReadRecPtr), LSN_FORMAT_ARGS((state)->EndRecPtr), \
+	LSN_FORMAT_ARGS((state)->DecodeRecPtr), LSN_FORMAT_ARGS((state)->NextRecPtr), LSN_FORMAT_ARGS((state)->PrevRecPtr)
+
+
+extern void allocate_recordbuf(XLogReaderState *state, uint32 reclength);
+extern void report_invalid_record(XLogReaderState *state, const char *fmt,...)
+			pg_attribute_printf(2, 3);
+extern DecodedXLogRecord *XLogReadRecordAlloc(XLogReaderState *state, size_t xl_tot_len, bool allow_oversized);
+
+/* POLAR end */
 
 #endif							/* XLOGREADER_H */

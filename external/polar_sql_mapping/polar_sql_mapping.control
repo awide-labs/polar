@@ -1,0 +1,4 @@
+comment = 'Record error sqls and mapping them to correct one'
+default_version = '1.0'
+module_pathname = '$libdir/polar_sql_mapping'
+relocatable = true

@@ -20,6 +20,9 @@
 
 #include "pg_regress.h"
 
+/* POLAR */
+extern bool polar_prepare_sql;
+
 /*
  * start a psql test process for specified file (including redirection),
  * and return process ID
@@ -90,6 +93,10 @@ psql_start_test(const char *testname,
 		fprintf(stderr, _("command too long\n"));
 		exit(2);
 	}
+
+	/* POLAR: replace psql via dummy command */
+	if (polar_prepare_sql)
+		psql_cmd[0] = '\0';
 
 	appnameenv = psprintf("pg_regress/%s", testname);
 	setenv("PGAPPNAME", appnameenv, 1);

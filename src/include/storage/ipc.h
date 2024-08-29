@@ -21,6 +21,14 @@
 typedef void (*pg_on_exit_callback) (int code, Datum arg);
 typedef void (*shmem_startup_hook_type) (void);
 
+/* POLAR: hook for backend memory context */
+typedef enum
+{
+	POLAR_SET_SIGNAL_MCTX,
+	POLAR_CHECK_SIGNAL_MCTX
+} PolarHookActionType;
+typedef void (*polar_monitor_hook_type) (PolarHookActionType action);
+
 /*----------
  * API for handling cleanup that must occur during either ereport(ERROR)
  * or ereport(FATAL) exits from a block of code.  (Typical examples are
@@ -80,5 +88,13 @@ extern PGDLLIMPORT shmem_startup_hook_type shmem_startup_hook;
 extern Size CalculateShmemSize(int *num_semaphores);
 extern void CreateSharedMemoryAndSemaphores(void);
 extern void InitializeShmemGUCs(void);
+
+/* POLAR */
+extern PGDLLIMPORT polar_monitor_hook_type polar_monitor_hook;
+
+extern void polar_unlink_shmem_stat_file(int status, Datum arg);
+extern bool polar_check_before_shmem_exit(pg_on_exit_callback function, Datum arg, bool print_backtrace);
+
+/* POLAR end */
 
 #endif							/* IPC_H */

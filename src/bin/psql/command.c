@@ -142,6 +142,7 @@ static backslashResult exec_command_x(PsqlScanState scan_state, bool active_bran
 static backslashResult exec_command_z(PsqlScanState scan_state, bool active_branch);
 static backslashResult exec_command_shell_escape(PsqlScanState scan_state, bool active_branch);
 static backslashResult exec_command_slash_command_help(PsqlScanState scan_state, bool active_branch);
+static backslashResult exec_command_lsn(PsqlScanState scan_state, bool active_branch);
 static char *read_connect_arg(PsqlScanState scan_state);
 static PQExpBuffer gather_boolean_expression(PsqlScanState scan_state);
 static bool is_true_boolean_expression(PsqlScanState scan_state, const char *name);
@@ -364,6 +365,8 @@ exec_command(const char *cmd,
 		status = exec_command_include(scan_state, active_branch, cmd);
 	else if (strcmp(cmd, "if") == 0)
 		status = exec_command_if(scan_state, cstack, query_buf);
+	else if (strcmp(cmd, "lsn") == 0)
+		status = exec_command_lsn(scan_state, active_branch);
 	else if (strcmp(cmd, "l") == 0 || strcmp(cmd, "list") == 0 ||
 			 strcmp(cmd, "l+") == 0 || strcmp(cmd, "list+") == 0)
 		status = exec_command_list(scan_state, active_branch, cmd);
@@ -426,6 +429,10 @@ exec_command(const char *cmd,
 	 */
 	if (status == PSQL_CMD_SEND)
 		(void) copy_previous_query(query_buf, previous_buf);
+
+	/* POLAR: save current conditional statck at single step mode. */
+	if (pset.singlestep)
+		pset.polar_cur_cstack = conditional_stack_peek(cstack);
 
 	return status;
 }
@@ -529,6 +536,15 @@ exec_command_connect(PsqlScanState scan_state, bool active_branch)
 			free(opt2);
 			free(opt3);
 			free(opt4);
+
+			/* POLAR: print single mode log for connect database */
+			if (pset.singlestep)
+			{
+				fflush(stderr);
+				printf(_("***(File: %s, line number: %ld, connect database command)***\n"),
+					   pset.inputfile != NULL ? pset.inputfile : "", pset.lineno);
+				fflush(stdout);
+			}
 		}
 		free(opt1);
 	}
@@ -2571,6 +2587,28 @@ exec_command_T(PsqlScanState scan_state, bool active_branch)
 }
 
 /*
+ * \lsn -- show LSN infomation of database
+ */
+static backslashResult
+exec_command_lsn(PsqlScanState scan_state, bool active_branch)
+{
+	bool		success = true;
+
+	if (active_branch)
+	{
+		char	   *lsn = getenv("_polar_proxy_lsn");
+
+		if (lsn)
+			puts(lsn);
+		else
+			puts("no LSN infomation");
+		fflush(stdout);
+	}
+
+	return success ? PSQL_CMD_SKIP_LINE : PSQL_CMD_ERROR;
+}
+
+/*
  * \timing -- enable/disable timing of queries
  */
 static backslashResult
@@ -3628,11 +3666,11 @@ connection_warnings(bool in_startup)
 			}
 
 			printf(_("%s (%s, server %s)\n"),
-				   pset.progname, PG_VERSION, server_version);
+				   pset.progname, PG_VERSION_STR, server_version);
 		}
 		/* For version match, only print psql banner on startup. */
 		else if (in_startup)
-			printf("%s (%s)\n", pset.progname, PG_VERSION);
+			printf("%s (%s)\n", pset.progname, PG_VERSION_STR);
 
 		/*
 		 * Warn if server's major version is newer than ours, or if server

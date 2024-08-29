@@ -3,9 +3,26 @@
  * pg_buffercache_pages.c
  *	  display some contents of the buffer cache
  *
+ * Copyright (c) 2024, Alibaba Group Holding Limited
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ *
+ * IDENTIFICATION
  *	  contrib/pg_buffercache/pg_buffercache_pages.c
+ *
  *-------------------------------------------------------------------------
  */
+
 #include "postgres.h"
 
 #include "access/htup_details.h"
@@ -13,7 +30,14 @@
 #include "funcapi.h"
 #include "storage/buf_internals.h"
 #include "storage/bufmgr.h"
-
+/* POLAR: drop cache */
+#include "storage/smgr.h"
+#include "utils/builtins.h"
+#include "utils/rel.h"
+#include "utils/varlena.h"
+#include "catalog/namespace.h"
+#include "access/relation.h"
+/* POLAR end */
 
 #define NUM_BUFFERCACHE_PAGES_MIN_ELEM	8
 #define NUM_BUFFERCACHE_PAGES_ELEM	9
@@ -236,4 +260,104 @@ pg_buffercache_pages(PG_FUNCTION_ARGS)
 	}
 	else
 		SRF_RETURN_DONE(funcctx);
+}
+
+/* ----- POLAR DROP CACHE ----- */
+
+/* This interface is not concurrently safe */
+static void
+drop_relfile_node_buffers_internal(text *relname, ForkNumber forknum,
+								   BlockNumber first_del_block)
+{
+	RangeVar   *relrv;
+	Relation	rel;
+	SMgrRelation rd_smgr;
+
+	if (!superuser())
+		ereport(ERROR,
+				(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
+				 (errmsg("must be superuser to use raw functions"))));
+
+	relrv = makeRangeVarFromNameList(textToQualifiedNameList(relname));
+	rel = relation_openrv(relrv, AccessExclusiveLock);
+
+	/* Check that this relation has storage */
+	if (rel->rd_rel->relkind == RELKIND_VIEW)
+		ereport(ERROR,
+				(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+				 errmsg("cannot drop buffers from view \"%s\"",
+						RelationGetRelationName(rel))));
+	if (rel->rd_rel->relkind == RELKIND_COMPOSITE_TYPE)
+		ereport(ERROR,
+				(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+				 errmsg("cannot drop buffers from composite type \"%s\"",
+						RelationGetRelationName(rel))));
+	if (rel->rd_rel->relkind == RELKIND_FOREIGN_TABLE)
+		ereport(ERROR,
+				(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+				 errmsg("cannot drop buffers from foreign table \"%s\"",
+						RelationGetRelationName(rel))));
+	if (rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
+		ereport(ERROR,
+				(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+				 errmsg("cannot drop buffers from partitioned table \"%s\"",
+						RelationGetRelationName(rel))));
+	if (rel->rd_rel->relkind == RELKIND_PARTITIONED_INDEX)
+		ereport(ERROR,
+				(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+				 errmsg("cannot drop buffers from partitioned index \"%s\"",
+						RelationGetRelationName(rel))));
+
+	/*
+	 * Reject attempts to read non-local temporary relations; we would be
+	 * likely to get wrong data since we have no visibility into the owning
+	 * session's local buffers.
+	 */
+	if (RELATION_IS_OTHER_TEMP(rel))
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("cannot access temporary tables of other sessions")));
+
+	if (first_del_block >= RelationGetNumberOfBlocksInFork(rel, forknum))
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("block number %u is out of range for relation \"%s\"",
+						first_del_block, RelationGetRelationName(rel))));
+
+	RelationGetSmgr(rel);
+	rd_smgr = rel->rd_smgr;
+
+	DropRelFileNodeBuffers(rd_smgr, &forknum, 1, &first_del_block);
+
+	relation_close(rel, AccessExclusiveLock);
+}
+
+/*
+ * The function is used for drop relation cache
+ */
+PG_FUNCTION_INFO_V1(polar_drop_relation_buffers);
+Datum
+polar_drop_relation_buffers(PG_FUNCTION_ARGS)
+{
+	text	   *relname;
+	text	   *forkname;
+	ForkNumber	forknum;
+
+	/*
+	 * We don't normally bother to check the number of arguments to a C
+	 * function, but here it's needed for safety because early 8.4 beta
+	 * releases mistakenly redefined get_raw_page() as taking three arguments.
+	 */
+	if (PG_NARGS() != 2)
+		ereport(ERROR,
+				(errmsg("wrong number of arguments to drop_relation_buffers()"),
+				 errhint("Run the updated test_bulk_read.sql script.")));
+
+	relname = PG_GETARG_TEXT_PP(0);
+	forkname = PG_GETARG_TEXT_PP(1);
+	forknum = forkname_to_number(text_to_cstring(forkname));
+
+	drop_relfile_node_buffers_internal(relname, forknum, 0);
+
+	PG_RETURN_VOID();
 }

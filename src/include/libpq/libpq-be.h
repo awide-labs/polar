@@ -218,7 +218,22 @@ typedef struct Port
 	SSL		   *ssl;
 	X509	   *peer;
 #endif
+
+	/* POLAR: Proxy information  */
+	bool		polar_proxy;
+	SockAddr	polar_proxy_client_raddr;
+	int			polar_proxy_session_id;
+	int32		polar_proxy_cancel_key;
+	bool		polar_proxy_send_lsn;
+	bool		polar_proxy_send_xact;
+	bool		polar_proxy_ssl_in_use;
+	char	   *polar_proxy_ssl_cipher_name;
+	char	   *polar_proxy_ssl_version;
 } Port;
+
+#define POLAR_PROXY_GET_RADDR(port, proxy)		((proxy) ? (port)->polar_proxy_client_raddr : (port)->raddr)
+#define POLAR_PROXY_GET_RADDR_P(port, proxy)	((proxy) ? &(port)->polar_proxy_client_raddr : &(port)->raddr)
+#define POLAR_PROXY_GET_CLIENT_RADDR(port)		POLAR_PROXY_GET_RADDR(port, (port)->polar_proxy)
 
 #ifdef USE_SSL
 /*

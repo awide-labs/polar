@@ -28,4 +28,6 @@ OBJS = \
 	ts_cache.o \
 	typcache.o
 
+OBJS += polar_local_cache.o
+
 include $(top_srcdir)/src/backend/common.mk

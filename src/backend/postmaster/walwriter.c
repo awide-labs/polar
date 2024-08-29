@@ -62,7 +62,11 @@
 #include "utils/hsearch.h"
 #include "utils/memutils.h"
 #include "utils/resowner.h"
+#include "utils/timeout.h"
 
+/* POLAR */
+#include "access/polar_logindex_redo.h"
+/* POLAR end */
 
 /*
  * GUC parameters
@@ -114,6 +118,13 @@ WalWriterMain(void)
 	 * Reset some signals that are accepted by postmaster but not here
 	 */
 	pqsignal(SIGCHLD, SIG_DFL);
+
+	/*
+	 * POLAR: Establishes SIGALRM handler and initialize parameters to
+	 * facilitate the running of scheduled tasks. Some scheduled tasks will
+	 * cause assertion errors when parameters are not initialized.
+	 */
+	InitializeTimeouts();
 
 	/*
 	 * Create a memory context that we will do all our work in.  We do this so
@@ -256,6 +267,14 @@ WalWriterMain(void)
 			left_till_hibernate = LOOPS_UNTIL_HIBERNATE;
 		else if (left_till_hibernate > 0)
 			left_till_hibernate--;
+
+		/*
+		 * POLAR: Notify logindex saver to consume xlog queue when we have
+		 * done a epoch.
+		 */
+		if (polar_logindex_redo_instance &&
+			polar_logindex_redo_instance->logindex_saver_latch != NULL)
+			SetLatch(polar_logindex_redo_instance->logindex_saver_latch);
 
 		/* report pending statistics to the cumulative stats system */
 		pgstat_report_wal(false);

@@ -42,4 +42,9 @@ extern const char *generic_identify(uint8 info);
 extern void generic_desc(StringInfo buf, XLogReaderState *record);
 extern void generic_mask(char *pagedata, BlockNumber blkno);
 
+/* POLAR */
+extern void applyPageRedo(Page page, const char *delta, Size deltaSize);
+
+/* POLAR end */
+
 #endif							/* GENERIC_XLOG_H */

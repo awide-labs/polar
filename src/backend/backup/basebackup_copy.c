@@ -396,7 +396,7 @@ SendTablespaceList(List *tablespaces)
 
 	/* Construct and send the directory information */
 	pq_beginmessage(&buf, 'T'); /* RowDescription */
-	pq_sendint16(&buf, 3);		/* 3 fields */
+	pq_sendint16(&buf, 4);		/* 4 fields */
 
 	/* First field - spcoid */
 	pq_sendstring(&buf, "spcoid");
@@ -424,6 +424,15 @@ SendTablespaceList(List *tablespaces)
 	pq_sendint16(&buf, 8);
 	pq_sendint32(&buf, 0);
 	pq_sendint16(&buf, 0);
+
+	/* fourth field - shared_storage */
+	pq_sendstring(&buf, "shared_storage");
+	pq_sendint32(&buf, 0);
+	pq_sendint16(&buf, 0);
+	pq_sendint32(&buf, INT2OID);
+	pq_sendint16(&buf, 2);
+	pq_sendint32(&buf, 0);
+	pq_sendint16(&buf, 0);
 	pq_endmessage(&buf);
 
 	foreach(lc, tablespaces)
@@ -432,7 +441,7 @@ SendTablespaceList(List *tablespaces)
 
 		/* Send one datarow message */
 		pq_beginmessage(&buf, 'D');
-		pq_sendint16(&buf, 3);	/* number of columns */
+		pq_sendint16(&buf, 4);	/* number of columns */
 		if (ti->path == NULL)
 		{
 			pq_sendint32(&buf, -1); /* Length = -1 ==> NULL */
@@ -454,6 +463,16 @@ SendTablespaceList(List *tablespaces)
 			send_int8_string(&buf, ti->size / 1024);
 		else
 			pq_sendint32(&buf, -1); /* NULL */
+
+		if (ti->polar_shared)
+		{
+			pq_sendint32(&buf, 1);
+			pq_sendbytes(&buf, "1", 1);
+		}
+		else
+		{
+			pq_sendint32(&buf, -1); /* Length = -1 ==> NULL */
+		}
 
 		pq_endmessage(&buf);
 	}

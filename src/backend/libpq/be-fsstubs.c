@@ -53,6 +53,9 @@
 #include "utils/memutils.h"
 #include "utils/snapmgr.h"
 
+/* POLAR */
+#include "storage/polar_fd.h"
+
 /* define this to enable debug logging */
 /* #define FSDB 1 */
 /* chunk size for lo_import/lo_export transfers */
@@ -435,7 +438,7 @@ lo_import_internal(text *filename, Oid lobjOid)
 	 */
 	lobj = inv_open(oid, INV_WRITE, CurrentMemoryContext);
 
-	while ((nbytes = read(fd, buf, BUFSIZE)) > 0)
+	while ((nbytes = polar_read(fd, buf, BUFSIZE)) > 0)
 	{
 		tmp = inv_write(lobj, buf, nbytes);
 		Assert(tmp == nbytes);
@@ -511,7 +514,7 @@ be_lo_export(PG_FUNCTION_ARGS)
 	 */
 	while ((nbytes = inv_read(lobj, buf, BUFSIZE)) > 0)
 	{
-		tmp = write(fd, buf, nbytes);
+		tmp = polar_write(fd, buf, nbytes);
 		if (tmp != nbytes)
 			ereport(ERROR,
 					(errcode_for_file_access(),

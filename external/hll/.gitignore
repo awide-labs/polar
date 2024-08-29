@@ -1,0 +1,10 @@
+# Generated subdirectories
+/log/
+/results/
+/tmp_check/
+regression.out
+regression.diffs
+
+binary.dat
+.deps/
+*.sql

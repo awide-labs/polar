@@ -8,6 +8,7 @@
  * stepping on each others' toes.  Formerly we used table-level locks
  * on pg_database, but that's too coarse-grained.
  *
+ * Portions Copyright (c) 2024, Alibaba Group Holding Limited
  * Portions Copyright (c) 1996-2022, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
@@ -68,6 +69,12 @@
 #include "utils/relmapper.h"
 #include "utils/snapmgr.h"
 #include "utils/syscache.h"
+
+/* POLAR */
+#include "replication/syncrep.h"
+#include "access/polar_logindex_redo.h"
+#include "access/polar_rel_size_cache.h"
+#include "storage/polar_fd.h"
 
 /*
  * Create database strategy.
@@ -139,6 +146,9 @@ static void CreateDatabaseUsingFileCopy(Oid src_dboid, Oid dboid, Oid src_tsid,
 										Oid dst_tsid);
 static void recovery_create_dbdir(char *path, bool only_tblspc);
 
+/* POLAR */
+static void polar_sync_dropdb_wal(Oid db_id);
+
 /*
  * Create a new database using the WAL_LOG strategy.
  *
@@ -158,12 +168,24 @@ CreateDatabaseUsingWalLog(Oid src_dboid, Oid dst_dboid,
 	RelFileNode dstrnode;
 	CreateDBRelInfo *relinfo;
 
-	/* Get source and destination database paths. */
+	char	   *polar_dstpath = NULL;
+
 	srcpath = GetDatabasePath(src_dboid, src_tsid);
 	dstpath = GetDatabasePath(dst_dboid, dst_tsid);
 
+	polar_dstpath = polar_get_database_path(dst_dboid, dst_tsid);
+
 	/* Create database directory and write PG_VERSION file. */
-	CreateDirAndVersionFile(dstpath, dst_dboid, dst_tsid, false);
+	CreateDirAndVersionFile(polar_dstpath, dst_dboid, dst_tsid, false);
+
+	/* POLAR: Also need create local dir for cache file */
+	if (polar_enable_shared_storage_mode)
+	{
+		if (MakePGDirectory(dstpath) != 0)
+			ereport(ERROR,
+					(errcode_for_file_access(),
+					 errmsg("could not create directory \"%s\": %m", dstpath)));
+	}
 
 	/* Copy relmap file from source database to the destination database. */
 	RelationMapCopy(dst_dboid, dst_tsid, srcpath, dstpath);
@@ -222,6 +244,7 @@ CreateDatabaseUsingWalLog(Oid src_dboid, Oid dst_dboid,
 
 	pfree(srcpath);
 	pfree(dstpath);
+	pfree(polar_dstpath);
 	list_free_deep(rnodelist);
 }
 
@@ -496,7 +519,7 @@ CreateDirAndVersionFile(char *dbpath, Oid dbid, Oid tsid, bool isRedo)
 	/* Write PG_MAJORVERSION in the PG_VERSION file. */
 	pgstat_report_wait_start(WAIT_EVENT_VERSION_FILE_WRITE);
 	errno = 0;
-	if ((int) write(fd, buf, nbytes) != nbytes)
+	if ((int) polar_write(fd, buf, nbytes) != nbytes)
 	{
 		/* If write didn't set errno, assume problem is no disk space. */
 		if (errno == 0)
@@ -508,7 +531,7 @@ CreateDirAndVersionFile(char *dbpath, Oid dbid, Oid tsid, bool isRedo)
 	pgstat_report_wait_end();
 
 	pgstat_report_wait_start(WAIT_EVENT_VERSION_FILE_SYNC);
-	if (pg_fsync(fd) != 0)
+	if (polar_fsync(fd) != 0)
 		ereport(data_sync_elevel(ERROR),
 				(errcode_for_file_access(),
 				 errmsg("could not fsync file \"%s\": %m", versionfile)));
@@ -533,6 +556,7 @@ CreateDirAndVersionFile(char *dbpath, Oid dbid, Oid tsid, bool isRedo)
 						 sizeof(xl_dbase_create_wal_log_rec));
 
 		(void) XLogInsert(RM_DBASE_ID, XLOG_DBASE_CREATE_WAL_LOG);
+		POLAR_RECORD_DB_STATE(1, &(xlrec.tablespace_id), xlrec.db_id, POLAR_DB_NEW);
 
 		END_CRIT_SECTION();
 	}
@@ -586,9 +610,9 @@ CreateDatabaseUsingFileCopy(Oid src_dboid, Oid dst_dboid, Oid src_tsid,
 		if (srctablespace == GLOBALTABLESPACE_OID)
 			continue;
 
-		srcpath = GetDatabasePath(src_dboid, srctablespace);
+		srcpath = polar_get_database_path(src_dboid, srctablespace);
 
-		if (stat(srcpath, &st) < 0 || !S_ISDIR(st.st_mode) ||
+		if (polar_stat(srcpath, &st) < 0 || !S_ISDIR(st.st_mode) ||
 			directory_is_empty(srcpath))
 		{
 			/* Assume we can ignore it */
@@ -608,7 +632,30 @@ CreateDatabaseUsingFileCopy(Oid src_dboid, Oid dst_dboid, Oid src_tsid,
 		 *
 		 * We don't need to copy subdirectories
 		 */
-		copydir(srcpath, dstpath, false);
+		if (polar_enable_shared_storage_mode)
+		{
+			char	   *polar_dstpath = NULL;
+
+			polar_dstpath = polar_get_database_path(dst_dboid, dsttablespace);
+			polar_copydir(srcpath, polar_dstpath, false, false, false);
+
+			/* POLAR: Also need create local dir for cache file */
+			if (MakePGDirectory(dstpath) != 0)
+				ereport(ERROR,
+						(errcode_for_file_access(),
+						 errmsg("could not create directory \"%s\": %m", dstpath)));
+
+			pfree(polar_dstpath);
+		}
+		else
+		{
+			/*
+			 * Copy this subdirectory to the new location
+			 *
+			 * We don't need to copy subdirectories
+			 */
+			copydir(srcpath, dstpath, false);
+		}
 
 		/* Record the filesystem change in XLOG */
 		{
@@ -625,6 +672,7 @@ CreateDatabaseUsingFileCopy(Oid src_dboid, Oid dst_dboid, Oid src_tsid,
 
 			(void) XLogInsert(RM_DBASE_ID,
 							  XLOG_DBASE_CREATE_FILE_COPY | XLR_SPECIAL_REL_UPDATE);
+			POLAR_RECORD_DB_STATE(1, &(xlrec.tablespace_id), xlrec.db_id, POLAR_DB_NEW);
 		}
 		pfree(srcpath);
 		pfree(dstpath);
@@ -1202,9 +1250,9 @@ createdb(ParseState *pstate, const CreatedbStmt *stmt)
 			char	   *srcpath;
 			struct stat st;
 
-			srcpath = GetDatabasePath(src_dboid, dst_deftablespace);
+			srcpath = polar_get_database_path(src_dboid, dst_deftablespace);
 
-			if (stat(srcpath, &st) == 0 &&
+			if (polar_stat(srcpath, &st) == 0 &&
 				S_ISDIR(st.st_mode) &&
 				!directory_is_empty(srcpath))
 				ereport(ERROR,
@@ -1692,11 +1740,25 @@ dropdb(const char *dbname, bool missing_ok, bool force)
 	ReplicationSlotsDropDBSlots(db_id);
 
 	/*
+	 * POLAR: Before drop pages for this database that are in the shared
+	 * buffer cache and remove database files, we should synchronize a wal to
+	 * ensure that all replicas have no backends to use these pages and files.
+	 */
+	polar_sync_dropdb_wal(db_id);
+
+	/*
 	 * Drop pages for this database that are in the shared buffer cache. This
 	 * is important to ensure that no remaining backend tries to write out a
 	 * dirty buffer to the dead database later...
 	 */
 	DropDatabaseBuffers(db_id);
+
+	/*
+	 * POLAR RSC: drop entries of this database.
+	 */
+	if (POLAR_RSC_ENABLED())
+		polar_rsc_drop_entries(db_id, InvalidOid);
+	/* POLAR end */
 
 	/*
 	 * Tell checkpointer to forget any pending fsync and unlink requests for
@@ -1858,6 +1920,7 @@ movedb(const char *dbname, const char *tblspcname)
 	DIR		   *dstdir;
 	struct dirent *xlde;
 	movedb_failure_params fparms;
+	char	   *polar_dst_dbpath = NULL;
 
 	/*
 	 * Look up the target database's OID, and get exclusive lock on it. We
@@ -1946,7 +2009,9 @@ movedb(const char *dbname, const char *tblspcname)
 	/*
 	 * Get old and new database paths
 	 */
-	src_dbpath = GetDatabasePath(db_id, src_tblspcoid);
+	src_dbpath = polar_get_database_path(db_id, src_tblspcoid);
+	polar_dst_dbpath = polar_get_database_path(db_id, dst_tblspcoid);
+
 	dst_dbpath = GetDatabasePath(db_id, dst_tblspcoid);
 
 	/*
@@ -1990,10 +2055,10 @@ movedb(const char *dbname, const char *tblspcname)
 	 * relations' pg_class.reltablespace entries to zero, and we don't have
 	 * access to the DB's pg_class to do so.
 	 */
-	dstdir = AllocateDir(dst_dbpath);
+	dstdir = AllocateDir(polar_dst_dbpath);
 	if (dstdir != NULL)
 	{
-		while ((xlde = ReadDir(dstdir, dst_dbpath)) != NULL)
+		while ((xlde = ReadDir(dstdir, polar_dst_dbpath)) != NULL)
 		{
 			if (strcmp(xlde->d_name, ".") == 0 ||
 				strcmp(xlde->d_name, "..") == 0)
@@ -2012,9 +2077,9 @@ movedb(const char *dbname, const char *tblspcname)
 		 * The directory exists but is empty. We must remove it before using
 		 * the copydir function.
 		 */
-		if (rmdir(dst_dbpath) != 0)
+		if (polar_rmdir(polar_dst_dbpath) != 0)
 			elog(ERROR, "could not remove directory \"%s\": %m",
-				 dst_dbpath);
+				 polar_dst_dbpath);
 	}
 
 	/*
@@ -2031,7 +2096,18 @@ movedb(const char *dbname, const char *tblspcname)
 		/*
 		 * Copy files from the old tablespace to the new one
 		 */
-		copydir(src_dbpath, dst_dbpath, false);
+		if (polar_enable_shared_storage_mode)
+		{
+			polar_copydir(src_dbpath, polar_dst_dbpath, false, false, false);
+
+			/* POLAR: create local dir for cache file */
+			if (MakePGDirectory(dst_dbpath) != 0)
+				ereport(ERROR,
+						(errcode_for_file_access(),
+						 errmsg("could not create directory \"%s\": %m", dst_dbpath)));
+		}
+		else
+			copydir(src_dbpath, dst_dbpath, false);
 
 		/*
 		 * Record the filesystem change in XLOG
@@ -2050,6 +2126,7 @@ movedb(const char *dbname, const char *tblspcname)
 
 			(void) XLogInsert(RM_DBASE_ID,
 							  XLOG_DBASE_CREATE_FILE_COPY | XLR_SPECIAL_REL_UPDATE);
+			POLAR_RECORD_DB_STATE(1, &(xlrec.tablespace_id), xlrec.db_id, POLAR_DB_NEW);
 		}
 
 		/*
@@ -2148,6 +2225,7 @@ movedb(const char *dbname, const char *tblspcname)
 
 		(void) XLogInsert(RM_DBASE_ID,
 						  XLOG_DBASE_DROP | XLR_SPECIAL_REL_UPDATE);
+		POLAR_RECORD_DB_STATE(xlrec.ntablespaces, xlrec.tablespace_ids, xlrec.db_id, POLAR_DB_DROPED);
 	}
 
 	/* Now it's safe to release the database lock */
@@ -2156,6 +2234,7 @@ movedb(const char *dbname, const char *tblspcname)
 
 	pfree(src_dbpath);
 	pfree(dst_dbpath);
+	pfree(polar_dst_dbpath);
 }
 
 /* Error cleanup callback for movedb */
@@ -2171,6 +2250,17 @@ movedb_failure_callback(int code, Datum arg)
 	(void) rmtree(dstpath, true);
 
 	pfree(dstpath);
+
+	if (polar_enable_shared_storage_mode)
+	{
+		char	   *pdb_dstpath;
+
+		pdb_dstpath = polar_get_database_path(fparms->dest_dboid, fparms->dest_tsoid);
+		(void) rmtree(pdb_dstpath, true);
+
+		pfree(pdb_dstpath);
+	}
+
 }
 
 /*
@@ -2824,6 +2914,7 @@ remove_dbtablespaces(Oid db_id)
 	int			ntblspc;
 	int			i;
 	Oid		   *tablespace_ids;
+	bool		polar_have_data = false;
 
 	rel = table_open(TableSpaceRelationId, AccessShareLock);
 	scan = table_beginscan_catalog(rel, 0, NULL);
@@ -2833,6 +2924,8 @@ remove_dbtablespaces(Oid db_id)
 		Oid			dsttablespace = spcform->oid;
 		char	   *dstpath;
 		struct stat st;
+
+		char	   *polar_dstpath = NULL;
 
 		/* Don't mess with the global tablespace */
 		if (dsttablespace == GLOBALTABLESPACE_OID)
@@ -2844,16 +2937,41 @@ remove_dbtablespaces(Oid db_id)
 		{
 			/* Assume we can ignore it */
 			pfree(dstpath);
-			continue;
+			dstpath = NULL;
+		}
+		else
+		{
+			polar_have_data = true;
+			if (!rmtree(dstpath, true))
+				ereport(WARNING,
+						(errmsg("some useless files may be left behind in old database directory \"%s\"",
+								dstpath)));
+			pfree(dstpath);
 		}
 
-		if (!rmtree(dstpath, true))
-			ereport(WARNING,
-					(errmsg("some useless files may be left behind in old database directory \"%s\"",
-							dstpath)));
+		/* POLAR: Do shared storage data */
+		if (polar_enable_shared_storage_mode)
+		{
+			polar_dstpath = polar_get_database_path(db_id, dsttablespace);
+			if (polar_stat(polar_dstpath, &st) < 0 || !S_ISDIR(st.st_mode))
+			{
+				/* Assume we can ignore it */
+				pfree(polar_dstpath);
+				polar_dstpath = NULL;
+			}
+			else
+			{
+				polar_have_data = true;
+				if (!rmtree(polar_dstpath, true))
+					ereport(WARNING,
+							(errmsg("some useless files may be left behind in old database directory \"%s\"",
+									polar_dstpath)));
+				pfree(polar_dstpath);
+			}
+		}
 
-		ltblspc = lappend_oid(ltblspc, dsttablespace);
-		pfree(dstpath);
+		if (polar_have_data)
+			ltblspc = lappend_oid(ltblspc, dsttablespace);
 	}
 
 	ntblspc = list_length(ltblspc);
@@ -2870,6 +2988,7 @@ remove_dbtablespaces(Oid db_id)
 		tablespace_ids[i++] = lfirst_oid(cell);
 
 	/* Record the filesystem change in XLOG */
+	if (!polar_enable_shared_storage_mode)
 	{
 		xl_dbase_drop_rec xlrec;
 
@@ -2882,6 +3001,7 @@ remove_dbtablespaces(Oid db_id)
 
 		(void) XLogInsert(RM_DBASE_ID,
 						  XLOG_DBASE_DROP | XLR_SPECIAL_REL_UPDATE);
+		POLAR_RECORD_DB_STATE(xlrec.ntablespaces, xlrec.tablespace_ids, xlrec.db_id, POLAR_DB_DROPED);
 	}
 
 	list_free(ltblspc);
@@ -2924,9 +3044,9 @@ check_db_file_conflict(Oid db_id)
 		if (dsttablespace == GLOBALTABLESPACE_OID)
 			continue;
 
-		dstpath = GetDatabasePath(db_id, dsttablespace);
+		dstpath = polar_get_database_path(db_id, dsttablespace);
 
-		if (lstat(dstpath, &st) == 0)
+		if (polar_lstat(dstpath, &st) == 0)
 		{
 			/* Found a conflicting file (or directory, whatever) */
 			pfree(dstpath);
@@ -3097,7 +3217,7 @@ recovery_create_dbdir(char *path, bool only_tblspc)
 
 	Assert(RecoveryInProgress());
 
-	if (stat(path, &st) == 0)
+	if (polar_stat(path, &st) == 0)
 		return;
 
 	if (only_tblspc && strstr(path, "pg_tblspc/") == NULL)
@@ -3123,6 +3243,8 @@ void
 dbase_redo(XLogReaderState *record)
 {
 	uint8		info = XLogRecGetInfo(record) & ~XLR_INFO_MASK;
+	Oid			db_id;
+	Oid			tablespace_id;
 
 	/* Backup blocks are not used in dbase records */
 	Assert(!XLogRecHasAnyBlockRefs(record));
@@ -3136,15 +3258,27 @@ dbase_redo(XLogReaderState *record)
 		char	   *parent_path;
 		struct stat st;
 
-		src_path = GetDatabasePath(xlrec->src_db_id, xlrec->src_tablespace_id);
-		dst_path = GetDatabasePath(xlrec->db_id, xlrec->tablespace_id);
+		db_id = xlrec->db_id;
+		tablespace_id = xlrec->tablespace_id;
+
+		/* POLAR: replica mode only edit local dir */
+		if (polar_is_replica())
+		{
+			src_path = GetDatabasePath(xlrec->src_db_id, xlrec->src_tablespace_id);
+			dst_path = GetDatabasePath(xlrec->db_id, xlrec->tablespace_id);
+		}
+		else
+		{
+			src_path = polar_get_database_path(xlrec->src_db_id, xlrec->src_tablespace_id);
+			dst_path = polar_get_database_path(xlrec->db_id, xlrec->tablespace_id);
+		}
 
 		/*
 		 * Our theory for replaying a CREATE is to forcibly drop the target
 		 * subdirectory if present, then re-copy the source data. This may be
 		 * more work than needed, but it is simple to implement.
 		 */
-		if (stat(dst_path, &st) == 0 && S_ISDIR(st.st_mode))
+		if (polar_stat(dst_path, &st) == 0 && S_ISDIR(st.st_mode))
 		{
 			if (!rmtree(dst_path, true))
 				/* If this failed, copydir() below is going to error. */
@@ -3161,7 +3295,7 @@ dbase_redo(XLogReaderState *record)
 		 */
 		parent_path = pstrdup(dst_path);
 		get_parent_directory(parent_path);
-		if (stat(parent_path, &st) < 0)
+		if (polar_stat(parent_path, &st) < 0)
 		{
 			if (errno != ENOENT)
 				ereport(FATAL,
@@ -3178,8 +3312,16 @@ dbase_redo(XLogReaderState *record)
 		 * copydir below doesn't fail.  The directory will be dropped soon by
 		 * recovery.
 		 */
-		if (stat(src_path, &st) < 0 && errno == ENOENT)
+		if (polar_stat(src_path, &st) < 0 && errno == ENOENT)
 			recovery_create_dbdir(src_path, false);
+
+		/*
+		 * POLAR: Must finish to replay all the logindex related to source
+		 * database before FlushDatabaseBuffers, to ensure all blocks from
+		 * source database are at the latest state.
+		 */
+		if (POLAR_IN_PARALLEL_REPLAY_STANDBY_MODE(polar_logindex_redo_instance))
+			polar_logindex_replay_db(polar_logindex_redo_instance, xlrec->src_db_id);
 
 		/*
 		 * Force dirty buffers out to disk, to ensure source database is
@@ -3195,10 +3337,11 @@ dbase_redo(XLogReaderState *record)
 		 *
 		 * We don't need to copy subdirectories
 		 */
-		copydir(src_path, dst_path, false);
+		polar_copydir(src_path, dst_path, false, false, false);
 
 		pfree(src_path);
 		pfree(dst_path);
+		POLAR_RECORD_DB_STATE(1, &(xlrec->tablespace_id), xlrec->db_id, POLAR_DB_NEW);
 	}
 	else if (info == XLOG_DBASE_CREATE_WAL_LOG)
 	{
@@ -3207,7 +3350,13 @@ dbase_redo(XLogReaderState *record)
 		char	   *dbpath;
 		char	   *parent_path;
 
-		dbpath = GetDatabasePath(xlrec->db_id, xlrec->tablespace_id);
+		db_id = xlrec->db_id;
+		tablespace_id = xlrec->tablespace_id;
+
+		if (polar_is_replica())
+			dbpath = GetDatabasePath(xlrec->db_id, xlrec->tablespace_id);
+		else
+			dbpath = polar_get_database_path(xlrec->db_id, xlrec->tablespace_id);
 
 		/* create the parent directory if needed and valid */
 		parent_path = pstrdup(dbpath);
@@ -3217,7 +3366,9 @@ dbase_redo(XLogReaderState *record)
 		/* Create the database directory with the version file. */
 		CreateDirAndVersionFile(dbpath, xlrec->db_id, xlrec->tablespace_id,
 								true);
+
 		pfree(dbpath);
+		POLAR_RECORD_DB_STATE(1, &(xlrec->tablespace_id), xlrec->db_id, POLAR_DB_NEW);
 	}
 	else if (info == XLOG_DBASE_DROP)
 	{
@@ -3244,8 +3395,21 @@ dbase_redo(XLogReaderState *record)
 		/* Drop any database-specific replication slots */
 		ReplicationSlotsDropDBSlots(xlrec->db_id);
 
+		/*
+		 * POLAR: record db state to logindex's rel_size_cache before dropping
+		 * buffers.
+		 */
+		POLAR_RECORD_DB_STATE(xlrec->ntablespaces, xlrec->tablespace_ids, xlrec->db_id, POLAR_DB_DROPED);
+
 		/* Drop pages for this database that are in the shared buffer cache */
 		DropDatabaseBuffers(xlrec->db_id);
+
+		/*
+		 * POLAR RSC: drop entries of this database.
+		 */
+		if (POLAR_RSC_PRIMARY_ENABLED() || POLAR_RSC_STANDBY_ENABLED())
+			polar_rsc_drop_entries(xlrec->db_id, InvalidOid);
+		/* POLAR end */
 
 		/* Also, clean out any fsync requests that might be pending in md.c */
 		ForgetDatabaseSyncRequests(xlrec->db_id);
@@ -3258,13 +3422,27 @@ dbase_redo(XLogReaderState *record)
 
 		for (i = 0; i < xlrec->ntablespaces; i++)
 		{
+			if (!polar_is_replica())
+			{
+				dst_path = polar_get_database_path(xlrec->db_id, xlrec->tablespace_ids[i]);
+
+				/* And remove the physical files */
+				if (!rmtree(dst_path, true))
+					ereport(WARNING,
+							(errmsg("some useless files may be left behind in old database directory \"%s\"",
+									dst_path)));
+
+				pfree(dst_path);
+			}
+
 			dst_path = GetDatabasePath(xlrec->db_id, xlrec->tablespace_ids[i]);
 
-			/* And remove the physical files */
+			/* And remove the local files */
 			if (!rmtree(dst_path, true))
 				ereport(WARNING,
 						(errmsg("some useless files may be left behind in old database directory \"%s\"",
 								dst_path)));
+
 			pfree(dst_path);
 		}
 
@@ -3282,4 +3460,108 @@ dbase_redo(XLogReaderState *record)
 	}
 	else
 		elog(PANIC, "dbase_redo: unknown op code %u", info);
+
+	if ((info == XLOG_DBASE_CREATE_FILE_COPY || info == XLOG_DBASE_CREATE_WAL_LOG) &&
+		!polar_is_replica())
+	{
+		char	   *polar_dst_path;
+		struct stat st;
+
+		polar_dst_path = GetDatabasePath(db_id, tablespace_id);
+		if (lstat(polar_dst_path, &st) < 0)
+		{
+			/* POLAR: Also need create local dir for cache file */
+			if (MakePGDirectory(polar_dst_path) != 0)
+				ereport(ERROR,
+						(errcode_for_file_access(),
+						 errmsg("could not create directory \"%s\": %m", polar_dst_path)));
+		}
+		pfree(polar_dst_path);
+	}
+}
+
+static void
+polar_sync_dropdb_wal(Oid db_id)
+{
+	xl_dbase_drop_rec xlrec;
+	XLogRecPtr	polar_recptr;
+	Oid		   *tablespace_ids;
+
+	Relation	rel;
+	TableScanDesc scan;
+	HeapTuple	tuple;
+	List	   *ltblspc = NIL;
+	int			ntblspc;
+	int			i;
+	ListCell   *cell;
+
+	if (!polar_enable_shared_storage_mode)
+		return;
+
+	rel = table_open(TableSpaceRelationId, AccessShareLock);
+	scan = table_beginscan_catalog(rel, 0, NULL);
+	while ((tuple = heap_getnext(scan, ForwardScanDirection)) != NULL)
+	{
+		Form_pg_tablespace spcform = (Form_pg_tablespace) GETSTRUCT(tuple);
+		Oid			dsttablespace = spcform->oid;
+
+		char	   *dstpath = NULL;
+		struct stat st;
+
+		/* Don't mess with the global tablespace */
+		if (dsttablespace == GLOBALTABLESPACE_OID)
+			continue;
+
+		dstpath = GetDatabasePath(db_id, dsttablespace);
+
+		if (lstat(dstpath, &st) < 0 || !S_ISDIR(st.st_mode))
+		{
+			/* Assume we can ignore it */
+			pfree(dstpath);
+			continue;
+		}
+
+		ltblspc = lappend_oid(ltblspc, dsttablespace);
+		pfree(dstpath);
+	}
+
+	ntblspc = list_length(ltblspc);
+	if (ntblspc == 0)
+	{
+		table_endscan(scan);
+		table_close(rel, AccessShareLock);
+		return;
+	}
+
+	tablespace_ids = (Oid *) palloc(ntblspc * sizeof(Oid));
+	i = 0;
+	foreach(cell, ltblspc)
+		tablespace_ids[i++] = lfirst_oid(cell);
+
+	xlrec.db_id = db_id;
+	xlrec.ntablespaces = ntblspc;
+
+	XLogBeginInsert();
+	XLogRegisterData((char *) &xlrec, MinSizeOfDbaseDropRec);
+	XLogRegisterData((char *) tablespace_ids, ntblspc * sizeof(Oid));
+
+	polar_recptr = XLogInsert(RM_DBASE_ID,
+							  XLOG_DBASE_DROP | XLR_SPECIAL_REL_UPDATE);
+	POLAR_RECORD_DB_STATE(ntblspc, tablespace_ids, db_id, POLAR_DB_DROPED);
+
+	list_free(ltblspc);
+	pfree(tablespace_ids);
+
+	table_endscan(scan);
+	table_close(rel, AccessShareLock);
+
+	/*
+	 * POLAR: synchronous ddl, enable standby lock, wait all replica node
+	 * replay this log
+	 */
+	if (polar_enable_sync_ddl)
+	{
+		XLogFlush(polar_recptr);
+		SyncRepWaitForLSN(polar_recptr, false, true);
+	}
 }

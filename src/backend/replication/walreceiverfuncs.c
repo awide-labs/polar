@@ -31,6 +31,8 @@
 #include "storage/shmem.h"
 #include "utils/timestamp.h"
 
+#include "access/polar_logindex_redo.h"
+
 WalRcvData *WalRcv = NULL;
 
 /*
@@ -68,6 +70,9 @@ WalRcvShmemInit(void)
 		SpinLockInit(&WalRcv->mutex);
 		pg_atomic_init_u64(&WalRcv->writtenUpto, 0);
 		WalRcv->latch = NULL;
+
+		if (polar_logindex_redo_instance)
+			WalRcv->polar_use_xlog_queue = true;
 	}
 }
 
@@ -256,9 +261,15 @@ RequestXLogStreaming(TimeLineID tli, XLogRecPtr recptr, const char *conninfo,
 	 * segment (i.e., with no records in the first half of a segment) from
 	 * being created by XLOG streaming, which might cause trouble later on if
 	 * the segment is e.g archived.
+	 *
+	 * POLAR: In replica mode we don't write XLOG to disk, so care nothing
+	 * about half of a segment.
 	 */
-	if (XLogSegmentOffset(recptr, wal_segment_size) != 0)
-		recptr -= XLogSegmentOffset(recptr, wal_segment_size);
+	if (!polar_is_replica())
+	{
+		if (XLogSegmentOffset(recptr, wal_segment_size) != 0)
+			recptr -= XLogSegmentOffset(recptr, wal_segment_size);
+	}
 
 	SpinLockAcquire(&walrcv->mutex);
 

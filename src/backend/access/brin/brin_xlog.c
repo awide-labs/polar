@@ -34,7 +34,7 @@ brin_xlog_createidx(XLogReaderState *record)
 	page = (Page) BufferGetPage(buf);
 	brin_metapage_init(page, xlrec->pagesPerRange, xlrec->version);
 	PageSetLSN(page, lsn);
-	MarkBufferDirty(buf);
+	PolarMarkBufferDirty(buf, record->ReadRecPtr);
 	UnlockReleaseBuffer(buf);
 }
 
@@ -92,7 +92,7 @@ brin_xlog_insert_update(XLogReaderState *record,
 			elog(PANIC, "brin_xlog_insert_update: failed to add tuple");
 
 		PageSetLSN(page, lsn);
-		MarkBufferDirty(buffer);
+		PolarMarkBufferDirty(buffer, record->ReadRecPtr);
 	}
 	if (BufferIsValid(buffer))
 		UnlockReleaseBuffer(buffer);
@@ -109,7 +109,7 @@ brin_xlog_insert_update(XLogReaderState *record,
 		brinSetHeapBlockItemptr(buffer, xlrec->pagesPerRange, xlrec->heapBlk,
 								tid);
 		PageSetLSN(page, lsn);
-		MarkBufferDirty(buffer);
+		PolarMarkBufferDirty(buffer, record->ReadRecPtr);
 	}
 	if (BufferIsValid(buffer))
 		UnlockReleaseBuffer(buffer);
@@ -153,7 +153,7 @@ brin_xlog_update(XLogReaderState *record)
 		PageIndexTupleDeleteNoCompact(page, offnum);
 
 		PageSetLSN(page, lsn);
-		MarkBufferDirty(buffer);
+		PolarMarkBufferDirty(buffer, record->ReadRecPtr);
 	}
 
 	/* Then insert the new tuple and update revmap, like in an insertion. */
@@ -193,7 +193,7 @@ brin_xlog_samepage_update(XLogReaderState *record)
 			elog(PANIC, "brin_xlog_samepage_update: failed to replace tuple");
 
 		PageSetLSN(page, lsn);
-		MarkBufferDirty(buffer);
+		PolarMarkBufferDirty(buffer, record->ReadRecPtr);
 	}
 	if (BufferIsValid(buffer))
 		UnlockReleaseBuffer(buffer);
@@ -245,7 +245,7 @@ brin_xlog_revmap_extend(XLogReaderState *record)
 		((PageHeader) metapg)->pd_lower =
 			((char *) metadata + sizeof(BrinMetaPageData)) - (char *) metapg;
 
-		MarkBufferDirty(metabuf);
+		PolarMarkBufferDirty(metabuf, record->ReadRecPtr);
 	}
 
 	/*
@@ -258,7 +258,7 @@ brin_xlog_revmap_extend(XLogReaderState *record)
 	brin_page_init(page, BRIN_PAGETYPE_REVMAP);
 
 	PageSetLSN(page, lsn);
-	MarkBufferDirty(buf);
+	PolarMarkBufferDirty(buf, record->ReadRecPtr);
 
 	UnlockReleaseBuffer(buf);
 	if (BufferIsValid(metabuf))
@@ -285,7 +285,7 @@ brin_xlog_desummarize_page(XLogReaderState *record)
 		brinSetHeapBlockItemptr(buffer, xlrec->pagesPerRange, xlrec->heapBlk, iptr);
 
 		PageSetLSN(BufferGetPage(buffer), lsn);
-		MarkBufferDirty(buffer);
+		PolarMarkBufferDirty(buffer, record->ReadRecPtr);
 	}
 	if (BufferIsValid(buffer))
 		UnlockReleaseBuffer(buffer);
@@ -299,7 +299,7 @@ brin_xlog_desummarize_page(XLogReaderState *record)
 		PageIndexTupleDeleteNoCompact(regPg, xlrec->regOffset);
 
 		PageSetLSN(regPg, lsn);
-		MarkBufferDirty(buffer);
+		PolarMarkBufferDirty(buffer, record->ReadRecPtr);
 	}
 	if (BufferIsValid(buffer))
 		UnlockReleaseBuffer(buffer);

@@ -58,7 +58,11 @@
 #include "utils/guc.h"
 #include "utils/memutils.h"
 #include "utils/resowner.h"
+#include "utils/timeout.h"
 
+/* POLAR */
+#include "storage/polar_bufmgr.h"
+#include "storage/polar_fd.h"
 
 /*----------
  * Shared memory area for communication between checkpointer and backends
@@ -206,6 +210,13 @@ CheckpointerMain(void)
 	 * Reset some signals that are accepted by postmaster but not here
 	 */
 	pqsignal(SIGCHLD, SIG_DFL);
+
+	/*
+	 * POLAR: Establishes SIGALRM handler and initialize parameters to
+	 * facilitate the running of scheduled tasks. Some scheduled tasks will
+	 * cause assertion errors when parameters are not initialized.
+	 */
+	InitializeTimeouts();
 
 	/*
 	 * Initialize so that first time-driven event happens at the correct time.
@@ -1094,6 +1105,13 @@ ForwardSyncRequest(const FileTag *ftag, SyncRequestType type)
 	if (AmCheckpointerProcess())
 		elog(ERROR, "ForwardSyncRequest must not be called in checkpointer");
 
+	/* POLAR: replica mode not write anything */
+	if (AmStartupProcess() && polar_is_replica())
+	{
+		elog(LOG, "PolarDB replica startup skip ForwardFsyncRequest");
+		return true;
+	}
+
 	LWLockAcquire(CheckpointerCommLock, LW_EXCLUSIVE);
 
 	/* Count all backend writes regardless of if they fit in the queue */
@@ -1356,3 +1374,29 @@ FirstCallSinceLastCheckpoint(void)
 
 	return FirstCall;
 }
+
+/* POLAR: some polar related implementations */
+void
+polar_checkpointer_do_reload(void)
+{
+	if (ConfigReloadPending)
+	{
+		ConfigReloadPending = false;
+		ProcessConfigFile(PGC_SIGHUP);
+
+		/*
+		 * Checkpointer is the last process to shut down, so we ask it to hold
+		 * the keys for a range of other tasks required most of which have
+		 * nothing to do with checkpointing at all.
+		 *
+		 * For various reasons, some config values can change dynamically so
+		 * the primary copy of them is held in shared memory to make sure all
+		 * backends see the same value.  We make Checkpointer responsible for
+		 * updating the shared memory copy if the parameter setting changes
+		 * because of SIGHUP.
+		 */
+		UpdateSharedMemoryConfig();
+	}
+}
+
+/* POLAR end */

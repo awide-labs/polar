@@ -59,7 +59,7 @@ typedef struct ExprSetupInfo
 	AttrNumber	last_scan;
 	/* MULTIEXPR SubPlan nodes appearing in the expression: */
 	List	   *multiexpr_subplans;
-}			ExprSetupInfo;
+} ExprSetupInfo;
 
 static void ExecReadyExpr(ExprState *state);
 static void ExecInitExprRec(Expr *node, ExprState *state,
@@ -68,8 +68,8 @@ static void ExecInitFunc(ExprEvalStep *scratch, Expr *node, List *args,
 						 Oid funcid, Oid inputcollid,
 						 ExprState *state);
 static void ExecCreateExprSetupSteps(ExprState *state, Node *node);
-static void ExecPushExprSetupSteps(ExprState *state, ExprSetupInfo * info);
-static bool expr_setup_walker(Node *node, ExprSetupInfo * info);
+static void ExecPushExprSetupSteps(ExprState *state, ExprSetupInfo *info);
+static bool expr_setup_walker(Node *node, ExprSetupInfo *info);
 static bool ExecComputeSlotInfo(ExprState *state, ExprEvalStep *op);
 static void ExecInitWholeRowVar(ExprEvalStep *scratch, Var *variable,
 								ExprState *state);
@@ -2575,7 +2575,7 @@ ExecCreateExprSetupSteps(ExprState *state, Node *node)
  * This is useful when building an ExprState covering more than one expression.
  */
 static void
-ExecPushExprSetupSteps(ExprState *state, ExprSetupInfo * info)
+ExecPushExprSetupSteps(ExprState *state, ExprSetupInfo *info)
 {
 	ExprEvalStep scratch = {0};
 	ListCell   *lc;
@@ -2658,7 +2658,7 @@ ExecPushExprSetupSteps(ExprState *state, ExprSetupInfo * info)
  * expr_setup_walker: expression walker for ExecCreateExprSetupSteps
  */
 static bool
-expr_setup_walker(Node *node, ExprSetupInfo * info)
+expr_setup_walker(Node *node, ExprSetupInfo *info)
 {
 	if (node == NULL)
 		return false;

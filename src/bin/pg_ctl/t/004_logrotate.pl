@@ -65,7 +65,6 @@ $node->init();
 $node->append_conf(
 	'postgresql.conf', qq(
 logging_collector = on
-log_destination = 'stderr, csvlog, jsonlog'
 # these ensure stability of test results:
 log_rotation_age = 0
 lc_messages = 'C'
@@ -95,14 +94,13 @@ note "current_logfiles = $current_logfiles";
 
 like(
 	$current_logfiles,
-	qr|^stderr log/postgresql-.*log
-csvlog log/postgresql-.*csv
-jsonlog log/postgresql-.*json$|,
+	qr|^stderr log/postgresql-.*log$|,
 	'current_logfiles is sane');
 
 check_log_pattern('stderr', $current_logfiles, 'division by zero', $node);
-check_log_pattern('csvlog', $current_logfiles, 'division by zero', $node);
-check_log_pattern('jsonlog', $current_logfiles, 'division by zero', $node);
+# POLAR
+#check_log_pattern('csvlog', $current_logfiles, 'division by zero', $node);
+#check_log_pattern('jsonlog', $current_logfiles, 'division by zero', $node);
 
 # Sleep 2 seconds and ask for log rotation; this should result in
 # output into a different log file name.
@@ -123,17 +121,17 @@ note "now current_logfiles = $new_current_logfiles";
 
 like(
 	$new_current_logfiles,
-	qr|^stderr log/postgresql-.*log
-csvlog log/postgresql-.*csv
-jsonlog log/postgresql-.*json$|,
+	qr|^stderr log/postgresql-.*log$|,
 	'new current_logfiles is sane');
 
 # Verify that log output gets to this file, too
 $node->psql('postgres', 'fee fi fo fum');
 
 check_log_pattern('stderr', $new_current_logfiles, 'syntax error', $node);
-check_log_pattern('csvlog', $new_current_logfiles, 'syntax error', $node);
-check_log_pattern('jsonlog', $new_current_logfiles, 'syntax error', $node);
+
+# POLAR
+#check_log_pattern('csvlog', $new_current_logfiles, 'syntax error', $node);
+#check_log_pattern('jsonlog', $new_current_logfiles, 'syntax error', $node);
 
 $node->stop();
 

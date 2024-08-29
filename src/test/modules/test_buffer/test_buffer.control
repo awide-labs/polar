@@ -1,0 +1,4 @@
+comment = 'Test code for buffer manager library'
+default_version = '1.0'
+module_pathname = '$libdir/test_buffer'
+relocatable = true

@@ -53,7 +53,7 @@ PG_FUNCTION_INFO_V1(ssl_is_used);
 Datum
 ssl_is_used(PG_FUNCTION_ARGS)
 {
-	PG_RETURN_BOOL(MyProcPort->ssl_in_use);
+	PG_RETURN_BOOL(MyProcPort->polar_proxy ? MyProcPort->polar_proxy_ssl_in_use : MyProcPort->ssl_in_use);
 }
 
 
@@ -66,7 +66,8 @@ ssl_version(PG_FUNCTION_ARGS)
 {
 	const char *version;
 
-	if (!MyProcPort->ssl_in_use)
+	if ((!MyProcPort->polar_proxy && !MyProcPort->ssl_in_use) &&
+		(MyProcPort->polar_proxy && !MyProcPort->polar_proxy_ssl_in_use))
 		PG_RETURN_NULL();
 
 	version = be_tls_get_version(MyProcPort);
@@ -86,7 +87,8 @@ ssl_cipher(PG_FUNCTION_ARGS)
 {
 	const char *cipher;
 
-	if (!MyProcPort->ssl_in_use)
+	if ((!MyProcPort->polar_proxy && !MyProcPort->ssl_in_use) ||
+		(MyProcPort->polar_proxy && !MyProcPort->polar_proxy_ssl_in_use))
 		PG_RETURN_NULL();
 
 	cipher = be_tls_get_cipher(MyProcPort);
