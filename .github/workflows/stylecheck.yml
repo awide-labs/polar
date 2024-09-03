@@ -1,0 +1,56 @@
+name: stylecheck
+
+on:
+  pull_request:
+    branches: [ POLARDB_15_STABLE ]
+  # trigger testing manually
+  workflow_dispatch:
+
+jobs:
+  stylecheck:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        container_image: [ anolis8 ]
+    steps:
+      - name: fetch source code
+        uses: actions/checkout@v4
+        # for copyright check
+        with:
+          fetch-depth: 0
+
+      - name: create and start the container
+        run: |
+          docker create                                                  \
+            -t                                                           \
+            --name polardb_${{ matrix.container_image }}                 \
+            -v `pwd`:/home/postgres/PolarDB-for-PostgreSQL               \
+            polardb/polardb_pg_devel:${{ matrix.container_image }}       \
+            bash &&                                                      \
+          docker start polardb_${{ matrix.container_image }}
+
+      - name: change ownership of the source code
+        run: |
+          docker exec                                            \
+            polardb_${{ matrix.container_image }}                \
+            bash -c "cd /home/postgres/PolarDB-for-PostgreSQL && \
+                     sudo chown -R postgres:postgres ./"
+
+      - name: stylecheck
+        run: |
+          docker exec                                                \
+            polardb_${{ matrix.container_image }}                    \
+            bash -c "cd /home/postgres/PolarDB-for-PostgreSQL &&     \
+                     ./configure -q && make stylecheck"
+
+      - name: change ownership of the source code
+        run: |
+          sudo chown -R runner:runner `pwd`
+
+      - name: check diff
+        run: |
+          if [[ $(git diff --stat) != '' ]]; then                    \
+            git diff >> style.diff;                                  \
+            cat style.diff;                                          \
+            exit 1;                                                  \
+          fi
