@@ -81,7 +81,7 @@ function compile() {
   configure_flag+=" --prefix=$base_dir --with-pgport=$port ${extra_configure_flag-}"
   info "Begin configure, flag: $configure_flag"
   ./configure $configure_flag
-  info "Begin compile and install PolarDB"
+  info "Begin compile and install PolarDB, flag: $make_flag"
   make install-world-bin $make_flag
 }
 

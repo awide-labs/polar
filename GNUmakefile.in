@@ -157,7 +157,7 @@ cpluspluscheck: submake-generated-headers
 # POLAR
 #
 LAST_COMMIT = HEAD~1
-PROVE_FLAGS = "--timer -j4"
+PROVE_FLAGS = "--timer"
 
 precheck-main: | temp-install
 	$(MAKE) check-world EXTRA_TESTS=numeric_big PG_TEST_EXTRA='kerberos ldap ssl' USE_MODULE_DB=1 PROVE_FLAGS=$(PROVE_FLAGS)

@@ -3809,14 +3809,14 @@ sub stop_child
 
 	if ($pid eq 0)
 	{
-		note "child $process_name's pid is 0!\n";
+		note "child $process_name\'s pid is 0!\n";
 		return;
 	}
 
 	PostgreSQL::Test::Utils::system_or_bail('kill', '-19', $pid);
 
 	my ($out, $err) = $self->run_command([ 'which', 'pstack' ]);
-	if ($err =~ qr/which:\s*no\s+pstack\s+in/i)
+	if ($err =~ qr/which:\s*no\s+pstack\s+in/i || (!$out && !$err))
 	{
 		note "There's no pstack command!\n";
 		return;

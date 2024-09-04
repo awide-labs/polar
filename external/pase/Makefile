@@ -3,7 +3,7 @@ OBJS = $(patsubst %.c,%.o,$(wildcard type/*.c hnsw/*.c *.c ivfflat/*.c utils/*.c
 
 MODULE_big = $(EXTENSION)
 PG_LDFLAGS = -fopenmp
-PG_CPPFLAGS = -fopenmp
+PG_CPPFLAGS = -fopenmp -Wno-uninitialized
 PG_LIBS = -fopenmp
 DATA = pase--0.0.1.sql
 PGFILEDESC = "pase - ai similarity search"

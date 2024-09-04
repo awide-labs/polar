@@ -51,12 +51,14 @@ test_core_pattern_path(void)
 	char		core_pattern_path[MAXPGPATH] = {0};
 	char		cwd[MAXPGPATH] = {0};
 
-	getcwd(cwd, MAXPGPATH);
+	if (!getcwd(cwd, MAXPGPATH))
+		exit(EXIT_FAILURE);
 	snprintf(core_pattern_path, MAXPGPATH, "%s/polar_test_core_pattern", cwd);
 
 	/* case1 */
 	fd = open(core_pattern_path, O_CREAT | O_WRONLY | PG_BINARY, pg_file_create_mode);
-	write(fd, &core_pattern, sizeof(core_pattern));
+	if (write(fd, &core_pattern, sizeof(core_pattern)) != sizeof(core_pattern))
+		exit(EXIT_FAILURE);
 	close(fd);
 	polar_read_core_pattern(core_pattern_path, core_file_path_temp);
 	Assert(!strcmp(core_file_path_temp, cwd));
@@ -64,7 +66,8 @@ test_core_pattern_path(void)
 	/* case2 */
 	fd = open(core_pattern_path, O_CREAT | O_WRONLY | PG_BINARY, pg_file_create_mode);
 	snprintf(core_pattern, MAXPGPATH, "core");
-	write(fd, &core_pattern, sizeof(core_pattern));
+	if (write(fd, &core_pattern, sizeof(core_pattern)) != sizeof(core_pattern))
+		exit(EXIT_FAILURE);
 	close(fd);
 	polar_read_core_pattern(core_pattern_path, core_file_path_temp);
 	Assert(!strcmp(core_file_path_temp, cwd));
@@ -72,7 +75,8 @@ test_core_pattern_path(void)
 	/* case3 */
 	fd = open(core_pattern_path, O_CREAT | O_WRONLY | PG_BINARY, pg_file_create_mode);
 	snprintf(core_pattern, MAXPGPATH, "corefile/core");
-	write(fd, &core_pattern, sizeof(core_pattern));
+	if (write(fd, &core_pattern, sizeof(core_pattern)) != sizeof(core_pattern))
+		exit(EXIT_FAILURE);
 	close(fd);
 	polar_read_core_pattern(core_pattern_path, core_file_path_temp);
 	snprintf(core_file_target, MAXPGPATH, "%s/corefile/", cwd);
@@ -81,7 +85,8 @@ test_core_pattern_path(void)
 	/* case4 */
 	fd = open(core_pattern_path, O_CREAT | O_WRONLY | PG_BINARY, pg_file_create_mode);
 	snprintf(core_pattern, MAXPGPATH, "/tmp/corefile/core");
-	write(fd, &core_pattern, sizeof(core_pattern));
+	if (write(fd, &core_pattern, sizeof(core_pattern)) != sizeof(core_pattern))
+		exit(EXIT_FAILURE);
 	close(fd);
 	polar_read_core_pattern(core_pattern_path, core_file_path_temp);
 	snprintf(core_file_target, MAXPGPATH, "/tmp/corefile/");

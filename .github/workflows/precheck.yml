@@ -1,0 +1,90 @@
+name: precheck
+
+on:
+  push:
+    branches: [ POLARDB_15_STABLE ]
+    paths:
+      - '.github/workflows/precheck.yml'
+      - 'config/**'
+      - 'contrib/**'
+      - 'external/**'
+      - 'src/**'
+      - 'configure*'
+      - 'build.sh'
+  pull_request:
+    branches: [ POLARDB_15_STABLE ]
+    paths:
+      - '.github/workflows/precheck.yml'
+      - 'config/**'
+      - 'contrib/**'
+      - 'external/**'
+      - 'src/**'
+      - 'configure*'
+      - 'build.sh'
+  # trigger testing manually
+  workflow_dispatch:
+
+jobs:
+  regression:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        container_image: [ rocky8, rocky9, ubuntu22.04 ]
+        rules: [ precheck-main, plcheck ]
+        debug_mode: [ on, off ]
+    steps:
+      - name: fetch source code
+        uses: actions/checkout@v4
+
+      - name: free disk space
+        run: |
+          df -h
+          sudo rm -rf .git
+          sudo swapoff -a
+          sudo rm -f /swapfile
+          sudo rm -rf \
+            /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+            /usr/local/share/powershell /usr/share/swift /usr/local/.ghcup \
+            /usr/lib/jvm || true
+          sudo apt autoremove -y
+          sudo apt clean -y
+          docker rmi $(docker image ls -aq)
+          df -h
+
+      - name: limit WAL size
+        run: |
+          grep -n "DEFAULT_XLOG_SEG_SIZE" src/include/pg_config_manual.h | cut -d: -f1 | xargs -I {} sed -i '{}s/.*/#define DEFAULT_XLOG_SEG_SIZE (16*1024*1024)/' src/include/pg_config_manual.h
+
+      - name: ignore unstable cases
+        run: |
+          sed -i 's/SUBDIRS += pgvector/# &/' external/Makefile
+
+      - name: create and start the container
+        run: |
+          docker create                                                  \
+            -t                                                           \
+            --name polardb_${{ matrix.container_image }}                 \
+            -v `pwd`:/home/postgres/PolarDB-for-PostgreSQL               \
+            polardb/polardb_pg_devel:${{ matrix.container_image }} \
+            bash &&                                                      \
+          docker start polardb_${{ matrix.container_image }}
+
+      - name: change ownership of the source code
+        run: |
+          docker exec                                            \
+            polardb_${{ matrix.container_image }}                \
+            bash -c "cd /home/postgres/PolarDB-for-PostgreSQL && \
+                     sudo chown -R postgres:postgres ./"
+
+      - name: build and run checks
+        run: |
+          docker exec                                                \
+            polardb_${{ matrix.container_image }}                    \
+            bash -c "cd /home/postgres/PolarDB-for-PostgreSQL &&     \
+                     if [ -f /etc/bashrc ]; then source /etc/bashrc; fi && \
+                     ./build.sh --wr=1 --debug=${{ matrix.debug_mode }} --ec='--enable-tap-tests' && \
+                     make ${{ matrix.rules }} -j4"
+
+      - name: change ownership of the source code back
+        run: |
+          sudo chown -R runner:runner `pwd`
