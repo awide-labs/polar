@@ -1,0 +1,47 @@
+name: docs build
+
+on:
+  # push:
+  #   branches: [ POLARDB_15_STABLE ]
+  #   paths:
+  #     - '.github/workflows/docs*'
+  #     - 'polar-doc/**'
+  pull_request:
+    branches: [ POLARDB_15_STABLE ]
+    paths:
+      - '.github/workflows/docs*'
+      - 'polar-doc/**'
+  # trigger deployment manually
+  workflow_dispatch:
+
+jobs:
+  docs-build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+      - name: setup pnpm
+        uses: pnpm/action-setup@v3
+        with:
+          version: 8
+      - name: setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: build VuePress site
+        run: |
+          cd polar-doc
+          pnpm install --frozen-lockfile
+          pnpm docs:build
+
+      # please check out the docs of the workflow for more details
+      # @see https://github.com/crazy-max/ghaction-github-pages
+      - name: Deploy to GitHub Pages
+        uses: crazy-max/ghaction-github-pages@v4
+        if: github.event_name == 'push'
+        with:
+          target_branch: gh-pages
+          build_dir: polar-doc/docs/.vuepress/dist
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

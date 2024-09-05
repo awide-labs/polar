@@ -1,0 +1,7 @@
+# NPM dependencies
+node_modules/
+
+# build artifact
+docs/.vuepress/dist/
+docs/.vuepress/.cache/
+docs/.vuepress/.temp/

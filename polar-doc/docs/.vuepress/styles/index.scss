@@ -1,0 +1,19 @@
+:root {
+  scroll-behavior: smooth;
+
+  // brand colors
+  --c-brand: #fc5207;
+  --c-brand-light: #fc5207;
+
+  --c-tip: #fc5207;
+
+  --content-width: 1020px;
+}
+
+html.dark {
+  // brand colors
+  --c-brand: #fc5207;
+  --c-brand-light: #fc5207;
+
+  --c-tip: #fc5207;
+}

@@ -1,0 +1,31 @@
+name: docs format check
+
+on:
+  pull_request:
+    branches: [ POLARDB_15_STABLE ]
+    paths:
+      - ".github/workflows/docs*"
+      - "polar-doc/**"
+  # trigger deployment manually
+  workflow_dispatch:
+
+jobs:
+  docs-format-check:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+      - name: setup pnpm
+        uses: pnpm/action-setup@v3
+        with:
+          version: 8
+      - name: setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: prettier check
+        run: |
+          cd polar-doc
+          pnpm install --frozen-lockfile
+          pnpm prettier:check

@@ -1,0 +1,36 @@
+{
+  "name": "polardb_pg_documentation",
+  "version": "0.2.0",
+  "license": "Apache-2.0",
+  "author": "Alibaba Cloud",
+  "description": "VuePress documentation of PolarDB for PostgreSQL",
+  "directories": {
+    "doc": "docs"
+  },
+  "scripts": {
+    "docs:dev": "vuepress dev docs",
+    "docs:build": "vuepress build docs",
+    "prettier:check": "prettier --check .",
+    "prettier:format": "prettier --write --log-level silent .",
+    "prettier:format_root": "prettier --write --log-level silent ../*.md"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ApsaraDB/PolarDB-for-PostgreSQL.git"
+  },
+  "bugs": {
+    "url": "https://github.com/ApsaraDB/PolarDB-for-PostgreSQL/issues"
+  },
+  "homepage": "https://github.com/ApsaraDB/PolarDB-for-PostgreSQL#readme",
+  "devDependencies": {
+    "@vuepress/bundler-vite": "^2.0.0-rc.9",
+    "@vuepress/plugin-docsearch": "^2.0.0-rc.9",
+    "@vuepress/plugin-register-components": "^2.0.0-rc.9",
+    "@vuepress/theme-default": "^2.0.0-rc.9",
+    "katex": "^0.16.10",
+    "prettier": "3.2.5",
+    "vue": "^3.4.0",
+    "vuepress": "^2.0.0-rc.9",
+    "vuepress-plugin-md-enhance": "^2.0.0-rc.33"
+  }
+}
