@@ -1,11 +1,11 @@
 name: docs build
 
 on:
-  # push:
-  #   branches: [ POLARDB_15_STABLE ]
-  #   paths:
-  #     - '.github/workflows/docs*'
-  #     - 'polar-doc/**'
+  push:
+    branches: [ POLARDB_15_STABLE ]
+    paths:
+      - '.github/workflows/docs*'
+      - 'polar-doc/**'
   pull_request:
     branches: [ POLARDB_15_STABLE ]
     paths:
