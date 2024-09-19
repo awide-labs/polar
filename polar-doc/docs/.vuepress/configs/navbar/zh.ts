@@ -109,8 +109,8 @@ export const zh: NavbarConfig = [
     text: "参与社区",
     link: "/zh/contributing/",
     children: [
-      "/zh/contributing/contributing-polardb-docs.html",
       "/zh/contributing/contributing-polardb-kernel.html",
+      "/zh/contributing/contributing-polardb-docs.html",
       "/zh/contributing/coding-style.html",
       "/zh/contributing/trouble-issuing.md",
     ],

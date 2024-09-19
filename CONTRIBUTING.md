@@ -11,7 +11,7 @@ PolarDB for PostgreSQL is an open source project based on PostgreSQL and other o
 Here is a checklist to prepare and submit your PR (pull request):
 
 - Create your own Github repository copy by forking `ApsaraDB/PolarDB-for-PostgreSQL`.
-- Checkout documentations [Advanced Deployment](../deploying/deploy.md) for how to hack PolarDB-PG.
+- Checkout documentations [Advanced Deployment](https://apsaradb.github.io/PolarDB-for-PostgreSQL/deploying/deploy.html) for how to hack PolarDB-PG.
 - Run `make stylecheck` to format your code, and push changes to your personal fork.
 - Edit detailed commit message, and create a PR to upstream.
 - Wait for all CI checks to pass.
@@ -27,7 +27,7 @@ Here is a checklist to prepare and submit your PR (pull request):
 
 ### Coding Style
 
-- Coding in C follows PostgreSQL's programing style, such as naming, error message format, control statements, length of lines, comment format, length of functions and global variables. In detail, please refer to [PostgreSQL style](https://www.postgresql.org/docs/15/source.html). Here is some highlines:
+- Coding in C follows PostgreSQL's programing style, such as naming, error message format, control statements, length of lines, comment format, length of functions and global variables. In detail, please refer to [PostgreSQL style](https://www.postgresql.org/docs/current/source.html). Here is some highlines:
 
   - Code in PostgreSQL should only rely on language features available in the C99 standard
   - Do not use `//` for comments

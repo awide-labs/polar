@@ -80,8 +80,8 @@ export const en: NavbarConfig = [
     text: "Contributing",
     link: "/contributing/",
     children: [
-      "/contributing/contributing-polardb-docs.html",
       "/contributing/contributing-polardb-kernel.html",
+      "/contributing/contributing-polardb-docs.html",
       "/contributing/coding-style.html",
       "/contributing/trouble-issuing.html",
     ],
