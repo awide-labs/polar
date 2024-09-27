@@ -2175,10 +2175,6 @@ exec_bind_message(StringInfo input_message)
 	if (whereToSendOutput == DestRemote)
 		pq_putemptymessage('2');
 
-	/* POLAR: get errmsg params string, we must free it in the last */
-	params_string = polar_get_errmsg_params(params);
-	/* POLAR end */
-
 	/*
 	 * Emit duration logging if appropriate.
 	 */
@@ -2195,6 +2191,14 @@ exec_bind_message(StringInfo input_message)
 				StringInfoData buf;
 
 				initStringInfo(&buf);
+
+				/*
+				 * POLAR: get errmsg params string, we must free it in the
+				 * last.
+				 */
+				params_string = polar_get_errmsg_params(params);
+				/* POLAR end */
+
 				if (polar_enable_output_search_path_to_log)
 					appendStringInfo(&buf, "/*%s*/ ", namespace_search_path);
 				ereport(LOG,
@@ -2209,6 +2213,12 @@ exec_bind_message(StringInfo input_message)
 						 polar_mark_slow_log(true), /* POLAR */
 						 errhidestmt(true)));
 				pfree(buf.data);
+
+				/* POLAR: free params_string */
+				if (params_string)
+					pfree(params_string);
+				/* POLAR end */
+
 				break;
 			}
 	}
@@ -2218,10 +2228,6 @@ exec_bind_message(StringInfo input_message)
 
 	if (numParams == 0)
 		hit_polar_unique_feature(UnparameterizedStmtExecCount);
-	/* POLAR: free params_string */
-	if (params_string)
-		pfree(params_string);
-	/* POLAR end */
 
 	if (save_log_statement_stats)
 		ShowUsage("BIND MESSAGE STATISTICS");

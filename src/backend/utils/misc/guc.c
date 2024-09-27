@@ -1638,7 +1638,7 @@ static struct config_bool ConfigureNamesBool[] =
 			GUC_NO_RESET_ALL | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_UNCHANGABLE
 		},
 		&polar_enable_xact_split,
-		true,
+		false,
 		NULL, NULL, NULL
 	},
 
