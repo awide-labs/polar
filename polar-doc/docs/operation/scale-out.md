@@ -93,7 +93,7 @@ initdb -D $HOME/primary
 
 ```shell:no-line-numbers
 sudo pfs -C disk mkdir /nvme1n1/shared_data
-sudo polar-initdb.sh $HOME/primary/ /nvme1n1/shared_data/
+sudo polar-initdb.sh $HOME/primary/ /nvme1n1/shared_data/ primary
 ```
 
 ### 编辑 Primary 节点配置
@@ -200,7 +200,7 @@ sudo /usr/local/polarstore/pfsd/bin/start_pfsd.sh -p nvme1n1 -w 4
 
 ```shell:no-line-numbers
 mkdir -m 0700 $HOME/replica1
-sudo polar-initdb.sh /nvme1n1/shared_data/ $HOME/replica1/
+sudo polar-initdb.sh $HOME/replica1/ /nvme1n1/shared_data/ replica
 
 initdb -D /tmp/replica1
 cp /tmp/replica1/*.conf $HOME/replica1/

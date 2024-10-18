@@ -26,7 +26,7 @@ initdb -D $HOME/primary
 # 使用 pfs 创建共享数据目录
 sudo pfs -C disk mkdir /nvme1n1/shared_data
 # 初始化 db 的本地和共享数据目录
-sudo polar-initdb.sh $HOME/primary/ /nvme1n1/shared_data/
+sudo polar-initdb.sh $HOME/primary/ /nvme1n1/shared_data/ primary
 ```
 
 编辑 Primary 节点的配置。打开 `~/primary/postgresql.conf`，增加配置项：
@@ -86,7 +86,7 @@ psql -p 5432 -d postgres \
 
 ```shell:no-line-numbers
 mkdir -m 0700 $HOME/replica1
-sudo polar-initdb.sh /nvme1n1/shared_data/ $HOME/replica1/
+sudo polar-initdb.sh $HOME/replica1/ /nvme1n1/shared_data/ replica
 
 initdb -D /tmp/replica1
 cp /tmp/replica1/*.conf $HOME/replica1/
