@@ -91,6 +91,10 @@ You are welcome to make contributions to PolarDB for PostgreSQL. Here are the co
 
 Made with [contrib.rocks](https://contrib.rocks).
 
+## Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=ApsaraDB/PolarDB-for-PostgreSQL&type=Date)](https://star-history.com/#ApsaraDB/PolarDB-for-PostgreSQL&Date)
+
 ## Software License
 
 PolarDB for PostgreSQL is released under Apache License (Version 2.0), developed based on PostgreSQL which is released under PostgreSQL License. See [LICENSE](./LICENSE) for more information.

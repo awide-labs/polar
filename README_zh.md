@@ -89,6 +89,10 @@ postgres=# SELECT version();
   <img src="https://contrib.rocks/image?repo=ApsaraDB/PolarDB-for-PostgreSQL" />
 </a>
 
+## Star 历史
+
+[![Star History Chart](https://api.star-history.com/svg?repos=ApsaraDB/PolarDB-for-PostgreSQL&type=Date)](https://star-history.com/#ApsaraDB/PolarDB-for-PostgreSQL&Date)
+
 ## 软件许可
 
 PolarDB for PostgreSQL 的源代码遵循 Apache 2.0 许可证，基于遵循 PostgreSQL 许可证的 PostgreSQL 开发，请阅读 [LICENSE](./LICENSE) 了解更多信息。其中还包含了部分遵循其它开源许可证的第三方组件，请阅读 [NOTICE](./NOTICE) 了解更多信息。
