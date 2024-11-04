@@ -77,6 +77,9 @@ extern PGDLLIMPORT bool track_io_timing;
 extern PGDLLIMPORT int effective_io_concurrency;
 extern PGDLLIMPORT int maintenance_io_concurrency;
 
+#define MAX_BUFFERS_TO_READ_BY 64
+#define MAX_BUFFERS_TO_EXTEND_BY 1024
+
 extern PGDLLIMPORT int checkpoint_flush_after;
 extern PGDLLIMPORT int backend_flush_after;
 extern PGDLLIMPORT int bgwriter_flush_after;
@@ -88,12 +91,6 @@ extern PGDLLIMPORT char *BufferBlocks;
 extern PGDLLIMPORT int NLocBuffer;
 extern PGDLLIMPORT Block *LocalBufferBlockPointers;
 extern PGDLLIMPORT int32 *LocalRefCount;
-
-/* POLAR: bulk read */
-extern bool polar_bulk_io_is_in_progress;
-extern int	polar_bulk_io_in_progress_count;
-
-/* POLAR end */
 
 /* upper limit for effective_io_concurrency */
 #define MAX_IO_CONCURRENCY 1000
@@ -255,7 +252,7 @@ extern bool ConditionalLockBufferForCleanup(Buffer buffer);
 extern bool IsBufferCleanupOK(Buffer buffer);
 extern bool HoldingBufferPinThatDelaysRecovery(void);
 
-extern void AbortBufferIO(void);
+extern void AbortBufferIO(Buffer buffer);
 
 extern void BufmgrCommit(void);
 extern bool BgBufferSync(struct WritebackContext *wb_context, int flags);
@@ -281,7 +278,10 @@ extern bool StartBufferIO(BufferDesc *buf, bool forInput);
 
 /* POLAR: bulk read */
 extern int	polar_get_buffer_access_strategy_ring_size(BufferAccessStrategy strategy);
-extern BufferDesc **polar_bulk_io_in_progress_buf;
+
+extern Buffer polar_read_buffer_common(struct SMgrRelationData *smgr, char relpersistence, ForkNumber forkNum,
+									   BlockNumber blockNum, ReadBufferMode mode,
+									   BufferAccessStrategy strategy);
 
 /* inline functions */
 
@@ -326,6 +326,9 @@ TestForOldSnapshot(Snapshot snapshot, Relation relation, Page page)
 }
 
 /* POLAR */
+extern PGDLLIMPORT bool polar_has_partial_write;
+extern PGDLLIMPORT int polar_bulk_read_size;
+
 extern void polar_lock_buffer_for_cleanup_ext(Buffer buffer, bool fresh_check);
 extern void polar_lock_buffer_ext(Buffer buffer, int mode, bool fresh_check);
 extern bool polar_conditional_lock_buffer_ext(Buffer buffer, bool fresh_check);

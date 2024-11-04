@@ -17,7 +17,7 @@
  * limitations under the License.
  *
  * IDENTIFICATION
- *           src/backend/access/logindex/polar_fullpage.c
+ *	  src/backend/access/logindex/polar_fullpage.c
  *
  *-------------------------------------------------------------------------
  */
@@ -33,6 +33,7 @@
 #include "access/xlog_internal.h"
 #include "access/xloginsert.h"
 #include "catalog/pg_control.h"
+#include "common/file_utils.h"
 #include "pgstat.h"
 #include "replication/walreceiver.h"
 #include "storage/buf_internals.h"
@@ -221,45 +222,32 @@ install_fullpage_file_segment(polar_fullpage_ctl_t ctl, uint64 *seg_no,
 static void
 fill_fullpage_file_zero_pages(int fd, char *tmppath)
 {
-#define ONE_MB (1024 * 1024L)
-	char	   *data;
-	int			nbytes = 0;
-
-	data = palloc_io_aligned(ONE_MB, MCXT_ALLOC_ZERO);
+	int			rc;
 
 	pgstat_report_wait_start(WAIT_EVENT_FULLPAGE_FILE_INIT_WRITE);
 
-	for (nbytes = 0; nbytes < FULLPAGE_SEGMENT_SIZE; nbytes += ONE_MB)
+	rc = polar_pwrite_zeros(fd, FULLPAGE_SEGMENT_SIZE, 0);
+
+	if (rc < 0)
 	{
-		int			rc = 0;
+		int			save_errno = errno;
 
-		errno = 0;
-		rc = (int) polar_pwrite(fd, data, ONE_MB, nbytes);
+		/*
+		 * If we fail to make the file, delete it to release disk space
+		 */
+		polar_unlink(tmppath);
 
-		if (rc != ONE_MB)
-		{
-			int			save_errno = errno;
+		polar_close(fd);
 
-			/*
-			 * If we fail to make the file, delete it to release disk space
-			 */
-			polar_unlink(tmppath);
+		/* if write didn't set errno, assume problem is no disk space */
+		errno = save_errno ? save_errno : ENOSPC;
 
-			polar_close(fd);
-
-			/* if write didn't set errno, assume problem is no disk space */
-			errno = save_errno ? save_errno : ENOSPC;
-
-			pfree(data);
-			ereport(ERROR,
-					(errcode_for_file_access(),
-					 errmsg("could not write to file \"%s\": %m", tmppath)));
-		}
+		ereport(ERROR,
+				(errcode_for_file_access(),
+				 errmsg("could not write to file \"%s\": %m", tmppath)));
 	}
 
 	pgstat_report_wait_end();
-
-	pfree(data);
 
 	if (polar_fsync(fd) != 0)
 	{
@@ -327,9 +315,25 @@ polar_fullpage_file_init(polar_fullpage_ctl_t ctl, uint64 fullpage_no)
 				(errcode_for_file_access(),
 				 errmsg("could not create file \"%s\": %m", tmppath)));
 
-	/* POLAR: File allocate, juse change file metadata once */
-	if (polar_fallocate(fd, 0, FULLPAGE_SEGMENT_SIZE) != 0)
-		elog(ERROR, "polar_posix_fallocate fail in polar_fullpage_file_init");
+#ifdef __linux__
+
+	/*
+	 * POLAR: use FALLOC_FL_NO_HIDE_STALE on PFS to optimize appending writes.
+	 */
+	if (polar_enable_fallocate_no_hide_stale &&
+		polar_vfs_type(fd) == POLAR_VFS_PFS &&
+		polar_fallocate(fd, FALLOC_FL_NO_HIDE_STALE, 0, FULLPAGE_SEGMENT_SIZE) != 0)
+	{
+		int			save_errno = errno;
+
+		polar_unlink(tmppath);
+		polar_close(fd);
+		errno = save_errno;
+
+		elog(ERROR, "fallocate failed \"%s\": %m", tmppath);
+	}
+	/* POLAR end */
+#endif
 
 	fill_fullpage_file_zero_pages(fd, tmppath);
 
@@ -652,7 +656,7 @@ polar_log_fullpage_snapshot_image(polar_fullpage_ctl_t ctl, Buffer buffer, XLogR
 	 * call.
 	 */
 	if (fullpage == NULL)
-		fullpage = MemoryContextAllocIOAligned(TopMemoryContext, BLCKSZ, 0);
+		fullpage = MemoryContextAllocAligned(TopMemoryContext, BLCKSZ, PG_IO_ALIGN_SIZE, 0);
 
 	Assert(polar_is_primary());
 

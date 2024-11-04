@@ -28,10 +28,15 @@
 #ifdef FRONTEND
 #include "common/logging.h"
 #endif
+#include "port/pg_iovec.h"
 
 /* POLAR */
 #include "storage/polar_fd.h"
 /* POLAR end */
+
+int			polar_zero_buffer_size = 0;
+int			polar_zero_buffers = -1;
+void	   *polar_zero_buffer = NULL;
 
 #ifdef FRONTEND
 
@@ -497,4 +502,204 @@ get_dirent_type(const char *path,
 	}
 
 	return result;
+}
+
+/*
+ * Compute what remains to be done after a possibly partial vectored read or
+ * write.  The part of 'source' beginning after 'transferred' bytes is copied
+ * to 'destination', and its length is returned.  'source' and 'destination'
+ * may point to the same array, for in-place adjustment.  A return value of
+ * zero indicates completion (for callers without a cheaper way to know that).
+ */
+int
+compute_remaining_iovec(struct iovec *destination,
+						const struct iovec *source,
+						int iovcnt,
+						size_t transferred)
+{
+	Assert(iovcnt > 0);
+
+	/* Skip wholly transferred iovecs. */
+	while (source->iov_len <= transferred)
+	{
+		transferred -= source->iov_len;
+		source++;
+		iovcnt--;
+
+		/* All iovecs transferred? */
+		if (iovcnt == 0)
+		{
+			/*
+			 * We don't expect the kernel to transfer more than we asked it
+			 * to, or something is out of sync.
+			 */
+			Assert(transferred == 0);
+			return 0;
+		}
+	}
+
+	/* Copy the remaining iovecs to the front of the array. */
+	if (source != destination)
+		memmove(destination, source, sizeof(*source) * iovcnt);
+
+	/* Adjust leading iovec, which may have been partially transferred. */
+	Assert(destination->iov_len > transferred);
+	destination->iov_base = (char *) destination->iov_base + transferred;
+	destination->iov_len -= transferred;
+
+	return iovcnt;
+}
+
+/*
+ * pg_pwritev_with_retry
+ *
+ * Convenience wrapper for pg_pwritev() that retries on partial write.  If an
+ * error is returned, it is unspecified how much has been written.
+ */
+ssize_t
+pg_pwritev_with_retry(int fd, const struct iovec *iov, int iovcnt, off_t offset)
+{
+	struct iovec iov_copy[PG_IOV_MAX];
+	ssize_t		sum = 0;
+	ssize_t		part;
+
+	/* We'd better have space to make a copy, in case we need to retry. */
+	if (iovcnt > PG_IOV_MAX)
+	{
+		errno = EINVAL;
+		return -1;
+	}
+
+	do
+	{
+		/* Write as much as we can. */
+		part = polar_pwritev(fd, iov, iovcnt, offset);
+		if (part < 0)
+			return -1;
+
+#ifdef SIMULATE_SHORT_WRITE
+		part = Min(part, 4096);
+#endif
+
+		/* Count our progress. */
+		sum += part;
+		offset += part;
+
+		/*
+		 * See what is left.  On the first loop we used the caller's array,
+		 * but in later loops we'll use our local copy that we are allowed to
+		 * mutate.
+		 */
+		iovcnt = compute_remaining_iovec(iov_copy, iov, iovcnt, part);
+		iov = iov_copy;
+	} while (iovcnt > 0);
+
+	return sum;
+}
+
+/*
+ * pg_pwrite_zeros
+ *
+ * Writes zeros to file worth "size" bytes at "offset" (from the start of the
+ * file), using vectored I/O.
+ *
+ * Returns the total amount of data written.  On failure, a negative value
+ * is returned with errno set.
+ */
+ssize_t
+pg_pwrite_zeros(int fd, size_t size, off_t offset)
+{
+	static const PGIOAlignedBlock zbuffer = {{0}};	/* worth BLCKSZ */
+	void	   *zerobuf_addr = unconstify(PGIOAlignedBlock *, &zbuffer)->data;
+	struct iovec iov[PG_IOV_MAX];
+	size_t		remaining_size = size;
+	ssize_t		total_written = 0;
+
+	/* Loop, writing as many blocks as we can for each system call. */
+	while (remaining_size > 0)
+	{
+		int			iovcnt = 0;
+		ssize_t		written;
+
+		for (; iovcnt < PG_IOV_MAX && remaining_size > 0; iovcnt++)
+		{
+			size_t		this_iov_size;
+
+			iov[iovcnt].iov_base = zerobuf_addr;
+
+			if (remaining_size < BLCKSZ)
+				this_iov_size = remaining_size;
+			else
+				this_iov_size = BLCKSZ;
+
+			iov[iovcnt].iov_len = this_iov_size;
+			remaining_size -= this_iov_size;
+		}
+
+		written = pg_pwritev_with_retry(fd, iov, iovcnt, offset);
+
+		if (written < 0)
+			return written;
+
+		offset += written;
+		total_written += written;
+	}
+
+	Assert(total_written == size);
+
+	return total_written;
+}
+
+/*
+ * polar_pwrite_zeros
+ *
+ * Writes zeros to file worth "size" bytes at "offset" (from the start of the
+ * file), using bulk I/O.
+ *
+ * Returns the total amount of data written.  On failure, a negative value
+ * is returned with errno set.
+ *
+ * If there is no valid global zero buffer, it will fallback to pg_pwrite_zeros.
+ */
+ssize_t
+polar_pwrite_zeros(int fd, size_t size, off_t offset)
+{
+	size_t		remaining_size = size;
+	ssize_t		total_written = 0;
+
+#ifdef FRONTEND
+	if (polar_zero_buffer_size == 0)
+	{
+#define FRONTEND_ZERO_BUFFER_SIZE (1024 * 1024)
+		/* In frontend, we malloc a fixed size of 1MB and never free */
+		polar_zero_buffer = (void *) TYPEALIGN(PG_IO_ALIGN_SIZE,
+											   malloc(FRONTEND_ZERO_BUFFER_SIZE + PG_IO_ALIGN_SIZE));
+		polar_zero_buffer_size = FRONTEND_ZERO_BUFFER_SIZE;
+	}
+#else
+	if (polar_zero_buffer_size == 0)
+		return pg_pwrite_zeros(fd, size, offset);
+
+	Assert(polar_zero_buffer);
+#endif
+
+	/* Loop, writing as many blocks as we can for each system call. */
+	while (remaining_size > 0)
+	{
+		ssize_t		written;
+		size_t		amount = Min(remaining_size, polar_zero_buffer_size);
+
+		written = polar_pwrite(fd, polar_zero_buffer, amount, offset);
+
+		if (written != amount)
+			return -1;
+
+		remaining_size -= written;
+		offset += written;
+		total_written += written;
+	}
+
+	Assert(total_written == size);
+
+	return total_written;
 }

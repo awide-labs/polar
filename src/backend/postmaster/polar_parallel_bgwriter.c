@@ -342,7 +342,6 @@ polar_parallel_bgwriter_worker_main(Datum main_arg)
 		 */
 		LWLockReleaseAll();
 		ConditionVariableCancelSleep();
-		AbortBufferIO();
 		UnlockBuffers();
 		ReleaseAuxProcessResources(false);
 		AtEOXact_Buffers(false);

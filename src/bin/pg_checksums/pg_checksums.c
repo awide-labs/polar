@@ -188,7 +188,7 @@ skipfile(const char *fn)
 static void
 scan_file(const char *fn, int segmentno)
 {
-	PGAlignedBlock buf;
+	PGIOAlignedBlock buf;
 	PageHeader	header = (PageHeader) buf.data;
 	int			f;
 	BlockNumber blockno;
@@ -686,7 +686,7 @@ main(int argc, char *argv[])
 			printf(_("Checksums disabled in cluster\n"));
 	}
 
-	polar_vfs_destory_simple_fe();
+	polar_vfs_destroy_simple_fe();
 
 	return 0;
 }

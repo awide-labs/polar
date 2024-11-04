@@ -238,11 +238,11 @@ polar_vfs_init(void)
 
 	if (localfs_mode)
 	{
-		if (!POLAR_DIECRTIO_IS_ALIGNED(polar_max_direct_io_size))
+		if (!POLAR_DIRECTIO_IS_ALIGNED(polar_max_direct_io_size))
 			elog(FATAL, "polar_max_direct_io_size is not aligned!");
 		else if (polar_directio_buffer == NULL &&
 				 posix_memalign((void **) &polar_directio_buffer,
-								POLAR_DIRECTIO_ALIGN_LEN,
+								PG_IO_ALIGN_SIZE,
 								polar_max_direct_io_size) != 0)
 		{
 			elog(ERROR, "posix_memalign alloc polar_directio_buffer failed!");

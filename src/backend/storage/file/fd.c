@@ -96,7 +96,6 @@
 #include "common/pg_prng.h"
 #include "miscadmin.h"
 #include "pgstat.h"
-#include "port/pg_iovec.h"
 #include "portability/mem.h"
 #include "postmaster/startup.h"
 #include "storage/fd.h"
@@ -168,6 +167,11 @@ bool		data_sync_retry = false;
 
 /* How SyncDataDirectory() should do its job. */
 int			recovery_init_sync_method = RECOVERY_INIT_SYNC_METHOD_FSYNC;
+
+/* POLAR: GUC */
+bool		polar_enable_fallocate_no_hide_stale;
+
+/* POLAR end */
 
 /* Debugging.... */
 
@@ -2080,16 +2084,16 @@ FileClose(File file)
  * to read into.
  */
 int
-FilePrefetch(File file, off_t offset, int amount, uint32 wait_event_info)
+FilePrefetch(File file, off_t offset, off_t amount, uint32 wait_event_info)
 {
 #if defined(USE_POSIX_FADVISE) && defined(POSIX_FADV_WILLNEED)
 	int			returnCode;
 
 	Assert(FileIsValid(file));
 
-	DO_DB(elog(LOG, "FilePrefetch: %d (%s) " INT64_FORMAT " %d",
+	DO_DB(elog(LOG, "FilePrefetch: %d (%s) " INT64_FORMAT " " INT64_FORMAT,
 			   file, VfdCache[file].fileName,
-			   (int64) offset, amount));
+			   (int64) offset, (int64) amount));
 
 	returnCode = FileAccess(file);
 	if (returnCode < 0)
@@ -2130,16 +2134,16 @@ FileWriteback(File file, off_t offset, off_t nbytes, uint32 wait_event_info)
 	pgstat_report_wait_end();
 }
 
-int
-FileRead(File file, char *buffer, int amount, off_t offset,
+ssize_t
+FileRead(File file, void *buffer, size_t amount, off_t offset,
 		 uint32 wait_event_info)
 {
-	int			returnCode;
+	ssize_t		returnCode;
 	Vfd		   *vfdP;
 
 	Assert(FileIsValid(file));
 
-	DO_DB(elog(LOG, "FileRead: %d (%s) " INT64_FORMAT " %d %p",
+	DO_DB(elog(LOG, "FileRead: %d (%s) " INT64_FORMAT " %zu %p",
 			   file, VfdCache[file].fileName,
 			   (int64) offset,
 			   amount, buffer));
@@ -2188,16 +2192,16 @@ retry:
 	return returnCode;
 }
 
-int
-FileWrite(File file, char *buffer, int amount, off_t offset,
+ssize_t
+FileWrite(File file, const void *buffer, size_t amount, off_t offset,
 		  uint32 wait_event_info)
 {
-	int			returnCode;
+	ssize_t		returnCode;
 	Vfd		   *vfdP;
 
 	Assert(FileIsValid(file));
 
-	DO_DB(elog(LOG, "FileWrite: %d (%s) " INT64_FORMAT " %d %p",
+	DO_DB(elog(LOG, "FileWrite: %d (%s) " INT64_FORMAT " %zu %p",
 			   file, VfdCache[file].fileName,
 			   (int64) offset,
 			   amount, buffer));
@@ -2305,6 +2309,100 @@ FileSync(File file, uint32 wait_event_info)
 	pgstat_report_wait_end();
 
 	return returnCode;
+}
+
+/*
+ * Zero a region of the file.
+ *
+ * Returns 0 on success, -1 otherwise. In the latter case errno is set to the
+ * appropriate error.
+ */
+int
+FileZero(File file, off_t offset, off_t amount, uint32 wait_event_info, bool bulkwrite)
+{
+	int			returnCode;
+	ssize_t		written;
+
+	Assert(FileIsValid(file));
+
+	DO_DB(elog(LOG, "FileZero: %d (%s) " INT64_FORMAT " " INT64_FORMAT,
+			   file, VfdCache[file].fileName,
+			   (int64) offset, (int64) amount));
+
+	returnCode = FileAccess(file);
+	if (returnCode < 0)
+		return returnCode;
+
+	pgstat_report_wait_start(wait_event_info);
+	if (bulkwrite)
+		written = polar_pwrite_zeros(VfdCache[file].fd, amount, offset);
+	else
+		written = pg_pwrite_zeros(VfdCache[file].fd, amount, offset);
+	pgstat_report_wait_end();
+
+	if (written < 0)
+		return -1;
+	else if (written != amount)
+	{
+		/* if errno is unset, assume problem is no disk space */
+		if (errno == 0)
+			errno = ENOSPC;
+		return -1;
+	}
+
+	return 0;
+}
+
+/*
+ * Try to reserve file space with posix_fallocate(). If posix_fallocate() is
+ * not implemented on the operating system or fails with EINVAL / EOPNOTSUPP,
+ * use FileZero() instead.
+ *
+ * Note that at least glibc() implements posix_fallocate() in userspace if not
+ * implemented by the filesystem. That's not the case for all environments
+ * though.
+ *
+ * Returns 0 on success, -1 otherwise. In the latter case errno is set to the
+ * appropriate error.
+ */
+int
+FileFallocate(File file, off_t offset, off_t amount, uint32 wait_event_info)
+{
+#ifdef HAVE_POSIX_FALLOCATE
+	int			returnCode;
+
+	Assert(FileIsValid(file));
+
+	DO_DB(elog(LOG, "FileFallocate: %d (%s) " INT64_FORMAT " " INT64_FORMAT,
+			   file, VfdCache[file].fileName,
+			   (int64) offset, (int64) amount));
+
+	returnCode = FileAccess(file);
+	if (returnCode < 0)
+		return -1;
+
+retry:
+	pgstat_report_wait_start(wait_event_info);
+	returnCode = polar_posix_fallocate(VfdCache[file].fd, offset, amount);
+	pgstat_report_wait_end();
+
+	if (returnCode == 0)
+		return 0;
+	else if (returnCode == EINTR)
+		goto retry;
+
+	/* for compatibility with %m printing etc */
+	errno = returnCode;
+
+	/*
+	 * Return in cases of a "real" failure, if fallocate is not supported,
+	 * fall through to the FileZero() backed implementation.
+	 */
+	if (returnCode != EINVAL && returnCode != EOPNOTSUPP)
+		return -1;
+#endif
+
+	return FileZero(file, offset, amount, wait_event_info, true);
 }
 
 off_t
@@ -3845,68 +3943,4 @@ int
 data_sync_elevel(int elevel)
 {
 	return data_sync_retry ? elevel : PANIC;
-}
-
-/*
- * A convenience wrapper for pg_pwritev() that retries on partial write.  If an
- * error is returned, it is unspecified how much has been written.
- */
-ssize_t
-pg_pwritev_with_retry(int fd, const struct iovec *iov, int iovcnt, off_t offset)
-{
-	struct iovec iov_copy[PG_IOV_MAX];
-	ssize_t		sum = 0;
-	ssize_t		part;
-
-	/* We'd better have space to make a copy, in case we need to retry. */
-	if (iovcnt > PG_IOV_MAX)
-	{
-		errno = EINVAL;
-		return -1;
-	}
-
-	for (;;)
-	{
-		/* Write as much as we can. */
-		part = polar_pwritev(fd, iov, iovcnt, offset);
-		if (part < 0)
-			return -1;
-
-#ifdef SIMULATE_SHORT_WRITE
-		part = Min(part, 4096);
-#endif
-
-		/* Count our progress. */
-		sum += part;
-		offset += part;
-
-		/* Step over iovecs that are done. */
-		while (iovcnt > 0 && iov->iov_len <= part)
-		{
-			part -= iov->iov_len;
-			++iov;
-			--iovcnt;
-		}
-
-		/* Are they all done? */
-		if (iovcnt == 0)
-		{
-			/* We don't expect the kernel to write more than requested. */
-			Assert(part == 0);
-			break;
-		}
-
-		/*
-		 * Move whatever's left to the front of our mutable copy and adjust
-		 * the leading iovec.
-		 */
-		Assert(iovcnt > 0);
-		memmove(iov_copy, iov, sizeof(*iov) * iovcnt);
-		Assert(iov->iov_len > part);
-		iov_copy[0].iov_base = (char *) iov_copy[0].iov_base + part;
-		iov_copy[0].iov_len -= part;
-		iov = iov_copy;
-	}
-
-	return sum;
 }

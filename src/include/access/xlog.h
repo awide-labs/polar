@@ -58,12 +58,6 @@ extern PGDLLIMPORT bool track_wal_io_timing;
 extern PGDLLIMPORT int wal_decode_buffer_size;
 
 extern PGDLLIMPORT int CheckPointSegments;
-extern int	polar_wal_init_set_size;
-
-/* xlog init zero file write size */
-#define POLAR_DEFAULT_XLOG_FILL_ZERO_SIZE 1024 * 1024
-#define POLAR_MIN_XLOG_FILL_ZERO_SIZE XLOG_BLCKSZ
-#define POLAR_MAX_XLOG_FILL_ZERO_SIZE 4 * 1024 * 1024
 
 /* Archive modes */
 typedef enum ArchiveMode

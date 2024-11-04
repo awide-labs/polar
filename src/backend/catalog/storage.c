@@ -28,6 +28,7 @@
 #include "catalog/storage.h"
 #include "catalog/storage_xlog.h"
 #include "miscadmin.h"
+#include "storage/bulk_write.h"
 #include "storage/freespace.h"
 #include "storage/smgr.h"
 #include "utils/hsearch.h"
@@ -474,14 +475,14 @@ void
 RelationCopyStorage(SMgrRelation src, SMgrRelation dst,
 					ForkNumber forkNum, char relpersistence)
 {
-	PGAlignedBlock buf;
-	Page		page;
 	bool		use_wal;
 	bool		copying_initfork;
 	BlockNumber nblocks;
 	BlockNumber blkno;
-
-	page = (Page) buf.data;
+	BulkWriteState *bulkstate;
+	void	   *buffer;
+	int			block_count;
+	int			max_block_count;
 
 	/*
 	 * The init fork for an unlogged relation in many respects has to be
@@ -500,64 +501,67 @@ RelationCopyStorage(SMgrRelation src, SMgrRelation dst,
 	use_wal = XLogIsNeeded() &&
 		(relpersistence == RELPERSISTENCE_PERMANENT || copying_initfork);
 
+	max_block_count = Max(1, polar_bulk_read_size);
+	buffer = palloc_aligned(max_block_count * BLCKSZ, PG_IO_ALIGN_SIZE, 0);
+
+	bulkstate = smgr_bulk_start_smgr(dst, forkNum, use_wal, relpersistence);
+
 	nblocks = smgrnblocks(src, forkNum);
 
-	for (blkno = 0; blkno < nblocks; blkno++)
+	for (blkno = 0; blkno < nblocks; blkno += block_count)
 	{
+		BulkWriteBuffer buf;
+
 		/* If we got a cancel signal during the copy of the data, quit */
 		CHECK_FOR_INTERRUPTS();
 
-		smgrread(src, forkNum, blkno, buf.data);
+		block_count = Min(max_block_count, nblocks - blkno);
 
-		if (!PageIsVerifiedExtended(page, blkno,
-									PIV_LOG_WARNING | PIV_REPORT_STAT))
+		polar_smgrbulkread(src, forkNum, blkno, block_count, buffer);
+
+		for (int i = 0; i < block_count; i++)
 		{
+			BlockNumber cur_blkno = blkno + i;
+			Page		page = (Page) ((char *) buffer + i * BLCKSZ);
+
+			if (!PageIsVerifiedExtended(page, cur_blkno,
+										PIV_LOG_WARNING | PIV_REPORT_STAT))
+			{
+				/*
+				 * For paranoia's sake, capture the file path before invoking
+				 * the ereport machinery.  This guards against the possibility
+				 * of a relcache flush caused by, e.g., an errcontext
+				 * callback. (errcontext callbacks shouldn't be risking any
+				 * such thing, but people have been known to forget that
+				 * rule.)
+				 */
+				char	   *relpath = relpathbackend(src->smgr_rnode.node,
+													 src->smgr_rnode.backend,
+													 forkNum);
+
+				ereport(ERROR,
+						(errcode(ERRCODE_DATA_CORRUPTED),
+						 errmsg("invalid page in block %u of relation %s",
+								cur_blkno, relpath)));
+			}
+
+			buf = smgr_bulk_get_buf(bulkstate);
+
+			memcpy(buf, page, BLCKSZ);
+
 			/*
-			 * For paranoia's sake, capture the file path before invoking the
-			 * ereport machinery.  This guards against the possibility of a
-			 * relcache flush caused by, e.g., an errcontext callback.
-			 * (errcontext callbacks shouldn't be risking any such thing, but
-			 * people have been known to forget that rule.)
+			 * Queue the page for WAL-logging and writing out.  Unfortunately
+			 * we don't know what kind of a page this is, so we have to log
+			 * the full page including any unused space.
 			 */
-			char	   *relpath = relpathbackend(src->smgr_rnode.node,
-												 src->smgr_rnode.backend,
-												 forkNum);
-
-			ereport(ERROR,
-					(errcode(ERRCODE_DATA_CORRUPTED),
-					 errmsg("invalid page in block %u of relation %s",
-							blkno, relpath)));
+			smgr_bulk_write(bulkstate, cur_blkno, buf, false);
 		}
-
-		/*
-		 * WAL-log the copied page. Unfortunately we don't know what kind of a
-		 * page this is, so we have to log the full page including any unused
-		 * space.
-		 */
-		if (use_wal)
-			log_newpage(&dst->smgr_rnode.node, forkNum, blkno, page, false);
-
-		PageSetChecksumInplace(page, blkno);
-
-		/*
-		 * Now write the page.  We say skipFsync = true because there's no
-		 * need for smgr to schedule an fsync for this write; we'll do it
-		 * ourselves below.
-		 */
-		smgrextend(dst, forkNum, blkno, buf.data, true);
 	}
+	Assert(blkno == nblocks);
 
-	/*
-	 * When we WAL-logged rel pages, we must nonetheless fsync them.  The
-	 * reason is that since we're copying outside shared buffers, a CHECKPOINT
-	 * occurring during the copy has no way to flush the previously written
-	 * data to disk (indeed it won't know the new rel even exists).  A crash
-	 * later on would replay WAL from the checkpoint, therefore it wouldn't
-	 * replay our earlier WAL entries. If we do not fsync those pages here,
-	 * they might still not be on disk when the crash occurs.
-	 */
-	if (use_wal || copying_initfork)
-		smgrimmedsync(dst, forkNum);
+	smgr_bulk_finish(bulkstate);
+
+	pfree(buffer);
 }
 
 /*

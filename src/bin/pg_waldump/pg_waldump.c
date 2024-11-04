@@ -1196,13 +1196,13 @@ main(int argc, char **argv)
 
 	XLogReaderFree(xlogreader_state);
 	if (polar_disk_name && polar_storage_cluster_name)
-		polar_vfs_destory_fe(ftype, polar_disk_name);
+		polar_vfs_destroy_fe(ftype, polar_disk_name);
 
 	return EXIT_SUCCESS;
 
 bad_argument:
 	if (polar_disk_name && polar_storage_cluster_name)
-		polar_vfs_destory_fe(ftype, polar_disk_name);
+		polar_vfs_destroy_fe(ftype, polar_disk_name);
 	pg_log_error_hint("Try \"%s --help\" for more information.", progname);
 	return EXIT_FAILURE;
 }

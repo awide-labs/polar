@@ -20,10 +20,6 @@ WITH rel AS (SELECT oid::regclass AS id FROM pg_class WHERE relname ~ 'freespace
 
 DELETE FROM freespace_tab;
 VACUUM freespace_tab;
--- In bulk extend, we will pre-extend pages.
--- And these pages will not be expected to vacuum truncated to avoid
--- repeating bulk extenion and truncating.
--- So the relation will exist in free space map.
 WITH rel AS (SELECT oid::regclass AS id FROM pg_class WHERE relname ~ 'freespace')
   SELECT rel.id, fsm.blkno, (fsm.avail > 0) AS is_avail
     FROM rel, LATERAL pg_freespace(rel.id) AS fsm

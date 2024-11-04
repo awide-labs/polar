@@ -15,6 +15,7 @@
 
 #include "access/amapi.h"
 #include "access/generic_xlog.h"
+#include "access/hio.h"
 #include "access/reloptions.h"
 #include "bloom.h"
 #include "catalog/index.h"
@@ -391,7 +392,7 @@ BloomNewBuffer(Relation index)
 	if (needLock)
 		LockRelationForExtension(index, ExclusiveLock);
 
-	buffer = ReadBuffer(index, P_NEW);
+	buffer = polar_index_add_blocks(index);
 	LockBuffer(buffer, BUFFER_LOCK_EXCLUSIVE);
 
 	if (needLock)

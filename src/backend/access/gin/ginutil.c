@@ -16,6 +16,7 @@
 
 #include "access/gin_private.h"
 #include "access/ginxlog.h"
+#include "access/hio.h"
 #include "access/reloptions.h"
 #include "access/xloginsert.h"
 #include "catalog/pg_collation.h"
@@ -331,7 +332,7 @@ GinNewBuffer(Relation index)
 	if (needLock)
 		LockRelationForExtension(index, ExclusiveLock);
 
-	buffer = ReadBuffer(index, P_NEW);
+	buffer = polar_index_add_blocks(index);
 	LockBuffer(buffer, GIN_EXCLUSIVE);
 
 	if (needLock)

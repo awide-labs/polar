@@ -32,6 +32,9 @@ typedef struct BulkInsertStateData
 	Buffer		current_buf;	/* current insertion target page */
 } BulkInsertStateData;
 
+/* GUCs */
+extern PGDLLIMPORT int polar_index_bulk_extend_size;
+extern PGDLLIMPORT int polar_heap_bulk_extend_size;
 
 extern void RelationPutHeapTuple(Relation relation, Buffer buffer,
 								 HeapTuple tuple, bool token);
@@ -39,5 +42,8 @@ extern Buffer RelationGetBufferForTuple(Relation relation, Size len,
 										Buffer otherBuffer, int options,
 										BulkInsertStateData *bistate,
 										Buffer *vmbuffer, Buffer *vmbuffer_other);
+
+extern int	polar_get_bulk_extend_size(BlockNumber first_block, int bulk_extend_size);
+extern Buffer polar_index_add_blocks(Relation relation);
 
 #endif							/* HIO_H */

@@ -674,32 +674,6 @@ LANGUAGE C PARALLEL SAFE;
 
 REVOKE ALL ON FUNCTION polar_xlog_buffer_stat_reset() FROM PUBLIC;
 
-/* Per Index */
-CREATE FUNCTION polar_pg_stat_get_bulk_create_index_extend_times(
-    IN oid,
-    OUT int8
-)
-AS 'MODULE_PATHNAME', 'polar_pg_stat_get_bulk_create_index_extend_times'
-LANGUAGE C PARALLEL SAFE;
-
--- Create View for create index extend stats
-CREATE VIEW polar_pg_stat_all_index_extend_stats AS
-    SELECT
-        C.oid AS relid,
-        N.nspname AS schemaname,
-        C.relname AS relname,
-        polar_pg_stat_get_bulk_create_index_extend_times(C.oid) AS idx_create_extend_times
-    FROM pg_class C LEFT JOIN
-            pg_index I ON C.oid = I.indrelid LEFT JOIN
-            pg_class T ON C.reltoastrelid = T.oid LEFT JOIN
-            pg_index X ON T.oid = X.indrelid
-            LEFT JOIN pg_namespace N ON (N.oid = C.relnamespace)
-    WHERE C.relkind IN ('r', 't', 'm')
-    GROUP BY C.oid, N.nspname, C.relname, T.oid, X.indrelid;
-
-REVOKE ALL ON FUNCTION polar_pg_stat_get_bulk_create_index_extend_times(IN oid,OUT int8) FROM PUBLIC;
-/* POLAR end */
-
 CREATE FUNCTION polar_get_slot_node_type(slot_name text)
 RETURNS text
 AS 'MODULE_PATHNAME', 'polar_get_slot_node_type'

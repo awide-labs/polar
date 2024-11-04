@@ -19,7 +19,7 @@
  * limitations under the License.
  *
  * IDENTIFICATION
- *      src/include/storage/polar_copybuf.h
+ *	  src/include/storage/polar_copybuf.h
  *
  *-------------------------------------------------------------------------
  */
@@ -71,6 +71,9 @@ typedef union CopyBufferDescPadded
 	CopyBufferDesc copy_buf_desc;
 	char		pad[COPYBUFFERDESC_PAD_TO_SIZE];
 } CopyBufferDescPadded;
+
+StaticAssertDecl(sizeof(CopyBufferDesc) <= COPYBUFFERDESC_PAD_TO_SIZE,
+				 "padding size is too small to fit CopyBufferDesc");
 
 #define CopyBufHdrGetBlock(copy_buf_hdr) \
 	((Block) (polar_copy_buffer_blocks + ((Size) (copy_buf_hdr)->buf_id) * BLCKSZ))

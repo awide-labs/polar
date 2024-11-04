@@ -272,10 +272,6 @@ extern struct config_generic *polar_parameter_check_name_internal(const char *gu
 
 /* POLAR end */
 
-/* POLAR */
-#define POLAR_MAX_BULK_IO_SIZE 64
-/* POLAR end */
-
 /* GUC vars that are actually declared in guc.c, rather than elsewhere */
 extern PGDLLIMPORT bool Debug_print_plan;
 extern PGDLLIMPORT bool Debug_print_parse;
@@ -615,22 +611,8 @@ extern bool polar_enable_track_lock_timing;
 extern bool polar_enable_track_network_stat;
 extern bool polar_enable_track_network_timing;
 
-/* POLAR: bulk io */
-extern int	polar_recovery_bulk_extend_size;
-extern int	polar_min_bulk_extend_table_size;
-extern bool polar_enable_primary_recovery_bulk_extend;
-extern int	polar_bulk_extend_size;
-extern int	polar_bulk_read_size;
-
-extern int	polar_index_bulk_extend_size;
-
-
-extern int	polar_index_create_bulk_extend_size;
-
 /* POLAR end */
 
-/* POLAR: partial write */
-extern bool polar_has_partial_write;
 extern bool polar_find_in_string_list(const char *itemname, const char *stringlist);
 
 

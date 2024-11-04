@@ -202,8 +202,6 @@ have_free_buffer(void)
  *
  *	To ensure that no one else can pin the buffer before we do, we must
  *	return the buffer with the buffer header spinlock still held.
- *	POLAR: if reading bulk non-first page and most buffers are pinned. return NULL
- *	instead of log(error).
  */
 BufferDesc *
 StrategyGetBuffer(BufferAccessStrategy strategy, uint32 *buf_state)
@@ -358,14 +356,6 @@ StrategyGetBuffer(BufferAccessStrategy strategy, uint32 *buf_state)
 			 * infinite loop.
 			 */
 			UnlockBufHdr(buf, local_buf_state);
-
-			/*
-			 * POLAR: bulk read, alloc not-first page, if failed just ok,
-			 * return NULL.
-			 */
-			if (polar_bulk_io_is_in_progress && polar_bulk_io_in_progress_count > 0)
-				return NULL;
-
 			elog(ERROR, "no unpinned buffers available");
 		}
 		UnlockBufHdr(buf, local_buf_state);

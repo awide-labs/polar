@@ -213,33 +213,27 @@ dir_open_for_write(const char *pathname, const char *temp_suffix, size_t pad_to_
 	/* Do pre-padding on non-compressed files */
 	if (pad_to_size && dir_data->compression_algorithm == PG_COMPRESSION_NONE)
 	{
-		char	   *data;
-		int			bytes;
-		int			write_once_bytes;
+		ssize_t		rc;
 
-		write_once_bytes = polar_is_write_pfs ? MAX_SEND_SIZE : XLOG_BLCKSZ;
-		data = (char *) pg_malloc0(write_once_bytes);
-		for (bytes = 0; bytes < pad_to_size; bytes += write_once_bytes)
-		{
-			errno = 0;
-			if (polar_write(fd, data, write_once_bytes) != write_once_bytes)
-			{
-				/* If write didn't set errno, assume problem is no disk space */
-				dir_data->lasterrno = errno ? errno : ENOSPC;
-				pg_free(data);
-				polar_close(fd);
-				return NULL;
-			}
-		}
+		rc = polar_pwrite_zeros(fd, pad_to_size, 0);
 
-		if (polar_lseek(fd, 0, SEEK_SET) != 0)
+		if (rc < 0)
 		{
 			dir_data->lasterrno = errno;
-			pg_free(data);
 			polar_close(fd);
 			return NULL;
 		}
-		pg_free(data);
+
+		/*
+		 * pg_pwrite() (called via polar_pwrite_zeros()) may have moved the
+		 * file position, so reset it (see win32pwrite.c).
+		 */
+		if (polar_lseek(fd, 0, SEEK_SET) != 0)
+		{
+			dir_data->lasterrno = errno;
+			polar_close(fd);
+			return NULL;
+		}
 	}
 
 	/*

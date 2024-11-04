@@ -520,7 +520,7 @@ main(int argc, char *argv[])
 
 	if (polar_real_datadir)
 		free(polar_real_datadir);
-	polar_vfs_destory_simple_fe();
+	polar_vfs_destroy_simple_fe();
 
 	printf(_("Write-ahead log reset\n"));
 	return 0;

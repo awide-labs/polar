@@ -105,7 +105,12 @@ vfs_mgr		polar_vfs[] =
 		.vfs_fsync = fsync,
 		.vfs_unlink = unlink,
 		.vfs_rename = rename,
-		.vfs_fallocate = posix_fallocate,
+		.vfs_posix_fallocate = posix_fallocate,
+#ifdef __linux__
+		.vfs_fallocate = fallocate,
+#else
+		.vfs_fallocate = NULL,
+#endif
 		.vfs_ftruncate = ftruncate,
 		.vfs_truncate = truncate,
 		.vfs_opendir = opendir,
@@ -116,6 +121,7 @@ vfs_mgr		polar_vfs[] =
 		.vfs_mgr_func = polar_get_local_vfs_mgr,
 		.vfs_chmod = chmod,
 		.vfs_mmap = mmap,
+		.vfs_type = NULL,
 	},
 	{
 		.vfs_env_init = NULL,
@@ -139,6 +145,7 @@ vfs_mgr		polar_vfs[] =
 		.vfs_fsync = NULL,
 		.vfs_unlink = NULL,
 		.vfs_rename = NULL,
+		.vfs_posix_fallocate = NULL,
 		.vfs_fallocate = NULL,
 		.vfs_ftruncate = NULL,
 		.vfs_truncate = NULL,
@@ -150,6 +157,7 @@ vfs_mgr		polar_vfs[] =
 		.vfs_mgr_func = NULL,
 		.vfs_chmod = NULL,
 		.vfs_mmap = NULL,
+		.vfs_type = NULL,
 	}
 };
 
@@ -407,14 +415,14 @@ polar_vfs_init_fe(bool is_pfs, char *fname, char *storage_cluster_name, char *po
 
 	if (localfs_mode)
 	{
-		if (!POLAR_DIECRTIO_IS_ALIGNED(polar_max_direct_io_size))
+		if (!POLAR_DIRECTIO_IS_ALIGNED(polar_max_direct_io_size))
 		{
 			fprintf(stderr, "polar_max_direct_io_size is not aligned!\n");
 			exit(EXIT_FAILURE);
 		}
 		else if (polar_directio_buffer == NULL &&
 				 posix_memalign((void **) &polar_directio_buffer,
-								POLAR_DIRECTIO_ALIGN_LEN,
+								PG_IO_ALIGN_SIZE,
 								polar_max_direct_io_size) != 0)
 		{
 			fprintf(stderr, "posix_memalign alloc polar_directio_buffer failed!\n");
@@ -457,10 +465,10 @@ polar_vfs_init_fe(bool is_pfs, char *fname, char *storage_cluster_name, char *po
  * Unmount polar file system for frontend.
  */
 void
-polar_vfs_destory_fe(char *ftype, char *disk_name)
+polar_vfs_destroy_fe(char *ftype, char *disk_name)
 {
 	/*
-	 * Do not destory polar vfs when instance is not in shared storage mode.
+	 * Do not destroy polar vfs when instance is not in shared storage mode.
 	 */
 	if (localfs_mode || !polar_enable_shared_storage_mode)
 		return;
@@ -713,11 +721,11 @@ polar_vfs_init_simple_fe(char *pgconfig, char *pg_datadir, int flag)
 }
 
 void
-polar_vfs_destory_simple_fe(void)
+polar_vfs_destroy_simple_fe(void)
 {
 	if (polar_disk_name != NULL)
 	{
-		polar_vfs_destory_fe(polar_datadir, polar_disk_name);
+		polar_vfs_destroy_fe(polar_datadir, polar_disk_name);
 		pg_free(polar_disk_name);
 		polar_disk_name = NULL;
 	}

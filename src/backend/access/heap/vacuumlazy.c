@@ -66,7 +66,7 @@
 #include "utils/timestamp.h"
 
 /* POLAR */
-#include "storage/polar_bufmgr.h"
+#include "access/hio.h"
 
 /*
  * Space/time tradeoff parameters: do these need to be user-tunable?
@@ -75,7 +75,7 @@
  * REL_TRUNCATE_MINIMUM or (relsize / REL_TRUNCATE_FRACTION) (whichever
  * is less) potentially-freeable pages.
  */
-#define REL_TRUNCATE_MINIMUM	1000
+#define REL_TRUNCATE_MINIMUM	MAX_BUFFERS_TO_EXTEND_BY
 #define REL_TRUNCATE_FRACTION	16
 
 /*
@@ -2853,21 +2853,24 @@ static bool
 should_attempt_truncation(LVRelState *vacrel)
 {
 	BlockNumber possibly_freeable;
+	BlockNumber min_possibly_freeable;
 
 	if (!vacrel->do_rel_truncate || vacrel->failsafe_active ||
 		old_snapshot_threshold >= 0)
 		return false;
 
+	/*
+	 * POLAR: If the table can be truncated to empty, let's do this without
+	 * considering bulk extend. Else if the table is truncatable, reserve bulk
+	 * extended pages.
+	 */
+	if (vacrel->nonempty_pages == 0)
+		min_possibly_freeable = 0;
+	else
+		min_possibly_freeable = polar_heap_bulk_extend_size;
+
 	possibly_freeable = vacrel->rel_pages - vacrel->nonempty_pages;
-
-	/* POLAR: We don't expect that vacuum cleanup our prealloc file blocks */
-	Assert(vacrel->rel);
-	if (polar_bulk_extend_size > 0 &&
-		!RelationUsesLocalBuffers(vacrel->rel) &&
-		possibly_freeable <= polar_bulk_extend_size)
-		return false;
-
-	if (possibly_freeable > 0 &&
+	if (possibly_freeable > min_possibly_freeable &&
 		(possibly_freeable >= REL_TRUNCATE_MINIMUM ||
 		 possibly_freeable >= vacrel->rel_pages / REL_TRUNCATE_FRACTION))
 		return true;
@@ -2965,6 +2968,15 @@ lazy_truncate_heap(LVRelState *vacrel)
 		 * were vacuuming.
 		 */
 		new_rel_pages = count_nondeletable_pages(vacrel, &lock_waiter_detected);
+
+		/*
+		 * POLAR: If the table can be truncated to empty, let's do this
+		 * without considering bulk extend. Else if the table is truncatable,
+		 * reserve bulk extended pages.
+		 */
+		if (new_rel_pages != 0 && orig_rel_pages > new_rel_pages)
+			new_rel_pages = Min(orig_rel_pages, new_rel_pages + polar_heap_bulk_extend_size);
+
 		vacrel->blkno = new_rel_pages;
 
 		if (new_rel_pages >= orig_rel_pages)
@@ -3133,14 +3145,7 @@ count_nondeletable_pages(LVRelState *vacrel, bool *lock_waiter_detected)
 
 		/* Done scanning if we found a tuple here */
 		if (hastup)
-		{
-			Assert(vacrel->rel);
-			/* POLAR: bulk_extend_page is empty page, should be included */
-			if (polar_bulk_extend_size > 0 && !RelationUsesLocalBuffers(vacrel->rel))
-				return blkno + polar_bulk_extend_size;
-			else
-				return blkno + 1;
-		}
+			return blkno + 1;
 	}
 
 	/*

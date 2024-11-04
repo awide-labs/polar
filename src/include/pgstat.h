@@ -196,9 +196,6 @@ typedef struct PgStat_TableCounts
 	PgStat_Counter polar_t_bulk_read_calls_IO;
 	PgStat_Counter polar_t_bulk_read_blocks_IO;
 	/* POLAR end */
-
-	/* bulk create index extend times */
-	PgStat_Counter polar_t_bulk_create_index_extends_times;
 } PgStat_TableCounts;
 
 /* ----------
@@ -257,7 +254,7 @@ typedef struct PgStat_TableXactStatus
  * ------------------------------------------------------------
  */
 
-#define PGSTAT_FILE_FORMAT_ID	0x01A5BCA9
+#define PGSTAT_FILE_FORMAT_ID	0x01A5BCA8
 
 typedef struct PgStat_ArchiverStats
 {
@@ -411,10 +408,6 @@ typedef struct PgStat_StatTabEntry
 	PgStat_Counter polar_bulk_read_calls_IO;
 	/* bulk read calls, IO read blocks counts */
 	PgStat_Counter polar_bulk_read_blocks_IO;
-	/* POLAR end */
-
-	/* POLAR: bulk extend */
-	PgStat_Counter polar_bulk_create_index_extends_times;
 	/* POLAR end */
 } PgStat_StatTabEntry;
 
@@ -685,13 +678,6 @@ polar_stat_wait_obj_and_time_clear(void)
 /* POLAR: end */
 
 
-/* POLAR: bulk create index extend stats */
-#define polar_pgstat_count_bulk_create_index_extend_times(rel)							\
-	do {																				\
-		if ((rel)->pgstat_info != NULL)													\
-			(rel)->pgstat_info->t_counts.polar_t_bulk_create_index_extends_times++;		\
-	} while (0)
-/* POLAR end */
 
 extern void pgstat_count_heap_insert(Relation rel, PgStat_Counter n);
 extern void pgstat_count_heap_update(Relation rel, bool hot);

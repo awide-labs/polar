@@ -20,4 +20,4 @@ polar_dir: polar
 test: force_unlogged_logged force_trans_ro_non_sup
 test: polar_parallel_bgwriter
 test: polar_invalid_memory_alloc_1 polar_shm_unused
-test: polar_support_gbk_encoding polar_copy_into_gbk polar_index_bulk_extend_for_coverage
+test: polar_support_gbk_encoding polar_copy_into_gbk

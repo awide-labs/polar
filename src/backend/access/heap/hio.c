@@ -22,14 +22,34 @@
 #include "access/visibilitymap.h"
 #include "storage/bufmgr.h"
 #include "storage/freespace.h"
+#include "storage/indexfsm.h"
 #include "storage/lmgr.h"
 #include "storage/smgr.h"
 
-/* POLAR */
-#include "utils/guc.h"
-/* POLAR end */
+/* GUCs */
+int			polar_heap_bulk_extend_size = 512;
+int			polar_index_bulk_extend_size = 128;
 
-static Buffer polar_relation_add_extra_blocks_and_return_last_buffer(Relation relation, BulkInsertState bistate);
+static Buffer polar_heap_add_blocks(Relation relation, BulkInsertState bistate);
+
+int
+polar_get_bulk_extend_size(BlockNumber first_block, int bulk_extend_size)
+{
+	/* Avoid small table bloat */
+	if (first_block < bulk_extend_size)
+		bulk_extend_size = 1;
+
+	/* Avoid failure on extremely small DB */
+	bulk_extend_size = Min(NBuffers / 4, bulk_extend_size);
+
+	/* Avoid acceed maximum possible length */
+	bulk_extend_size = Min(MaxBlockNumber - first_block, bulk_extend_size);
+
+	/* Extend by one page at least */
+	bulk_extend_size = Max(1, bulk_extend_size);
+
+	return bulk_extend_size;
+}
 
 /*
  * RelationPutHeapTuple - place tuple at specified page
@@ -351,7 +371,7 @@ RelationGetBufferForTuple(Relation relation, Size len,
 	BlockNumber targetBlock,
 				otherBlock;
 	bool		needLock;
-	int			bulk_extend_size = polar_bulk_extend_size;
+	int			bulk_extend_size = polar_heap_bulk_extend_size;
 
 	len = MAXALIGN(len);		/* be conservative */
 
@@ -369,7 +389,7 @@ RelationGetBufferForTuple(Relation relation, Size len,
 	 * POLAR: when enable preallocate_file, use fsm record blocks => if
 	 * preallocate_file is enabled, use fsm record blocks
 	 */
-	if (polar_enable_shared_storage_mode && bulk_extend_size > 0)
+	if (bulk_extend_size > 0)
 		use_fsm = true;
 
 	/*
@@ -629,7 +649,7 @@ loop:
 			}
 
 			/* POLAR: If we don't need file prealloc, use origin normal method */
-			if (!(polar_enable_shared_storage_mode && bulk_extend_size > 0))
+			if (bulk_extend_size <= 0)
 			{
 				/* Time to bulk-extend */
 				RelationAddExtraBlocks(relation, bistate);
@@ -647,8 +667,8 @@ loop:
 	 * rather than relying on the kernel to do it for us?
 	 */
 	/* POLAR: preallocate multiple block and only use one block */
-	if (polar_enable_shared_storage_mode && bulk_extend_size > 0)
-		buffer = polar_relation_add_extra_blocks_and_return_last_buffer(relation, bistate);
+	if (bulk_extend_size > 0)
+		buffer = polar_heap_add_blocks(relation, bistate);
 	else
 		buffer = ReadBufferBI(relation, P_NEW, RBM_ZERO_AND_LOCK, bistate);
 
@@ -754,10 +774,9 @@ loop:
 	return buffer;
 }
 
-
 /*
  * POLAR:
- * polar_relation_add_extra_blocks_and_return_last_buffer - Extend a relation by multiple blocks
+ * polar_heap_add_blocks - Extend a relation by multiple blocks
  * to avoid future contention on the relation extension lock and expensive pfs extend operation.
  *
  * If bistate isn't NULL, bistate->current_buf is assigned to last buffer alloced.
@@ -770,15 +789,18 @@ loop:
  * relation extension lock has been acquired if relation is not local.
  */
 static Buffer
-polar_relation_add_extra_blocks_and_return_last_buffer(Relation relation, BulkInsertState bistate)
+polar_heap_add_blocks(Relation relation, BulkInsertState bistate)
 {
-	BlockNumber first_block_num_extended = InvalidBlockNumber;
+	BlockNumber first_block = InvalidBlockNumber;
 	int			block_count = 0;
 	Buffer		last_buffer = InvalidBuffer;
 	Buffer	   *buffers = NULL;
 	int			index = 0;
-	char	   *bulk_buf_block = NULL;
 	BufferAccessStrategy strategy = NULL;
+	SMgrRelation smgr = RelationGetSmgr(relation);
+
+	if (polar_heap_bulk_extend_size == 0)
+		return ReadBufferBI(relation, P_NEW, RBM_ZERO_AND_LOCK, bistate);
 
 	if (bistate != NULL)
 	{
@@ -791,27 +813,17 @@ polar_relation_add_extra_blocks_and_return_last_buffer(Relation relation, BulkIn
 		}
 	}
 
-	/* Open it at the smgr level if not already done */
-	RelationGetSmgr(relation);
-
 	/* bulk extend times */
 	polar_pgstat_count_bulk_extend_times(relation);
 
 	PG_TRY();
 	{
 		/* init bulk extend backend-local-variable */
-		polar_smgr_init_bulk_extend(relation->rd_smgr, MAIN_FORKNUM);
+		polar_smgr_init_bulk_extend(smgr, MAIN_FORKNUM);
 
-		first_block_num_extended = relation->rd_smgr->polar_nblocks_faked_for_bulk_extend[MAIN_FORKNUM];
-		block_count = Min(polar_bulk_extend_size, (BlockNumber) RELSEG_SIZE - (first_block_num_extended % ((BlockNumber) RELSEG_SIZE)));
-		if (block_count < 1)
-			block_count = 1;
+		first_block = smgr->polar_nblocks_faked_for_bulk_extend[MAIN_FORKNUM];
+		block_count = polar_get_bulk_extend_size(first_block, polar_heap_bulk_extend_size);
 
-		/* avoid small table bloat */
-		if (first_block_num_extended < polar_min_bulk_extend_table_size)
-			block_count = 1;
-
-		bulk_buf_block = (char *) palloc_io_aligned(block_count * BLCKSZ, MCXT_ALLOC_ZERO);
 		buffers = (Buffer *) palloc(block_count * sizeof(Buffer));
 
 		for (index = 0; index < block_count; index++)
@@ -825,11 +837,10 @@ polar_relation_add_extra_blocks_and_return_last_buffer(Relation relation, BulkIn
 			{
 				/*
 				 * Lock last buffer in bulk extend, when last buffers are
-				 * between buf head lock releasing and LockBuffer, the last
-				 * buffers can be taken by other backends. Under this
-				 * condition, the page will be init twice by two backend. we
-				 * fix the bug by releasing buf head lock after LockBuffer in
-				 * last buffer.
+				 * between IO lock releasing and LockBuffer, the last buffer
+				 * can be taken by other backends. Under this condition, the
+				 * page will be init twice by two backend. we fix the bug by
+				 * releasing IO lock after LockBuffer in last buffer.
 				 */
 				buffers[index] = ReadBufferExtended(relation, MAIN_FORKNUM, P_NEW, RBM_ZERO_AND_LOCK, strategy);
 			}
@@ -843,26 +854,19 @@ polar_relation_add_extra_blocks_and_return_last_buffer(Relation relation, BulkIn
 		 * error recovery, very important, reset bulk extend
 		 * backend-local-variable
 		 */
-		if (relation->rd_smgr != NULL)
-			polar_smgr_clear_bulk_extend(relation->rd_smgr, MAIN_FORKNUM);
+		polar_smgr_clear_bulk_extend(smgr, MAIN_FORKNUM);
 		PG_RE_THROW();
 	}
 	PG_END_TRY();
 
-	/*
-	 * Reset bulk extend backend-local-variable. The reason why we can use
-	 * backend-local-variable in bulk extend is that we don't allow to extend
-	 * concurrently.
-	 */
-	polar_smgr_clear_bulk_extend(relation->rd_smgr, MAIN_FORKNUM);
+	/* reset bulk extend backend-local-variable */
+	polar_smgr_clear_bulk_extend(smgr, MAIN_FORKNUM);
 
-	/* bulk extend io */
-	polar_smgrbulkextend(relation->rd_smgr, MAIN_FORKNUM, first_block_num_extended, block_count, bulk_buf_block, false);
+	/* bulk extend polar store */
+	smgrzeroextend(smgr, MAIN_FORKNUM, first_block, block_count, false);
 
-	/* Update block countters */
+	/* Update block counters */
 	polar_pgstat_count_bulk_extend_blocks(relation, block_count);
-
-	pfree(bulk_buf_block);
 
 	/* ----------------
 	 * Until here, all alloced buffer are zero page(BM_VALID, non-BM_DIRTY). It is safe.
@@ -907,7 +911,7 @@ polar_relation_add_extra_blocks_and_return_last_buffer(Relation relation, BulkIn
 		MarkBufferDirty(buffer);
 
 		/* we'll need this info below */
-		Assert((first_block_num_extended + index) == BufferGetBlockNumber(buffer));
+		Assert((first_block + index) == BufferGetBlockNumber(buffer));
 		freespace = PageGetHeapFreeSpace(page);
 
 		UnlockReleaseBuffer(buffer);
@@ -917,7 +921,7 @@ polar_relation_add_extra_blocks_and_return_last_buffer(Relation relation, BulkIn
 		 * chance of making this page visible to other concurrently inserting
 		 * backends, and we want that to happen without delay.
 		 */
-		RecordPageWithFreeSpace(relation, first_block_num_extended + index, freespace);
+		RecordPageWithFreeSpace(relation, first_block + index, freespace);
 	}
 
 	/*
@@ -927,7 +931,7 @@ polar_relation_add_extra_blocks_and_return_last_buffer(Relation relation, BulkIn
 	 * inserted. skip last block.
 	 */
 	if (block_count > 0)
-		FreeSpaceMapVacuumRange(relation, first_block_num_extended, first_block_num_extended + block_count);
+		FreeSpaceMapVacuumRange(relation, first_block, first_block + block_count);
 
 	/* last block */
 	last_buffer = buffers[block_count];
@@ -937,6 +941,114 @@ polar_relation_add_extra_blocks_and_return_last_buffer(Relation relation, BulkIn
 		IncrBufferRefCount(last_buffer);
 		bistate->current_buf = last_buffer;
 	}
+	pfree(buffers);
+
+	return last_buffer;
+}
+
+/*
+ * POLAR: index insert bulk extend. If we can not find free pages in index relation while
+ * doing index insert, we will do index bulk extend. The free blocks will be registered
+ * in FSM.
+ */
+Buffer
+polar_index_add_blocks(Relation relation)
+{
+	BlockNumber first_block = InvalidBlockNumber;
+	int			block_count = 0;
+	Buffer		last_buffer = InvalidBuffer;
+	Buffer	   *buffers = NULL;
+	int			index = 0;
+	SMgrRelation smgr = RelationGetSmgr(relation);
+
+	if (polar_index_bulk_extend_size == 0)
+		return ReadBuffer(relation, P_NEW);
+
+	PG_TRY();
+	{
+		/* init bulk extend backend-local-variable */
+		polar_smgr_init_bulk_extend(smgr, MAIN_FORKNUM);
+
+		first_block = smgr->polar_nblocks_faked_for_bulk_extend[MAIN_FORKNUM];
+		block_count = polar_get_bulk_extend_size(first_block, polar_index_bulk_extend_size);
+
+		buffers = (Buffer *) palloc(block_count * sizeof(Buffer));
+
+		/*
+		 * The difference between polar_heap_add_blocks here is that: All the
+		 * buffer is RBM_NORMAL, not RBM_ZERO_AND_LOCK for the last buffer.
+		 * Because the btree index will not try to get the last blkno when fsm
+		 * is not free, which is the scene in heap_insert. The return last
+		 * buffer will be locked by locked from caller.
+		 */
+		for (index = 0; index < block_count; index++)
+		{
+			/*
+			 * Extend by one page.  This should generally match the main-line
+			 * extension code in RelationGetBufferForTuple, except that we
+			 * hold the relation extension lock throughout.
+			 */
+			buffers[index] = ReadBufferExtended(relation, MAIN_FORKNUM, P_NEW, RBM_NORMAL, NULL);
+		}
+	}
+	PG_CATCH();
+	{
+		/*
+		 * error recovery, very important, reset bulk extend
+		 * backend-local-variable
+		 */
+		polar_smgr_clear_bulk_extend(smgr, MAIN_FORKNUM);
+		PG_RE_THROW();
+	}
+	PG_END_TRY();
+
+	/* reset bulk extend backend-local-variable */
+	polar_smgr_clear_bulk_extend(smgr, MAIN_FORKNUM);
+
+	/* bulk extend polar store */
+	smgrzeroextend(smgr, MAIN_FORKNUM, first_block, block_count, false);
+
+	/* process left (block_count - 1) blocks, skip last block */
+	block_count--;
+	for (index = 0; index < block_count; index++)
+	{
+		Buffer		buffer;
+		Page		page;
+
+		buffer = buffers[index];
+		LockBuffer(buffer, BUFFER_LOCK_SHARE);
+		page = BufferGetPage(buffer);
+		if (!PageIsNew(page))
+			elog(ERROR, "index bulk extend page %u of relation \"%s\" should be empty but is not",
+				 BufferGetBlockNumber(buffer),
+				 RelationGetRelationName(relation));
+
+		/*
+		 * The difference between polar_heap_add_blocks here is that: we don't
+		 * need to init new page and MarkBufferDirty. Because for btree index,
+		 * when it get one page from fsm, it always call _bt_pageinit for a
+		 * new page. While heap page should be inited by the caller.
+		 */
+
+		Assert((first_block + index) == BufferGetBlockNumber(buffer));
+		UnlockReleaseBuffer(buffer);
+
+		/*
+		 * We just register the free pages into FSM, no need to mark all the
+		 * new buffers dirty
+		 */
+		RecordFreeIndexPage(relation, first_block + index);
+	}
+
+	/*
+	 * Finally, vacuum the FSM. Update the upper-level FSM pages to ensure
+	 * that searchers can find them.
+	 */
+	if (block_count > 0)
+		FreeSpaceMapVacuumRange(relation, first_block, first_block + block_count);
+
+	/* last block */
+	last_buffer = buffers[block_count];
 	pfree(buffers);
 
 	return last_buffer;

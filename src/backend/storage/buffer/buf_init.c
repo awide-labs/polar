@@ -19,6 +19,7 @@
 #include "storage/proc.h"
 
 /* POLAR */
+#include "common/file_utils.h"
 #include "storage/polar_copybuf.h"
 #include "storage/polar_fd.h"
 #include "storage/polar_flush.h"
@@ -63,6 +64,48 @@ CkptSortItem *CkptBufferIds;
  *		multiple times. Check the PrivateRefCount infrastructure in bufmgr.c.
  */
 
+static Size
+polar_zero_buffer_shmem_size()
+{
+	/* -1 indicates a request for auto-tune. */
+	if (polar_zero_buffers == -1)
+	{
+		/* Request according to NBuffers, which is in [16, INT_MAX / 2) */
+		polar_zero_buffers = 4;
+
+		if (NBuffers >= 1024)
+			polar_zero_buffers = 32;
+
+		if (NBuffers >= 16384)
+			polar_zero_buffers = 512;
+	}
+
+	/* 0 disables the zero buffer. */
+	if (polar_zero_buffers == 0)
+		return 0;
+
+	polar_zero_buffer_size = polar_zero_buffers * BLCKSZ;
+
+	return polar_zero_buffer_size + PG_IO_ALIGN_SIZE;
+}
+
+static void
+polar_zero_buffer_init()
+{
+	bool		found;
+
+	if (polar_zero_buffer_size == 0)
+		return;
+
+	polar_zero_buffer = (char *)
+		TYPEALIGN(PG_IO_ALIGN_SIZE,
+				  ShmemInitStruct("Zero Buffer Blocks",
+								  polar_zero_buffer_size + PG_IO_ALIGN_SIZE,
+								  &found));
+
+	if (!found)
+		MemSet(polar_zero_buffer, 0, polar_zero_buffer_size);
+}
 
 /*
  * Initialize shared buffer pool
@@ -84,10 +127,11 @@ InitBufferPool(void)
 						NBuffers * sizeof(BufferDescPadded),
 						&foundDescs);
 
+	/* Align buffer pool on IO page size boundary. */
 	BufferBlocks = (char *)
-		TYPEALIGN(POLAR_BUFFER_ALIGN_LEN,
+		TYPEALIGN(PG_IO_ALIGN_SIZE,
 				  ShmemInitStruct("Buffer Blocks",
-								  ((NBuffers * (Size) BLCKSZ) + POLAR_BUFFER_ALIGN_LEN),
+								  NBuffers * (Size) BLCKSZ + PG_IO_ALIGN_SIZE,
 								  &foundBufs));
 
 	/* Align condition variables to cacheline boundary. */
@@ -169,6 +213,9 @@ InitBufferPool(void)
 	/* POLAR: init copy buffer pool */
 	polar_init_copy_buffer_pool();
 
+	/* POLAR: init global zero buffer */
+	polar_zero_buffer_init();
+
 	/* Initialize per-backend file flush context */
 	WritebackContextInit(&BackendWritebackContext,
 						 &backend_flush_after);
@@ -210,6 +257,9 @@ BufferShmemSize(void)
 
 	/* POLAR: add copy buffer shared memory size */
 	size = add_size(size, polar_copy_buffer_shmem_size());
+
+	/* POLAR: size of global zero buffer */
+	size = add_size(size, polar_zero_buffer_shmem_size());
 
 	return size;
 }

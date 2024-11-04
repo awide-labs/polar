@@ -97,6 +97,9 @@ typedef union polar_xlog_buffer_desc_padded
 	char		pad[XLOGBUFFERDESC_PAD_TO_SIZE];
 } polar_xlog_buffer_desc_padded;
 
+StaticAssertDecl(sizeof(polar_xlog_buffer_desc) <= XLOGBUFFERDESC_PAD_TO_SIZE,
+				 "padding size is too small to fit polar_xlog_buffer_desc");
+
 typedef struct polar_xlog_buffer_ctl_t
 {
 	polar_xlog_buffer_desc_padded *buffer_descriptors;

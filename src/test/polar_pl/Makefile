@@ -6,6 +6,9 @@
 #
 #-------------------------------------------------------------------------
 
+export enable_fault_injector
+export with_ssl
+
 EXTRA_INSTALL = external/polar_monitor
 EXTRA_INSTALL += contrib/pg_stat_statements
 
@@ -16,8 +19,6 @@ endif
 subdir = src/test/polar_pl
 top_builddir = ../../..
 include $(top_builddir)/src/Makefile.global
-
-export with_ssl
 
 check:
 	$(prove_check)

@@ -188,23 +188,6 @@ int			checkpoint_flush_after = 0;
 int			bgwriter_flush_after = 0;
 int			backend_flush_after = 0;
 
-/* local state for StartBufferIO and related functions */
-static BufferDesc *InProgressBuf = NULL;
-static bool IsForInput;
-
-/*
- * POLAR: bulk io local state for StartBufferIO/TerminateBufferIO/AbortBufferIO and related functions.
- *
- * notice: bulk read io may be mixed with temporary write io, for flushing dirty evicted page.
- *	       So polar_bulk_io_is_for_input[] is required for error recovery.
- */
-bool		polar_bulk_io_is_in_progress = false;
-int			polar_bulk_io_in_progress_count = 0;
-BufferDesc **polar_bulk_io_in_progress_buf = NULL;
-static bool *polar_bulk_io_is_for_input = NULL;
-
-/* POLAR end */
-
 /* local state for LockBufferForCleanup */
 static BufferDesc *PinCountWaitBuf = NULL;
 
@@ -250,6 +233,9 @@ static PrivateRefCountEntry *GetPrivateRefCountEntry(Buffer buffer, bool do_move
 static inline int32 GetPrivateRefCount(Buffer buffer);
 static void ForgetPrivateRefCountEntry(PrivateRefCountEntry *ref);
 
+/* POLAR */
+bool		polar_has_partial_write;
+int			polar_bulk_read_size = 16;
 
 static bool polar_apply_io_locked_page(BufferDesc *bufHdr, XLogRecPtr replay_from,
 									   XLogRecPtr checkpoint_lsn, SMgrRelation smgr,
@@ -862,6 +848,19 @@ ReadBufferWithoutRelcache(RelFileNode rnode, ForkNumber forkNum,
 							 mode, strategy, &hit);
 }
 
+/*
+ * Convenience wrapper for ReadBuffer_common, exported for outer usage.
+ */
+Buffer
+polar_read_buffer_common(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
+						 BlockNumber blockNum, ReadBufferMode mode,
+						 BufferAccessStrategy strategy)
+{
+	bool		hit;
+
+	return ReadBuffer_common(smgr, relpersistence, forkNum,
+							 blockNum, mode, strategy, &hit);
+}
 
 /*
  * ReadBuffer_common -- common logic for all ReadBuffer variants
@@ -1071,7 +1070,7 @@ repeat_read:
 		/* new buffers are zero-filled */
 		MemSet((char *) bufBlock, 0, BLCKSZ);
 		/* don't set checksum for all-zero page */
-		smgrextend(smgr, forkNum, blockNum, (char *) bufBlock, false);
+		smgrzeroextend(smgr, forkNum, blockNum, 1, false);
 
 		/*
 		 * NB: we're *not* doing a ScheduleBufferTagForWriteback here;
@@ -1096,7 +1095,7 @@ repeat_read:
 			if (track_io_timing)
 				INSTR_TIME_SET_CURRENT(io_start);
 
-			smgrread(smgr, forkNum, blockNum, (char *) bufBlock);
+			smgrread(smgr, forkNum, blockNum, bufBlock);
 
 			if (track_io_timing)
 			{
@@ -2914,7 +2913,6 @@ InitBufferPoolAccess(void)
 static void
 AtProcExit_Buffers(int code, Datum arg)
 {
-	AbortBufferIO();
 	UnlockBuffers();
 
 	CheckForBufferLeaks();
@@ -4055,7 +4053,7 @@ RelationCopyStorageUsingBuffer(RelFileNode srcnode,
 	bool		use_wal;
 	BlockNumber nblocks;
 	BlockNumber blkno;
-	PGAlignedBlock buf;
+	PGIOAlignedBlock buf;
 	BufferAccessStrategy bstrategy_src;
 	BufferAccessStrategy bstrategy_dst;
 
@@ -5038,14 +5036,7 @@ polar_start_buffer_io_extend(BufferDesc *buf,
 {
 	uint32		buf_state;
 
-	/* POLAR: bulk io */
-	if (!polar_bulk_io_is_in_progress)
-	{
-		/* single io */
-		Assert(!InProgressBuf);
-	}
-	/* POLAR end */
-
+	ResourceOwnerEnlargeBufferIOs(CurrentResourceOwner);
 
 	for (;;)
 	{
@@ -5085,27 +5076,8 @@ polar_start_buffer_io_extend(BufferDesc *buf,
 	buf_state |= BM_IO_IN_PROGRESS;
 	UnlockBufHdr(buf, buf_state);
 
-	/* POLAR: bulk io */
-	if (!polar_bulk_io_is_in_progress)
-	{
-		/* single io */
-		InProgressBuf = buf;
-		IsForInput = forInput;
-	}
-	else
-	{
-		/* bulk io */
-		polar_bulk_io_in_progress_buf[polar_bulk_io_in_progress_count] = buf;
-
-		/*
-		 * bulk read io may be mixed with temporary write io, for flushing
-		 * dirty evicted page. So polar_bulk_io_is_for_input[] is required for
-		 * error recovery.
-		 */
-		polar_bulk_io_is_for_input[polar_bulk_io_in_progress_count] = forInput;
-		polar_bulk_io_in_progress_count++;
-	}
-	/* POLAR end */
+	ResourceOwnerRememberBufferIO(CurrentResourceOwner,
+								  BufferDescriptorGetBuffer(buf));
 
 	return true;
 }
@@ -5131,32 +5103,6 @@ TerminateBufferIO(BufferDesc *buf, bool clear_dirty, uint32 set_flag_bits)
 {
 	uint32		buf_state;
 
-	/* POLAR：bulk io */
-
-	/*
-	 * Because assert will be ignored during release mode, we only use
-	 * Assert()
-	 */
-	/* ----------------
-	 * single io:
-	 * if (!polar_bulk_io_is_in_progress)
-	   {  Assert(buf == InProgressBuf); }
-	 * ----------------
-	 */
-	Assert(polar_bulk_io_is_in_progress || buf == InProgressBuf);
-	/* ----------------
-	 * bulk io:
-	 * if (polar_bulk_io_is_in_progress)
-	 * {
-	 *   Assert(polar_bulk_io_in_progress_count > 0);
-	 *   Assert(buf == polar_bulk_io_in_progress_buf[polar_bulk_io_in_progress_count - 1]);
-	 * }
-	 * ----------------
-	 */
-	Assert(!polar_bulk_io_is_in_progress || polar_bulk_io_in_progress_count > 0);
-	Assert(!polar_bulk_io_is_in_progress || buf == polar_bulk_io_in_progress_buf[polar_bulk_io_in_progress_count - 1]);
-	/* POLAR end */
-
 	buf_state = LockBufHdr(buf);
 
 	Assert(buf_state & BM_IO_IN_PROGRESS);
@@ -5168,26 +5114,14 @@ TerminateBufferIO(BufferDesc *buf, bool clear_dirty, uint32 set_flag_bits)
 	buf_state |= set_flag_bits;
 	UnlockBufHdr(buf, buf_state);
 
-	/* POLAR: bulk io */
-	if (!polar_bulk_io_is_in_progress)
-	{
-		/* single io */
-		InProgressBuf = NULL;
-	}
-	else
-	{
-		/* bulk io */
-		polar_bulk_io_in_progress_count--;
-	}
-	/* POLAR end */
-
-	InProgressBuf = NULL;
+	ResourceOwnerForgetBufferIO(CurrentResourceOwner,
+								BufferDescriptorGetBuffer(buf));
 
 	ConditionVariableBroadcast(BufferDescriptorGetIOCV(buf));
 }
 
 /*
- * AbortBufferIO: Clean up any active buffer I/O after an error.
+ * AbortBufferIO: Clean up active buffer I/O after an error.
  *
  *	All LWLocks we might have held have been released,
  *	but we haven't yet released buffer pins, so the buffer is still pinned.
@@ -5196,70 +5130,41 @@ TerminateBufferIO(BufferDesc *buf, bool clear_dirty, uint32 set_flag_bits)
  *	possible the error condition wasn't related to the I/O.
  */
 void
-AbortBufferIO(void)
+AbortBufferIO(Buffer buf)
 {
-	BufferDesc *buf = InProgressBuf;
+	BufferDesc *buf_hdr = GetBufferDescriptor(buf - 1);
+	uint32		buf_state;
 
-polar_bulk_read:
+	buf_state = LockBufHdr(buf_hdr);
+	Assert(buf_state & (BM_IO_IN_PROGRESS | BM_TAG_VALID));
 
-	/*
-	 * POLAR: deal with local buffer(buf->buf_id < 0) local buffer doesn't
-	 * need to release source, just decrease io_in_progress_count
-	 */
-	if (buf && buf->buf_id < 0)
-		polar_bulk_io_in_progress_count--;
-	else if (buf)
+	if (!(buf_state & BM_VALID))
 	{
-		uint32		buf_state;
+		Assert(!(buf_state & BM_DIRTY));
+		UnlockBufHdr(buf_hdr, buf_state);
+	}
+	else
+	{
+		Assert(buf_state & BM_DIRTY);
+		UnlockBufHdr(buf_hdr, buf_state);
 
-		buf_state = LockBufHdr(buf);
-		Assert(buf_state & BM_IO_IN_PROGRESS);
-		if (IsForInput)
+		/* Issue notice if this is not the first failure... */
+		if (buf_state & BM_IO_ERROR)
 		{
-			Assert(!(buf_state & BM_DIRTY));
+			/* Buffer is pinned, so we can read tag without spinlock */
+			char	   *path;
 
-			/* We'd better not think buffer is valid yet */
-			Assert(!(buf_state & BM_VALID));
-			UnlockBufHdr(buf, buf_state);
+			path = relpathperm(buf_hdr->tag.rnode, buf_hdr->tag.forkNum);
+			ereport(WARNING,
+					(errcode(ERRCODE_IO_ERROR),
+					 errmsg("could not write block %u of %s",
+							buf_hdr->tag.blockNum, path),
+					 errdetail("Multiple failures --- write error might be permanent.")));
+			pfree(path);
 		}
-		else
-		{
-			Assert(buf_state & BM_DIRTY);
-			UnlockBufHdr(buf, buf_state);
-			/* Issue notice if this is not the first failure... */
-			if (buf_state & BM_IO_ERROR)
-			{
-				/* Buffer is pinned, so we can read tag without spinlock */
-				char	   *path;
-
-				path = relpathperm(buf->tag.rnode, buf->tag.forkNum);
-				ereport(WARNING,
-						(errcode(ERRCODE_IO_ERROR),
-						 errmsg("could not write block %u of %s",
-								buf->tag.blockNum, path),
-						 errdetail("Multiple failures --- write error might be permanent.")));
-				pfree(path);
-			}
-		}
-		TerminateBufferIO(buf, false, BM_IO_ERROR);
 	}
 
-	/* POLAR: bulk io recovery */
-	if (polar_bulk_io_is_in_progress)
-	{
-		if (polar_bulk_io_in_progress_count > 0)
-		{
-			buf = polar_bulk_io_in_progress_buf[polar_bulk_io_in_progress_count - 1];
-			IsForInput = polar_bulk_io_is_for_input[polar_bulk_io_in_progress_count - 1];
-
-			/*
-			 * In TerminateBufferIO(), polar_bulk_io_in_progress_count was
-			 * reduced by 1.
-			 */
-			goto polar_bulk_read;
-		}
-		polar_bulk_io_is_in_progress = false;
-	}
+	TerminateBufferIO(buf_hdr, false, BM_IO_ERROR);
 
 	/*
 	 * POLAR: we must reset read_min_lsn where ERROR, otherwise bgwriter

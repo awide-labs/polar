@@ -154,7 +154,6 @@ bool		XLOG_DEBUG = false;
 #endif
 
 int			wal_segment_size = DEFAULT_XLOG_SEG_SIZE;
-int			polar_wal_init_set_size = POLAR_DEFAULT_XLOG_FILL_ZERO_SIZE;
 
 /*
  * Number of WAL insertion locks to use. A higher value allows more insertions
@@ -3111,20 +3110,30 @@ XLogFileInitInternal(XLogSegNo logsegno, TimeLineID logtli,
 	memset(zbuffer.data, 0, XLOG_BLCKSZ);
 
 	pgstat_report_wait_start(WAIT_EVENT_WAL_INIT_WRITE);
+
+#ifdef __linux__
+
+	/*
+	 * POLAR: use FALLOC_FL_NO_HIDE_STALE on PFS to optimize appending writes.
+	 */
+	if (polar_enable_fallocate_no_hide_stale &&
+		polar_vfs_type(fd) == POLAR_VFS_PFS &&
+		polar_fallocate(fd, FALLOC_FL_NO_HIDE_STALE, 0, (off_t) wal_segment_size) != 0)
+	{
+		save_errno = errno;
+		polar_unlink(tmppath);
+		polar_close(fd);
+		errno = save_errno;
+
+		elog(ERROR, "fallocate failed \"%s\": %m", tmppath);
+	}
+	/* POLAR end */
+#endif
+
 	save_errno = 0;
 	if (wal_init_zero)
 	{
-		struct iovec iov[PG_IOV_MAX];
-		int			blocks;
-		static char zero_data[POLAR_MAX_XLOG_FILL_ZERO_SIZE];
-
-		blocks = polar_wal_init_set_size / XLOG_BLCKSZ;
-		polar_wal_init_set_size = INTALIGN(blocks) * XLOG_BLCKSZ;
-
-		if (polar_wal_init_set_size > POLAR_MAX_XLOG_FILL_ZERO_SIZE)
-			memset(zero_data, 0, POLAR_MAX_XLOG_FILL_ZERO_SIZE);
-		else
-			memset(zero_data, 0, polar_wal_init_set_size);
+		ssize_t		rc;
 
 		/*
 		 * Zero-fill the file.  With this setting, we do this the hard way to
@@ -3135,29 +3144,10 @@ XLogFileInitInternal(XLogSegNo logsegno, TimeLineID logtli,
 		 * indirect blocks are down on disk.  Therefore, fdatasync(2) or
 		 * O_DSYNC will be sufficient to sync future writes to the log file.
 		 */
+		rc = polar_pwrite_zeros(fd, wal_segment_size, 0);
 
-		/* Prepare to write out a lot of copies of our zero buffer at once. */
-		for (int i = 0; i < lengthof(iov); ++i)
-		{
-			iov[i].iov_base = zero_data;
-			iov[i].iov_len = polar_wal_init_set_size;
-		}
-
-		/* Loop, writing as many blocks as we can for each system call. */
-		blocks = wal_segment_size / polar_wal_init_set_size;
-		for (int i = 0; i < blocks;)
-		{
-			int			iovcnt = Min(blocks - i, lengthof(iov));
-			off_t		offset = i * polar_wal_init_set_size;
-
-			if (pg_pwritev_with_retry(fd, iov, iovcnt, offset) < 0)
-			{
-				save_errno = errno;
-				break;
-			}
-
-			i += iovcnt;
-		}
+		if (rc < 0)
+			save_errno = errno;
 	}
 	else
 	{
@@ -4610,7 +4600,7 @@ XLOGShmemSize(void)
 	/* xlblocks array */
 	size = add_size(size, mul_size(sizeof(XLogRecPtr), XLOGbuffers));
 	/* extra alignment padding for XLOG I/O buffers */
-	size = add_size(size, XLOG_BLCKSZ);
+	size = add_size(size, Max(XLOG_BLCKSZ, PG_IO_ALIGN_SIZE));
 	/* and the buffers themselves */
 	size = add_size(size, mul_size(XLOG_BLCKSZ, XLOGbuffers));
 

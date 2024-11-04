@@ -17,8 +17,7 @@
  * limitations under the License.
  *
  * IDENTIFICATION
- *    src/include/polar_vfs/polar_directio.h
- *
+ *	  src/include/polar_vfs/polar_directio.h
  *
  *-------------------------------------------------------------------------
  */
@@ -46,10 +45,9 @@ extern char *polar_directio_buffer;
 extern const vfs_mgr polar_vfs_dio;
 
 #define POLAR_ACCESS_MODE_MASK      0x3
-#define POLAR_DIRECTIO_ALIGN_LEN		POLAR_BUFFER_ALIGN_LEN
-#define POLAR_DIRECTIO_ALIGN_DOWN(LEN)  TYPEALIGN_DOWN(POLAR_DIRECTIO_ALIGN_LEN, LEN)
-#define POLAR_DIRECTIO_ALIGN(LEN)       TYPEALIGN(POLAR_DIRECTIO_ALIGN_LEN, LEN)
-#define POLAR_DIECRTIO_IS_ALIGNED(LEN)  !((uintptr_t)(LEN) & (uintptr_t)(POLAR_DIRECTIO_ALIGN_LEN - 1))
+#define POLAR_DIRECTIO_ALIGN_DOWN(LEN)  TYPEALIGN_DOWN(PG_IO_ALIGN_SIZE, LEN)
+#define POLAR_DIRECTIO_ALIGN(LEN)       TYPEALIGN(PG_IO_ALIGN_SIZE, LEN)
+#define POLAR_DIRECTIO_IS_ALIGNED(LEN)  !((uintptr_t)(LEN) & (uintptr_t)(PG_IO_ALIGN_SIZE - 1))
 
 extern int	polar_directio_open(const char *path, int flags, mode_t mode);
 extern ssize_t polar_directio_read(int fd, void *buf, size_t len);

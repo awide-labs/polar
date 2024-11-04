@@ -1435,22 +1435,9 @@ MemoryContextAllocAligned(MemoryContext context,
 }
 
 void *
-MemoryContextAllocIOAligned(MemoryContext context, Size size, int flags)
-{
-	/* FIXME: don't hardcode page size */
-	return MemoryContextAllocAligned(context, size, POLAR_BUFFER_ALIGN_LEN, flags);
-}
-
-void *
 palloc_aligned(Size size, Size alignto, int flags)
 {
 	return MemoryContextAllocAligned(CurrentMemoryContext, size, alignto, flags);
-}
-
-void *
-palloc_io_aligned(Size size, int flags)
-{
-	return MemoryContextAllocIOAligned(CurrentMemoryContext, size, flags);
 }
 
 /*

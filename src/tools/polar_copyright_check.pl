@@ -59,7 +59,10 @@ my $identification = 'IDENTIFICATION';
 
 my $invalid_comment_body = 'Invalid comment body';
 
-my @common_typo = ('poalr', 'wirte', 'wrod', 'confict');
+my @common_typo = (
+	'poalr', 'wirte', 'wrod', 'confict',
+	'enalbe', 'cleard', 'recognisable', 'exsits',
+	'conficts', 'sucess');
 my @standard_comment_prefix = ('\/\* POLAR px\:', '\/\* POLAR\:');
 
 #------ the max diff line before checking PG community files ------
@@ -549,6 +552,14 @@ sub c_apache_license_format_check
 	{
 		print
 		  "  $logger_error $invalid_comment_body: reached the end of the body.\n";
+		return 0;
+	}
+
+	# identification indent
+	if ($lines[$start_line] !~ m/^ \*\t  .+/)
+	{
+		print
+		  "  $logger_error $invalid_comment_body: invalid identification path indent.\n";
 		return 0;
 	}
 

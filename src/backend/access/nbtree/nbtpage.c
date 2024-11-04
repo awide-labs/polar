@@ -39,6 +39,7 @@
 #include "utils/snapmgr.h"
 
 /* POLAR */
+#include "access/hio.h"
 #include "storage/smgr.h"
 #include "utils/guc.h"
 
@@ -67,9 +68,6 @@ static bool _bt_lock_subtree_parent(Relation rel, BlockNumber child,
 									BlockNumber *topparentrightsib);
 static void _bt_pendingfsm_add(BTVacState *vstate, BlockNumber target,
 							   FullTransactionId safexid);
-
-/* POLAR */
-static Buffer polar_index_add_extra_blocks_and_return_last_buffer(Relation reln, BlockNumber blockNum);
 
 /*
  *	_bt_initmetapage() -- Fill a page buffer with a correct metapage image
@@ -983,14 +981,7 @@ _bt_getbuf(Relation rel, BlockNumber blkno, int access)
 		if (needLock)
 			LockRelationForExtension(rel, ExclusiveLock);
 
-		/*
-		 * POLAR: if polar_index_bulk_extend_size > 0, use index bulk extend
-		 * instead of extend one page
-		 */
-		if (polar_enable_shared_storage_mode && polar_index_bulk_extend_size > 0)
-			buf = polar_index_add_extra_blocks_and_return_last_buffer(rel, P_NEW);
-		else
-			buf = ReadBuffer(rel, P_NEW);
+		buf = polar_index_add_blocks(rel);
 
 		/* Acquire buffer lock on new page */
 		_bt_lockbuf(rel, buf, BT_WRITE);
@@ -3120,137 +3111,4 @@ _bt_pendingfsm_add(BTVacState *vstate,
 	vstate->pendingpages[vstate->npendingpages].target = target;
 	vstate->pendingpages[vstate->npendingpages].safexid = safexid;
 	vstate->npendingpages++;
-}
-
-/*
- * POLAR: index insert bulk extend. If we can not find free pages in index relation while
- * doing index insert, we will do index bulk extend. The free blocks will be registered
- * in FSM.
- * We now only support bulk extend for btree index.
- * Note: raw LockBuffer() calls are disallowed in nbtree; all
- * buffer lock requests need to go through wrapper functions such
- * as _bt_lockbuf().
- */
-static Buffer
-polar_index_add_extra_blocks_and_return_last_buffer(Relation reln, BlockNumber blockNum)
-{
-	BlockNumber first_block_num_extended = InvalidBlockNumber;
-	int			block_count = 0;
-	Buffer		last_buffer = InvalidBuffer;
-	Buffer	   *buffers = NULL;
-	int			index = 0;
-	char	   *bulk_buf_block = NULL;
-
-	PG_TRY();
-	{
-		/* init bulk extend backend-local-variable */
-		polar_smgr_init_bulk_extend(RelationGetSmgr(reln), MAIN_FORKNUM);
-
-		first_block_num_extended = RelationGetSmgr(reln)->polar_nblocks_faked_for_bulk_extend[MAIN_FORKNUM];
-		block_count = Min(polar_index_bulk_extend_size, (BlockNumber) RELSEG_SIZE - (first_block_num_extended % ((BlockNumber) RELSEG_SIZE)));
-		if (block_count < 1)
-			block_count = 1;
-
-		/* avoid small table bloat */
-		if (first_block_num_extended < polar_min_bulk_extend_table_size)
-			block_count = 1;
-
-		bulk_buf_block = (char *) palloc_io_aligned(block_count * BLCKSZ, MCXT_ALLOC_ZERO);
-		buffers = (Buffer *) palloc0(block_count * sizeof(Buffer));
-
-		/*
-		 * The difference between
-		 * polar_relation_add_extra_blocks_and_return_last_buffer here is
-		 * that: All the buffer is RBM_NORMAL, not RBM_ZERO_AND_LOCK for the
-		 * last buffer. Because the btree index will not try to get the last
-		 * blkno when fsm is not free. The btree index must get free page from
-		 * fsm. When we check PageIsNew(), these bulk extend pages will not
-		 * added into fsm. Moreover, The caller will init bulk extend pages
-		 * which get from fsm, but bulk extend doesn't init index pages. There
-		 * is no problem for init page twice. The return last buffer will be
-		 * locked by _bt_lockbuf from caller.
-		 */
-		for (index = 0; index < block_count; index++)
-		{
-			/*
-			 * Extend by one page.  This should generally match the main-line
-			 * extension code in RelationGetBufferForTuple, except that we
-			 * hold the relation extension lock throughout.
-			 */
-			buffers[index] = ReadBufferExtended(reln, MAIN_FORKNUM, P_NEW, RBM_NORMAL, NULL);
-		}
-	}
-	PG_CATCH();
-	{
-		/*
-		 * error recovery, very important, reset bulk extend
-		 * backend-local-variable
-		 */
-		if (RelationGetSmgr(reln) != NULL)
-			polar_smgr_clear_bulk_extend(RelationGetSmgr(reln), MAIN_FORKNUM);
-		PG_RE_THROW();
-	}
-	PG_END_TRY();
-
-	/* reset bulk extend backend-local-variable */
-	polar_smgr_clear_bulk_extend(RelationGetSmgr(reln), MAIN_FORKNUM);
-
-	/* bulk extend polar store */
-	polar_smgrbulkextend(RelationGetSmgr(reln), MAIN_FORKNUM, first_block_num_extended, block_count, bulk_buf_block, false);
-
-	pfree(bulk_buf_block);
-
-	/* process left (block_count-1) blocks, skip last block */
-	block_count--;
-	for (index = 0; index < block_count; index++)
-	{
-		Buffer		buffer;
-		Page		page;
-
-		buffer = buffers[index];
-
-		/*
-		 * In polar_relation_add_extra_blocks_and_return_last_buffer, we have
-		 * no need to init page. We just check zero page. we only need to add
-		 * share lock to index buffer.
-		 */
-		_bt_lockbuf(reln, buffer, BT_READ);
-		page = BufferGetPage(buffer);
-		if (!PageIsNew(page))
-			elog(ERROR, "index bulk extend page %u of relation \"%s\" should be empty but is not",
-				 BufferGetBlockNumber(buffer),
-				 RelationGetRelationName(reln));
-
-		/*
-		 * The difference between
-		 * polar_relation_add_extra_blocks_and_return_last_buffer here is
-		 * that: we don't need to init new page and MarkBufferDirty. Because
-		 * for btree index, when it get one page from fsm, it always call
-		 * _bt_pageinit for a new page. While heap page should be inited by
-		 * the caller.
-		 */
-
-		Assert((first_block_num_extended + index) == BufferGetBlockNumber(buffer));
-		/* unlock index buffer and release pin */
-		_bt_relbuf(reln, buffer);
-
-		/*
-		 * We just register the free pages into FSM, no need to mark all the
-		 * new buffers dirty
-		 */
-		RecordFreeIndexPage(reln, first_block_num_extended + index);
-	}
-
-	/*
-	 * Finally, vacuum the FSM. Update the upper-level FSM pages to ensure
-	 * that searchers can find them.
-	 */
-	if (block_count > 0)
-		IndexFreeSpaceMapVacuum(reln);
-
-	/* last block */
-	last_buffer = buffers[block_count];
-	pfree(buffers);
-
-	return last_buffer;
 }

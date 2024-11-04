@@ -4,7 +4,7 @@ subdir = external
 top_builddir = ..
 include $(top_builddir)/src/Makefile.global
 
-SUBDIRS = 
+SUBDIRS =
 
 # multi-arch/0-dependency/fast-compile extensions can be added here
 # sort extention by names, less git conflict
@@ -15,6 +15,7 @@ SUBDIRS += polar_monitor_preload
 SUBDIRS += polar_parameter_manager
 SUBDIRS += polar_proxy_utils
 SUBDIRS += polar_resource_manager
+SUBDIRS += polar_smgrperf
 SUBDIRS += polar_stat_env
 SUBDIRS += polar_worker
 

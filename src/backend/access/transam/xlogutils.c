@@ -34,6 +34,7 @@
 #include "utils/rel.h"
 
 /* POLAR */
+#include "access/hio.h"
 #include "access/polar_logindex_redo.h"
 #include "storage/bufpage.h"
 #include "storage/buf_internals.h"
@@ -45,6 +46,7 @@
 
 /* GUC variable */
 bool		ignore_invalid_pages = false;
+int			polar_recovery_bulk_extend_size = 512;
 
 /*
  * Are we doing recovery from XLOG?
@@ -478,33 +480,21 @@ XLogReadBufferForRedoExtended(XLogReaderState *record,
  * exceed one file size.
  */
 static Buffer
-polar_xlog_relation_bulk_extend_within_segment(SMgrRelationData *smgr,
-											   RelFileNode rnode,
-											   ReadBufferMode mode,
-											   ForkNumber forknum,
-											   int num_bulk_block_once)
+polar_recovery_add_blocks(SMgrRelation smgr, ReadBufferMode mode,
+						  ForkNumber forknum, BlockNumber blockNum)
 {
-	char	   *bulk_buf_block = NULL;
-	BlockNumber first_block_num_extended = InvalidBlockNumber;
+	BlockNumber first_block = InvalidBlockNumber;
 	Buffer		buffer = InvalidBuffer;
-
-	Assert(num_bulk_block_once > 0);
+	int			block_count = 0;
 
 	PG_TRY();
 	{
 		int			index = 0;
 
-		/*
-		 * POLAR: acquire relation file lock to avoid extend the same block
-		 * concurrently which may result in EOF error when proc1 read block
-		 * extended and modified by proc2.
-		 */
-		polar_acquire_relfile_lock(rnode, forknum, ExclusiveLock);
-
 		polar_smgr_init_bulk_extend(smgr, forknum);
-		first_block_num_extended = smgr->polar_nblocks_faked_for_bulk_extend[forknum];
 
-		bulk_buf_block = (char *) palloc_io_aligned(num_bulk_block_once * BLCKSZ, MCXT_ALLOC_ZERO);
+		first_block = smgr->polar_nblocks_faked_for_bulk_extend[forknum];
+		block_count = polar_get_bulk_extend_size(first_block, polar_recovery_bulk_extend_size);
 
 		do
 		{
@@ -518,9 +508,8 @@ polar_xlog_relation_bulk_extend_within_segment(SMgrRelationData *smgr,
 				 * read transaction arrives now, and this buffer will be
 				 * evicted,it will not launch any write to disk. So, it is
 				 * Safe. By the way, maybe the most safe algo is to do this
-				 * after polar_smgrbulkextend, but it's ok to leave it here
-				 * currently. The last buffer will hold on buffer content
-				 * exclusive lock.
+				 * after smgrzeroextend, but it's ok to leave it here
+				 * currently.
 				 */
 				if (mode == RBM_ZERO_AND_LOCK || mode == RBM_ZERO_AND_CLEANUP_LOCK)
 				{
@@ -528,87 +517,24 @@ polar_xlog_relation_bulk_extend_within_segment(SMgrRelationData *smgr,
 				}
 				ReleaseBuffer(buffer);
 			}
-			buffer = ReadBufferWithoutRelcache(rnode, forknum, P_NEW, mode, NULL, true);
-
-		} while (index < num_bulk_block_once);
+			buffer = ReadBufferWithoutRelcache(smgr->smgr_rnode.node, forknum, P_NEW, mode, NULL, true);
+		} while (index < block_count);
 	}
 	PG_CATCH();
 	{
 		polar_smgr_clear_bulk_extend(smgr, forknum);
-
-		/* POLAR: release relation file lock after extend */
-		polar_release_relfile_lock(rnode, forknum, ExclusiveLock);
-
 		PG_RE_THROW();
 	}
 	PG_END_TRY();
 
 	polar_smgr_clear_bulk_extend(smgr, forknum);
 
-	if (bulk_buf_block == NULL)
-		elog(FATAL, "Block buffer is NULL in recovery bulk extend");
-
 	/*
-	 * In polar_smgrbulkextend, if first_block_num_extended is a new segment
-	 * start block, then, it will open a new file, and write it from 0 to
-	 * num_bulk_block_once * 8K. else, will just return an existing file
-	 * handler to write into.
+	 * in smgrzeroextend, if first_block is a new segment start block, then,
+	 * it will open a new file, and write it from 0 to block_count * 8K. else,
+	 * will just return an existing file handler to write into.
 	 */
-	polar_smgrbulkextend(smgr, forknum, first_block_num_extended, num_bulk_block_once, bulk_buf_block, false);
-
-	/* POLAR: release relation file lock after extend */
-	polar_release_relfile_lock(rnode, forknum, ExclusiveLock);
-
-	pfree(bulk_buf_block);
-	return buffer;
-}
-
-/*
- * POLAR:
- * polar_xlog_relation_bulk_extend_blocks -- to extend relation file size more once,
- * worked only on polar store env, with recoverying mode.
- *
- * Returns: the target block's buffer.
- *
- * Params:
- * current_total_blocks: the total number of rel blocks currently, which is the
- *		start position of PwriteExtend.
- * target_blkno: the block id to be replayed, target_blkno - current_total_blocks is
- *		the total blocks to be extended.
- */
-static Buffer
-polar_xlog_relation_bulk_extend_blocks(SMgrRelationData *smgr,
-									   RelFileNode rnode,
-									   ReadBufferMode mode,
-									   ForkNumber forknum,
-									   BlockNumber current_total_blocks,
-									   BlockNumber target_blkno,
-									   int one_bulk_max_size)
-{
-	int			left_blocks_seg = 0;
-	int			num_bulk_block = 0;
-	int			left_blocks = target_blkno + 1 - current_total_blocks;
-	Buffer		buffer = InvalidBuffer;
-
-	do
-	{
-		if (buffer != InvalidBuffer)
-		{
-			if (mode == RBM_ZERO_AND_LOCK || mode == RBM_ZERO_AND_CLEANUP_LOCK)
-			{
-				LockBuffer(buffer, BUFFER_LOCK_UNLOCK);
-			}
-			ReleaseBuffer(buffer);
-		}
-		left_blocks_seg = (BlockNumber) RELSEG_SIZE -
-			(current_total_blocks % (BlockNumber) RELSEG_SIZE);
-		num_bulk_block = Min(left_blocks, left_blocks_seg);
-		num_bulk_block = Min(num_bulk_block, one_bulk_max_size);
-		buffer = polar_xlog_relation_bulk_extend_within_segment(smgr,
-																rnode, mode, forknum, num_bulk_block);
-		current_total_blocks += num_bulk_block;
-		left_blocks -= num_bulk_block;
-	} while (left_blocks > 0);
+	smgrzeroextend(smgr, forknum, first_block, block_count, false);
 
 	return buffer;
 }
@@ -650,8 +576,6 @@ XLogReadBufferExtended(RelFileNode rnode, ForkNumber forknum,
 	BlockNumber lastblock = InvalidBlockNumber;
 	Buffer		buffer;
 	SMgrRelation smgr;
-	int			one_bulk_max_size = 0;
-	bool		can_bulk = false;
 
 	Assert(blkno != P_NEW);
 
@@ -703,66 +627,32 @@ XLogReadBufferExtended(RelFileNode rnode, ForkNumber forknum,
 		Assert(InRecovery || POLAR_IN_LOGINDEX_PARALLEL_REPLAY());
 		buffer = InvalidBuffer;
 
-		/* POLAR: bulk block extend opt start */
-		one_bulk_max_size = polar_recovery_bulk_extend_size;
-		can_bulk = false;
-		if (InHotStandby)
+		do
 		{
-			can_bulk = true;
-		}
-		else if (InRecovery && polar_enable_primary_recovery_bulk_extend)
-		{
-			/*
-			 * can_bulk set true when RW crashes recovery and page in xlog
-			 * will not exist in heap table. The latter will occur in insert
-			 * and truncate relfilenode. In online promote, can_bulk will not
-			 * be true because RO type has been RW when xlog replay.
-			 * InRecovery here is always false in online promote.
-			 */
-			can_bulk = true;
-		}
-
-		/* get last blocks */
-		if (lastblock == InvalidBlockNumber)
-			lastblock = smgrnblocks(smgr, forknum);
-		/* avoid small table bloat */
-		if (lastblock < polar_min_bulk_extend_table_size)
-			can_bulk = false;
-
-		if (can_bulk && polar_enable_shared_storage_mode &&
-			one_bulk_max_size > 0)
-		{
-			buffer = polar_xlog_relation_bulk_extend_blocks(smgr,
-															rnode, mode, forknum, lastblock, blkno,
-															one_bulk_max_size);
-		}
-		else
-		{
-			do
+			if (buffer != InvalidBuffer)
 			{
-				if (buffer != InvalidBuffer)
-				{
-					if (mode == RBM_ZERO_AND_LOCK || mode == RBM_ZERO_AND_CLEANUP_LOCK)
-						LockBuffer(buffer, BUFFER_LOCK_UNLOCK);
-					ReleaseBuffer(buffer);
-				}
-
-				/*
-				 * POLAR: acquire relation file lock to avoid extend the same
-				 * block concurrently which may result in EOF error when proc1
-				 * read block extended and modified by proc2.
-				 */
-				polar_acquire_relfile_lock(rnode, forknum, ExclusiveLock);
-
-				buffer = ReadBufferWithoutRelcache(rnode, forknum,
-												   P_NEW, mode, NULL, true);
-
-				/* POLAR: release relation file lock after extend */
-				polar_release_relfile_lock(rnode, forknum, ExclusiveLock);
+				if (mode == RBM_ZERO_AND_LOCK || mode == RBM_ZERO_AND_CLEANUP_LOCK)
+					LockBuffer(buffer, BUFFER_LOCK_UNLOCK);
+				ReleaseBuffer(buffer);
 			}
-			while (BufferGetBlockNumber(buffer) < blkno);
+
+			/*
+			 * POLAR: acquire relation file lock to avoid extend the same
+			 * block concurrently which may result in EOF error when proc1
+			 * read block extended and modified by proc2.
+			 */
+			polar_acquire_relfile_lock(rnode, forknum, ExclusiveLock);
+
+			if ((InHotStandby || InRecovery) &&
+				polar_recovery_bulk_extend_size > 0)
+				buffer = polar_recovery_add_blocks(smgr, mode, forknum, blkno);
+			else
+				buffer = ReadBufferWithoutRelcache(rnode, forknum, P_NEW, mode, NULL, true);
+
+			/* POLAR: release relation file lock after extend */
+			polar_release_relfile_lock(rnode, forknum, ExclusiveLock);
 		}
-		/* POLAR: bulk block extend opt end */
+		while (BufferGetBlockNumber(buffer) < blkno);
 
 		/* Handle the corner case that P_NEW returns non-consecutive pages */
 		if (BufferGetBlockNumber(buffer) != blkno)
@@ -1373,4 +1263,24 @@ WALReadRaiseError(WALReadError *errinfo)
 						fname, errinfo->wre_off, errinfo->wre_read,
 						errinfo->wre_req)));
 	}
+}
+
+int
+polar_get_recovery_bulk_extend_size(BlockNumber target_block, BlockNumber nblocks)
+{
+	int			bulk_extend_size = polar_recovery_bulk_extend_size;
+
+	Assert(target_block >= nblocks);
+
+	/* Avoid small table bloat */
+	if (nblocks < polar_recovery_bulk_extend_size)
+		bulk_extend_size = 1;
+
+	/* Avoid acceed maximum possible length */
+	bulk_extend_size = Min(MaxBlockNumber - nblocks, bulk_extend_size);
+
+	/* Extend the relation to blockNum + 1 at least */
+	bulk_extend_size = Max(target_block - nblocks + 1, bulk_extend_size);
+
+	return bulk_extend_size;
 }

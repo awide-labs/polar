@@ -27,19 +27,22 @@ extern void mdcreate(SMgrRelation reln, ForkNumber forknum, bool isRedo);
 extern bool mdexists(SMgrRelation reln, ForkNumber forknum);
 extern void mdunlink(RelFileNodeBackend rnode, ForkNumber forknum, bool isRedo);
 extern void mdextend(SMgrRelation reln, ForkNumber forknum,
-					 BlockNumber blocknum, char *buffer, bool skipFsync);
+					 BlockNumber blocknum, const void *buffer, bool skipFsync);
+extern void mdzeroextend(SMgrRelation reln, ForkNumber forknum,
+						 BlockNumber blocknum, int nblocks, bool skipFsync);
 extern bool mdprefetch(SMgrRelation reln, ForkNumber forknum,
 					   BlockNumber blocknum);
 extern void mdread(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
-				   char *buffer);
+				   void *buffer);
 extern void mdwrite(SMgrRelation reln, ForkNumber forknum,
-					BlockNumber blocknum, char *buffer, bool skipFsync);
+					BlockNumber blocknum, const void *buffer, bool skipFsync);
 extern void mdwriteback(SMgrRelation reln, ForkNumber forknum,
 						BlockNumber blocknum, BlockNumber nblocks);
 extern BlockNumber mdnblocks(SMgrRelation reln, ForkNumber forknum);
 extern void mdtruncate(SMgrRelation reln, ForkNumber forknum,
 					   BlockNumber nblocks);
 extern void mdimmedsync(SMgrRelation reln, ForkNumber forknum);
+extern void mdregistersync(SMgrRelation reln, ForkNumber forknum);
 
 extern void ForgetDatabaseSyncRequests(Oid dbid);
 extern void DropRelationFiles(RelFileNode *delrels, int ndelrels, bool isRedo);
@@ -49,9 +52,14 @@ extern int	mdsyncfiletag(const FileTag *ftag, char *path);
 extern int	mdunlinkfiletag(const FileTag *ftag, char *path);
 extern bool mdfiletagmatches(const FileTag *ftag, const FileTag *candidate);
 
-/* POLAR: bulk io */
-extern void polar_mdbulkextend(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
-							   int blockCount, char *buffer, bool skipFsync);
+/* POLAR */
 extern void polar_mdbulkread(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
-							 int blockCount, char *buffer);
+							 int nblocks, void *buffer);
+extern void polar_mdbulkwrite(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
+							  int nblocks, const void *buffer, bool skipFsync);
+extern void polar_mdbulkextend(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
+							   int nblocks, const void *buffer, bool skipFsync);
+
+/* POLAR end */
+
 #endif							/* MD_H */

@@ -104,7 +104,12 @@ vfs_mgr		polar_vfs[] =
 		.vfs_fsync = pg_fsync,
 		.vfs_unlink = unlink,
 		.vfs_rename = rename,
-		.vfs_fallocate = posix_fallocate,
+		.vfs_posix_fallocate = posix_fallocate,
+#ifdef __linux__
+		.vfs_fallocate = fallocate,
+#else
+		.vfs_fallocate = NULL,
+#endif
 		.vfs_ftruncate = ftruncate,
 		.vfs_truncate = truncate,
 		.vfs_opendir = opendir,
@@ -125,6 +130,7 @@ vfs_mgr		polar_vfs[] =
 #else
 		.vfs_posix_fadvise = NULL,
 #endif
+		.vfs_type = polar_bufferio_vfs_type,
 	},
 	{
 		.vfs_env_init = NULL,
@@ -149,6 +155,7 @@ vfs_mgr		polar_vfs[] =
 		.vfs_fsync = NULL,
 		.vfs_unlink = NULL,
 		.vfs_rename = NULL,
+		.vfs_posix_fallocate = NULL,
 		.vfs_fallocate = NULL,
 		.vfs_ftruncate = NULL,
 		.vfs_truncate = NULL,
@@ -162,6 +169,7 @@ vfs_mgr		polar_vfs[] =
 		.vfs_sync_file_range = NULL,
 		.vfs_posix_fadvise = NULL,
 		.vfs_mmap = NULL,
+		.vfs_type = NULL,
 	}
 };
 

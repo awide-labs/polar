@@ -1,0 +1,5 @@
+# polar_smgrperf extension
+comment = 'smgr perf test extension'
+default_version = '1.0'
+module_pathname = '$libdir/polar_smgrperf'
+schema = 'public'

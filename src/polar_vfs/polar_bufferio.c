@@ -57,7 +57,12 @@ const vfs_mgr polar_vfs_bio =
 #endif
 	.vfs_unlink = unlink,
 	.vfs_rename = rename,
-	.vfs_fallocate = posix_fallocate,
+	.vfs_posix_fallocate = posix_fallocate,
+#ifdef __linux__
+	.vfs_fallocate = fallocate,
+#else
+	.vfs_fallocate = NULL,
+#endif
 	.vfs_ftruncate = ftruncate,
 	.vfs_truncate = truncate,
 	.vfs_opendir = opendir,
@@ -68,4 +73,5 @@ const vfs_mgr polar_vfs_bio =
 	.vfs_mgr_func = NULL,
 	.vfs_chmod = chmod,
 	.vfs_mmap = mmap,
+	.vfs_type = polar_bufferio_vfs_type,
 };

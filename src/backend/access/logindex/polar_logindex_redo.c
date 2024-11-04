@@ -170,51 +170,27 @@ polar_logindex_abort_replaying_buffer(void)
 }
 
 /*
- * For the block file in tag, extend it to tag->blockNum blocks.
+ * For the block file in tag, extend it to at least tag->blockNum blocks (might
+ * be longer to reduce smgrzeroextend invocations).
  */
 static void
 polar_extend_block_if_not_exist(BufferTag *tag)
 {
 	SMgrRelation smgr;
 	BlockNumber nblocks;
-	char	   *extendBuf = NULL;
-	int			copy_bulk_extend_size;
-	int			copy_min_bulk_extend_table_size;
 
 	smgr = smgropen(tag->rnode, InvalidBackendId);
 	smgrcreate(smgr, tag->forkNum, true);
 	nblocks = smgrnblocks(smgr, tag->forkNum);
 
-	/* When close the bulk extend, we still palloc one size */
-	copy_bulk_extend_size = polar_recovery_bulk_extend_size;
-	copy_min_bulk_extend_table_size = polar_min_bulk_extend_table_size;
-
-	while (tag->blockNum >= nblocks)
+	if (tag->blockNum >= nblocks)
 	{
-		int			block_count;
+		int			block_count = polar_get_recovery_bulk_extend_size(tag->blockNum, nblocks);
 
-		if (copy_bulk_extend_size > 0
-			&& nblocks >= copy_min_bulk_extend_table_size
-			 /* Avoid small table bloat */ )
-		{
-			block_count = Min(copy_bulk_extend_size,
-							  (BlockNumber) RELSEG_SIZE - nblocks % ((BlockNumber) RELSEG_SIZE));
-		}
-		else
-			block_count = 1;
+		Assert(nblocks + block_count > tag->blockNum);
 
-		/*
-		 * When close the bulk extend, we still palloc one size. We palloc
-		 * only once.
-		 */
-		if (extendBuf == NULL)
-			extendBuf = palloc_io_aligned(BLCKSZ * Max(block_count, copy_bulk_extend_size), MCXT_ALLOC_ZERO);
-		polar_smgrbulkextend(smgr, tag->forkNum, nblocks, block_count, extendBuf, false);
-		nblocks += block_count;
+		smgrzeroextend(smgr, tag->forkNum, nblocks, block_count, false);
 	}
-
-	if (extendBuf != NULL)
-		pfree(extendBuf);
 }
 
 void

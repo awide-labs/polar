@@ -42,6 +42,12 @@ static ssize_t polar_pfsd_pwritev(int fd, const struct iovec *iov, int iovcnt, o
 
 int			max_pfsd_io_size = PFSD_DEFAULT_MAX_IOSIZE;
 
+static inline PolarVFSKind
+polar_pfsd_vfs_type(int fd)
+{
+	return POLAR_VFS_PFS;
+}
+
 /*
  * Pfsd file system interface.
  * It use original pfsd's file access interface.
@@ -74,7 +80,8 @@ const vfs_mgr polar_vfs_pfsd =
 	.vfs_fsync = pfsd_fsync,
 	.vfs_unlink = pfsd_unlink,
 	.vfs_rename = pfsd_rename,
-	.vfs_fallocate = pfsd_posix_fallocate,
+	.vfs_posix_fallocate = pfsd_posix_fallocate,
+	.vfs_fallocate = pfsd_fallocate,
 	.vfs_ftruncate = pfsd_ftruncate,
 	.vfs_truncate = pfsd_truncate,
 	.vfs_opendir = pfsd_opendir,
@@ -85,6 +92,7 @@ const vfs_mgr polar_vfs_pfsd =
 	.vfs_mgr_func = NULL,
 	.vfs_chmod = pfsd_chmod,
 	.vfs_mmap = NULL,
+	.vfs_type = polar_pfsd_vfs_type,
 #else
 	.vfs_env_init = NULL,
 	.vfs_env_destroy = NULL,
@@ -108,6 +116,7 @@ const vfs_mgr polar_vfs_pfsd =
 	.vfs_fsync = NULL,
 	.vfs_unlink = NULL,
 	.vfs_rename = NULL,
+	.vfs_posix_fallocate = NULL,
 	.vfs_fallocate = NULL,
 	.vfs_ftruncate = NULL,
 	.vfs_truncate = NULL,
@@ -119,6 +128,7 @@ const vfs_mgr polar_vfs_pfsd =
 	.vfs_mgr_func = NULL,
 	.vfs_chmod = NULL,
 	.vfs_mmap = NULL,
+	.vfs_type = NULL,
 #endif
 };
 

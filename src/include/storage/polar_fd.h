@@ -18,7 +18,7 @@
  * limitations under the License.
  *
  * IDENTIFICATION
- *      src/include/storage/polar_fd.h
+ *	  src/include/storage/polar_fd.h
  *
  *-------------------------------------------------------------------------
  */
@@ -156,7 +156,8 @@ typedef struct vfs_mgr
 	int			(*vfs_fsync) (int fd);
 	int			(*vfs_unlink) (const char *path);
 	int			(*vfs_rename) (const char *oldpath, const char *newpath);
-	int			(*vfs_fallocate) (int fd, off_t offset, off_t len);
+	int			(*vfs_posix_fallocate) (int fd, off_t offset, off_t len);
+	int			(*vfs_fallocate) (int fd, int mode, off_t offset, off_t len);
 	int			(*vfs_ftruncate) (int fd, off_t len);
 	int			(*vfs_truncate) (const char *path, off_t len);
 	DIR		   *(*vfs_opendir) (const char *path);
@@ -170,9 +171,16 @@ typedef struct vfs_mgr
 	int			(*vfs_sync_file_range) (int fd, off_t offset, off_t nbytes, unsigned int flags);
 	int			(*vfs_posix_fadvise) (int fd, off_t offset, off_t len, int advice);
 	int			(*vfs_umount) (char *ftype, const char *pbdname);
+	PolarVFSKind (*vfs_type) (int fd);
 } vfs_mgr;
 
 extern vfs_mgr polar_vfs[];
+
+static inline PolarVFSKind
+polar_bufferio_vfs_type(int fd)
+{
+	return POLAR_VFS_LOCAL_BIO;
+}
 
 extern ssize_t polar_read_line(int fd, void *buffer, size_t len);
 extern int	polar_copy_file(char *fromfile, char *tofile, bool skiperr);
@@ -327,9 +335,15 @@ polar_rename(const char *oldfile, const char *newfile)
 }
 
 static inline int
-polar_fallocate(int fd, off_t offset, off_t len)
+polar_posix_fallocate(int fd, off_t offset, off_t len)
 {
-	return polar_vfs[polar_vfs_switch].vfs_fallocate(fd, offset, len);
+	return polar_vfs[polar_vfs_switch].vfs_posix_fallocate(fd, offset, len);
+}
+
+static inline int
+polar_fallocate(int fd, int mode, off_t offset, off_t len)
+{
+	return polar_vfs[polar_vfs_switch].vfs_fallocate(fd, mode, offset, len);
 }
 
 static inline int
@@ -484,6 +498,12 @@ polar_umount(char *ftype, const char *pbdname)
 		rc = polar_vfs[polar_vfs_switch].vfs_umount(ftype, pbdname);
 
 	return rc;
+}
+
+static inline PolarVFSKind
+polar_vfs_type(int fd)
+{
+	return polar_vfs[polar_vfs_switch].vfs_type(fd);
 }
 
 #endif

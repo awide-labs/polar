@@ -2965,7 +2965,7 @@ main(int argc, char **argv)
 	BaseBackup(compression_algorithm, compression_detail, compressloc,
 			   &client_compress);
 
-	polar_vfs_destory_fe(ftype, polar_disk_name);
+	polar_vfs_destroy_fe(ftype, polar_disk_name);
 	success = true;
 	return 0;
 }

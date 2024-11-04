@@ -6,6 +6,7 @@
  *	  All file system operations in POSTGRES dispatch through these
  *	  routines.
  *
+ * Portions Copyright (c) 2024, Alibaba Group Holding Limited
  * Portions Copyright (c) 1996-2022, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
@@ -53,24 +54,31 @@ typedef struct f_smgr
 	void		(*smgr_unlink) (RelFileNodeBackend rnode, ForkNumber forknum,
 								bool isRedo);
 	void		(*smgr_extend) (SMgrRelation reln, ForkNumber forknum,
-								BlockNumber blocknum, char *buffer, bool skipFsync);
+								BlockNumber blocknum, const void *buffer, bool skipFsync);
+	void		(*smgr_zeroextend) (SMgrRelation reln, ForkNumber forknum,
+									BlockNumber blocknum, int nblocks, bool skipFsync);
 	bool		(*smgr_prefetch) (SMgrRelation reln, ForkNumber forknum,
 								  BlockNumber blocknum);
 	void		(*smgr_read) (SMgrRelation reln, ForkNumber forknum,
-							  BlockNumber blocknum, char *buffer);
+							  BlockNumber blocknum, void *buffer);
 	void		(*smgr_write) (SMgrRelation reln, ForkNumber forknum,
-							   BlockNumber blocknum, char *buffer, bool skipFsync);
+							   BlockNumber blocknum, const void *buffer, bool skipFsync);
 	void		(*smgr_writeback) (SMgrRelation reln, ForkNumber forknum,
 								   BlockNumber blocknum, BlockNumber nblocks);
 	BlockNumber (*smgr_nblocks) (SMgrRelation reln, ForkNumber forknum);
 	void		(*smgr_truncate) (SMgrRelation reln, ForkNumber forknum,
 								  BlockNumber nblocks);
 	void		(*smgr_immedsync) (SMgrRelation reln, ForkNumber forknum);
-	/* POLAR: bulk io */
-	void		(*polar_smgr_bulkextend) (SMgrRelation reln, ForkNumber forknum,
-										  BlockNumber blocknum, int blockCount, char *buffer, bool skipFsync);
+	void		(*smgr_registersync) (SMgrRelation reln, ForkNumber forknum);
+	/* POLAR: bulk read */
 	void		(*polar_smgr_bulkread) (SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
-										int blockCount, char *buffer);
+										int nblocks, void *buffer);
+	/* POLAR: bulk write */
+	void		(*polar_smgr_bulkwrite) (SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
+										 int nblocks, const void *buffer, bool skipFsync);
+	/* POLAR: bulk extend */
+	void		(*polar_smgr_bulkextend) (SMgrRelation reln, ForkNumber forknum,
+										  BlockNumber blocknum, int nblocks, const void *buffer, bool skipFsync);
 	/* POLAR end */
 } f_smgr;
 
@@ -85,6 +93,7 @@ static const f_smgr smgrsw[] = {
 		.smgr_exists = mdexists,
 		.smgr_unlink = mdunlink,
 		.smgr_extend = mdextend,
+		.smgr_zeroextend = mdzeroextend,
 		.smgr_prefetch = mdprefetch,
 		.smgr_read = mdread,
 		.smgr_write = mdwrite,
@@ -92,9 +101,13 @@ static const f_smgr smgrsw[] = {
 		.smgr_nblocks = mdnblocks,
 		.smgr_truncate = mdtruncate,
 		.smgr_immedsync = mdimmedsync,
-		/* POLAR: extend io */
-		.polar_smgr_bulkextend = polar_mdbulkextend,
+		.smgr_registersync = mdregistersync,
+		/* POLAR: bulk read */
 		.polar_smgr_bulkread = polar_mdbulkread,
+		/* POLAR: bulk write */
+		.polar_smgr_bulkwrite = polar_mdbulkwrite,
+		/* POLAR: extend batch */
+		.polar_smgr_bulkextend = polar_mdbulkextend,
 		/* POLAR end */
 	}
 };
@@ -544,7 +557,7 @@ smgrdounlinkall(SMgrRelation *rels, int nrels, bool isRedo)
  */
 void
 smgrextend(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
-		   char *buffer, bool skipFsync)
+		   const void *buffer, bool skipFsync)
 {
 	smgrsw[reln->smgr_which].smgr_extend(reln, forknum, blocknum,
 										 buffer, skipFsync);
@@ -573,23 +586,27 @@ smgrextend(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
 	/* POLAR end */
 }
 
-/* POLAR: bulk extend */
+/*
+ * smgrzeroextend() -- Add new zeroed out blocks to a file.
+ *
+ * Similar to smgrextend(), except the relation can be extended by
+ * multiple blocks at once and the added blocks will be filled with
+ * zeroes.
+ */
 void
-polar_smgrbulkextend(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
-					 int blockCount, char *buffer, bool skipFsync)
+smgrzeroextend(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
+			   int nblocks, bool skipFsync)
 {
-	Assert(blockCount >= 1);
-	Assert(!reln->polar_flag_for_bulk_extend[forknum]);
-
-	smgrsw[reln->smgr_which].polar_smgr_bulkextend(reln, forknum, blocknum, blockCount, buffer, skipFsync);
+	smgrsw[reln->smgr_which].smgr_zeroextend(reln, forknum, blocknum,
+											 nblocks, skipFsync);
 
 	/*
-	 * Normally we expect this to increase nblocks by one, but if the cached
-	 * value isn't as expected, just invalidate it so the next call asks the
-	 * kernel. nblock should be blocknum + blockCount in bulkExtend
+	 * Normally we expect this to increase the fork size by nblocks, but if
+	 * the cached value isn't as expected, just invalidate it so the next call
+	 * asks the kernel.
 	 */
 	if (reln->smgr_cached_nblocks[forknum] == blocknum)
-		reln->smgr_cached_nblocks[forknum] = blocknum + blockCount;
+		reln->smgr_cached_nblocks[forknum] = blocknum + nblocks;
 	else
 		reln->smgr_cached_nblocks[forknum] = InvalidBlockNumber;
 
@@ -597,24 +614,41 @@ polar_smgrbulkextend(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum
 	 * POLAR RSC: update new blocknum into entry.
 	 */
 	if (POLAR_RSC_SHOULD_UPDATE(reln, forknum))
-		polar_rsc_update_entry(reln, forknum, blocknum + blockCount);
+		polar_rsc_update_entry(reln, forknum, blocknum + nblocks);
+	/* POLAR end */
 }
 
 /*
- *  POLAR: bulk read
+ * polar_smgrbulkextend() -- Add new blocks to a file.
  *
- *	polar_smgrbulkread() -- read multi particular block from a relation into the supplied
- *    				  buffer.
- *
- *		This routine is called from the buffer manager in order to
- *		instantiate pages in the shared buffer cache.  All storage managers
- *		return pages in the format that POSTGRES expects.
+ * The semantics are nearly the same as smgrwrite(): write at the
+ * specified position.  However, this is to be used for the case of
+ * extending a relation (i.e., blocknum is at or beyond the current
+ * EOF).  Note that we assume writing nblocks beyond current EOF
+ * causes intervening file space to become filled with zeroes.
  */
 void
-polar_smgrbulkread(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
-				   int blockCount, char *buffer)
+polar_smgrbulkextend(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
+					 int nblocks, const void *buffer, bool skipFsync)
 {
-	smgrsw[reln->smgr_which].polar_smgr_bulkread(reln, forknum, blocknum, blockCount, buffer);
+	smgrsw[reln->smgr_which].polar_smgr_bulkextend(reln, forknum, blocknum, nblocks, buffer, skipFsync);
+
+	/*
+	 * Normally we expect this to increase the fork size by nblocks, but if
+	 * the cached value isn't as expected, just invalidate it so the next call
+	 * asks the kernel.
+	 */
+	if (reln->smgr_cached_nblocks[forknum] == blocknum)
+		reln->smgr_cached_nblocks[forknum] = blocknum + nblocks;
+	else
+		reln->smgr_cached_nblocks[forknum] = InvalidBlockNumber;
+
+	/*
+	 * POLAR RSC: update new blocknum into entry.
+	 */
+	if (POLAR_RSC_SHOULD_UPDATE(reln, forknum))
+		polar_rsc_update_entry(reln, forknum, blocknum + nblocks);
+	/* POLAR end */
 }
 
 /*
@@ -640,9 +674,24 @@ smgrprefetch(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum)
  */
 void
 smgrread(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
-		 char *buffer)
+		 void *buffer)
 {
 	smgrsw[reln->smgr_which].smgr_read(reln, forknum, blocknum, buffer);
+}
+
+/*
+ * polar_smgrbulkread() -- read multi particular blocks from a relation into
+ *						   the supplied buffers.
+ *
+ * This routine is called from the buffer manager in order to
+ * instantiate pages in the shared buffer cache.  All storage managers
+ * return pages in the format that POSTGRES expects.
+ */
+void
+polar_smgrbulkread(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
+				   int nblocks, void *buffer)
+{
+	smgrsw[reln->smgr_which].polar_smgr_bulkread(reln, forknum, blocknum, nblocks, buffer);
 }
 
 /*
@@ -662,12 +711,42 @@ smgrread(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
  */
 void
 smgrwrite(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
-		  char *buffer, bool skipFsync)
+		  const void *buffer, bool skipFsync)
 {
 	smgrsw[reln->smgr_which].smgr_write(reln, forknum, blocknum,
 										buffer, skipFsync);
 }
 
+/*
+ * polar_smgrbulkwrite() -- Write the supplied buffers out.
+ *
+ * This is to be used only for updating already-existing blocks of a
+ * relation (ie, those before the current EOF).  To extend a relation,
+ * use polar_smgrbulkextend().
+ *
+ * This is not a synchronous write -- the block is not necessarily
+ * on disk at return, only dumped out to the kernel.  However,
+ * provisions will be made to fsync the write before the next checkpoint.
+ *
+ * NB: The mechanism to ensure fsync at next checkpoint assumes that there is
+ * something that prevents a concurrent checkpoint from "racing ahead" of the
+ * write.  One way to prevent that is by holding a lock on the buffer; the
+ * buffer manager's writes are protected by that.  The bulk writer facility
+ * in bulk_write.c checks the redo pointer and calls smgrimmedsync() if a
+ * checkpoint happened; that relies on the fact that no other backend can be
+ * concurrently modifying the page.
+ *
+ * skipFsync indicates that the caller will make other provisions to
+ * fsync the relation, so we needn't bother.  Temporary relations also
+ * do not require fsync.
+ */
+void
+polar_smgrbulkwrite(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
+					int nblocks, const void *buffer, bool skipFsync)
+{
+	smgrsw[reln->smgr_which].polar_smgr_bulkwrite(reln, forknum, blocknum, nblocks,
+												  buffer, skipFsync);
+}
 
 /*
  *	smgrwriteback() -- Trigger kernel writeback for the supplied range of
@@ -845,6 +924,24 @@ smgrtruncate(SMgrRelation reln, ForkNumber *forknum, int nforks, BlockNumber *nb
 			polar_rsc_update_entry(reln, forknum[i], nblocks[i]);
 		/* POLAR end */
 	}
+}
+
+/*
+ * smgrregistersync() -- Request a relation to be sync'd at next checkpoint
+ *
+ * This can be used after calling smgrwrite() or smgrextend() with skipFsync =
+ * true, to register the fsyncs that were skipped earlier.
+ *
+ * Note: be mindful that a checkpoint could already have happened between the
+ * smgrwrite or smgrextend calls and this!  In that case, the checkpoint
+ * already missed fsyncing this relation, and you should use smgrimmedsync
+ * instead.  Most callers should use the bulk loading facility in bulk_write.c
+ * which handles all that.
+ */
+void
+smgrregistersync(SMgrRelation reln, ForkNumber forknum)
+{
+	smgrsw[reln->smgr_which].smgr_registersync(reln, forknum);
 }
 
 /*

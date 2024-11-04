@@ -40,6 +40,12 @@ polar_directio_fsync(int fd)
 #endif
 }
 
+static inline PolarVFSKind
+polar_directio_vfs_type(int fd)
+{
+	return POLAR_VFS_LOCAL_DIO;
+}
+
 /*
  * Local file system interface with O_DIRECT flag.
  * It use original file system interface to do other jobs
@@ -73,7 +79,12 @@ const vfs_mgr polar_vfs_dio =
 	.vfs_fsync = polar_directio_fsync,
 	.vfs_unlink = unlink,
 	.vfs_rename = rename,
-	.vfs_fallocate = posix_fallocate,
+	.vfs_posix_fallocate = posix_fallocate,
+#ifdef __linux__
+	.vfs_fallocate = fallocate,
+#else
+	.vfs_fallocate = NULL,
+#endif
 	.vfs_ftruncate = ftruncate,
 	.vfs_truncate = truncate,
 	.vfs_opendir = opendir,
@@ -84,6 +95,7 @@ const vfs_mgr polar_vfs_dio =
 	.vfs_mgr_func = NULL,
 	.vfs_chmod = chmod,
 	.vfs_mmap = mmap,
+	.vfs_type = polar_directio_vfs_type,
 };
 
 /*
@@ -125,9 +137,9 @@ polar_directio_write(int fd, const void *buf, size_t len)
 	if (offset < 0)
 		return res;
 
-	if (POLAR_DIECRTIO_IS_ALIGNED(buf) &&
-		POLAR_DIECRTIO_IS_ALIGNED(len) &&
-		POLAR_DIECRTIO_IS_ALIGNED(offset))
+	if (POLAR_DIRECTIO_IS_ALIGNED(buf) &&
+		POLAR_DIRECTIO_IS_ALIGNED(len) &&
+		POLAR_DIRECTIO_IS_ALIGNED(offset))
 		return write(fd, buf, len);
 
 	res = polar_directio_pwrite(fd, buf, len, offset);
@@ -148,9 +160,9 @@ polar_directio_read(int fd, void *buf, size_t len)
 	if (offset < 0)
 		return res;
 
-	if (POLAR_DIECRTIO_IS_ALIGNED(buf) &&
-		POLAR_DIECRTIO_IS_ALIGNED(len) &&
-		POLAR_DIECRTIO_IS_ALIGNED(offset))
+	if (POLAR_DIRECTIO_IS_ALIGNED(buf) &&
+		POLAR_DIRECTIO_IS_ALIGNED(len) &&
+		POLAR_DIRECTIO_IS_ALIGNED(offset))
 		return read(fd, buf, len);
 
 	res = polar_directio_pread(fd, buf, len, offset);
@@ -187,9 +199,9 @@ polar_directio_pread(int fd, void *buffer, size_t len, off_t offset)
 	off_t		nleft;
 	ssize_t		cplen;
 
-	if (POLAR_DIECRTIO_IS_ALIGNED(buffer) &&
-		POLAR_DIECRTIO_IS_ALIGNED(len) &&
-		POLAR_DIECRTIO_IS_ALIGNED(offset))
+	if (POLAR_DIRECTIO_IS_ALIGNED(buffer) &&
+		POLAR_DIRECTIO_IS_ALIGNED(len) &&
+		POLAR_DIRECTIO_IS_ALIGNED(offset))
 		return pread(fd, buffer, len, offset);
 
 	from = (char *) buffer;
@@ -208,19 +220,19 @@ polar_directio_pread(int fd, void *buffer, size_t len, off_t offset)
 		nleft > 0)
 	{
 		off = head_start;
-		res = pread(fd, buf, POLAR_DIRECTIO_ALIGN_LEN, off);
+		res = pread(fd, buf, PG_IO_ALIGN_SIZE, off);
 
 		if (res < 0)
 			return res;
-		else if (res <= (offset & (POLAR_DIRECTIO_ALIGN_LEN - 1)))
+		else if (res <= (offset & (PG_IO_ALIGN_SIZE - 1)))
 			return count;
 		else
 		{
-			cplen = Min(res - (offset & (POLAR_DIRECTIO_ALIGN_LEN - 1)), len);
+			cplen = Min(res - (offset & (PG_IO_ALIGN_SIZE - 1)), len);
 			cplen = Min(nleft, cplen);
 		}
 
-		memcpy(from, buf + (offset & (POLAR_DIRECTIO_ALIGN_LEN - 1)), cplen);
+		memcpy(from, buf + (offset & (PG_IO_ALIGN_SIZE - 1)), cplen);
 		from += cplen;
 		count += cplen;
 		nleft -= cplen;
@@ -259,13 +271,13 @@ polar_directio_pread(int fd, void *buffer, size_t len, off_t offset)
 		nleft > 0)
 	{
 		off = tail_start;
-		res = pread(fd, buf, POLAR_DIRECTIO_ALIGN_LEN, off);
+		res = pread(fd, buf, PG_IO_ALIGN_SIZE, off);
 
 		if (res < 0)
 			return res;
 		else
 		{
-			cplen = Min(res, ((offset + len) & (POLAR_DIRECTIO_ALIGN_LEN - 1)));
+			cplen = Min(res, ((offset + len) & (PG_IO_ALIGN_SIZE - 1)));
 			cplen = Min(nleft, cplen);
 		}
 
@@ -289,9 +301,9 @@ polar_directio_preadv(int fd, const struct iovec *iov, int iovcnt, off_t offset)
 
 	for (i = 0; i < iovcnt; i++)
 	{
-		if (aligned && (!POLAR_DIECRTIO_IS_ALIGNED(iov[i].iov_base) ||
-						!POLAR_DIECRTIO_IS_ALIGNED(iov[i].iov_len) ||
-						!POLAR_DIECRTIO_IS_ALIGNED(offset)))
+		if (aligned && (!POLAR_DIRECTIO_IS_ALIGNED(iov[i].iov_base) ||
+						!POLAR_DIRECTIO_IS_ALIGNED(iov[i].iov_len) ||
+						!POLAR_DIRECTIO_IS_ALIGNED(offset)))
 			aligned = false;
 
 		bytes += iov[i].iov_len;
@@ -341,15 +353,15 @@ polar_directio_pwrite(int fd, const void *buffer, size_t len, off_t offset)
 #define POLAR_DIRECTIO_PWRITE_SECTION(start, len)               \
 	do                                                          \
 	{                                                           \
-		MemSet(buf, 0x0, POLAR_DIRECTIO_ALIGN_LEN);             \
-		res = pread(fd, buf, POLAR_DIRECTIO_ALIGN_LEN, off);    \
+		MemSet(buf, 0x0, PG_IO_ALIGN_SIZE);             \
+		res = pread(fd, buf, PG_IO_ALIGN_SIZE, off);    \
 		if (res < 0)                                            \
 			return res;                                         \
 		memcpy(buf + start, from, len);                         \
-		res = pwrite(fd, buf, POLAR_DIRECTIO_ALIGN_LEN, off);   \
+		res = pwrite(fd, buf, PG_IO_ALIGN_SIZE, off);   \
 		if (res < 0)                                            \
 			return res;                                         \
-		Assert(res == POLAR_DIRECTIO_ALIGN_LEN);                \
+		Assert(res == PG_IO_ALIGN_SIZE);                \
 		from += len;                                            \
 		count += len;                                           \
 		nleft -= len;                                           \
@@ -369,9 +381,9 @@ polar_directio_pwrite(int fd, const void *buffer, size_t len, off_t offset)
 	bool		need_truncate = false;
 	struct stat stat_buf;
 
-	if (POLAR_DIECRTIO_IS_ALIGNED(buffer) &&
-		POLAR_DIECRTIO_IS_ALIGNED(len) &&
-		POLAR_DIECRTIO_IS_ALIGNED(offset))
+	if (POLAR_DIRECTIO_IS_ALIGNED(buffer) &&
+		POLAR_DIRECTIO_IS_ALIGNED(len) &&
+		POLAR_DIRECTIO_IS_ALIGNED(offset))
 		return pwrite(fd, buffer, len, offset);
 
 	from = (char *) buffer;
@@ -389,7 +401,7 @@ polar_directio_pwrite(int fd, const void *buffer, size_t len, off_t offset)
 	 * Whether we should truncate file to expected size or not. stat_buf
 	 * constains the original file's states including size.
 	 */
-	if (!POLAR_DIECRTIO_IS_ALIGNED(offset + len))
+	if (!POLAR_DIRECTIO_IS_ALIGNED(offset + len))
 	{
 		res = fstat(fd, &stat_buf);
 		if (res < 0)
@@ -403,8 +415,8 @@ polar_directio_pwrite(int fd, const void *buffer, size_t len, off_t offset)
 		nleft > 0)
 	{
 		off = head_start;
-		cplen = Min(nleft, POLAR_DIRECTIO_ALIGN_LEN - (offset & (POLAR_DIRECTIO_ALIGN_LEN - 1)));
-		POLAR_DIRECTIO_PWRITE_SECTION((offset & (POLAR_DIRECTIO_ALIGN_LEN - 1)), cplen);
+		cplen = Min(nleft, PG_IO_ALIGN_SIZE - (offset & (PG_IO_ALIGN_SIZE - 1)));
+		POLAR_DIRECTIO_PWRITE_SECTION((offset & (PG_IO_ALIGN_SIZE - 1)), cplen);
 	}
 
 	/* write the middle sections */
@@ -436,7 +448,7 @@ polar_directio_pwrite(int fd, const void *buffer, size_t len, off_t offset)
 		nleft > 0)
 	{
 		off = tail_start;
-		cplen = Min(nleft, (offset + len) & (POLAR_DIRECTIO_ALIGN_LEN - 1));
+		cplen = Min(nleft, (offset + len) & (PG_IO_ALIGN_SIZE - 1));
 		POLAR_DIRECTIO_PWRITE_SECTION(0, cplen);
 	}
 
@@ -463,9 +475,9 @@ polar_directio_pwritev(int fd, const struct iovec *iov, int iovcnt, off_t offset
 
 	for (i = 0; i < iovcnt; i++)
 	{
-		if (aligned && (!POLAR_DIECRTIO_IS_ALIGNED(iov[i].iov_base) ||
-						!POLAR_DIECRTIO_IS_ALIGNED(iov[i].iov_len) ||
-						!POLAR_DIECRTIO_IS_ALIGNED(offset)))
+		if (aligned && (!POLAR_DIRECTIO_IS_ALIGNED(iov[i].iov_base) ||
+						!POLAR_DIRECTIO_IS_ALIGNED(iov[i].iov_len) ||
+						!POLAR_DIRECTIO_IS_ALIGNED(offset)))
 			aligned = false;
 
 		bytes += iov[i].iov_len;

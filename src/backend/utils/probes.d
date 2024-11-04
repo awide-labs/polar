@@ -86,6 +86,10 @@ provider postgresql {
 	probe smgr__md__read__done(ForkNumber, BlockNumber, Oid, Oid, Oid, int, int, int);
 	probe smgr__md__write__start(ForkNumber, BlockNumber, Oid, Oid, Oid, int);
 	probe smgr__md__write__done(ForkNumber, BlockNumber, Oid, Oid, Oid, int, int, int);
+	probe smgr__md__extend__start(ForkNumber, BlockNumber, Oid, Oid, Oid, int);
+	probe smgr__md__extend__done(ForkNumber, BlockNumber, Oid, Oid, Oid, int, int, int);
+	probe smgr__md__zeroextend__start(ForkNumber, BlockNumber, Oid, Oid, Oid, int);
+	probe smgr__md__zeroextend__done(ForkNumber, BlockNumber, Oid, Oid, Oid, int, int, int);
 
 	probe wal__insert(unsigned char, unsigned char);
 	probe wal__switch();

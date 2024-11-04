@@ -117,13 +117,16 @@
 #include "utils/xml.h"
 
 /* POLAR */
+#include "access/hio.h"
 #include "access/multixact.h"
 #include "access/polar_logindex.h"
 #include "access/polar_logindex_redo.h"
 #include "access/subtrans.h"
 #include "access/slru.h"
 #include "commands/tablecmds.h"
+#include "common/file_utils.h"
 #include "common/username.h"
+#include "storage/bulk_write.h"
 #include "storage/polar_fd.h"
 #include "storage/polar_rsc.h"
 #include "storage/polar_xlogbuf.h"
@@ -715,6 +718,7 @@ extern const struct config_enum_entry dynamic_shared_memory_options[];
 
 /* POLAR enum GUC options start */
 extern const struct config_enum_entry polar_release_assert_level_options[];
+extern const struct config_enum_entry polar_zero_extend_method_options[];
 
 const struct config_enum_entry polar_session_id_display_options[] = {
 	{"proxy", POLAR_SID_DISPLAY_PROXY, false},
@@ -862,19 +866,7 @@ bool		polar_enable_alloc_checkinterrupts;
 
 bool		polar_enable_sync_ddl;
 
-/* POLAR: bulk io */
-int			polar_recovery_bulk_extend_size = 0;
-int			polar_min_bulk_extend_table_size = 0;
-bool		polar_enable_primary_recovery_bulk_extend = false;
-int			polar_bulk_extend_size = 0;
-int			polar_bulk_read_size = 0;
-int			polar_index_bulk_extend_size = 0;
-int			polar_index_create_bulk_extend_size = 0;
-
 /* POLAR end */
-
-/* POLAR: partial write */
-bool		polar_has_partial_write;
 
 bool		polar_disable_escape_inside_gbk_character;
 
@@ -1074,8 +1066,8 @@ const char *const config_group_names[] =
 	gettext_noop("PolarDB Buffer Management"),
 	/* POLAR_PROXY */
 	gettext_noop("PolarDB Proxy"),
-	/* POLAR_BULK_READ_EXTEND */
-	gettext_noop("PolarDB bulk read/extend"),
+	/* POLAR I/O management */
+	gettext_noop("PolarDB I/O Management"),
 	/* POLAR end */
 
 	/* DEVELOPER_OPTIONS */
@@ -1233,7 +1225,7 @@ static const unit_conversion time_unit_conversion_table[] =
 /******** option records follow ********/
 static struct config_bool ConfigureNamesBool[] =
 {
-	/* POLAR boolean GUCs start */
+	/* POLAR bool GUCs start */
 	{
 		{"polar_enable_persisted_logical_slot", PGC_POSTMASTER, UNGROUPED,
 			gettext_noop("Enable persisted logical slot on shared storage."),
@@ -1664,6 +1656,17 @@ static struct config_bool ConfigureNamesBool[] =
 		NULL, NULL, NULL
 	},
 
+	{
+		{"polar_enable_fallocate_no_hide_stale", PGC_USERSET, POLAR_IO_MANAGEMENT,
+			gettext_noop("Allow using FALLOC_FL_NO_HIDE_STALE during file extension."),
+			NULL,
+			POLAR_GUC_IS_CHANGABLE | POLAR_GUC_IS_INVISIBLE
+		},
+		&polar_enable_fallocate_no_hide_stale,
+		true,
+		NULL, NULL, NULL
+	},
+
 	/*
 	 * POLAR: enable to send SIGSTOP rather than SIGQUIT to all peers when
 	 * backend exit abnormally, this is set with -T parameter when start
@@ -1724,20 +1727,6 @@ static struct config_bool ConfigureNamesBool[] =
 		NULL, NULL, NULL
 	},
 
-	/*
-	 * POLAR: bulk io
-	 */
-	{
-		{"polar_enable_primary_recovery_bulk_extend", PGC_SIGHUP, POLAR_BULK_READ_EXTEND,
-			gettext_noop("A switch to control whether to use xlog bulk extend opt during recovery on primary."),
-			NULL,
-			GUC_NO_RESET_ALL | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_CHANGABLE
-		},
-		&polar_enable_primary_recovery_bulk_extend,
-		true,
-		NULL, NULL, NULL
-	},
-
 	{
 		{"polar_enable_async_lock_replay_debug", PGC_SIGHUP, REPLICATION_STANDBY,
 			gettext_noop("Enable async lock replay debug logging."),
@@ -1793,7 +1782,7 @@ static struct config_bool ConfigureNamesBool[] =
 		NULL, NULL, NULL
 	},
 
-	/* POLAR boolean GUCs end */
+	/* POLAR bool GUCs end */
 
 	{
 		{"enable_seqscan", PGC_USERSET, QUERY_TUNING_METHOD,
@@ -3067,8 +3056,6 @@ static struct config_bool ConfigureNamesBool[] =
 	},
 
 
-	/* POLAR bool GUCs end */
-
 	/* End-of-list marker */
 	{
 		{NULL, 0, 0, NULL, NULL}, NULL, false, NULL, NULL, NULL
@@ -3078,7 +3065,7 @@ static struct config_bool ConfigureNamesBool[] =
 
 static struct config_int ConfigureNamesInt[] =
 {
-	/* POLAR integer GUCs start */
+	/* POLAR int GUCs start */
 
 	{
 		/* see max_connections */
@@ -3701,52 +3688,62 @@ static struct config_int ConfigureNamesInt[] =
 			GUC_UNIT_BLOCKS | POLAR_GUC_IS_VISIBLE | POLAR_GUC_IS_CHANGABLE
 		},
 		&polar_ring_buffer_vacuum_size,
-		0, 0, (10 * 1024 * 1024 * 1024L) / BLCKSZ,
+		128 * 1024 * 1024 / BLCKSZ, 0, (10 * 1024 * 1024 * 1024L) / BLCKSZ,
 		NULL, NULL, NULL
 	},
 
 	{
-		{"polar_recovery_bulk_extend_size", PGC_SIGHUP, POLAR_BULK_READ_EXTEND,
-			gettext_noop("Sets the size for bulk file extension while replaying xlog on standby (0 turns this feature off)."),
-			NULL,
-			GUC_UNIT_BLOCKS | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_CHANGABLE
-		},
-		&polar_recovery_bulk_extend_size,
-		512, 0, 2048,
-		NULL, NULL, NULL
-	},
-
-	{
-		{"polar_min_bulk_extend_table_size", PGC_USERSET, POLAR_BULK_READ_EXTEND,
-			gettext_noop("Sets the minimum amount of table data for bulk extend,"
-						 "bulk extend is enabled only when the table size >= polar_min_bulk_extend_table_size."),
-			NULL,
-			GUC_UNIT_BLOCKS | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_CHANGABLE
-		},
-		&polar_min_bulk_extend_table_size,
-		(8 * 1024 * 1024) / BLCKSZ, 0, INT_MAX / 2,
-		NULL, NULL, NULL
-	},
-
-	{
-		{"polar_bulk_extend_size", PGC_USERSET, POLAR_BULK_READ_EXTEND,
-			gettext_noop("Sets the size of preallocate file, 0 (turning this feature off)."),
-			NULL,
-			GUC_UNIT_BLOCKS | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_CHANGABLE
-		},
-		&polar_bulk_extend_size,
-		512, 0, INT_MAX / 2,
-		NULL, NULL, NULL
-	},
-
-	{
-		{"polar_bulk_read_size", PGC_USERSET, POLAR_BULK_READ_EXTEND,
-			gettext_noop("Sets size of bulk read, 0 (turning this feature off). polar_bulk_read_size= 16 means 128KB."),
-			NULL,
+		{"polar_bulk_read_size", PGC_USERSET, POLAR_IO_MANAGEMENT,
+			gettext_noop("Size of bulk read."),
+			gettext_noop("0 turns this feature off."),
 			GUC_UNIT_BLOCKS | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_CHANGABLE
 		},
 		&polar_bulk_read_size,
-		16, 0, POLAR_MAX_BULK_IO_SIZE,
+		16, 0, MAX_BUFFERS_TO_READ_BY,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"polar_heap_bulk_extend_size", PGC_USERSET, POLAR_IO_MANAGEMENT,
+			gettext_noop("Size of bulk extend for heap table."),
+			gettext_noop("0 turns this feature off."),
+			GUC_UNIT_BLOCKS | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_CHANGABLE
+		},
+		&polar_heap_bulk_extend_size,
+		512, 0, MAX_BUFFERS_TO_EXTEND_BY,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"polar_index_bulk_extend_size", PGC_USERSET, POLAR_IO_MANAGEMENT,
+			gettext_noop("Size of bulk extend for index table."),
+			gettext_noop("0 turns this feature off."),
+			GUC_UNIT_BLOCKS | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_CHANGABLE
+		},
+		&polar_index_bulk_extend_size,
+		128, 0, MAX_BUFFERS_TO_EXTEND_BY,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"polar_recovery_bulk_extend_size", PGC_SIGHUP, POLAR_IO_MANAGEMENT,
+			gettext_noop("Size for bulk extend during recovery."),
+			gettext_noop("0 turns this feature off."),
+			GUC_UNIT_BLOCKS | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_CHANGABLE
+		},
+		&polar_recovery_bulk_extend_size,
+		512, 0, MAX_BUFFERS_TO_EXTEND_BY,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"polar_bulk_write_maxpages", PGC_USERSET, POLAR_IO_MANAGEMENT,
+			gettext_noop("Max cached pages in bulk write."),
+			NULL,
+			GUC_UNIT_BLOCKS | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_CHANGABLE
+		},
+		&polar_bulk_write_maxpages,
+		128, 1, 512,
 		NULL, NULL, NULL
 	},
 
@@ -3761,29 +3758,6 @@ static struct config_int ConfigureNamesInt[] =
 		NULL, NULL, NULL
 	},
 
-	{
-		{"polar_index_bulk_extend_size", PGC_SIGHUP, POLAR_BULK_READ_EXTEND,
-			gettext_noop("Sets the size of preallocate file for index, 0 (turning this feature off)."),
-			NULL,
-			GUC_UNIT_BLOCKS | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_CHANGABLE
-		},
-		/* POLAR: default 1MB */
-		&polar_index_bulk_extend_size,
-		128, 0, INT_MAX / 2,
-		NULL, NULL, NULL
-	},
-
-	{
-		{"polar_index_create_bulk_extend_size", PGC_SIGHUP, POLAR_BULK_READ_EXTEND,
-			gettext_noop("Sets the size of preallocate file for index create, 0 (turning this feature off)."),
-			NULL,
-			GUC_UNIT_BLOCKS | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_CHANGABLE
-		},
-		/* POLAR: default 4MB */
-		&polar_index_create_bulk_extend_size,
-		512, 0, INT_MAX / 2,
-		NULL, NULL, NULL
-	},
 	/* POLAR int GUCs end */
 
 	{
@@ -5415,16 +5389,17 @@ static struct config_int ConfigureNamesInt[] =
 		30000, 0, INT_MAX,
 		NULL, NULL, NULL
 	},
+
 	{
-		{"polar_wal_init_set_size", PGC_SIGHUP, WAL_SETTINGS,
-			gettext_noop("Set the size of each data block written when initializing the zero wal file."),
-			NULL,
-			GUC_UNIT_BYTE | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_CHANGABLE
+		{"polar_zero_buffers", PGC_POSTMASTER, RESOURCES_MEM,
+			gettext_noop("Set the size of zero buffer, which is used to init zero wal and data file."),
+			gettext_noop("A value of -1 indicates a request for auto-tune, 0 disables it."),
+			GUC_UNIT_BLOCKS | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_CHANGABLE
 		},
-		&polar_wal_init_set_size,
-		POLAR_DEFAULT_XLOG_FILL_ZERO_SIZE, POLAR_MIN_XLOG_FILL_ZERO_SIZE, POLAR_MAX_XLOG_FILL_ZERO_SIZE,
-		NULL, NULL, NULL
+		&polar_zero_buffers,
+		-1, -1, 4096,
 	},
+
 	{
 		{"polar_instance_spec_mem", PGC_SIGHUP, DEVELOPER_OPTIONS,
 			gettext_noop("PolarDB instance specification for memory."),
@@ -6765,6 +6740,17 @@ static struct config_enum ConfigureNamesEnum[] =
 		NULL, NULL, NULL
 	},
 
+	{
+		{"polar_zero_extend_method", PGC_USERSET, POLAR_IO_MANAGEMENT,
+			gettext_noop("Selects the method of zero extend to use."),
+			NULL,
+			GUC_NOT_IN_SAMPLE | GUC_NO_SHOW_ALL | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_CHANGABLE
+		},
+		&polar_zero_extend_method,
+		POLAR_ZERO_EXTEND_FALLOCATE, polar_zero_extend_method_options,
+		NULL, NULL, NULL
+	},
+
 	/* POLAR enum GUCs end */
 
 	{
@@ -7183,6 +7169,8 @@ static const char *const map_old_guc_names[] = {
 	/* POLAR */
 	"smgr_shared_relations", "polar_rsc_shared_relations",	/* RSC old style GUC */
 	"smgr_pool_sweep_times", "polar_rsc_pool_sweep_times",	/* RSC old style GUC */
+	"polar_bulk_extend_size", "polar_heap_bulk_extend_size",	/* bulk extend old style
+																 * GUC */
 	/* POLAR */
 
 	NULL

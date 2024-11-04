@@ -94,7 +94,8 @@ static int	vfs_access(const char *path, int mode);
 static int	vfs_fsync(int file);
 static int	vfs_unlink(const char *fname);
 static int	vfs_rename(const char *oldfile, const char *newfile);
-static int	vfs_fallocate(int file, off_t offset, off_t len);
+static int	vfs_posix_fallocate(int file, off_t offset, off_t len);
+static int	vfs_fallocate(int file, int mode, off_t offset, off_t len);
 static int	vfs_ftruncate(int file, off_t len);
 static int	vfs_truncate(const char *path, off_t len);
 
@@ -113,6 +114,8 @@ static const vfs_mgr *vfs_get_mgr(const char *path);
 static int	vfs_chmod(const char *path, mode_t mode);
 static inline const char *polar_vfs_file_type_and_path(const char *path, int *kind);
 static void *vfs_mmap(void *start, size_t length, int prot, int flags, int file, off_t offset);
+
+static PolarVFSKind vfs_type(int fd);
 
 static const vfs_mgr *const vfs[POLAR_VFS_KIND_SIZE] =
 {
@@ -171,6 +174,7 @@ static const vfs_mgr vfs_interface =
 	.vfs_fsync = vfs_fsync,
 	.vfs_unlink = vfs_unlink,
 	.vfs_rename = vfs_rename,
+	.vfs_posix_fallocate = vfs_posix_fallocate,
 	.vfs_fallocate = vfs_fallocate,
 	.vfs_ftruncate = vfs_ftruncate,
 	.vfs_truncate = vfs_truncate,
@@ -182,6 +186,7 @@ static const vfs_mgr vfs_interface =
 	.vfs_mgr_func = vfs_get_mgr,
 	.vfs_chmod = vfs_chmod,
 	.vfs_mmap = vfs_mmap,
+	.vfs_type = vfs_type,
 };
 
 bool		localfs_mode = false;
@@ -840,7 +845,7 @@ vfs_rename(const char *oldfile, const char *newfile)
 }
 
 static int
-vfs_fallocate(int file, off_t offset, off_t len)
+vfs_posix_fallocate(int file, off_t offset, off_t len)
 {
 	vfs_vfd    *vfdP = NULL;
 	int			rc = 0;
@@ -852,12 +857,46 @@ vfs_fallocate(int file, off_t offset, off_t len)
 	POLAR_VFS_FD_MASK_RMOVE(file);
 	vfdP = vfs_find_file(file);
 
-	elog(LOG, "vfs_fallocate from %s", vfdP->file_name);
+	if (unlikely(polar_vfs_debug))
+		elog(LOG, "vfs_posix_fallocate from %s", vfdP->file_name);
 
 	if (polar_vfs_io_before_hook)
 		polar_vfs_io_before_hook(vfdP, 0, VFS_FALLOCATE);
 
-	rc = vfs[vfdP->kind]->vfs_fallocate(vfdP->fd, offset, len);
+	rc = vfs[vfdP->kind]->vfs_posix_fallocate(vfdP->fd, offset, len);
+	save_errno = errno;
+
+	if (polar_vfs_io_after_hook)
+		polar_vfs_io_after_hook(vfdP, 0, VFS_FALLOCATE);
+
+	CHECK_FD_REENTRANT_END();
+
+	VFS_RESUME_INTERRUPTS();
+
+	errno = save_errno;
+	return rc;
+}
+
+static int
+vfs_fallocate(int file, int mode, off_t offset, off_t len)
+{
+	vfs_vfd    *vfdP = NULL;
+	int			rc = 0;
+	int			save_errno;
+
+	VFS_HOLD_INTERRUPTS();
+
+	CHECK_FD_REENTRANT_BEGIN();
+	POLAR_VFS_FD_MASK_RMOVE(file);
+	vfdP = vfs_find_file(file);
+
+	if (unlikely(polar_vfs_debug))
+		elog(LOG, "vfs_fallocate from %s", vfdP->file_name);
+
+	if (polar_vfs_io_before_hook)
+		polar_vfs_io_before_hook(vfdP, 0, VFS_FALLOCATE);
+
+	rc = vfs[vfdP->kind]->vfs_fallocate(vfdP->fd, mode, offset, len);
 	save_errno = errno;
 
 	if (polar_vfs_io_after_hook)
@@ -1271,4 +1310,15 @@ vfs_mmap(void *start, size_t length, int prot, int flags, int file, off_t offset
 	vfdP = vfs_find_file(file);
 
 	return vfs[vfdP->kind]->vfs_mmap(start, length, prot, flags, vfdP->fd, offset);
+}
+
+static PolarVFSKind
+vfs_type(int fd)
+{
+	vfs_vfd    *vfdP = NULL;
+
+	POLAR_VFS_FD_MASK_RMOVE(fd);
+	vfdP = vfs_find_file(fd);
+
+	return vfs[vfdP->kind]->vfs_type(vfdP->fd);
 }

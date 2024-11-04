@@ -243,13 +243,16 @@ typedef struct BufferDesc
  * platform with either 32 or 128 byte line sizes, it's good to align to
  * boundaries and avoid false sharing.
  */
-#define BUFFERDESC_PAD_TO_SIZE	(SIZEOF_VOID_P == 8 ? 64 : 1)
+#define BUFFERDESC_PAD_TO_SIZE	(SIZEOF_VOID_P == 8 ? 128 : 1)
 
 typedef union BufferDescPadded
 {
 	BufferDesc	bufferdesc;
 	char		pad[BUFFERDESC_PAD_TO_SIZE];
 } BufferDescPadded;
+
+StaticAssertDecl(sizeof(BufferDesc) <= BUFFERDESC_PAD_TO_SIZE,
+				 "padding size is too small to fit BufferDesc");
 
 #define GetBufferDescriptor(id) (&BufferDescriptors[(id)].bufferdesc)
 #define GetLocalBufferDescriptor(id) (&LocalBufferDescriptors[(id)])

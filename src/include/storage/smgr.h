@@ -105,13 +105,15 @@ extern void smgrcreate(SMgrRelation reln, ForkNumber forknum, bool isRedo);
 extern void smgrdosyncall(SMgrRelation *rels, int nrels);
 extern void smgrdounlinkall(SMgrRelation *rels, int nrels, bool isRedo);
 extern void smgrextend(SMgrRelation reln, ForkNumber forknum,
-					   BlockNumber blocknum, char *buffer, bool skipFsync);
+					   BlockNumber blocknum, const void *buffer, bool skipFsync);
+extern void smgrzeroextend(SMgrRelation reln, ForkNumber forknum,
+						   BlockNumber blocknum, int nblocks, bool skipFsync);
 extern bool smgrprefetch(SMgrRelation reln, ForkNumber forknum,
 						 BlockNumber blocknum);
 extern void smgrread(SMgrRelation reln, ForkNumber forknum,
-					 BlockNumber blocknum, char *buffer);
+					 BlockNumber blocknum, void *buffer);
 extern void smgrwrite(SMgrRelation reln, ForkNumber forknum,
-					  BlockNumber blocknum, char *buffer, bool skipFsync);
+					  BlockNumber blocknum, const void *buffer, bool skipFsync);
 extern void smgrwriteback(SMgrRelation reln, ForkNumber forknum,
 						  BlockNumber blocknum, BlockNumber nblocks);
 extern BlockNumber smgrnblocks(SMgrRelation reln, ForkNumber forknum);
@@ -119,16 +121,25 @@ extern BlockNumber smgrnblocks_cached(SMgrRelation reln, ForkNumber forknum);
 extern void smgrtruncate(SMgrRelation reln, ForkNumber *forknum,
 						 int nforks, BlockNumber *nblocks);
 extern void smgrimmedsync(SMgrRelation reln, ForkNumber forknum);
+extern void smgrregistersync(SMgrRelation reln, ForkNumber forknum);
 extern void AtEOXact_SMgr(void);
 extern bool ProcessBarrierSmgrRelease(void);
 
-/* POLAR: bulk io */
+/* POLAR */
+#define POLAR_ZERO_EXTEND_NONE		0
+#define POLAR_ZERO_EXTEND_BULKWRITE	1
+#define POLAR_ZERO_EXTEND_FALLOCATE	2
+
+extern PGDLLIMPORT int polar_zero_extend_method;
+
+extern void polar_smgrbulkread(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
+							   int nblocks, void *buffer);
+extern void polar_smgrbulkwrite(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
+								int nblocks, const void *buffer, bool skipFsync);
 extern void polar_smgrbulkextend(SMgrRelation reln, ForkNumber forknum,
-								 BlockNumber blocknum, int blockCount, char *buffer, bool skipFsync);
+								 BlockNumber blocknum, int nblocks, const void *buffer, bool skipFsync);
 extern void polar_smgr_init_bulk_extend(SMgrRelation reln, ForkNumber forknum);
 extern void polar_smgr_clear_bulk_extend(SMgrRelation reln, ForkNumber forknum);
-extern void polar_smgrbulkread(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
-							   int blockCount, char *buffer);
 
 /* POLAR end */
 

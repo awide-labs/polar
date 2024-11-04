@@ -16,6 +16,7 @@
 #include <math.h>
 
 #include "access/gist_private.h"
+#include "access/hio.h"
 #include "access/htup_details.h"
 #include "access/reloptions.h"
 #include "catalog/pg_opclass.h"
@@ -883,7 +884,7 @@ gistNewBuffer(Relation r)
 	if (needLock)
 		LockRelationForExtension(r, ExclusiveLock);
 
-	buffer = ReadBuffer(r, P_NEW);
+	buffer = polar_index_add_blocks(r);
 	LockBuffer(buffer, GIST_EXCLUSIVE);
 
 	if (needLock)

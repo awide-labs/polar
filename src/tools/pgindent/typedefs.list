@@ -323,6 +323,8 @@ BuildAccumulator
 BuiltinScript
 BulkInsertState
 BulkInsertStateData
+BulkWriteBuffer
+BulkWriteState
 CACHESIGN
 CAC_state
 CCFastEqualFN
@@ -1699,6 +1701,7 @@ PGEventResultDestroy
 PGFInfoFunction
 PGFileType
 PGFunction
+PGIOAlignedBlock
 PGLZ_HistEntry
 PGLZ_Strategy
 PGMessageField
@@ -1986,6 +1989,7 @@ PendingFsyncEntry
 PendingRelDelete
 PendingRelSync
 PendingUnlinkEntry
+PendingWrite
 PendingWriteback
 PerLockTagEntry
 PerlInterpreter

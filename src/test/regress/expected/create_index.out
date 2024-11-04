@@ -2,6 +2,9 @@
 -- CREATE_INDEX
 -- Create ancillary data structures (i.e. indices)
 --
+-- Disable bulk extend to make table size unchanged, thus make plan stable.
+set polar_heap_bulk_extend_size = 0;
+set polar_index_bulk_extend_size = 0;
 -- directory paths are passed to us in environment variables
 \getenv abs_srcdir PG_ABS_SRCDIR
 --

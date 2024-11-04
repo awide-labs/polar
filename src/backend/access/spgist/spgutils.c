@@ -16,6 +16,7 @@
 #include "postgres.h"
 
 #include "access/amvalidate.h"
+#include "access/hio.h"
 #include "access/htup_details.h"
 #include "access/reloptions.h"
 #include "access/spgist_private.h"
@@ -428,7 +429,7 @@ SpGistNewBuffer(Relation index)
 	if (needLock)
 		LockRelationForExtension(index, ExclusiveLock);
 
-	buffer = ReadBuffer(index, P_NEW);
+	buffer = polar_index_add_blocks(index);
 	LockBuffer(buffer, BUFFER_LOCK_EXCLUSIVE);
 
 	if (needLock)

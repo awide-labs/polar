@@ -520,6 +520,18 @@ bt_page_items_internal(PG_FUNCTION_ARGS, enum pageinspect_version ext_version)
 		uargs->page = palloc(BLCKSZ);
 		memcpy(uargs->page, BufferGetPage(buffer), BLCKSZ);
 
+		/*
+		 * POLAR: During bulk extend, page inspect may access zero page, which
+		 * makes PageGetSpecialPointer Assert error. In order to handle this
+		 * situation, we init these zero pages.
+		 */
+		if (PageIsNew(uargs->page))
+		{
+			_bt_pageinit(uargs->page, BufferGetPageSize(buffer));
+			elog(DEBUG1, "page from block" INT64_FORMAT " is new in index bulk extend", blkno);
+		}
+		/* POLAR end */
+
 		UnlockReleaseBuffer(buffer);
 		relation_close(rel, AccessShareLock);
 

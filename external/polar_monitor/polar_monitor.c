@@ -220,24 +220,6 @@ polar_pg_stat_get_bulk_read_blocks_IO(PG_FUNCTION_ARGS)
 	PG_RETURN_INT64(result);
 }
 
-/* POLAR: Bulk create index extend stats */
-/* Per table (or index) */
-PG_FUNCTION_INFO_V1(polar_pg_stat_get_bulk_create_index_extend_times);
-Datum
-polar_pg_stat_get_bulk_create_index_extend_times(PG_FUNCTION_ARGS)
-{
-	Oid			relid = PG_GETARG_OID(0);
-	int64		result;
-	PgStat_StatTabEntry *tabentry;
-
-	if ((tabentry = pgstat_fetch_stat_tabentry(relid)) == NULL)
-		result = 0;
-	else
-		result = (int64) (tabentry->polar_bulk_create_index_extends_times);
-
-	PG_RETURN_INT64(result);
-}
-
 PG_FUNCTION_INFO_V1(polar_get_slot_node_type);
 Datum
 polar_get_slot_node_type(PG_FUNCTION_ARGS)

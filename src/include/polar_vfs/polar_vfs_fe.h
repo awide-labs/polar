@@ -44,12 +44,12 @@ extern char *polar_storage_cluster_name;
 
 extern int	polar_mkdir_p(char *path, int omode);
 extern void polar_vfs_init_fe(bool is_pfs, char *fname, char *storage_cluster_name, char *polar_disk_name, int flag);
-extern void polar_vfs_destory_fe(char *ftype, char *polar_disk_name);
+extern void polar_vfs_destroy_fe(char *ftype, char *polar_disk_name);
 extern bool polar_in_shared_storage_mode_fe(char *pgconfig);
 extern bool polar_in_localfs_mode_fe(char *pgconfig);
 extern bool polar_in_replica_mode_fe(const char *pgconfig);
 extern void polar_vfs_init_simple_fe(char *pgconfig, char *pg_datadir, int flag);
-extern void polar_vfs_destory_simple_fe(void);
+extern void polar_vfs_destroy_simple_fe(void);
 extern int	polar_vfs_state_backup_current(void);
 extern int	polar_vfs_state_restore_current(int index);
 extern int	polar_vfs_state_backup(bool is_shared, bool is_localfs, int hostid,

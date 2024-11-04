@@ -183,7 +183,7 @@ main(int argc, char *argv[])
 				 "Either the file is corrupt, or it has a different layout than this program\n"
 				 "is expecting.  The results below are untrustworthy.\n\n"));
 
-	polar_vfs_destory_simple_fe();
+	polar_vfs_destroy_simple_fe();
 
 	/* set wal segment size */
 	WalSegSz = ControlFile->xlog_seg_size;

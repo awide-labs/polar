@@ -89,7 +89,7 @@ test_directio(PG_FUNCTION_ARGS)
 
 	if (polar_directio_buffer == NULL &&
 		posix_memalign((void **) &polar_directio_buffer,
-					   POLAR_DIRECTIO_ALIGN_LEN,
+					   PG_IO_ALIGN_SIZE,
 					   polar_max_direct_io_size) != 0)
 		elog(PANIC, "posix_memalign alloc polar_directio_buffer failed!");
 
@@ -442,7 +442,7 @@ test_aligned_buffer_offset_len(int directio_fd, int bufferio_fd)
 	for (i = 0; i < SUBAPI_LOOP; i++)
 	{
 		len = POLAR_DIRECTIO_ALIGN(random() % polar_max_direct_io_size);
-		Assert(0 == posix_memalign((void **) &buffer, POLAR_DIRECTIO_ALIGN_LEN, len));
+		Assert(0 == posix_memalign((void **) &buffer, PG_IO_ALIGN_SIZE, len));
 		MemSet(buffer, 0x4, len);
 		Assert(0 == polar_stat(directio_file, &stat_buf));
 		offset = POLAR_DIRECTIO_ALIGN_DOWN(random() % stat_buf.st_size);

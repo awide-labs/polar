@@ -1188,20 +1188,20 @@ polar_bulk_read_buffer_common(Relation reln, char relpersistence, ForkNumber for
 {
 	SMgrRelation smgr = reln->rd_smgr;
 	BufferDesc *bufHdr;
-	BufferDesc *first_buf_hdr;
 	Block		bufBlock;
 	bool		found;
 	bool		isLocalBuf = SmgrIsTemp(smgr);
 	int			actual_bulk_io_count;
 	int			index;
 	char	   *buf_read;
+	BufferDesc *buffers[MAX_BUFFERS_TO_READ_BY];
+	bool		checksum_fail[MAX_BUFFERS_TO_READ_BY] = {false};
 
 	/* POLAR: start lsn to do replay */
 	XLogRecPtr	checkpoint_redo_lsn = InvalidXLogRecPtr;
 	XLogRecPtr	replay_from;
 	polar_redo_action redo_action;
 	uint32		repeat_read_times = 0;
-	bool	   *checksum_fail;
 
 	polar_pgstat_count_bulk_read_calls(reln);
 
@@ -1213,28 +1213,6 @@ polar_bulk_read_buffer_common(Relation reln, char relpersistence, ForkNumber for
 	{
 		return ReadBuffer_common(smgr, relpersistence, forkNum, firstBlockNum,
 								 mode, strategy, hit);
-	}
-
-	Assert(!polar_bulk_io_is_in_progress);
-	Assert(0 == polar_bulk_io_in_progress_count);
-
-	/* bulk read begin */
-	polar_bulk_io_is_in_progress = true;
-
-	/*
-	 * Alloc buffer for polar_bulk_io_in_progress_buf and
-	 * polar_bulk_io_is_for_input on demand. If bulk read is called once,
-	 * there is a great possibility that bulk read will be called later.
-	 * polar_bulk_io_in_progress_buf and polar_bulk_io_is_for_input will be
-	 * not freed, until backend exit.
-	 */
-	if (NULL == polar_bulk_io_in_progress_buf)
-	{
-		Assert(NULL == polar_bulk_io_is_for_input);
-		polar_bulk_io_in_progress_buf = MemoryContextAlloc(TopMemoryContext,
-														   POLAR_MAX_BULK_IO_SIZE * sizeof(polar_bulk_io_in_progress_buf[0]));
-		polar_bulk_io_is_for_input = MemoryContextAlloc(TopMemoryContext,
-														POLAR_MAX_BULK_IO_SIZE * sizeof(polar_bulk_io_is_for_input[0]));
 	}
 
 	*hit = false;
@@ -1259,11 +1237,6 @@ polar_bulk_read_buffer_common(Relation reln, char relpersistence, ForkNumber for
 	}
 	else
 	{
-		/*
-		 * lookup the buffer.  IO_IN_PROGRESS is set if the requested block is
-		 * not currently in memory. If not found,
-		 * polar_bulk_io_in_progress_count will be added by 1.
-		 */
 		bufHdr = BufferAlloc(smgr, relpersistence, forkNum, firstBlockNum,
 							 strategy, &found);
 		if (found)
@@ -1291,10 +1264,6 @@ polar_bulk_read_buffer_common(Relation reln, char relpersistence, ForkNumber for
 										  false,
 										  found);
 
-		Assert(0 == polar_bulk_io_in_progress_count);
-		/* important, mark bulk_io end */
-		polar_bulk_io_is_in_progress = false;
-
 		return BufferDescriptorGetBuffer(bufHdr);
 	}
 
@@ -1312,14 +1281,7 @@ polar_bulk_read_buffer_common(Relation reln, char relpersistence, ForkNumber for
 	 */
 	Assert(!(pg_atomic_read_u32(&bufHdr->state) & BM_VALID));	/* spinlock not needed */
 
-	Assert(1 == polar_bulk_io_in_progress_count);
-	Assert(bufHdr == polar_bulk_io_in_progress_buf[polar_bulk_io_in_progress_count - 1]);
-
-	/*
-	 * Hold the first block bufHdr, after TerminateBufferIO(),
-	 * polar_bulk_io_in_progress_buf is freed.
-	 */
-	first_buf_hdr = bufHdr;
+	buffers[0] = bufHdr;
 
 	/*
 	 * Make sure than single bulk_read will not read blocks across files.
@@ -1340,9 +1302,6 @@ polar_bulk_read_buffer_common(Relation reln, char relpersistence, ForkNumber for
 		/*
 		 * lookup the buffer.  IO_IN_PROGRESS is set if the requested block is
 		 * not currently in memory.
-		 *
-		 * If not found, polar_bulk_io_in_progress_count will be added by 1 by
-		 * StartBufferIO().
 		 */
 		if (isLocalBuf)
 			bufHdr = LocalBufferAlloc(smgr, forkNum, blockNum, &found);
@@ -1350,32 +1309,30 @@ polar_bulk_read_buffer_common(Relation reln, char relpersistence, ForkNumber for
 			bufHdr = BufferAlloc(smgr, relpersistence, forkNum, blockNum,
 								 strategy, &found);
 
+		Assert(bufHdr);
+
 		/*
 		 * For extra block, don't update pgBufferUsage.shared_blks_hit or
 		 * pgBufferUsage.shared_blks_read, also the blocks are not used now.
 		 */
-		/* bufHdr == NULL, all buffers are pinned. */
-		if (found || bufHdr == NULL)
+		if (found)
 		{
 			/*
 			 * important: this buffer is the upper boundary, it should be
 			 * excluded.
 			 */
-			if (bufHdr != NULL)
-			{
-				ReleaseBuffer(BufferDescriptorGetBuffer(bufHdr));
-			}
+			ReleaseBuffer(BufferDescriptorGetBuffer(bufHdr));
 			break;
 		}
 		Assert(!(pg_atomic_read_u32(&bufHdr->state) & BM_VALID));	/* spinlock not needed */
+		buffers[index] = bufHdr;
 	}
 
-	Assert(index == polar_bulk_io_in_progress_count);
+	actual_bulk_io_count = index;
 
 	/*
-	 * Until now, as to {blockNum + [0, polar_bulk_io_in_progress_count)}
-	 * block buffers, IO_IN_PROGRESS flag is set and io_in_progress_lock is
-	 * holded.
+	 * Until now, as to {blockNum + [0, actual_bulk_io_count)} block buffers,
+	 * IO_IN_PROGRESS flag is set and io_in_progress_lock is holded.
 	 *
 	 * Other proc(include backend sql exec、start xlog replay) which read
 	 * there buffers, would be blocked on io_in_progress_lock.
@@ -1384,21 +1341,7 @@ polar_bulk_read_buffer_common(Relation reln, char relpersistence, ForkNumber for
 	 * lock on io_in_progress_lock.
 	 */
 
-	/*
-	 * polar_bulk_io_in_progress_count will be reduced by TerminateBufferIO(),
-	 * For safety, its copy actual_bulk_io_count is used.
-	 */
-	actual_bulk_io_count = polar_bulk_io_in_progress_count;
-
-	/* for eliminating palloc and memcpy */
-	if (1 == actual_bulk_io_count)
-		buf_read = isLocalBuf ?
-			(char *) LocalBufHdrGetBlock(first_buf_hdr) :
-			(char *) BufHdrGetBlock(first_buf_hdr);
-	else
-		buf_read = (char *) palloc_io_aligned(actual_bulk_io_count * BLCKSZ, MCXT_ALLOC_ZERO);
-
-	checksum_fail = (bool *) palloc0(actual_bulk_io_count * sizeof(bool));
+	buf_read = (char *) palloc_aligned(actual_bulk_io_count * BLCKSZ, PG_IO_ALIGN_SIZE, MCXT_ALLOC_ZERO);
 
 repeat_read:
 
@@ -1475,25 +1418,15 @@ repeat_read:
 		}
 	}
 
-	/*
-	 * notice: 1. buffers must be processed by TerminateBufferIO() from back
-	 * to front. a) TerminateBufferIO() release
-	 * polar_bulk_io_in_progress_buf[] in decrement order. b) For better
-	 * performance, LWLockRelease() release io_in_progress_lock in decrement
-	 * order. 2. polar_bulk_io_in_progress_count was reduced by
-	 * TerminateBufferIO(). a) polar_bulk_io_in_progress_count must not be
-	 * used here.
-	 */
 	for (index = actual_bulk_io_count - 1; index >= 0; index--)
 	{
 		BlockNumber blockNum = firstBlockNum + index;
 
-		bufHdr = polar_bulk_io_in_progress_buf[index];
+		bufHdr = buffers[index];
 		bufBlock = isLocalBuf ? LocalBufHdrGetBlock(bufHdr) : BufHdrGetBlock(bufHdr);
 
 		/* need copy page content from aligned_buf_read to block shared_buffer */
-		if (actual_bulk_io_count != 1)
-			memcpy((char *) bufBlock, buf_read + index * BLCKSZ, BLCKSZ);
+		memcpy((char *) bufBlock, buf_read + index * BLCKSZ, BLCKSZ);
 
 		if (unlikely(polar_trace_logindex_messages <= DEBUG3))
 		{
@@ -1552,8 +1485,6 @@ repeat_read:
 
 			buf_state |= BM_VALID;
 			pg_atomic_unlocked_write_u32(&bufHdr->state, buf_state);
-			/* bulk io */
-			polar_bulk_io_in_progress_count--;
 		}
 		else
 			TerminateBufferIO(bufHdr, false, BM_VALID);
@@ -1589,21 +1520,9 @@ repeat_read:
 									  false,
 									  found);
 
-	/*
-	 * notice: polar_bulk_io_in_progress_count was reduced by
-	 * TerminateBufferIO(). polar_bulk_io_in_progress_count must not be used
-	 * here.
-	 */
-	if (actual_bulk_io_count != 1)
-		pfree(buf_read);
+	pfree(buf_read);
 
-	pfree(checksum_fail);
-
-	Assert(0 == polar_bulk_io_in_progress_count);
-	/* important, mark bulk_io end */
-	polar_bulk_io_is_in_progress = false;
-
-	return BufferDescriptorGetBuffer(first_buf_hdr);
+	return BufferDescriptorGetBuffer(buffers[0]);
 }
 bool
 polar_is_future_page(BufferDesc *buf_hdr)

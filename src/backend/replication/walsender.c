@@ -990,8 +990,8 @@ polar_logical_read_xlog_page_bulk(XLogReaderState *state,
 			pfree(state->bulk_read_buffer);
 
 		state->bulk_read_buffer_size = polar_logical_repl_xlog_bulk_read_size;
-		state->bulk_read_buffer = palloc_extended(state->bulk_read_buffer_size * XLOG_BLCKSZ,
-												  MCXT_ALLOC_NO_OOM);
+		state->bulk_read_buffer = palloc_aligned(state->bulk_read_buffer_size * XLOG_BLCKSZ,
+												 PG_IO_ALIGN_SIZE, MCXT_ALLOC_NO_OOM);
 
 		/*
 		 * Fail to allocate bulk buffer, turn to use original read buffer

@@ -2296,7 +2296,7 @@ get_control_dbstate(void)
 
 	/* POLAR: umount */
 	if (pg_config)
-		polar_vfs_destory_simple_fe();
+		polar_vfs_destroy_simple_fe();
 
 	return ret;
 }

@@ -819,9 +819,6 @@ pgstat_relation_flush_cb(PgStat_EntryRef *entry_ref, bool nowait)
 	tabentry->polar_bulk_read_calls += lstats->t_counts.polar_t_bulk_read_calls;
 	tabentry->polar_bulk_read_calls_IO += lstats->t_counts.polar_t_bulk_read_calls_IO;
 	tabentry->polar_bulk_read_blocks_IO += lstats->t_counts.polar_t_bulk_read_blocks_IO;
-
-	/* POLAR: create index bulk extend */
-	tabentry->polar_bulk_create_index_extends_times += lstats->t_counts.polar_t_bulk_create_index_extends_times;
 	/* POLAR end */
 
 
