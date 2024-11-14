@@ -32,8 +32,9 @@ export default defineUserConfig({
   theme: defaultTheme({
     logo: "/images/polardb.png",
     repo: "ApsaraDB/PolarDB-for-PostgreSQL",
+    docsBranch: "POLARDB_15_STABLE",
+    docsDir: "polar-doc/docs/",
     colorMode: "light",
-    contributors: false,
 
     locales: {
       "/": {
