@@ -4,8 +4,10 @@
  *	  Efficiently and reliably populate a new relation
  *
  * The assumption is that no other backends access the relation while we are
- * loading it, so we can take some shortcuts.  Do not mix operations through
- * the regular buffer manager and the bulk loading interface!
+ * loading it, so we can take some shortcuts.  Pages already present in the
+ * indicated fork when the bulk write operation is started are not modified
+ * unless explicitly written to.  Do not mix operations through the regular
+ * buffer manager and the bulk loading interface!
  *
  * We bypass the buffer manager to avoid the locking overhead, and call
  * smgrextend() directly.  A downside is that the pages will need to be
@@ -71,7 +73,7 @@ struct BulkWriteState
 	PendingWrite pending_writes[MAX_PENDING_WRITES];
 
 	/* Current size of the relation */
-	BlockNumber pages_written;
+	BlockNumber relsize;
 
 	MemoryContext memcxt;
 };
@@ -110,7 +112,7 @@ smgr_bulk_start_smgr(SMgrRelation smgr, ForkNumber forknum, bool use_wal, char r
 	state->relpersistence = relpersistence;
 
 	state->npending = 0;
-	state->pages_written = 0;
+	state->relsize = smgrnblocks(smgr, forknum);
 
 	/*
 	 * Remember the memory context.  We will use it to allocate all the
@@ -167,11 +169,11 @@ smgr_bulk_flush(BulkWriteState *bulkstate)
 	 * Before we alloc buffers from buffer pool for those pages, extend the
 	 * underlying file first.
 	 */
-	if (nblocks > bulkstate->pages_written)
+	if (nblocks > bulkstate->relsize)
 	{
-		smgrzeroextend(bulkstate->smgr, bulkstate->forknum, bulkstate->pages_written,
-					   nblocks - bulkstate->pages_written, true);
-		bulkstate->pages_written = nblocks;
+		smgrzeroextend(bulkstate->smgr, bulkstate->forknum, bulkstate->relsize,
+					   nblocks - bulkstate->relsize, true);
+		bulkstate->relsize = nblocks;
 	}
 
 	for (int i = 0; i < npending;)
