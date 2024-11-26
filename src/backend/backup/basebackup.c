@@ -1413,18 +1413,8 @@ sendDir(bbsink *sink, const char *path, int basepathlen, bool sizeonly,
 		}
 
 		/* Allow symbolic links in pg_tblspc only */
-<<<<<<< HEAD
 		snprintf(pathbuf2, MAXPGPATH, "%s/pg_tblspc", is_shared_data ? polar_datadir : ".");
-		if (strcmp(path, pathbuf2) == 0 &&
-#ifndef WIN32
-			S_ISLNK(statbuf.st_mode)
-#else
-			pgwin32_is_junction(pathbuf)
-#endif
-			)
-=======
-		if (strcmp(path, "./pg_tblspc") == 0 && S_ISLNK(statbuf.st_mode))
->>>>>>> REL_15_10
+		if (strcmp(path, pathbuf2) == 0 && S_ISLNK(statbuf.st_mode))
 		{
 #if defined(HAVE_READLINK) || defined(WIN32)
 			char		linkpath[MAXPGPATH];

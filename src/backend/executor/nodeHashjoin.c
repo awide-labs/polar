@@ -1524,10 +1524,6 @@ void
 ExecHashJoinReInitializeDSM(HashJoinState *state, ParallelContext *cxt)
 {
 	int			plan_node_id = state->js.ps.plan->plan_node_id;
-<<<<<<< HEAD
-	ParallelHashJoinState *pstate =
-		shm_toc_lookup(cxt->toc, plan_node_id, false);
-=======
 	ParallelHashJoinState *pstate;
 
 	/* Nothing to do if we failed to create a DSM segment. */
@@ -1535,7 +1531,6 @@ ExecHashJoinReInitializeDSM(HashJoinState *state, ParallelContext *cxt)
 		return;
 
 	pstate = shm_toc_lookup(cxt->toc, plan_node_id, false);
->>>>>>> REL_15_10
 
 	/*
 	 * It would be possible to reuse the shared hash table in single-batch

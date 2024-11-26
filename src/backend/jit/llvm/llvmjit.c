@@ -1319,15 +1319,11 @@ llvm_create_object_layer(void *Ctx, LLVMOrcExecutionSessionRef ES, const char *T
 {
 #ifdef USE_LLVM_BACKPORT_SECTION_MEMORY_MANAGER
 	LLVMOrcObjectLayerRef objlayer =
-<<<<<<< HEAD
-		LLVMOrcCreateRTDyldObjectLinkingLayerWithSectionMemoryManager(ES);
-=======
 		LLVMOrcCreateRTDyldObjectLinkingLayerWithSafeSectionMemoryManager(ES);
 #else
 	LLVMOrcObjectLayerRef objlayer =
 		LLVMOrcCreateRTDyldObjectLinkingLayerWithSectionMemoryManager(ES);
 #endif
->>>>>>> REL_15_10
 
 #if defined(HAVE_DECL_LLVMCREATEGDBREGISTRATIONLISTENER) && HAVE_DECL_LLVMCREATEGDBREGISTRATIONLISTENER
 	if (jit_debugging_support)

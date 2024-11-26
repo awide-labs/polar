@@ -6688,11 +6688,7 @@ static struct config_string ConfigureNamesString[] =
 
 	{
 		{"restrict_nonsystem_relation_kind", PGC_USERSET, CLIENT_CONN_STATEMENT,
-<<<<<<< HEAD
-			gettext_noop("Sets relation kinds of non-system relation to restrict use."),
-=======
 			gettext_noop("Prohibits access to non-system relations of specified kinds."),
->>>>>>> REL_15_10
 			NULL,
 			GUC_LIST_INPUT | GUC_NOT_IN_SAMPLE
 		},
@@ -10394,9 +10390,9 @@ set_config_option_ext(const char *name, const char *value,
 						(void) set_config_option_ext("role",
 													 value ? "none" : NULL,
 													 orig_context,
-													  (orig_source == PGC_S_OVERRIDE)
-													  ? PGC_S_DYNAMIC_DEFAULT
-													  : orig_source,
+													 (orig_source == PGC_S_OVERRIDE)
+													 ? PGC_S_DYNAMIC_DEFAULT
+													 : orig_source,
 													 orig_srole,
 													 action,
 													 true,
