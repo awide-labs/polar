@@ -1,6 +1,7 @@
 --
 -- ADVISORY LOCKS
 --
+SELECT oid AS datoid FROM pg_database WHERE datname = current_database() \gset
 BEGIN;
 SELECT
 	pg_advisory_xact_lock(1), pg_advisory_xact_lock_shared(2),

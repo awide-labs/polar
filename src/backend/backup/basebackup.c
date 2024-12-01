@@ -1414,13 +1414,7 @@ sendDir(bbsink *sink, const char *path, int basepathlen, bool sizeonly,
 
 		/* Allow symbolic links in pg_tblspc only */
 		snprintf(pathbuf2, MAXPGPATH, "%s/pg_tblspc", is_shared_data ? polar_datadir : ".");
-		if (strcmp(path, pathbuf2) == 0 &&
-#ifndef WIN32
-			S_ISLNK(statbuf.st_mode)
-#else
-			pgwin32_is_junction(pathbuf)
-#endif
-			)
+		if (strcmp(path, pathbuf2) == 0 && S_ISLNK(statbuf.st_mode))
 		{
 #if defined(HAVE_READLINK) || defined(WIN32)
 			char		linkpath[MAXPGPATH];
@@ -1921,11 +1915,7 @@ static void
 convert_link_to_directory(const char *pathbuf, struct stat *statbuf)
 {
 	/* If symlink, write it as a directory anyway */
-#ifndef WIN32
 	if (S_ISLNK(statbuf->st_mode))
-#else
-	if (pgwin32_is_junction(pathbuf))
-#endif
 		statbuf->st_mode = S_IFDIR | pg_dir_create_mode;
 }
 
