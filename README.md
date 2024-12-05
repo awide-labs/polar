@@ -60,7 +60,7 @@ If you have Docker installed already，then you can pull the instance image of P
 ```bash
 # pull the instance image and run the container
 docker pull polardb/polardb_pg_local_instance:15
-docker run -it --rm polardb/polardb_pg_local_instance:15 psql
+docker run -it --cap-add=SYS_PTRACE --privileged=true --rm polardb/polardb_pg_local_instance:15 psql
 # check
 postgres=# SELECT version();
                                    version

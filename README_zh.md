@@ -60,7 +60,7 @@ PolarDB for PostgreSQL 采用了基于 Shared-Storage 的存储计算分离架�
 ```bash
 # 拉取镜像并运行容器
 docker pull polardb/polardb_pg_local_instance:15
-docker run -it --rm polardb/polardb_pg_local_instance:15 psql
+docker run -it --cap-add=SYS_PTRACE --privileged=true --rm polardb/polardb_pg_local_instance:15 psql
 # 测试实例可用性
 postgres=# SELECT version();
                                    version

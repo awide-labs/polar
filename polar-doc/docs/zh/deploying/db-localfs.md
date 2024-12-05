@@ -48,6 +48,7 @@ docker pull registry.cn-hangzhou.aliyuncs.com/polardb_pg/polardb_pg_local_instan
 
 ```bash:no-line-numbers
 docker run -it --rm \
+    --cap-add=SYS_PTRACE --privileged=true \
     --env POLARDB_PORT=5432 \
     --env POLARDB_USER=u1 \
     --env POLARDB_PASSWORD=your_password \
@@ -61,6 +62,7 @@ docker run -it --rm \
 
 ```bash:no-line-numbers
 docker run -it --rm \
+    --cap-add=SYS_PTRACE --privileged=true \
     --env POLARDB_PORT=5432 \
     --env POLARDB_USER=u1 \
     --env POLARDB_PASSWORD=your_password \
@@ -81,6 +83,7 @@ docker run -it --rm \
 
 ```bash:no-line-numbers
 docker run -d \
+    --cap-add=SYS_PTRACE --privileged=true \
     -p 54320-54322:5432-5434 \
     -v ${your_data_dir}:/var/polardb \
     polardb/polardb_pg_local_instance:15
@@ -91,6 +94,7 @@ docker run -d \
 
 ```bash:no-line-numbers
 docker run -d \
+    --cap-add=SYS_PTRACE --privileged=true \
     -p 54320-54322:5432-5434 \
     -v ${your_data_dir}:/var/polardb \
     registry.cn-hangzhou.aliyuncs.com/polardb_pg/polardb_pg_local_instance:15
@@ -106,6 +110,7 @@ docker run -d \
 
 ```bash:no-line-numbers
 docker run -d \
+    --cap-add=SYS_PTRACE --privileged=true \
     --network=host \
     -v ${your_data_dir}:/var/polardb \
     polardb/polardb_pg_local_instance:15
@@ -116,6 +121,7 @@ docker run -d \
 
 ```bash:no-line-numbers
 docker run -d \
+    --cap-add=SYS_PTRACE --privileged=true \
     --network=host \
     -v ${your_data_dir}:/var/polardb \
     registry.cn-hangzhou.aliyuncs.com/polardb_pg/polardb_pg_local_instance:15

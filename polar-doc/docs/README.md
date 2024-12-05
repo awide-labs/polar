@@ -17,7 +17,7 @@ Pull the [local instance image](https://hub.docker.com/r/polardb/polardb_pg_loca
 ```bash:no-line-numbers
 # pull the instance image and run the container
 docker pull polardb/polardb_pg_local_instance:15
-docker run -it --rm polardb/polardb_pg_local_instance:15 psql
+docker run -it --cap-add=SYS_PTRACE --privileged=true --rm polardb/polardb_pg_local_instance:15 psql
 # check
 postgres=# SELECT version();
                                    version
@@ -32,7 +32,7 @@ postgres=# SELECT version();
 ```bash:no-line-numbers
 # pull the instance image and run the container
 docker pull registry.cn-hangzhou.aliyuncs.com/polardb_pg/polardb_pg_local_instance:15
-docker run -it --rm registry.cn-hangzhou.aliyuncs.com/polardb_pg/polardb_pg_local_instance:15 psql
+docker run -it --cap-add=SYS_PTRACE --privileged=true --rm registry.cn-hangzhou.aliyuncs.com/polardb_pg/polardb_pg_local_instance:15 psql
 # check
 postgres=# SELECT version();
                                    version
