@@ -2,7 +2,8 @@ EXTENSION = vector
 EXTVERSION = 0.6.2
 
 MODULE_big = vector
-DATA = $(wildcard sql/*--*.sql)
+DATA = $(wildcard sql/*--*--*.sql)
+DATA_built = sql/$(EXTENSION)--$(EXTVERSION).sql
 OBJS = src/hnsw.o src/hnswbuild.o src/hnswinsert.o src/hnswscan.o src/hnswutils.o src/hnswvacuum.o src/ivfbuild.o src/ivfflat.o src/ivfinsert.o src/ivfkmeans.o src/ivfscan.o src/ivfutils.o src/ivfvacuum.o src/vector.o
 HEADERS = src/vector.h
 
@@ -40,8 +41,6 @@ all: sql/$(EXTENSION)--$(EXTVERSION).sql
 
 sql/$(EXTENSION)--$(EXTVERSION).sql: sql/$(EXTENSION).sql
 	cp $< $@
-
-# EXTRA_CLEAN = sql/$(EXTENSION)--$(EXTVERSION).sql
 
 ifdef USE_PGXS
 PG_CONFIG = pg_config
