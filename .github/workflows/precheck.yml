@@ -48,7 +48,9 @@ jobs:
             /usr/lib/jvm || true
           sudo apt autoremove -y
           sudo apt clean -y
-          docker rmi $(docker image ls -aq)
+          if [ -n "$(docker image ls -aq)" ]; then
+            docker rmi $(docker image ls -aq)
+          fi
           df -h
 
       - name: limit WAL size
