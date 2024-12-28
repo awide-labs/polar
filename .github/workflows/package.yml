@@ -67,7 +67,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        base_image: [ ubuntu20.04, ubuntu22.04, ubuntu24.04 ]
+        base_image: [ ubuntu20.04, ubuntu22.04, ubuntu24.04, debian11, debian12 ]
     steps:
       - name: fetch source code
         uses: actions/checkout@v4
