@@ -1,6 +1,6 @@
 ---
 author: 棠羽
-date: 2024/08/30
+date: 2025/01/15
 minute: 15
 ---
 
@@ -25,26 +25,21 @@ initdb -D $HOME/primary
 ```bash:no-line-numbers
 # 使用 pfs 创建共享数据目录
 sudo pfs -C disk mkdir /nvme1n1/shared_data
-# 初始化 db 的本地和共享数据目录
+# 初始化 Primary 节点的本地目录和共享目录
 sudo polar-initdb.sh $HOME/primary/ /nvme1n1/shared_data/ primary
+# 注入配置模板
+cat /u01/polardb_pg/share/polardb.conf.sample >> $HOME/primary/postgresql.conf
 ```
 
-编辑 Primary 节点的配置。打开 `~/primary/postgresql.conf`，增加配置项：
+编辑 Primary 节点的配置文件 `~/primary/postgresql.conf`，增加配置项：
 
 ```ini:no-line-numbers
 port=5432
 polar_hostid=1
-polar_enable_shared_storage_mode=on
 polar_disk_name='nvme1n1'
 polar_datadir='/nvme1n1/shared_data/'
 polar_vfs.localfs_mode=off
-shared_preload_libraries='$libdir/polar_vfs,$libdir/polar_worker'
 polar_storage_cluster_name='disk'
-logging_collector=on
-log_line_prefix='%p\t%r\t%u\t%m\t'
-log_directory='pg_log'
-listen_addresses='*'
-max_connections=1000
 ```
 
 编辑 Primary 节点的客户端认证文件 `~/primary/pg_hba.conf`，增加以下配置项，允许 Replica 节点进行物理复制：
@@ -85,29 +80,27 @@ psql -p 5432 -d postgres \
 在 Replica 节点本地磁盘的 `~/replica1` 路径下创建一个空目录，然后通过 `polar-initdb.sh` 脚本使用共享存储上的数据目录来初始化 Replica 节点的本地目录。初始化后的本地目录中没有默认配置文件，所以还需要使用 `initdb` 创建一个临时的本地目录模板，然后将所有的默认配置文件拷贝到 Replica 节点的本地目录下：
 
 ```shell:no-line-numbers
+# 从共享存储初始化 Replica 节点的本地目录
 mkdir -m 0700 $HOME/replica1
-sudo polar-initdb.sh $HOME/replica1/ /nvme1n1/shared_data/ replica
+polar-initdb.sh $HOME/replica1/ /nvme1n1/shared_data/ replica
 
+# 产生配置文件
 initdb -D /tmp/replica1
 cp /tmp/replica1/*.conf $HOME/replica1/
+
+# 注入配置模板
+cat /u01/polardb_pg/share/polardb.conf.sample >> $HOME/replica1/postgresql.conf
 ```
 
-编辑 Replica 的配置。打开 `~/replica1/postgresql.conf`，增加配置项：
+编辑 Replica 节点的配置文件 `~/replica1/postgresql.conf`，增加配置项：
 
 ```ini:no-line-numbers
 port=5433
 polar_hostid=2
-polar_enable_shared_storage_mode=on
 polar_disk_name='nvme1n1'
 polar_datadir='/nvme1n1/shared_data/'
 polar_vfs.localfs_mode=off
-shared_preload_libraries='$libdir/polar_vfs,$libdir/polar_worker'
 polar_storage_cluster_name='disk'
-logging_collector=on
-log_line_prefix='%p\t%r\t%u\t%m\t'
-log_directory='pg_log'
-listen_addresses='*'
-max_connections=1000
 
 # replication
 primary_slot_name='replica1'

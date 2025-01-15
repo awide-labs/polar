@@ -1,6 +1,6 @@
 ---
 author: 棠羽
-date: 2024/08/30
+date: 2025/01/15
 minute: 15
 ---
 
@@ -22,6 +22,7 @@ PolarDB File System，简称 PFS 或 PolarFS，是由阿里云自主研发的高
 ```shell:no-line-numbers
 docker pull polardb/polardb_pg_binary:15
 docker run -it \
+    --network=host \
     --cap-add=SYS_PTRACE \
     --privileged=true \
     --name polardb_pg \
