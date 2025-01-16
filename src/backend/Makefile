@@ -212,6 +212,7 @@ endif
 	$(INSTALL_DATA) $(srcdir)/libpq/pg_hba.conf.sample '$(DESTDIR)$(datadir)/pg_hba.conf.sample'
 	$(INSTALL_DATA) $(srcdir)/libpq/pg_ident.conf.sample '$(DESTDIR)$(datadir)/pg_ident.conf.sample'
 	$(INSTALL_DATA) $(srcdir)/utils/misc/postgresql.conf.sample '$(DESTDIR)$(datadir)/postgresql.conf.sample'
+	$(INSTALL_DATA) $(srcdir)/utils/misc/polardb.conf.sample '$(DESTDIR)$(datadir)/polardb.conf.sample'
 
 ifeq ($(with_llvm), yes)
 install-bin: install-postgres-bitcode
@@ -276,7 +277,8 @@ endif
 	$(MAKE) -C utils uninstall-data
 	rm -f '$(DESTDIR)$(datadir)/pg_hba.conf.sample' \
 	      '$(DESTDIR)$(datadir)/pg_ident.conf.sample' \
-	      '$(DESTDIR)$(datadir)/postgresql.conf.sample'
+	      '$(DESTDIR)$(datadir)/postgresql.conf.sample' \
+	      '$(DESTDIR)$(datadir)/polardb.conf.sample'
 ifeq ($(with_llvm), yes)
 	$(call uninstall_llvm_module,postgres)
 endif

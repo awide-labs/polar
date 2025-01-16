@@ -28,7 +28,7 @@ sudo pfs -C disk mkdir /nvme1n1/shared_data
 # 初始化 Primary 节点的本地目录和共享目录
 sudo polar-initdb.sh $HOME/primary/ /nvme1n1/shared_data/ primary
 # 注入配置模板
-cat /u01/polardb_pg/share/polardb.conf.sample >> $HOME/primary/postgresql.conf
+cat /u01/polardb_pg/share/postgresql/polardb.conf.sample >> $HOME/primary/postgresql.conf
 ```
 
 编辑 Primary 节点的配置文件 `~/primary/postgresql.conf`，增加配置项：
@@ -89,7 +89,7 @@ initdb -D /tmp/replica1
 cp /tmp/replica1/*.conf $HOME/replica1/
 
 # 注入配置模板
-cat /u01/polardb_pg/share/polardb.conf.sample >> $HOME/replica1/postgresql.conf
+cat /u01/polardb_pg/share/postgresql/polardb.conf.sample >> $HOME/replica1/postgresql.conf
 ```
 
 编辑 Replica 节点的配置文件 `~/replica1/postgresql.conf`，增加配置项：
