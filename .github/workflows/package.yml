@@ -22,10 +22,11 @@ on:
 jobs:
 
   build-and-publish-rpm:
-    runs-on: ubuntu-latest
     strategy:
       matrix:
+        arch: [ ubuntu-24.04, ubuntu-24.04-arm ]
         base_image: [ anolis8, rocky8, rocky9 ]
+    runs-on: ${{ matrix.arch }}
     steps:
       - name: fetch source code
         uses: actions/checkout@v4
@@ -51,23 +52,28 @@ jobs:
 
       - name: get package name
         run: |
-          cd ./package/rpm/x86_64 && RPMNAME=`ls` && echo "rpmname=$RPMNAME" >> $GITHUB_ENV
+          RPMPATH=./package/rpm/`uname -m` && \
+          cd $RPMPATH && \
+          RPMNAME=`ls` && \
+          echo "rpmname=$RPMNAME" >> $GITHUB_ENV
+          echo "rpmpath=$RPMPATH/$RPMNAME" >> $GITHUB_ENV
       - name: upload artifact
         if: startsWith(github.ref, 'refs/tags/')
         uses: actions/upload-artifact@v4
         with:
           name: ${{ env.rpmname }}
-          path: ./package/rpm/x86_64/${{ env.rpmname }}
+          path: ${{ env.rpmpath }}
           compression-level: 0
       - name: change ownership of the source code
         run: |
           sudo chown -R runner:runner `pwd`
 
   build-and-publish-deb:
-    runs-on: ubuntu-latest
     strategy:
       matrix:
+        arch: [ ubuntu-24.04, ubuntu-24.04-arm ]
         base_image: [ ubuntu20.04, ubuntu22.04, ubuntu24.04, debian11, debian12 ]
+    runs-on: ${{ matrix.arch }}
     steps:
       - name: fetch source code
         uses: actions/checkout@v4
