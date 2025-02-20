@@ -13,17 +13,17 @@ jobs:
         with:
           persist-credentials: false
       - name: repo-sync-all
-        uses: repo-sync/github-sync@v2
+        uses: repo-sync/github-sync@master
         with:
-          source_repo: https://github.com/postgres/postgres.git
+          source_repo: https://git.postgresql.org/git/postgresql.git
           source_branch: "REL_*"
           destination_branch: "REL_*"
           sync_tags: "true"
           github_token: ${{ secrets.GITHUB_TOKEN }}
       - name: repo-sync-master
-        uses: repo-sync/github-sync@v2
+        uses: repo-sync/github-sync@master
         with:
-          source_repo: https://github.com/postgres/postgres.git
+          source_repo: https://git.postgresql.org/git/postgresql.git
           source_branch: master
           destination_branch: master
           github_token: ${{ secrets.GITHUB_TOKEN }}
