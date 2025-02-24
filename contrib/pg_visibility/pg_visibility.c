@@ -403,6 +403,13 @@ pg_truncate_visibility_map(PG_FUNCTION_ARGS)
 	old_block = BlockNumberIsValid(block) ? smgrnblocks(RelationGetSmgr(rel), fork) : 0;
 
 	/*
+	 * POLAR RSC: make sure all segments are opened.
+	 */
+	if (POLAR_RSC_SHOULD_UPDATE(RelationGetSmgr(rel), fork) && BlockNumberIsValid(block))
+		(void) smgrnblocks_real(RelationGetSmgr(rel), fork);
+	/* POLAR end */
+
+	/*
 	 * WAL-logging, buffer dropping, file truncation must be atomic and all on
 	 * one side of a checkpoint.  See RelationTruncate() for discussion.
 	 */

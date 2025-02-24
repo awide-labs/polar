@@ -1956,7 +1956,7 @@ WriteOffset(ArchiveHandle *AH, pgoff_t o, int wasSet)
 }
 
 int
-ReadOffset(ArchiveHandle *AH, pgoff_t * o)
+ReadOffset(ArchiveHandle *AH, pgoff_t *o)
 {
 	int			i;
 	int			off;

@@ -3564,6 +3564,7 @@ pg_uuid_t
 pg_wc_probefunc
 pg_wchar
 pg_wchar_tbl
+pgoff_t
 pgp_armor_headers_state
 pgpid_t
 pgsocket

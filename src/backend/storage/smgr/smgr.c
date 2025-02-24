@@ -878,7 +878,16 @@ smgrtruncate(SMgrRelation reln, ForkNumber *forknum, int nforks,
 	BlockNumber old_nblocks[MAX_FORKNUM + 1];
 
 	for (int i = 0; i < nforks; ++i)
+	{
 		old_nblocks[i] = smgrnblocks(reln, forknum[i]);
+
+		/*
+		 * POLAR RSC: make sure all segments are opened.
+		 */
+		if (POLAR_RSC_SHOULD_UPDATE(reln, forknum[i]))
+			(void) smgrnblocks_real(reln, forknum[i]);
+		/* POLAR end */
+	}
 
 	smgrtruncate2(reln, forknum, nforks, old_nblocks, nblocks);
 }

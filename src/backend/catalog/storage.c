@@ -315,6 +315,13 @@ RelationTruncate(Relation rel, BlockNumber nblocks)
 	blocks[nforks] = nblocks;
 	nforks++;
 
+	/*
+	 * POLAR RSC: make sure all segments are opened.
+	 */
+	if (POLAR_RSC_SHOULD_UPDATE(reln, MAIN_FORKNUM))
+		(void) smgrnblocks_real(reln, MAIN_FORKNUM);
+	/* POLAR end */
+
 	/* Prepare for truncation of the FSM if it exists */
 	fsm = smgrexists(RelationGetSmgr(rel), FSM_FORKNUM);
 	if (fsm)
@@ -326,6 +333,13 @@ RelationTruncate(Relation rel, BlockNumber nblocks)
 			old_blocks[nforks] = smgrnblocks(reln, FSM_FORKNUM);
 			nforks++;
 			need_fsm_vacuum = true;
+
+			/*
+			 * POLAR RSC: make sure all segments are opened.
+			 */
+			if (POLAR_RSC_SHOULD_UPDATE(reln, FSM_FORKNUM))
+				(void) smgrnblocks_real(reln, FSM_FORKNUM);
+			/* POLAR end */
 		}
 	}
 
@@ -339,6 +353,13 @@ RelationTruncate(Relation rel, BlockNumber nblocks)
 			forks[nforks] = VISIBILITYMAP_FORKNUM;
 			old_blocks[nforks] = smgrnblocks(reln, VISIBILITYMAP_FORKNUM);
 			nforks++;
+
+			/*
+			 * POLAR RSC: make sure all segments are opened.
+			 */
+			if (POLAR_RSC_SHOULD_UPDATE(reln, VISIBILITYMAP_FORKNUM))
+				(void) smgrnblocks_real(reln, VISIBILITYMAP_FORKNUM);
+			/* POLAR end */
 		}
 	}
 
@@ -1075,6 +1096,13 @@ smgr_redo(XLogReaderState *record)
 
 			/* Also tell xlogutils.c about it */
 			XLogTruncateRelation(xlrec->rnode, MAIN_FORKNUM, xlrec->blkno);
+
+			/*
+			 * POLAR RSC: make sure all segments are opened.
+			 */
+			if (POLAR_RSC_SHOULD_UPDATE(reln, MAIN_FORKNUM))
+				(void) smgrnblocks_real(reln, MAIN_FORKNUM);
+			/* POLAR end */
 		}
 
 		/* Prepare for truncation of FSM and VM too */
@@ -1090,6 +1118,13 @@ smgr_redo(XLogReaderState *record)
 				old_blocks[nforks] = smgrnblocks(reln, FSM_FORKNUM);
 				nforks++;
 				need_fsm_vacuum = true;
+
+				/*
+				 * POLAR RSC: make sure all segments are opened.
+				 */
+				if (POLAR_RSC_SHOULD_UPDATE(reln, FSM_FORKNUM))
+					(void) smgrnblocks_real(reln, FSM_FORKNUM);
+				/* POLAR end */
 			}
 		}
 		if ((xlrec->flags & SMGR_TRUNCATE_VM) != 0 &&
@@ -1101,6 +1136,13 @@ smgr_redo(XLogReaderState *record)
 				forks[nforks] = VISIBILITYMAP_FORKNUM;
 				old_blocks[nforks] = smgrnblocks(reln, VISIBILITYMAP_FORKNUM);
 				nforks++;
+
+				/*
+				 * POLAR RSC: make sure all segments are opened.
+				 */
+				if (POLAR_RSC_SHOULD_UPDATE(reln, VISIBILITYMAP_FORKNUM))
+					(void) smgrnblocks_real(reln, VISIBILITYMAP_FORKNUM);
+				/* POLAR end */
 			}
 		}
 
