@@ -50,6 +50,13 @@ int			Password_encryption = PASSWORD_TYPE_SCRAM_SHA_256;
 /* Hook to check passwords in CreateRole() and AlterRole() */
 check_password_hook_type check_password_hook = NULL;
 
+/*
+ * POLAR: login history
+ */
+polar_register_delete_login_history_hook_type polar_register_delete_login_history_hook = NULL;
+
+/* POLAR end */
+
 static void AddRoleMems(const char *rolename, Oid roleid,
 						List *memberSpecs, List *memberIds,
 						Oid grantorId, bool admin_opt);
@@ -913,6 +920,13 @@ DropRole(DropRoleStmt *stmt)
 				pg_auth_members_rel;
 	ListCell   *item;
 
+	/*
+	 * POLAR: login history
+	 */
+	List	   *roleidlist = NIL;
+
+	/* POLAR end */
+
 	if (!have_createrole_privilege())
 		ereport(ERROR,
 				(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
@@ -1072,7 +1086,21 @@ DropRole(DropRoleStmt *stmt)
 		 * itself.)
 		 */
 		CommandCounterIncrement();
+
+		/*
+		 * POLAR: login history
+		 */
+		roleidlist = lappend_oid(roleidlist, roleid);
+		/* POLAR end */
 	}
+
+	/*
+	 * POLAR: login history Register a callback function to delete the login
+	 * information for these users when the transaction is committed.
+	 */
+	if (polar_register_delete_login_history_hook)
+		polar_register_delete_login_history_hook(roleidlist);
+	/* POLAR end */
 
 	/*
 	 * Now we can clean up; but keep locks until commit.

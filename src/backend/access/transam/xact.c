@@ -337,6 +337,13 @@ static SubXactCallbackItem *SubXact_callbacks = NULL;
 polar_unsplittable_reason_t polar_unsplittable_reason;
 XLogRecPtr	polar_xact_split_wait_lsn = InvalidXLogRecPtr;
 
+/*
+ * POLAR: login history
+ */
+polar_callback_delete_login_history_hook_type polar_callback_delete_login_history_hook = NULL;
+
+/* POLAR end */
+
 /* local function prototypes */
 static void AssignTransactionId(TransactionState s);
 static void AbortTransaction(void);
@@ -2351,6 +2358,13 @@ CommitTransaction(void)
 	CallXactCallbacks(is_parallel_worker ? XACT_EVENT_PARALLEL_COMMIT
 					  : XACT_EVENT_COMMIT);
 
+	/*
+	 * POLAR: login history Delete the login information of the user.
+	 */
+	if (polar_callback_delete_login_history_hook)
+		polar_callback_delete_login_history_hook(is_parallel_worker ? XACT_EVENT_PARALLEL_COMMIT : XACT_EVENT_COMMIT);
+	/* POLAR end */
+
 	ResourceOwnerRelease(TopTransactionResourceOwner,
 						 RESOURCE_RELEASE_BEFORE_LOCKS,
 						 true, true);
@@ -2912,6 +2926,14 @@ AbortTransaction(void)
 			CallXactCallbacks(XACT_EVENT_PARALLEL_ABORT);
 		else
 			CallXactCallbacks(XACT_EVENT_ABORT);
+
+		/*
+		 * POLAR: login history Cancel the callback function for deleting user
+		 * login information.
+		 */
+		if (polar_callback_delete_login_history_hook)
+			polar_callback_delete_login_history_hook(is_parallel_worker ? XACT_EVENT_PARALLEL_ABORT : XACT_EVENT_ABORT);
+		/* POLAR end */
 
 		ResourceOwnerRelease(TopTransactionResourceOwner,
 							 RESOURCE_RELEASE_BEFORE_LOCKS,

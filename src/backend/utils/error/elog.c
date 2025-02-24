@@ -136,6 +136,15 @@ int			polar_audit_log_flush_timeout = 0;
 
 /* POLAR end */
 
+/*
+ * POLAR: login history
+ */
+bool		polar_login_flag = false;
+polar_update_login_history_hook_type polar_update_login_history_hook = NULL;
+polar_flush_login_history_hook_type polar_flush_login_history_hook = NULL;
+
+/* POLAR end */
+
 #ifdef HAVE_SYSLOG
 
 /*
@@ -540,6 +549,14 @@ errfinish(const char *filename, int lineno, const char *funcname)
 	int			elevel;
 	MemoryContext oldcontext;
 	ErrorContextCallback *econtext;
+
+	/*
+	 * POLAR: login history Record the failed login information of the user.
+	 * Most of the errors caused by users during login are fatal.
+	 */
+	if (edata->elevel == FATAL && polar_update_login_history_hook)
+		polar_update_login_history_hook(false);
+	/* POLAR end */
 
 	recursion_depth++;
 	CHECK_STACK_DEPTH();

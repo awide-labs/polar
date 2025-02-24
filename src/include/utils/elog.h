@@ -536,4 +536,14 @@ extern void polar_reset_program_error_handler(void);
 
 /* POLAR end */
 
+/*
+ * POLAR: login history
+ */
+extern PGDLLIMPORT bool polar_login_flag;
+typedef void (*polar_update_login_history_hook_type) (bool);
+extern PGDLLIMPORT polar_update_login_history_hook_type polar_update_login_history_hook;
+typedef void (*polar_flush_login_history_hook_type) (void);
+extern PGDLLIMPORT polar_flush_login_history_hook_type polar_flush_login_history_hook;
+/* POLAR end */
+
 #endif							/* ELOG_H */

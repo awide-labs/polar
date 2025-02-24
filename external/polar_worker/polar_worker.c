@@ -346,6 +346,10 @@ polar_worker_handler_main(Datum main_arg)
 			ProcessConfigFile(PGC_SIGHUP);
 		}
 
+		/* Write the user's login information to the file */
+		if (polar_flush_login_history_hook)
+			polar_flush_login_history_hook();
+
 		if (!enable_polar_worker)
 		{
 			/* We don't want to prealloc wal file now, so just wait forever. */

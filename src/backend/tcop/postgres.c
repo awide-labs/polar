@@ -4515,6 +4515,12 @@ PostgresMain(const char *dbname, const char *username)
 	long		secs = 0;
 	int			microsecs = 0;
 
+	/*
+	 * POLAR: login history Indicate that the login process starts.
+	 */
+	polar_login_flag = true;
+	/* POLAR end */
+
 	AssertArg(dbname != NULL);
 	AssertArg(username != NULL);
 
@@ -4682,6 +4688,14 @@ PostgresMain(const char *dbname, const char *username)
 	MemoryContextSwitchTo(row_description_context);
 	initStringInfo(&row_description_buf);
 	MemoryContextSwitchTo(TopMemoryContext);
+
+	/*
+	 * POLAR: login history Record the successful login information of the
+	 * user.
+	 */
+	if (polar_update_login_history_hook)
+		polar_update_login_history_hook(true);
+	/* POLAR end */
 
 	/*
 	 * POSTGRES main processing loop begins here

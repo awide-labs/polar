@@ -1,0 +1,4 @@
+comment = 'record user login information'
+default_version = '1.0'
+module_pathname = '$libdir/polar_login_history'
+relocatable = true

@@ -558,4 +558,11 @@ extern void polar_stat_update_xact_split_info(void);
 
 /* POLAR end */
 
+/*
+ * POLAR: login history
+ */
+typedef void (*polar_callback_delete_login_history_hook_type) (XactEvent);
+extern PGDLLIMPORT polar_callback_delete_login_history_hook_type polar_callback_delete_login_history_hook;
+/* POLAR end */
+
 #endif							/* XACT_H */
