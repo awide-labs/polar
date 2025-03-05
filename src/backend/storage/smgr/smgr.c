@@ -864,6 +864,25 @@ smgrnblocks_cached(SMgrRelation reln, ForkNumber forknum)
 }
 
 /*
+ * smgrnblocks_ensure_opened() -- Calculate the number of blocks in the
+ *								  supplied relation.
+ *
+ * This interface ensures that all segment of the relation file is opened. This
+ * should be called before mdtruncate, to make sure all segments are truncated.
+ */
+BlockNumber
+smgrnblocks_ensure_opened(SMgrRelation reln, ForkNumber forknum)
+{
+	/*
+	 * POLAR: make sure all segments are opened.
+	 */
+	if (POLAR_RSC_SHOULD_UPDATE(reln, forknum))
+		(void) smgrnblocks_real(reln, forknum);
+
+	return smgrnblocks(reln, forknum);
+}
+
+/*
  *	smgrtruncate() -- Truncate the given forks of supplied relation to
  *					  each specified numbers of blocks
  *
@@ -878,16 +897,7 @@ smgrtruncate(SMgrRelation reln, ForkNumber *forknum, int nforks,
 	BlockNumber old_nblocks[MAX_FORKNUM + 1];
 
 	for (int i = 0; i < nforks; ++i)
-	{
-		old_nblocks[i] = smgrnblocks(reln, forknum[i]);
-
-		/*
-		 * POLAR RSC: make sure all segments are opened.
-		 */
-		if (POLAR_RSC_SHOULD_UPDATE(reln, forknum[i]))
-			(void) smgrnblocks_real(reln, forknum[i]);
-		/* POLAR end */
-	}
+		old_nblocks[i] = smgrnblocks_ensure_opened(reln, forknum[i]);
 
 	smgrtruncate2(reln, forknum, nforks, old_nblocks, nblocks);
 }

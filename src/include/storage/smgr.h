@@ -118,6 +118,7 @@ extern void smgrwriteback(SMgrRelation reln, ForkNumber forknum,
 						  BlockNumber blocknum, BlockNumber nblocks);
 extern BlockNumber smgrnblocks(SMgrRelation reln, ForkNumber forknum);
 extern BlockNumber smgrnblocks_cached(SMgrRelation reln, ForkNumber forknum);
+extern BlockNumber smgrnblocks_ensure_opened(SMgrRelation reln, ForkNumber forknum);
 extern void smgrtruncate(SMgrRelation reln, ForkNumber *forknum, int nforks,
 						 BlockNumber *nblocks);
 extern void smgrtruncate2(SMgrRelation reln, ForkNumber *forknum, int nforks,
