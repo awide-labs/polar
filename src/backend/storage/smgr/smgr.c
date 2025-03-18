@@ -257,9 +257,6 @@ smgropen(RelFileNode rnode, BackendId backend)
 		reln->rsc_generation = 0;
 		/* POLAR end */
 
-		/* implementation-specific initialization */
-		smgrsw[reln->smgr_which].smgr_open(reln);
-
 		/* POLAR: bulk extend status */
 		for (forknum = 0; forknum <= MAX_FORKNUM; forknum++)
 			polar_smgr_clear_bulk_extend(reln, forknum);
@@ -268,6 +265,9 @@ smgropen(RelFileNode rnode, BackendId backend)
 		/* it is not pinned yet */
 		reln->pincount = 0;
 		dlist_push_tail(&unpinned_relns, &reln->node);
+
+		/* implementation-specific initialization */
+		smgrsw[reln->smgr_which].smgr_open(reln);
 	}
 
 	return reln;
