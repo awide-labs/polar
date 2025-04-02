@@ -1,6 +1,6 @@
 <div align="center">
 
-[![logo](./polar-doc/docs/.vuepress/public/images/polardb.png)](https://www.polardbpg.com/home)
+[![logo](./polar-doc/docs/.vuepress/public/images/polardb.png)](https://apsaradb.github.io/PolarDB-for-PostgreSQL/)
 
 # PolarDB for PostgreSQL
 
@@ -8,7 +8,7 @@
 
 #### English | [简体中文](./README_zh.md)
 
-[![official](https://img.shields.io/badge/official%20site-blueviolet?style=flat&logo=alibabacloud)](https://www.polardbpg.com/home)
+[![official](https://img.shields.io/badge/official%20site-blueviolet?style=flat&logo=alibabacloud)](https://apsaradb.github.io/PolarDB-for-PostgreSQL/)
 
 [![GitHub License](https://img.shields.io/github/license/ApsaraDB/PolarDB-for-PostgreSQL?style=flat&logo=apache)](./LICENSE)
 [![github-issues](https://img.shields.io/github/issues/ApsaraDB/PolarDB-for-PostgreSQL?style=flat&logo=github)](https://github.com/ApsaraDB/PolarDB-for-PostgreSQL/issues)
