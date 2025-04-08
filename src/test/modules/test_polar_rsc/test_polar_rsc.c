@@ -26,6 +26,8 @@
 #include "postgres.h"
 
 #include "funcapi.h"
+#include "storage/smgr.h"
+
 #include "storage/polar_rsc.h"
 
 PG_MODULE_MAGIC;

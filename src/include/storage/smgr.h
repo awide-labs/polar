@@ -21,8 +21,6 @@
 /* POLAR */
 #include "storage/polar_rsc.h"
 
-typedef struct polar_rsc_shared_relation_t polar_rsc_shared_relation_t;
-
 /*
  * smgr.c maintains a table of SMgrRelation objects, which are essentially
  * cached file handles.  An SMgrRelation is created (if not already present)
@@ -47,7 +45,7 @@ typedef struct SMgrRelationData
 	RelFileNodeBackend smgr_rnode;	/* relation physical identifier */
 
 	/* pointer to shared object, valid if non-NULL and generation matches */
-	polar_rsc_shared_relation_t *rsc_ref;
+	struct polar_rsc_shared_relation_t *rsc_ref;
 	uint64		rsc_generation;
 
 	/* pointer to owning pointer, or NULL if none */

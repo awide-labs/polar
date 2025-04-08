@@ -34,7 +34,6 @@
 #include "port/atomics.h"
 #include "storage/block.h"
 #include "storage/relfilenode.h"
-#include "storage/smgr.h"
 #include "utils/relcache.h"
 
 /* GUCs */
@@ -121,13 +120,13 @@ typedef struct polar_rsc_stat_t
 
 extern polar_rsc_stat_t *polar_rsc_global_stat;
 
-typedef struct SMgrRelationData *SMgrRelation;
+struct SMgrRelationData;
 
-extern BlockNumber smgrnblocks_real(SMgrRelation reln, ForkNumber forknum);
-extern BlockNumber polar_rsc_search_by_ref(SMgrRelation reln, ForkNumber forknum);
-extern BlockNumber polar_rsc_search_by_mapping(SMgrRelation reln, ForkNumber forknum);
-extern BlockNumber polar_rsc_search_entry(SMgrRelation reln, ForkNumber forknum, bool evict);
-extern BlockNumber polar_rsc_update_entry(SMgrRelation reln, ForkNumber forknum, BlockNumber nblocks);
+extern BlockNumber smgrnblocks_real(struct SMgrRelationData *reln, ForkNumber forknum);
+extern BlockNumber polar_rsc_search_by_ref(struct SMgrRelationData *reln, ForkNumber forknum);
+extern BlockNumber polar_rsc_search_by_mapping(struct SMgrRelationData *reln, ForkNumber forknum);
+extern BlockNumber polar_rsc_search_entry(struct SMgrRelationData *reln, ForkNumber forknum, bool evict);
+extern BlockNumber polar_rsc_update_entry(struct SMgrRelationData *reln, ForkNumber forknum, BlockNumber nblocks);
 extern void polar_rsc_update_if_exists_and_greater_than(RelFileNode *rnode,
 														ForkNumber forknum,
 														BlockNumber nblocks);
