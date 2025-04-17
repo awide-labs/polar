@@ -59,7 +59,7 @@ minute: 30
 
 将一段共享内存根据并发进程数目进行等分，每一段作为一个环形队列，分配给一个进程。通过配置参数设定每个环形队列的深度：
 
-![image.png](../../../imgs/pr_parallel_execute_1.png)
+![image.png](../../imgs/pr_parallel_execute_1.png)
 
 - Dispatcher 进程
   - 通过将任务分发给指定的进程来控制并发调度；
@@ -67,7 +67,7 @@ minute: 30
 - 进程组
   - 组内每一个进程从相应的环形队列中获取需要执行的任务，根据任务的状态决定是否执行。
 
-![image.png](../../../imgs/pr_parallel_execute_2.png)
+![image.png](../../imgs/pr_parallel_execute_2.png)
 
 #### 任务
 
@@ -79,7 +79,7 @@ minute: 30
 - `Finished`：表示进程组中的进程已经执行完该任务；
 - `Removed`：当 Dispatcher 进程发现一个任务的状态已经为 `Finished`，那么该任务所有的前置依赖任务也都应该为 `Finished` 状态，`Removed` 状态表示 Dispatcher 进程已经将该任务以及该任务所有前置任务都从管理结构体中删除；可以通过该机制保证 Dispatcher 进程按顺序处理有依赖关系的任务执行结果。
 
-![image.png](../../../imgs/pr_parallel_execute_task.png)
+![image.png](../../imgs/pr_parallel_execute_task.png)
 
 上述状态机的状态转移过程中，黑色线标识的状态转移过程在 Dispatcher 进程中完成，橙色线标识的状态转移过程在并行回放进程组中完成。
 
@@ -98,7 +98,7 @@ Dispatcher 调度策略如下：
 - 如果要执行的 Task Node 有相同 Task Tag 的任务在执行，则优先将该 Task Node 分配到该 Task Tag 链表最后一个 Task Node 所在的执行进程；目的是让有依赖关系的任务尽量被同一个进程执行，减少进程间同步的开销；
 - 如果期望优先分配的进程队列已满，或者没有相同的 Task Tag 在执行，则在进程组中按顺序选择一个进程，从中获取状态为 `Idle` 的 Task Node 来调度任务执行；目的是让任务尽量平均分配到不同的进程进行执行。
 
-![image.png](../../../imgs/pr_parallel_execute_dispatcher.png)
+![image.png](../../imgs/pr_parallel_execute_dispatcher.png)
 
 #### 进程组
 
@@ -108,15 +108,15 @@ Dispatcher 调度策略如下：
 - `TaskHandler` 根据传入的 Task Node，负责执行具体的任务
 - `TaskCleanup` 表示执行进程退出前需要执行的回收动作
 
-![image.png](../../../imgs/pr_parallel_execute_procs_1.png)
+![image.png](../../imgs/pr_parallel_execute_procs_1.png)
 
 进程组中的进程从环形队列中获取一个 Task Node，如果 Task Node 当前的状态是 `Hold`，则将该 Task Node 插入到 Hold List 的尾部；如果 Task Node 的状态为 Running，则调用 TaskHandler 执行；如果 TaskHandler 执行失败，则设置该 Task Node 重新执行需要等待调用的次数，默认为 3，将该 Task Node 插入到 Hold List 的头部。
 
-![image.png](../../../imgs/pr_parallel_execute_procs_2.png)
+![image.png](../../imgs/pr_parallel_execute_procs_2.png)
 
 进程优先从 Hold List 头部搜索，获取可执行的 Task；如果 Task 状态为 Running，且等待调用次数为 0，则执行该 Task；如果 Task 状态为 Running，但等待调用次数大于 0，则将等待调用次数减去 1。
 
-![image.png](../../../imgs/pr_parallel_execute_procs_3.png)
+![image.png](../../imgs/pr_parallel_execute_procs_3.png)
 
 ### WAL 日志并行回放
 
@@ -129,13 +129,13 @@ Dispatcher 调度策略如下：
 - 并行回放进程组内的进程：执行日志回放子任务，对数据块执行单个日志的回放操作；
 - Backend 进程：主动读取数据块时，根据 PageTag 来检索 LogIndex 数据，获得修改该数据块的 LSN 日志链表，对数据块执行完整日志链的回放操作。
 
-![image.png](../../../imgs/pr_parallel_replay_1.png)
+![image.png](../../imgs/pr_parallel_replay_1.png)
 
 - Dispatcher 进程利用 LSN 来检索 LogIndex 数据，按 LogIndex 插入顺序枚举 PageTag 和对应 LSN，构建{LSN -> PageTag}，组成相应的 Task Node；
 - PageTag 作为 Task Node 的 Task Tag；
 - 将枚举组成的 Task Node 分发给并行执行框架中进程组的子进程进行回放；
 
-![image.png](../../../imgs/pr_parallel_replay_2.png)
+![image.png](../../imgs/pr_parallel_replay_2.png)
 
 ## 使用方法
 

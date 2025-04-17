@@ -10,9 +10,9 @@
   "scripts": {
     "docs:dev": "vuepress dev docs",
     "docs:build": "vuepress build docs",
-    "prettier:check": "prettier --check .",
-    "prettier:format": "prettier --write --log-level silent .",
-    "prettier:format_root": "prettier --write --log-level silent ../*.md"
+    "prettier:check": "pnpm exec prettier --check .",
+    "prettier:format": "pnpm exec prettier --write --loglevel silent .",
+    "prettier:format_root": "pnpm exec prettier --write --loglevel silent ../*.md"
   },
   "repository": {
     "type": "git",

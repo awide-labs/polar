@@ -24,18 +24,18 @@ PolarDB for PostgreSQL 针对上述问题，从数据库内部提供了 **Shared
 
 在 PostgreSQL 原生的 One-Process-Per-Connection 连接调度策略中，用户发起的连接与后端进程一一绑定：这里不仅是生命周期的绑定，同时还是服务与被服务关系的绑定。
 
-![ss-old](../../../imgs/ss-old.png)
+![ss-old](../../imgs/ss-old.png)
 
 在 Shared Server 内置连接池中，通过提取出会话相关上下文 Session Context，将用户连接和后端进程进行了解绑，并且引入 Dispatcher 来进行代理转发：
 
-![ss-new](../../../imgs/ss-new.png)
+![ss-new](../../imgs/ss-new.png)
 
 - Session Context 保存 Session 相关数据，存放于共享内存中，跨进程共享。存放数据包括：Prepared Statement、连接私有参数、临时表元数据等，后续还可以不断扩展。
 - Dispatcher 进程承载代理转发工作，用户连接通过 Dispatcher 分发调度到不同的后端进程上，后端进程通过 Dispatcher 被多个用户连接共享使用。Dispatcher 进程可以配置多个。
 - 每个 Dispatcher 管理的后端进程按 `<user, database, GUCs>` 为 key，划分成不同的后端进程池。每个后端进程池都有自己独占的后端进程组，单个后端进程池内的后端进程数量随着负载增高而增多，随着负载降低而减少。
 - 用户连接中的一个事务会始终被同一个后端进程服务，不同事务可能会被不同的后端进程服务
 
-![ss-pool](../../../imgs/ss-pool.png)
+![ss-pool](../../imgs/ss-pool.png)
 
 在 Shared Server 中，后端进程有三种执行模式。进程执行模式在运行时会根据实时负载和进程污染情况进行动态转换：
 
@@ -73,7 +73,7 @@ Shared Server 主要应用于高并发或大量短连接的业务场景，因此
 - ss didicated：使用 Shared Server 内置连接池，**启动后开启 SS 开关**，但强制使用 Dedicated 模式
 - ss shared：使用 Shared Server 内置连接池，**启动后开启 SS 开关**，使用标准的 Shared 模式
 
-![ss-tpcc](../../../imgs/ss-tpcc.jpg)
+![ss-tpcc](../../imgs/ss-tpcc.jpg)
 
 从图中可以看出：
 
@@ -90,9 +90,9 @@ Shared Server 主要应用于高并发或大量短连接的业务场景，因此
 - ss dedicated：使用 Shared Server 内置连接池，但强制设置为 Dedicated 模式
 - ss shared：使用 Shared Server 内置连接池，配置为标准的 Shared 模式
 
-![ss-pgbench1](../../../imgs/ss-pgbench1.jpg)
+![ss-pgbench1](../../imgs/ss-pgbench1.jpg)
 
-![ss-pgbench2](../../../imgs/ss-pgbench2.jpg)
+![ss-pgbench2](../../imgs/ss-pgbench2.jpg)
 
 从图中可以看出，使用连接池后，对于短连接，PgBouncer 和 Shared Server 的性能均有所提升。但 PgBouncer 最高只能提升 14 倍性能，Shared Server 最高可以提升 42 倍性能。
 

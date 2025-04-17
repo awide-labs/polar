@@ -174,7 +174,7 @@ SET polar_px_enable_partition TO ON;
 
 以下图为例：当查询过滤条件 `WHERE date = '202201' AND region = 'beijing'` 中包含一级分区键 `date` 和二级分区键 `region` 时，ePQ 优化器能够裁剪掉所有不相关的分区，产生的执行计划中只包含符合条件的子分区。由此，执行器只对需要扫描的子分区进行扫描即可。
 
-![multi-level-partition](../../../imgs/htap-multi-level-partition-1.png)
+![multi-level-partition](../../imgs/htap-multi-level-partition-1.png)
 
 使用以下 SQL 为例，创建一张多级分区表：
 

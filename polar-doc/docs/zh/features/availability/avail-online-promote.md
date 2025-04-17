@@ -58,7 +58,7 @@ PolarDB 使用和传统数据库一致的备库节点 Promote 方法，触发条
 5. 发送 `SIGUSR2` 信号给 **Polar Worker 辅助进程**，通知其停止对于部分 LogIndex 数据的解析，因为这部分 LogIndex 数据只对于正常运行期间的 Replica 节点有用处。
 6. 发送 `SIGUSR2` 信号给 **LogIndex BGW (Background Ground Worker) 后台回放进程**，通知其处理 OnlinePromote 操作。
 
-![image.png](../../../imgs/online_promote_postmaster.png)
+![image.png](../../imgs/online_promote_postmaster.png)
 
 ### Startup 进程处理过程
 
@@ -69,7 +69,7 @@ PolarDB 使用和传统数据库一致的备库节点 Promote 方法，触发条
 5. 重置 WAL Meta Queue 内存空间，从共享存储中重新加载 slot 信息，并重新设置 LogIndex BGW 进程的回放位点为其与当前一致性位点两者的最小值，表示接下来 LogIndex BGW 进程从该位点开始新的回放；
 6. 将节点角色设置为主库节点，并设置 LogIndex BGW 进程的状态为 `POLAR_BG_ONLINE_PROMOTE`，至此实例可以对外提供读写服务。
 
-![image.png](../../../imgs/online_promote_startup.png)
+![image.png](../../imgs/online_promote_startup.png)
 
 ### LogIndex BGW 进程处理过程
 
@@ -81,7 +81,7 @@ LogIndex BGW 进程有自己的状态机，在其生命周期内，一直按照�
 - `POLAR_BG_RO_BUF_REPLAYING`：Replica 节点正常运行时，进程处于该状态，读取 LogIndex 数据，按照 WAL 日志的顺序回放一定量的 WAL 日志，每回放一轮，便会推进后台回放进程的回放位点；
 - `POLAR_BG_PARALLEL_REPLAYING`：LogIndex BGW 进程每次读取一定量的 LogIndex 数据，组织并分发回放任务，利用并行回放进程组回放 WAL 日志，每回放一轮，便会推进后台回放进程的回放位点。
 
-![image.png](../../../imgs/online_promote_logindex_bgw.png)
+![image.png](../../imgs/online_promote_logindex_bgw.png)
 
 LogIndex BGW 进程接收到 Postmaster 的 `SIGUSR2` 信号后，执行 OnlinePromote 操作的流程如下：
 

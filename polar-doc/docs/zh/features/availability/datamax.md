@@ -37,7 +37,7 @@ PolarDB for PostgreSQL 基于物理流复制实现主备库之间的数据同步
 
 针对传统主备模式下同步复制对主库性能影响较大的问题，PolarDB for PostgreSQL 新增了 DataMax 节点用于实现远程同步，该模式下的高可用架构如下所示：
 
-![dma-arch](../../../imgs/datamax_availability_architecture.png)
+![dma-arch](../../imgs/datamax_availability_architecture.png)
 
 其中：
 
@@ -53,7 +53,7 @@ PolarDB for PostgreSQL 基于物理流复制实现主备库之间的数据同步
 
 DataMax 是一种新的节点角色，用户需要通过配置文件来标识当前节点是否为 DataMax 节点。DataMax 模式下，Startup 进程在回放完 DataMax 节点自身日志之后，从 `PM_HOT_STANDBY` 进入到 `PM_DATAMAX` 模式。`PM_DATAMAX` 模式下，Startup 进程仅进行相关信号及状态的处理，并通知 Postmaster 进程启动流复制，Startup 进程不再进行日志回放的操作。因此 DataMax 节点不会保存 Primary 节点的数据文件，从而降低了存储成本。
 
-![datamax-impl](../../../imgs/datamax_realization_1.png)
+![datamax-impl](../../imgs/datamax_realization_1.png)
 
 如上图所示，DataMax 节点通过 WalReceiver 进程向 Primary 节点发起流复制请求，接收并保存 Primary 节点发送的 WAL 日志信息；同时通过 WalSender 进程将所接收的主库 WAL 日志发送给异地的备库节点；备库节点接收到 WAL 日志后，通知其 Startup 进程进行日志回放，从而实现备库节点与 Primary 节点的数据同步。
 
@@ -64,7 +64,7 @@ DataMax 节点在数据目录中新增了 `polar_datamax/` 目录，用于保存
 - 初始化部署：在全新部署或者 DataMax 节点重搭的场景下，没有存量的位点信息；在向主库请求流复制时，需要表明自己是 DataMax 节点，同时还需要额外传递 `InvalidXLogRecPtr` 位点，表明其需要从 Primary 节点当前最旧的位点开始复制； Primary 节点接收到 `InvalidXLogRecPtr` 的流复制请求之后，会开始从当前最旧且完整的 WAL segment 文件开始发送 WAL 日志，并将相应复制槽的 `restart_lsn` 设置为该位点；
 - 异常恢复：从存储上读取元数据文件，确认位点信息；以该位点为起点请求流复制。
 
-![datamax-impl-dir](../../../imgs/datamax_realization_2.png)
+![datamax-impl-dir](../../imgs/datamax_realization_2.png)
 
 ### DataMax 集群高可用
 
@@ -72,11 +72,11 @@ DataMax 节点在数据目录中新增了 `polar_datamax/` 目录，用于保存
 
 此外，DataMax 节点在进行日志清理时，除了保留下游 Standby 节点尚未接收的 WAL 日志文件以外，还会保留上游 Primary 节点尚未删除的 WAL 日志文件，避免 Primary 节点异常后，备份系统无法获取到 Primary 节点相较于 DataMax 节点多出的日志信息，保证集群数据的完整性。
 
-![datamax-ha](../../../imgs/datamax_availability_1.png)
+![datamax-ha](../../imgs/datamax_availability_1.png)
 
 若 DataMax 节点异常，则优先尝试通过重启进行恢复；若重启失败则会对其进行重建。因 DataMax 节点与 Primary 节点的存储彼此隔离，因此两者的数据不会互相影响。此外，DataMax 节点同样可以使用计算存储分离架构，确保 DataMax 节点的异常不会导致其存储的 WAL 日志数据丢失。
 
-![datamax-restart](../../../imgs/datamax_availability_2.png)
+![datamax-restart](../../imgs/datamax_availability_2.png)
 
 类似地，DataMax 节点实现了如下几种日志同步模式，用户可以根据具体业务需求进行相应配置：
 

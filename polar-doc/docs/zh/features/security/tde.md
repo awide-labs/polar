@@ -131,7 +131,7 @@ extern int data_encryption_cipher;
 
 数据库初始化时需要生成密钥，过程示意图如下：
 
-![image.png](../../../imgs/tde_1.png)
+![image.png](../../imgs/tde_1.png)
 
 1. 运行 `polar_cluster_passphrase_command` 得到 64 字节的 KEK + HMACK，其中 KEK 长度为 32 字节，HMACK 长度为 32 字节。
 2. 调用 [OpenSSL](https://www.openssl.org/) 中的随机数生成算法生成 MDEK。
@@ -145,7 +145,7 @@ extern int data_encryption_cipher;
 
 当数据库崩溃或重新启动等情况下，需要通过有限的密文信息解密出对应的密钥，其过程如下：
 
-![image.png](../../../imgs/tde_2.png)
+![image.png](../../imgs/tde_2.png)
 
 1. 读取 `global/kmgr` 文件获取 ENCMDEK 和 KEK_HMAC。
 2. 运行 `polar_cluster_passphrase_command` 得到 64 字节的 KEK + HMACK。
@@ -158,7 +158,7 @@ extern int data_encryption_cipher;
 
 密钥更换的过程可以理解为先用旧的 KEK 还原密钥，然后再用新的 KEK 生成新的 kmgr 文件。其过程如下图：
 
-![image.png](../../../imgs/tde_3.png)
+![image.png](../../imgs/tde_3.png)
 
 1. 读取 `global/kmgr` 文件获取 ENCMDEK 和 KEK_HMAC。
 2. 运行 `polar_cluster_passphrase_command` 得到 64 字节的 KEK + HMACK

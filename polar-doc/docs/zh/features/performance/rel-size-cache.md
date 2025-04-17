@@ -54,7 +54,7 @@ PolarDB for PostgreSQL 为了实现 RSC，在 smgr 层进行了重新适配与�
 
 当执行表访问操作时，如果引用计数与 RSC 缓存中的 `generation` 一致，则认为 RSC 缓存没有被更新过，可以直接通过指针得到 RSC 缓存，获得物理表的当前大小。RSC 一级索引整体上是一个共享引用计数 + 共享内存指针的设计，在对大多数特定表的读多写少场景中，这样的设计可以有效降低对 RSC 二级索引的并发访问。
 
-![rsc-first-cache](../../../imgs/rsc-first-cache.png)
+![rsc-first-cache](../../imgs/rsc-first-cache.png)
 
 ### RSC 二级索引
 
@@ -65,7 +65,7 @@ PolarDB for PostgreSQL 为了实现 RSC，在 smgr 层进行了重新适配与�
 
 通过待访问物理表的 OID，查找位于共享内存中的 RSC 二级索引：如果命中，则直接得到 RSC 缓存块，取得表大小，同时更新 RSC 一级索引；如果不命中，则使用 lseek 系统调用获取物理表的实际大小，并更新 RSC 缓存及其一二级索引。RSC 缓存更新的过程可能因缓存已满而触发缓存淘汰。
 
-![rsc-second-cache](../../../imgs/rsc-second-cache.png)
+![rsc-second-cache](../../imgs/rsc-second-cache.png)
 
 ### RSC 缓存更新与淘汰
 

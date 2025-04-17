@@ -96,4 +96,4 @@ ePQ 对并行 `INSERT` 的处理如下：
 
 并行查询和并行写入是以流水线的形式同时进行的。上述执行过程如图所示：
 
-![parallel_insert_data_flow](../../../imgs/parallel_data_flow.png)
+![parallel_insert_data_flow](../../imgs/parallel_data_flow.png)

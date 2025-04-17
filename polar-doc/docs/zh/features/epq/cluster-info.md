@@ -86,7 +86,7 @@ SET polar_px_nodes = 'node1';
 
 在具体实现上，Primary 节点收集的全局状态带有版本 generation，只有在接收到节点拓扑变化才会递增；当全局状态版本更新后，才会发送到其他节点，其他节点接收到后，设置到自己的节点上。
 
-![生成集群拓扑视图](../../../imgs/cluster_info_generate.png)
+![生成集群拓扑视图](../../imgs/cluster_info_generate.png)
 
 ### 采集维度
 

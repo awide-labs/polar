@@ -41,13 +41,13 @@ ePQ 提供的自适应扫描模式可以解决这个问题。自适应扫描模�
 
 QC 进程在发起并行查询任务时，会为每个 PX Worker 进程分配固定的 Worker ID，每个 PX Worker 进程根据 Worker ID 对存储单元 **取模**，只扫描其所属的特定的 Dist Unit。
 
-![non-adaptive-scan](../../../imgs/htap-non-adaptive-scan.png)
+![non-adaptive-scan](../../imgs/htap-non-adaptive-scan.png)
 
 ### 自适应扫描
 
 QC 进程在发起并行查询任务时，会启动 **自适应扫描线程**，用于接收并处理来自 PX Worker 进程的请求消息。自适应扫描线程维护了当前查询扫描任务的进度，并根据每个 PX Worker 进程的工作进度，向 PX Worker 进程分派需要扫描的 Disk Unit ID。对于需要扫描的最后一个 Disk Unit，自适应扫描线程会唤醒处于空闲状态的 PX Worker，加速最后一块 Disk Unit 的扫描过程。
 
-![adaptive-scan](../../../imgs/htap-adaptive-scan.png)
+![adaptive-scan](../../imgs/htap-adaptive-scan.png)
 
 #### 消息通信机制
 

@@ -47,7 +47,7 @@ PolarDB for PostgreSQL（以下简称 PolarDB）底层使用 PolarFS（以下简
 
 后续的读取操作会直接命中 Buffer。数据流图如下所示：
 
-![heap-read](../../../imgs/bulk_read.png)
+![heap-read](../../imgs/bulk_read.png)
 
 ### 堆表预扩展
 
@@ -131,11 +131,11 @@ SELECT pg_reload_conf();
 
 400GB 表的 Vacuum 性能：
 
-![400gb-vacuum-perf](../../../imgs/bulk_vacuum_data.png)
+![400gb-vacuum-perf](../../imgs/bulk_vacuum_data.png)
 
 400GB 表的 SeqScan 性能：
 
-![400gb-vacuum-seqscan](../../../imgs/bulk_seq_scan.png)
+![400gb-vacuum-seqscan](../../imgs/bulk_seq_scan.png)
 
 结论：
 
@@ -146,7 +146,7 @@ SELECT pg_reload_conf();
 
 400GB 表数据装载性能：
 
-![400gb-insert-data-perf](../../../imgs/bulk_insert_data.png)
+![400gb-insert-data-perf](../../imgs/bulk_insert_data.png)
 
 结论：
 
@@ -157,7 +157,7 @@ SELECT pg_reload_conf();
 
 400GB 表创建索引性能：
 
-![400GB 表创建索引性能](../../../imgs/bulk_create_index_data.png)
+![400GB 表创建索引性能](../../imgs/bulk_create_index_data.png)
 
 结论：
 

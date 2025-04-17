@@ -55,3 +55,5 @@ docs-dev: deps
 docs-format: deps
 	pnpm run prettier:format
 	pnpm run prettier:format_root
+	python3 docs/zh/features/generate-version-badge.py
+	python3 docs/zh/features/generate-index.py
