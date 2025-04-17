@@ -11,8 +11,8 @@ footer: Apache 2.0 Licensed | Copyright © Alibaba Group, Inc.
 
 Pull the [local instance image](https://hub.docker.com/r/polardb/polardb_pg_local_instance/tags) of PolarDB for PostgreSQL based on local storage. Create and run the container, and try PolarDB-PG instance directly:
 
-:::: code-group
-::: code-group-item DockerHub
+::: code-tabs
+@tab DockerHub
 
 ```bash:no-line-numbers
 # pull the instance image and run the container
@@ -26,8 +26,7 @@ postgres=# SELECT version();
 (1 row)
 ```
 
-:::
-::: code-group-item Alibaba Cloud ACR
+@tab Alibaba Cloud ACR
 
 ```bash:no-line-numbers
 # pull the instance image and run the container
@@ -42,4 +41,3 @@ postgres=# SELECT version();
 ```
 
 :::
-::::

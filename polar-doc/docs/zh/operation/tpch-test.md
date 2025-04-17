@@ -22,8 +22,8 @@ minute: 20
 
 使用 Docker 快速拉起一个单机的 PolarDB for PostgreSQL 集群：
 
-:::: code-group
-::: code-group-item DockerHub
+::: code-tabs
+@tab DockerHub
 
 ```shell:no-line-numbers
 docker pull polardb/polardb_pg_local_instance:11
@@ -36,8 +36,7 @@ docker run -it \
     bash
 ```
 
-:::
-::: code-group-item 阿里云 ACR
+@tab 阿里云 ACR
 
 ```shell:no-line-numbers
 docker pull registry.cn-hangzhou.aliyuncs.com/polardb_pg/polardb_pg_local_instance:11
@@ -51,7 +50,6 @@ docker run -it \
 ```
 
 :::
-::::
 
 或者参考 [进阶部署](../deploying/deploy.md) 部署一个基于共享存储的 PolarDB for PostgreSQL 集群。
 

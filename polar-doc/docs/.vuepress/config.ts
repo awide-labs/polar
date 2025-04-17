@@ -2,7 +2,8 @@ import { defineUserConfig } from "vuepress";
 import { path } from "vuepress/utils";
 import { defaultTheme } from "@vuepress/theme-default";
 import { docsearchPlugin } from "@vuepress/plugin-docsearch";
-import { mdEnhancePlugin } from "vuepress-plugin-md-enhance";
+import { markdownMathPlugin } from "@vuepress/plugin-markdown-math";
+import { markdownExtPlugin } from "@vuepress/plugin-markdown-ext";
 import { registerComponentsPlugin } from "@vuepress/plugin-register-components";
 import { navbar, sidebar } from "./configs";
 import { viteBundler } from "@vuepress/bundler-vite";
@@ -124,8 +125,10 @@ export default defineUserConfig({
         },
       },
     }),
-    mdEnhancePlugin({
-      katex: true,
+    markdownMathPlugin({
+      type: "katex",
+    }),
+    markdownExtPlugin({
       footnote: true,
     }),
     registerComponentsPlugin({

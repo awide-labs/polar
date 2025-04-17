@@ -1,19 +1,14 @@
+// === colors ===
 :root {
   scroll-behavior: smooth;
 
-  // brand colors
-  --c-brand: #fc5207;
-  --c-brand-light: #fc5207;
+  // accent colors
+  --vp-c-accent: #fc5207;
+  --vp-c-accent-bg: #fc5207;
+  --vp-c-accent-hover: #fc5207;
 
-  --c-tip: #fc5207;
+  --badge-c-tip-text: #fc5207;
+  --badge-c-tip-bg: #fc51072c;
 
   --content-width: 1020px;
-}
-
-html.dark {
-  // brand colors
-  --c-brand: #fc5207;
-  --c-brand-light: #fc5207;
-
-  --c-tip: #fc5207;
 }

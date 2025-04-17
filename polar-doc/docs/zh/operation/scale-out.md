@@ -16,8 +16,8 @@ PolarDB for PostgreSQL 是一款存储与计算分离的数据库，所有计算
 
 首先，在已经搭建完毕的共享存储集群上，初始化并启动第一个计算节点，即 Primary 节点，该节点可以对共享存储进行读写。我们在下面的镜像中提供了已经编译完毕的 PolarDB-PG 数据库和工具的可执行文件：
 
-:::: code-group
-::: code-group-item DockerHub
+::: code-tabs
+@tab DockerHub
 
 ```shell:no-line-numbers
 docker pull polardb/polardb_pg_binary:15
@@ -30,8 +30,7 @@ docker run -it \
     bash
 ```
 
-:::
-::: code-group-item 阿里云 ACR
+@tab 阿里云 ACR
 
 ```shell:no-line-numbers
 docker pull registry.cn-hangzhou.aliyuncs.com/polardb_pg/polardb_pg_binary:15
@@ -45,7 +44,6 @@ docker run -it \
 ```
 
 :::
-::::
 
 ```shell:no-line-numbers
 $ ls ~/tmp_polardb_pg_15_base/bin/
@@ -143,8 +141,8 @@ psql -p 5432 -d postgres -c 'SELECT version();'
 
 类似地，在用于部署新计算节点的机器上，拉取镜像并启动带有可执行文件的容器：
 
-:::: code-group
-::: code-group-item DockerHub
+::: code-tabs
+@tab DockerHub
 
 ```shell:no-line-numbers
 docker pull polardb/polardb_pg_binary:15
@@ -157,8 +155,7 @@ docker run -it \
     bash
 ```
 
-:::
-::: code-group-item 阿里云 ACR
+@tab 阿里云 ACR
 
 ```shell:no-line-numbers
 docker pull registry.cn-hangzhou.aliyuncs.com/polardb_pg/polardb_pg_binary:15
@@ -172,7 +169,6 @@ docker run -it \
 ```
 
 :::
-::::
 
 ### 确认存储可访问
 

@@ -16,22 +16,20 @@ minute: 15
 
 我们已提供 PolarDB-PG 的 [单机实例镜像](https://hub.docker.com/r/polardb/polardb_pg_local_instance/tags)，里面已包含启动 PolarDB-PG 单机实例的入口脚本。
 
-:::: code-group
-::: code-group-item DockerHub
+::: code-tabs
+@tab DockerHub
 
 ```bash:no-line-numbers
 docker pull polardb/polardb_pg_local_instance:15
 ```
 
-:::
-::: code-group-item 阿里云 ACR
+@tab 阿里云 ACR
 
 ```bash:no-line-numbers
 docker pull registry.cn-hangzhou.aliyuncs.com/polardb_pg/polardb_pg_local_instance:15
 ```
 
 :::
-::::
 
 ## 初始化数据库
 
@@ -43,8 +41,8 @@ docker pull registry.cn-hangzhou.aliyuncs.com/polardb_pg/polardb_pg_local_instan
 
 使用如下命令初始化数据库：
 
-:::: code-group
-::: code-group-item DockerHub
+::: code-tabs
+@tab DockerHub
 
 ```bash:no-line-numbers
 docker run -it --rm \
@@ -57,8 +55,7 @@ docker run -it --rm \
     echo 'done'
 ```
 
-:::
-::: code-group-item 阿里云 ACR
+@tab 阿里云 ACR
 
 ```bash:no-line-numbers
 docker run -it --rm \
@@ -72,14 +69,13 @@ docker run -it --rm \
 ```
 
 :::
-::::
 
 ## 启动数据库服务
 
 数据库初始化完毕后，使用 `-d` 参数以后台模式创建容器，启动 PolarDB-PG 服务。通常 PolarDB-PG 的端口需要暴露给外界使用，使用 `-p` 参数将容器内的端口范围暴露到容器外。比如，初始化数据库时使用的是 `5432-5434` 端口，如下命令将会把这三个端口映射到容器外的 `54320-54322` 端口：
 
-:::: code-group
-::: code-group-item DockerHub
+::: code-tabs
+@tab DockerHub
 
 ```bash:no-line-numbers
 docker run -d \
@@ -89,8 +85,7 @@ docker run -d \
     polardb/polardb_pg_local_instance:15
 ```
 
-:::
-::: code-group-item 阿里云 ACR
+@tab 阿里云 ACR
 
 ```bash:no-line-numbers
 docker run -d \
@@ -101,12 +96,11 @@ docker run -d \
 ```
 
 :::
-::::
 
 或者也可以直接让容器与宿主机共享网络：
 
-:::: code-group
-::: code-group-item DockerHub
+::: code-tabs
+@tab DockerHub
 
 ```bash:no-line-numbers
 docker run -d \
@@ -116,8 +110,7 @@ docker run -d \
     polardb/polardb_pg_local_instance:15
 ```
 
-:::
-::: code-group-item 阿里云 ACR
+@tab 阿里云 ACR
 
 ```bash:no-line-numbers
 docker run -d \
@@ -128,4 +121,3 @@ docker run -d \
 ```
 
 :::
-::::

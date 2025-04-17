@@ -12,22 +12,20 @@ minute: 10
 
 从 [GitHub](https://github.com/ApsaraDB/PolarDB-for-PostgreSQL) 上下载 PolarDB for PostgreSQL 的源代码，稳定分支为 `POLARDB_15_STABLE`：
 
-:::: code-group
-::: code-group-item GitHub
+::: code-tabs
+@tab GitHub
 
 ```bash:no-line-numbers
 git clone -b POLARDB_15_STABLE https://github.com/ApsaraDB/PolarDB-for-PostgreSQL.git
 ```
 
-:::
-::: code-group-item Gitee
+@tab Gitee
 
 ```bash:no-line-numbers
 git clone -b POLARDB_15_STABLE https://gitee.com/mirrors/PolarDB-for-PostgreSQL
 ```
 
 :::
-::::
 
 代码克隆完毕后，进入源码目录：
 
@@ -39,22 +37,20 @@ cd PolarDB-for-PostgreSQL/
 
 拉取 PolarDB-PG 的 [开发镜像](https://hub.docker.com/r/polardb/polardb_pg_devel/tags)。
 
-:::: code-group
-::: code-group-item DockerHub
+::: code-tabs
+@tab DockerHub
 
 ```bash:no-line-numbers
 docker pull polardb/polardb_pg_devel:ubuntu24.04
 ```
 
-:::
-::: code-group-item 阿里云 ACR
+@tab 阿里云 ACR
 
 ```bash:no-line-numbers
 docker pull registry.cn-hangzhou.aliyuncs.com/polardb_pg/polardb_pg_devel:ubuntu24.04
 ```
 
 :::
-::::
 
 ## 创建并运行容器
 
@@ -63,8 +59,8 @@ docker pull registry.cn-hangzhou.aliyuncs.com/polardb_pg/polardb_pg_devel:ubuntu
 - 在容器内的环境中编译源码
 - 在容器外（开发机器上）使用编辑器来查看或修改代码
 
-:::: code-group
-::: code-group-item DockerHub
+::: code-tabs
+@tab DockerHub
 
 ```bash:no-line-numbers
 docker run -it \
@@ -75,8 +71,7 @@ docker run -it \
     bash
 ```
 
-:::
-::: code-group-item 阿里云 ACR
+@tab 阿里云 ACR
 
 ```bash:no-line-numbers
 docker run -it \
@@ -88,7 +83,6 @@ docker run -it \
 ```
 
 :::
-::::
 
 进入容器后，为容器内用户获取源码目录的权限，然后编译部署 PolarDB-PG 实例。
 

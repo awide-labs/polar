@@ -25,8 +25,8 @@ PolarDB-PG 提供已经构建完毕的开发镜像 [`polardb/polardb_pg_devel`](
 
 通过如下方式即可拉取相应发行版的镜像：
 
-:::: code-group
-::: code-group-item DockerHub
+::: code-tabs
+@tab DockerHub
 
 ```bash:no-line-numbers
 docker pull polardb/polardb_pg_devel:centos7
@@ -38,8 +38,7 @@ docker pull polardb/polardb_pg_devel:ubuntu22.04
 docker pull polardb/polardb_pg_devel:ubuntu24.04
 ```
 
-:::
-::: code-group-item 阿里云 ACR
+@tab 阿里云 ACR
 
 ```bash:no-line-numbers
 docker pull registry.cn-hangzhou.aliyuncs.com/polardb_pg/polardb_pg_devel:centos7
@@ -52,6 +51,5 @@ docker pull registry.cn-hangzhou.aliyuncs.com/polardb_pg/polardb_pg_devel:ubuntu
 ```
 
 :::
-::::
 
 另外，也提供了构建上述开发镜像的 [Dockerfile](https://github.com/ApsaraDB/polardb-pg-docker-images)，您可以根据自己的需要在 Dockerfile 中添加更多依赖，然后构建自己的开发镜像。

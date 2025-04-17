@@ -11,8 +11,8 @@ footer: Apache 2.0 Licensed | Copyright © Alibaba Group, Inc.
 
 拉取 PolarDB for PostgreSQL 的 [单机实例镜像](https://hub.docker.com/r/polardb/polardb_pg_local_instance/tags)，运行容器并试用 PolarDB-PG：
 
-:::: code-group
-::: code-group-item DockerHub
+::: code-tabs
+@tab DockerHub
 
 ```bash:no-line-numbers
 # 拉取镜像并运行容器
@@ -26,8 +26,7 @@ postgres=# SELECT version();
 (1 row)
 ```
 
-:::
-::: code-group-item 阿里云 ACR
+@tab 阿里云 ACR
 
 ```bash:no-line-numbers
 # 拉取镜像并运行容器
@@ -42,4 +41,3 @@ postgres=# SELECT version();
 ```
 
 :::
-::::
