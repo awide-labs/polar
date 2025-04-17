@@ -10,7 +10,6 @@
   "scripts": {
     "docs:dev": "vuepress dev docs",
     "docs:build": "vuepress build docs",
-    "prettier:check": "pnpm exec prettier --check .",
     "prettier:format": "pnpm exec prettier --write --loglevel silent .",
     "prettier:format_root": "pnpm exec prettier --write --loglevel silent ../*.md"
   },
