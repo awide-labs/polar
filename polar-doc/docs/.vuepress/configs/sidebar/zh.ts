@@ -93,7 +93,10 @@ export const zh: SidebarConfig = {
             {
               text: "安全",
               link: "/zh/features/security/",
-              children: ["/zh/features/security/tde.md"],
+              children: [
+                "/zh/features/security/tde.md",
+                "/zh/features/security/polar_login_history.md",
+              ],
             },
             {
               text: "弹性跨机并行查询（ePQ）",
