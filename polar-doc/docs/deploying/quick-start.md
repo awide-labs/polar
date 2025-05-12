@@ -33,7 +33,7 @@ minute: 5
 ```bash:no-line-numbers
 # 拉取镜像并运行容器
 docker pull polardb/polardb_pg_local_instance:15
-docker run -it --rm polardb/polardb_pg_local_instance:15 psql
+docker run -it --cap-add=SYS_PTRACE --privileged=true --rm polardb/polardb_pg_local_instance:15 psql
 # 测试可用性
 postgres=# SELECT version();
                                    version
@@ -47,7 +47,7 @@ postgres=# SELECT version();
 ```bash:no-line-numbers
 # 拉取镜像并运行容器
 docker pull registry.cn-hangzhou.aliyuncs.com/polardb_pg/polardb_pg_local_instance:15
-docker run -it --rm registry.cn-hangzhou.aliyuncs.com/polardb_pg/polardb_pg_local_instance:15 psql
+docker run -it --cap-add=SYS_PTRACE --privileged=true --rm registry.cn-hangzhou.aliyuncs.com/polardb_pg/polardb_pg_local_instance:15 psql
 # 测试可用性
 postgres=# SELECT version();
                                    version
