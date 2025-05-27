@@ -3332,8 +3332,8 @@ BufferIsPermanent(Buffer buffer)
 XLogRecPtr
 BufferGetLSNAtomic(Buffer buffer)
 {
-	BufferDesc *bufHdr = GetBufferDescriptor(buffer - 1);
 	char	   *page = BufferGetPage(buffer);
+	BufferDesc *bufHdr;
 	XLogRecPtr	lsn;
 	uint32		buf_state;
 
@@ -3347,6 +3347,7 @@ BufferGetLSNAtomic(Buffer buffer)
 	Assert(BufferIsValid(buffer));
 	Assert(BufferIsPinned(buffer));
 
+	bufHdr = GetBufferDescriptor(buffer - 1);
 	buf_state = LockBufHdr(bufHdr);
 	lsn = PageGetLSN(page);
 	UnlockBufHdr(bufHdr, buf_state);
