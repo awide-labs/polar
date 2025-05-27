@@ -88,10 +88,16 @@
 #include "utils/ps_status.h"
 
 /* POLAR */
+#include "access/xlogutils.h"
+#include "catalog/storage.h"
 #include "replication/slot.h"
 
 /* User-settable parameters for sync rep */
 char	   *SyncRepStandbyNames;
+bool		polar_enable_sync_ddl = true;
+bool		polar_enable_sync_ddl_legacy = false;
+
+XLogRecPtr	polar_ddl_lock_lsn = InvalidXLogRecPtr;
 
 #define SyncStandbysDefined() \
 	(SyncRepStandbyNames != NULL && SyncRepStandbyNames[0] != '\0')
@@ -152,7 +158,7 @@ static bool polar_get_ddl_applyptr(XLogRecPtr *ddl_applyptr, bool *replication_s
  * remote_apply, because only commit records provide apply feedback.
  */
 void
-SyncRepWaitForLSN(XLogRecPtr lsn, bool commit, bool polar_force_wait_apply)
+SyncRepWaitForLSN(XLogRecPtr lsn, bool commit, bool sync_ddl)
 {
 	char	   *new_status = NULL;
 	const char *old_status;
@@ -180,7 +186,7 @@ SyncRepWaitForLSN(XLogRecPtr lsn, bool commit, bool polar_force_wait_apply)
 	if ((!SyncRepRequested() ||
 		 ((((volatile WalSndCtlData *) WalSndCtl)->sync_standbys_status) &
 		  (SYNC_STANDBY_INIT | SYNC_STANDBY_DEFINED)) == SYNC_STANDBY_INIT) &&
-		!polar_force_wait_apply)
+		!sync_ddl)
 		return;
 
 	/* Cap the level for anything other than commit to remote flush only. */
@@ -193,7 +199,7 @@ SyncRepWaitForLSN(XLogRecPtr lsn, bool commit, bool polar_force_wait_apply)
 	 * POLAR: when enable shared storage, ddl must be in synchronous mode. We
 	 * use streaming replication standby lock for synchronous ddl.
 	 */
-	if (polar_enable_shared_storage_mode && polar_force_wait_apply)
+	if (polar_enable_shared_storage_mode && sync_ddl)
 		mode = POLAR_SYNC_DDL_WAIT_APPLY;
 
 	Assert(SHMQueueIsDetached(&(MyProc->syncRepLinks)));
@@ -214,7 +220,7 @@ SyncRepWaitForLSN(XLogRecPtr lsn, bool commit, bool polar_force_wait_apply)
 	 * (SYNC_STANDBY_INIT is not set), fall back to a check based on the LSN,
 	 * then do a direct GUC check.
 	 */
-	if (polar_force_wait_apply)
+	if (sync_ddl)
 	{
 		/*
 		 * POLAR: When using synchronous ddl, WalSndCtl's sync_standbys_status
@@ -326,7 +332,7 @@ SyncRepWaitForLSN(XLogRecPtr lsn, bool commit, bool polar_force_wait_apply)
 		 * We do NOT reset ProcDiePending, so that the process will die after
 		 * the commit is cleaned up.
 		 */
-		if (ProcDiePending && !polar_force_wait_apply)
+		if (ProcDiePending && !sync_ddl)
 		{
 			ereport(WARNING,
 					(errcode(ERRCODE_ADMIN_SHUTDOWN),
@@ -337,7 +343,7 @@ SyncRepWaitForLSN(XLogRecPtr lsn, bool commit, bool polar_force_wait_apply)
 			break;
 		}
 		/* POLAR: cancel the synchronous ddl. */
-		else if (ProcDiePending && polar_force_wait_apply)
+		else if (ProcDiePending && sync_ddl)
 		{
 			whereToSendOutput = DestNone;
 			SyncRepCancelWait();
@@ -353,7 +359,7 @@ SyncRepWaitForLSN(XLogRecPtr lsn, bool commit, bool polar_force_wait_apply)
 		 * altogether is not helpful, so we just terminate the wait with a
 		 * suitable warning.
 		 */
-		if (QueryCancelPending && !polar_force_wait_apply)
+		if (QueryCancelPending && !sync_ddl)
 		{
 			QueryCancelPending = false;
 			ereport(WARNING,
@@ -367,7 +373,7 @@ SyncRepWaitForLSN(XLogRecPtr lsn, bool commit, bool polar_force_wait_apply)
 		 * POLAR: cancel the synchronous ddl if a query cancel interrupt
 		 * arrives.
 		 */
-		else if (QueryCancelPending && polar_force_wait_apply)
+		else if (QueryCancelPending && sync_ddl)
 		{
 			QueryCancelPending = false;
 			SyncRepCancelWait();
@@ -1359,4 +1365,34 @@ polar_get_ddl_applyptr(XLogRecPtr *ddl_applyptr, bool *replica_slot_all_active)
 	}
 	LWLockRelease(ReplicationSlotControlLock);
 	return replica_slot_exist;
+}
+
+void
+polar_wait_ddl_lock(void)
+{
+	if (InRecovery || !polar_enable_shared_storage_mode)
+		return;
+
+	if (XLogRecPtrIsInvalid(polar_ddl_lock_lsn))
+		return;
+
+	XLogFlush(polar_ddl_lock_lsn);
+	SyncRepWaitForLSN(polar_ddl_lock_lsn, false, true);
+
+	polar_ddl_lock_lsn = InvalidXLogRecPtr;
+}
+
+void
+polar_wait_ddl_lock_for_pending_deletes(void)
+{
+	RelFileNode *rels;
+	int			nrels;
+
+	nrels = smgrGetPendingDeletes(true, &rels);
+
+	if (nrels > 0)
+	{
+		pfree(rels);
+		polar_wait_ddl_lock();
+	}
 }

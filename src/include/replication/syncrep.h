@@ -84,9 +84,13 @@ extern PGDLLIMPORT char *syncrep_parse_error_msg;
 
 /* user-settable parameters for synchronous replication */
 extern PGDLLIMPORT char *SyncRepStandbyNames;
+extern bool polar_enable_sync_ddl;
+extern bool polar_enable_sync_ddl_legacy;
+
+extern XLogRecPtr polar_ddl_lock_lsn;
 
 /* called by user backend */
-extern void SyncRepWaitForLSN(XLogRecPtr lsn, bool commit, bool polar_force_wait_apply);
+extern void SyncRepWaitForLSN(XLogRecPtr lsn, bool commit, bool sync_ddl);
 
 /* called at backend exit */
 extern void SyncRepCleanupAtProcExit(void);
@@ -120,5 +124,7 @@ extern void syncrep_scanner_finish(void);
  * POLAR: called by walsender & drop replication slot
  */
 extern bool polar_release_ddl_waiters(void);
+extern void polar_wait_ddl_lock(void);
+extern void polar_wait_ddl_lock_for_pending_deletes(void);
 
 #endif							/* _SYNCREP_H */

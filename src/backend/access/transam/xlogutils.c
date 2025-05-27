@@ -1280,7 +1280,7 @@ polar_get_recovery_bulk_extend_size(BlockNumber target_block, BlockNumber nblock
 	/* Avoid acceed maximum possible length */
 	bulk_extend_size = Min(MaxBlockNumber - nblocks, bulk_extend_size);
 
-	/* Extend the relation to blockNum + 1 at least */
+	/* Extend the relation to target_block + 1 at least */
 	bulk_extend_size = Max(target_block - nblocks + 1, bulk_extend_size);
 
 	return bulk_extend_size;

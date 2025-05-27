@@ -1391,24 +1391,16 @@ LogAccessExclusiveLock(Oid dbOid, Oid relOid)
 {
 	xl_standby_lock xlrec;
 
-	/* POLAR */
-	XLogRecPtr	polar_sync_recptr;
-
 	xlrec.xid = GetCurrentTransactionId();
 
 	xlrec.dbOid = dbOid;
 	xlrec.relOid = relOid;
 
-	polar_sync_recptr = LogAccessExclusiveLocks(1, &xlrec);
+	polar_ddl_lock_lsn = LogAccessExclusiveLocks(1, &xlrec);
 	MyXactFlags |= XACT_FLAGS_ACQUIREDACCESSEXCLUSIVELOCK;
 
-	/* POLAR: synchronous ddl, wait all replicas to replay this log */
-	if (polar_enable_shared_storage_mode && polar_enable_sync_ddl)
-	{
-		Assert(!XLogRecPtrIsInvalid(polar_sync_recptr));
-		XLogFlush(polar_sync_recptr);
-		SyncRepWaitForLSN(polar_sync_recptr, false, true);
-	}
+	if (polar_enable_sync_ddl_legacy)
+		polar_wait_ddl_lock();
 }
 
 /*

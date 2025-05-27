@@ -9,8 +9,8 @@
 export enable_fault_injector
 export with_ssl
 
-EXTRA_INSTALL = external/polar_monitor
-EXTRA_INSTALL += contrib/pg_stat_statements
+EXTRA_INSTALL = contrib/pg_stat_statements
+EXTRA_INSTALL += external/polar_monitor
 
 ifeq ($(with_ssl),openssl)
 EXTRA_INSTALL += contrib/sslinfo

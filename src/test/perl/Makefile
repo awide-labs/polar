@@ -27,6 +27,7 @@ install: all installdirs
 	$(INSTALL_DATA) $(srcdir)/PostgreSQL/Test/BackgroundPsql.pm '$(DESTDIR)$(pgxsdir)/$(subdir)/PostgreSQL/Test/BackgroundPsql.pm'
 	$(INSTALL_DATA) $(srcdir)/PostgreSQL/Version.pm '$(DESTDIR)$(pgxsdir)/$(subdir)/PostgreSQL/Version.pm'
 	$(INSTALL_DATA) $(srcdir)/PolarDB/DCRegression.pm '$(DESTDIR)$(pgxsdir)/$(subdir)/PolarDB/DCRegression.pm'
+	$(INSTALL_DATA) $(srcdir)/PolarDB/Task.pm '$(DESTDIR)$(pgxsdir)/$(subdir)/PolarDB/Task.pm'
 
 uninstall:
 	rm -f '$(DESTDIR)$(pgxsdir)/$(subdir)/PostgreSQL/Test/Utils.pm'
@@ -36,5 +37,6 @@ uninstall:
 	rm -f '$(DESTDIR)$(pgxsdir)/$(subdir)/PostgreSQL/Test/BackgroundPsql.pm'
 	rm -f '$(DESTDIR)$(pgxsdir)/$(subdir)/PostgreSQL/Version.pm'
 	rm -f '$(DESTDIR)$(pgxsdir)/$(subdir)/PolarDB/DCRegression.pm'
+	rm -f '$(DESTDIR)$(pgxsdir)/$(subdir)/PolarDB/Task.pm'
 
 endif

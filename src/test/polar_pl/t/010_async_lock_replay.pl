@@ -25,13 +25,13 @@ use warnings;
 use PostgreSQL::Test::Cluster;
 use PostgreSQL::Test::Utils;
 use PolarDB::Task;
-use Test::More tests => 5;
+use Test::More;
 
 my $inf = 999999;
 my $regress_db = "postgres";
-my $lock_t1 = 'begin; lock table t1; end;';
-my $lock_t2 = 'begin; lock table t2; end;';
-my $lock_t1t2 = 'begin; lock table t1; lock table t2; end;';
+my $lock_t1 = 'begin; truncate t1; end;';
+my $lock_t2 = 'begin; truncate t2; end;';
+my $lock_t1t2 = 'begin; truncate t1; truncate t2; end;';
 my ($ret, $stdout, $stderr);
 
 my $node_primary = PostgreSQL::Test::Cluster->new("primary");
@@ -61,12 +61,6 @@ $node_replica2->start;
 $node_primary->safe_psql($regress_db, 'create extension polar_monitor');
 $node_primary->safe_psql($regress_db, 'create table t1(id int)');
 $node_primary->safe_psql($regress_db, 'create table t2(id int)');
-$node_primary->wait_for_catchup($node_replica1, 'replay',
-	$node_primary->lsn('insert'));
-$node_primary->wait_for_catchup($node_replica2, 'replay',
-	$node_primary->lsn('insert'));
-
-$node_primary->safe_psql($regress_db, $lock_t1);
 $node_primary->wait_for_catchup($node_replica1, 'replay',
 	$node_primary->lsn('insert'));
 $node_primary->wait_for_catchup($node_replica2, 'replay',
@@ -121,44 +115,15 @@ Task::start_new_task(
 	[ $regress_db, "select * from t1, pg_sleep($inf)" ],
 	Task::EXEC_UNTIL_FAIL,
 	$inf);
-Task::start_new_task(
-	'slock t2',
-	[$node_replica2],
-	\&PostgreSQL::Test::Cluster::psql,
-	[ $regress_db, "select * from t2, pg_sleep($inf)" ],
-	Task::EXEC_UNTIL_FAIL,
-	$inf);
 sleep 1;
-Task::start_new_task(
-	'xlock t2', [$node_primary],
-	\&PostgreSQL::Test::Cluster::psql,
-	[ $regress_db, $lock_t2 ],
-	Task::EXEC_ONCE, 5);
-Task::start_new_task(
-	'xlock t1', [$node_primary],
-	\&PostgreSQL::Test::Cluster::psql,
-	[ $regress_db, $lock_t1 ],
-	Task::EXEC_ONCE, 5);
-sleep 1;
-is( $node_replica2->safe_psql(
-		$regress_db,
-		"select count(distinct relOid) from polar_async_replay_lock"),
-	2,
-	"xlock t1 t2 and recovery will not block");
-Task::wait_all_task;
-
-Task::start_new_task(
-	'slock t1',
-	[$node_replica1],
-	\&PostgreSQL::Test::Cluster::psql,
-	[ $regress_db, "select * from t1, pg_sleep($inf)" ],
-	Task::EXEC_UNTIL_FAIL,
-	$inf);
 $node_primary->psql($regress_db,
-	"begin; lock table t1; insert into t1 select 1; end;");
+	"begin; truncate t1; insert into t1 select 1; end;");
+Task::wait_all_task;
 is($node_replica1->safe_psql($regress_db, "select count(*) from t1"),
 	1, "xlock t1 and insert success");
 
 $node_primary->stop;
 $node_replica1->stop;
 $node_replica2->stop;
+
+done_testing();

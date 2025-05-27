@@ -28,6 +28,7 @@
 #include "catalog/storage.h"
 #include "catalog/storage_xlog.h"
 #include "miscadmin.h"
+#include "replication/syncrep.h"
 #include "storage/bulk_write.h"
 #include "storage/freespace.h"
 #include "storage/smgr.h"
@@ -341,6 +342,9 @@ RelationTruncate(Relation rel, BlockNumber nblocks)
 			nforks++;
 		}
 	}
+
+	if (polar_enable_sync_ddl && reln->smgr_rnode.backend == InvalidBackendId)
+		polar_wait_ddl_lock();
 
 	RelationPreTruncate(rel);
 

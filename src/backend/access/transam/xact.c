@@ -2175,6 +2175,8 @@ StartTransaction(void)
 		enable_timeout_after(TRANSACTION_TIMEOUT, TransactionTimeout);
 
 	ShowTransactionState("StartTransaction");
+
+	Assert(polar_ddl_lock_lsn == InvalidXLogRecPtr);
 }
 
 
@@ -2289,6 +2291,9 @@ CommitTransaction(void)
 	 */
 	if (!is_parallel_worker)
 		PreCommit_CheckForSerializationFailure();
+
+	if (polar_enable_sync_ddl)
+		polar_wait_ddl_lock_for_pending_deletes();
 
 	/* Prevent cancel/die interrupt while cleaning up */
 	HOLD_INTERRUPTS();
@@ -2448,6 +2453,8 @@ CommitTransaction(void)
 	XactTopFullTransactionId = InvalidFullTransactionId;
 	nParallelCurrentXids = 0;
 
+	polar_ddl_lock_lsn = InvalidXLogRecPtr;
+
 	/*
 	 * done with commit processing, set current transaction state back to
 	 * default
@@ -2576,6 +2583,9 @@ PrepareTransaction(void)
 		ereport(ERROR,
 				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 				 errmsg("cannot PREPARE a transaction that has exported snapshots")));
+
+	if (polar_enable_sync_ddl)
+		polar_wait_ddl_lock_for_pending_deletes();
 
 	/* Prevent cancel/die interrupt while cleaning up */
 	HOLD_INTERRUPTS();
@@ -2738,6 +2748,8 @@ PrepareTransaction(void)
 
 	XactTopFullTransactionId = InvalidFullTransactionId;
 	nParallelCurrentXids = 0;
+
+	polar_ddl_lock_lsn = InvalidXLogRecPtr;
 
 	/*
 	 * done with 1st phase commit processing, set current transaction state
@@ -2963,6 +2975,8 @@ AbortTransaction(void)
 		AtEOXact_ApplyLauncher(false);
 		pgstat_report_xact_timestamp(0);
 	}
+
+	polar_ddl_lock_lsn = InvalidXLogRecPtr;
 
 	/*
 	 * State remains TRANS_ABORT until CleanupTransaction().

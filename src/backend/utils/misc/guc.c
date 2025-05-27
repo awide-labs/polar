@@ -864,8 +864,6 @@ bool		polar_enable_track_network_stat;
 bool		polar_enable_track_network_timing;
 bool		polar_enable_alloc_checkinterrupts;
 
-bool		polar_enable_sync_ddl;
-
 /* POLAR end */
 
 bool		polar_disable_escape_inside_gbk_character;
@@ -1591,13 +1589,24 @@ static struct config_bool ConfigureNamesBool[] =
 	},
 
 	{
-		{"polar_enable_sync_ddl", PGC_SIGHUP, REPLICATION_STANDBY,
+		{"polar_enable_sync_ddl", PGC_USERSET, REPLICATION_STANDBY,
 			gettext_noop("Enable synchronous ddl."),
 			NULL,
 			GUC_NO_SHOW_ALL | GUC_NO_RESET_ALL | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_UNCHANGABLE
 		},
 		&polar_enable_sync_ddl,
 		true,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"polar_enable_sync_ddl_legacy", PGC_USERSET, REPLICATION_STANDBY,
+			gettext_noop("Enable old style synchronous ddl."),
+			NULL,
+			GUC_NO_SHOW_ALL | GUC_NO_RESET_ALL | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_UNCHANGABLE
+		},
+		&polar_enable_sync_ddl_legacy,
+		false,
 		NULL, NULL, NULL
 	},
 

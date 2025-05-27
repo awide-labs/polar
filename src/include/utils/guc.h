@@ -326,7 +326,6 @@ extern bool polar_enable_debug;
 
 extern char *polar_disk_name;
 extern char *polar_storage_cluster_name;
-extern bool polar_enable_sync_ddl;
 
 /* POLAR end */
 

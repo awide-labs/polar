@@ -2215,14 +2215,6 @@ movedb(const char *dbname, const char *tblspcname)
 	StartTransactionCommand();
 
 	/*
-	 * Remove files from the old tablespace
-	 */
-	if (!rmtree(src_dbpath, true))
-		ereport(WARNING,
-				(errmsg("some useless files may be left behind in old database directory \"%s\"",
-						src_dbpath)));
-
-	/*
 	 * Record the filesystem change in XLOG
 	 */
 	{
@@ -2235,10 +2227,20 @@ movedb(const char *dbname, const char *tblspcname)
 		XLogRegisterData((char *) &xlrec, sizeof(xl_dbase_drop_rec));
 		XLogRegisterData((char *) &src_tblspcoid, sizeof(Oid));
 
-		(void) XLogInsert(RM_DBASE_ID,
-						  XLOG_DBASE_DROP | XLR_SPECIAL_REL_UPDATE);
+		polar_ddl_lock_lsn = XLogInsert(RM_DBASE_ID,
+										XLOG_DBASE_DROP | XLR_SPECIAL_REL_UPDATE);
+		if (polar_enable_sync_ddl)
+			polar_wait_ddl_lock();
 		POLAR_RECORD_DB_STATE(xlrec.ntablespaces, xlrec.tablespace_ids, xlrec.db_id, POLAR_DB_DROPED);
 	}
+
+	/*
+	 * Remove files from the old tablespace
+	 */
+	if (!rmtree(src_dbpath, true))
+		ereport(WARNING,
+				(errmsg("some useless files may be left behind in old database directory \"%s\"",
+						src_dbpath)));
 
 	/* Now it's safe to release the database lock */
 	UnlockSharedObjectForSession(DatabaseRelationId, db_id, 0,
@@ -3504,7 +3506,6 @@ static void
 polar_sync_dropdb_wal(Oid db_id)
 {
 	xl_dbase_drop_rec xlrec;
-	XLogRecPtr	polar_recptr;
 	Oid		   *tablespace_ids;
 
 	Relation	rel;
@@ -3565,8 +3566,8 @@ polar_sync_dropdb_wal(Oid db_id)
 	XLogRegisterData((char *) &xlrec, MinSizeOfDbaseDropRec);
 	XLogRegisterData((char *) tablespace_ids, ntblspc * sizeof(Oid));
 
-	polar_recptr = XLogInsert(RM_DBASE_ID,
-							  XLOG_DBASE_DROP | XLR_SPECIAL_REL_UPDATE);
+	polar_ddl_lock_lsn = XLogInsert(RM_DBASE_ID,
+									XLOG_DBASE_DROP | XLR_SPECIAL_REL_UPDATE);
 	POLAR_RECORD_DB_STATE(ntblspc, tablespace_ids, db_id, POLAR_DB_DROPED);
 
 	list_free(ltblspc);
@@ -3575,13 +3576,6 @@ polar_sync_dropdb_wal(Oid db_id)
 	table_endscan(scan);
 	table_close(rel, AccessShareLock);
 
-	/*
-	 * POLAR: synchronous ddl, enable standby lock, wait all replica node
-	 * replay this log
-	 */
 	if (polar_enable_sync_ddl)
-	{
-		XLogFlush(polar_recptr);
-		SyncRepWaitForLSN(polar_recptr, false, true);
-	}
+		polar_wait_ddl_lock();
 }
