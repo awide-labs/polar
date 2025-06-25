@@ -16,6 +16,7 @@
 #include "catalog/namespace.h"
 #include "commands/extension.h"
 #include "fmgr.h"
+#include "utils/acl.h"
 #include "utils/builtins.h"
 #include "utils/fmgroids.h"
 #include "utils/guc.h"
@@ -42,6 +43,13 @@ PG_MODULE_MAGIC;
 #define Anum_polar_password_policy_password_fail_count	9
 #define Anum_polar_password_policy_password_lock_time	10
 #define Natts_polar_password_policy						10
+
+#define POLAR_PASSWORD_POLICY_BINDING				"polar_password_policy_binding"
+#define POLAR_PASSWORD_POLICY_BINDING_ROLE_INDEX	"polar_password_policy_binding_role_index"
+#define POLAR_PASSWORD_POLICY_BINDING_POLICY_INDEX	"polar_password_policy_binding_policy_index"
+#define Anum_polar_password_policy_binding_role		1
+#define Anum_polar_password_policy_binding_policy	2
+#define Natts_polar_password_policy_binding			2
 
 /* Options for password policies */
 #define PASSWORD_POLICY_OPTION_NUM 8
@@ -91,6 +99,8 @@ PG_FUNCTION_INFO_V1(polar_create_password_policy_option);
 PG_FUNCTION_INFO_V1(polar_alter_password_policy);
 PG_FUNCTION_INFO_V1(polar_rename_password_policy);
 PG_FUNCTION_INFO_V1(polar_drop_password_policy);
+PG_FUNCTION_INFO_V1(polar_bind_password_policy);
+PG_FUNCTION_INFO_V1(polar_unbind_password_policy);
 
 void		_PG_init(void);
 
@@ -505,6 +515,10 @@ polar_drop_password_policy(PG_FUNCTION_ARGS)
 	ScanKeyData skey;
 	SysScanDesc scan;
 	HeapTuple	tup;
+	Oid			polid;
+	bool		isnull;
+	Relation	rel_binding;
+	SysScanDesc scan_binding;
 
 	if (!polar_password_policy_enable)
 		ereport(ERROR,
@@ -543,11 +557,196 @@ polar_drop_password_policy(PG_FUNCTION_ARGS)
 				 errmsg("policy \"%s\" does not exist", pname)));
 	}
 
+	polid = DatumGetObjectId(heap_getattr(tup, Anum_polar_password_policy_oid, RelationGetDescr(rel), &isnull));
+
+	/* Check whether a password policy is bound to the specified user */
+	relid = get_relname_relid(POLAR_PASSWORD_POLICY_BINDING, schid);
+	indid = get_relname_relid(POLAR_PASSWORD_POLICY_BINDING_POLICY_INDEX, schid);
+	if (!OidIsValid(relid) || !OidIsValid(indid))
+	{
+		systable_endscan(scan);
+		table_close(rel, RowExclusiveLock);
+		PG_RETURN_VOID();
+	}
+
+	rel_binding = table_open(relid, AccessShareLock);
+
+	/* Form a scan key and fetch a tuple */
+	ScanKeyInit(&skey,
+				Anum_polar_password_policy_binding_policy,
+				BTEqualStrategyNumber, F_OIDEQ,
+				ObjectIdGetDatum(polid));
+	scan_binding = systable_beginscan(rel_binding, indid, true, NULL, 1, &skey);
+	if (HeapTupleIsValid(systable_getnext(scan_binding)))
+	{
+		systable_endscan(scan_binding);
+		systable_endscan(scan);
+		table_close(rel_binding, AccessShareLock);
+		table_close(rel, RowExclusiveLock);
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("\"%s\" has been bound to the user, please unbind it first", pname)));
+	}
+
 	/* Delete a tuple */
 	CatalogTupleDelete(rel, &tup->t_self);
 
+	systable_endscan(scan_binding);
 	systable_endscan(scan);
+	table_close(rel_binding, AccessShareLock);
 	table_close(rel, RowExclusiveLock);
+
+	PG_RETURN_VOID();
+}
+
+/*
+ * Record the binding relationship between users and password policies.
+ */
+static void
+polar_bind_password_policy_to_user(Oid rolid, char *pname)
+{
+	Oid			schid;
+	Oid			relid;
+	Oid			indid;
+	Relation	rel;
+	ScanKeyData skey;
+	SysScanDesc scan;
+	HeapTuple	tup;
+	Oid			polid;
+	bool		isnull;
+	Relation	rel_binding;
+	TupleDesc	tupdesc;
+	Datum		values[Natts_polar_password_policy_binding];
+	bool		nulls[Natts_polar_password_policy_binding];
+
+	schid = get_namespace_oid(POLAR_PASSWORD_POLICY_SCHEMA, false);
+	relid = get_relname_relid(POLAR_PASSWORD_POLICY, schid);
+	indid = get_relname_relid(POLAR_PASSWORD_POLICY_NAME_INDEX, schid);
+	if (!OidIsValid(relid) || !OidIsValid(indid))
+		return;
+
+	rel = table_open(relid, AccessShareLock);
+
+	/* Form a scan key and fetch a tuple */
+	ScanKeyInit(&skey,
+				Anum_polar_password_policy_name,
+				BTEqualStrategyNumber, F_NAMEEQ,
+				CStringGetDatum(pname));
+	scan = systable_beginscan(rel, indid, true, NULL, 1, &skey);
+	tup = systable_getnext(scan);
+
+	/* Check whether the password policy exists */
+	if (!HeapTupleIsValid(tup))
+	{
+		systable_endscan(scan);
+		table_close(rel, AccessShareLock);
+		ereport(ERROR,
+				(errcode(ERRCODE_UNDEFINED_OBJECT),
+				 errmsg("policy \"%s\" does not exist", pname)));
+	}
+
+	polid = DatumGetObjectId(heap_getattr(tup, Anum_polar_password_policy_oid, RelationGetDescr(rel), &isnull));
+	systable_endscan(scan);
+
+	/* Check whether a password policy is bound to the specified user */
+	relid = get_relname_relid(POLAR_PASSWORD_POLICY_BINDING, schid);
+	indid = get_relname_relid(POLAR_PASSWORD_POLICY_BINDING_ROLE_INDEX, schid);
+	if (!OidIsValid(relid) || !OidIsValid(indid))
+	{
+		table_close(rel, AccessShareLock);
+		return;
+	}
+
+	rel_binding = table_open(relid, RowExclusiveLock);
+	tupdesc = RelationGetDescr(rel_binding);
+
+	/* Form a scan key and fetch a tuple */
+	ScanKeyInit(&skey,
+				Anum_polar_password_policy_binding_role,
+				BTEqualStrategyNumber, F_OIDEQ,
+				ObjectIdGetDatum(rolid));
+	scan = systable_beginscan(rel_binding, indid, true, NULL, 1, &skey);
+	tup = systable_getnext(scan);
+
+	/* Form a tuple */
+	memset(values, 0, sizeof(values));
+	memset(nulls, false, sizeof(nulls));
+
+	if (!HeapTupleIsValid(tup))
+	{
+		values[Anum_polar_password_policy_binding_role - 1] = ObjectIdGetDatum(rolid);
+		values[Anum_polar_password_policy_binding_policy - 1] = ObjectIdGetDatum(polid);
+
+		/* Insert a new tuple */
+		tup = heap_form_tuple(tupdesc, values, nulls);
+		CatalogTupleInsert(rel_binding, tup);
+		heap_freetuple(tup);
+	}
+	else
+	{
+		Oid			polid_o = DatumGetObjectId(heap_getattr(tup, Anum_polar_password_policy_binding_policy, tupdesc, &isnull));
+
+		if (polid_o != polid)
+		{
+			bool		replaces[Natts_polar_password_policy_binding];
+
+			memset(replaces, false, sizeof(nulls));
+
+			values[Anum_polar_password_policy_binding_policy - 1] = ObjectIdGetDatum(polid);
+			replaces[Anum_polar_password_policy_binding_policy - 1] = true;
+
+			/* Update a tuple */
+			tup = heap_modify_tuple(tup, tupdesc, values, nulls, replaces);
+			CatalogTupleUpdate(rel_binding, &tup->t_self, tup);
+			heap_freetuple(tup);
+		}
+	}
+
+	systable_endscan(scan);
+	table_close(rel_binding, RowExclusiveLock);
+	table_close(rel, AccessShareLock);
+}
+
+/*
+ * Bind a user to a password policy.
+ */
+Datum
+polar_bind_password_policy(PG_FUNCTION_ARGS)
+{
+	char	   *rname;
+	char	   *pname;
+	Oid			rolid;
+
+	if (!polar_password_policy_enable)
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("polar_password_policy.enable is false")));
+
+	rname = NameStr(*(PG_GETARG_NAME(0)));
+	pname = NameStr(*(PG_GETARG_NAME(1)));
+	rolid = get_role_oid(rname, false);
+	polar_bind_password_policy_to_user(rolid, pname);
+
+	PG_RETURN_VOID();
+}
+
+/*
+ * Unbind a user from a password policy.
+ */
+Datum
+polar_unbind_password_policy(PG_FUNCTION_ARGS)
+{
+	char	   *rname;
+	Oid			rolid;
+
+	if (!polar_password_policy_enable)
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("polar_password_policy.enable is false")));
+
+	rname = NameStr(*(PG_GETARG_NAME(0)));
+	rolid = get_role_oid(rname, false);
+	polar_bind_password_policy_to_user(rolid, DEFAULT_PASSWORD_POLICY);
 
 	PG_RETURN_VOID();
 }

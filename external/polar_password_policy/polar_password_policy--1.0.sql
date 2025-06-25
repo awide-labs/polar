@@ -59,3 +59,25 @@ CREATE UNIQUE INDEX polar_password_policy_oid_index ON polar_security.polar_pass
 CREATE UNIQUE INDEX polar_password_policy_name_index ON polar_security.polar_password_policy (policy_name);
 
 SELECT polar_security.polar_create_password_policy('default_password_policy');
+
+
+
+CREATE FUNCTION polar_security.polar_bind_password_policy (
+	role_name name,
+	policy_name name
+) RETURNS void
+AS 'MODULE_PATHNAME', 'polar_bind_password_policy'
+LANGUAGE C STABLE STRICT;
+
+CREATE FUNCTION polar_security.polar_unbind_password_policy (
+	role_name name
+) RETURNS void
+AS 'MODULE_PATHNAME', 'polar_unbind_password_policy'
+LANGUAGE C STABLE STRICT;
+
+CREATE TABLE polar_security.polar_password_policy_binding (
+	role_oid OID,
+	policy_oid OID
+);
+CREATE UNIQUE INDEX polar_password_policy_binding_role_index ON polar_security.polar_password_policy_binding (role_oid);
+CREATE UNIQUE INDEX polar_password_policy_binding_policy_index ON polar_security.polar_password_policy_binding (policy_oid);
