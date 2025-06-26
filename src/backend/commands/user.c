@@ -51,9 +51,13 @@ int			Password_encryption = PASSWORD_TYPE_SCRAM_SHA_256;
 check_password_hook_type check_password_hook = NULL;
 
 /*
- * POLAR: login history
+ * POLAR: security feature
  */
+/* login history */
 polar_register_delete_login_history_hook_type polar_register_delete_login_history_hook = NULL;
+
+/* password policy */
+polar_register_password_policy_hook_type polar_register_password_policy_hook = NULL;
 
 /* POLAR end */
 
@@ -429,6 +433,13 @@ CreateRole(ParseState *pstate, CreateRoleStmt *stmt)
 	 * Insert new record in the pg_authid table
 	 */
 	CatalogTupleInsert(pg_authid_rel, tuple);
+
+	/*
+	 * POLAR: Bind the new role to the default password policy.
+	 */
+	if (polar_register_password_policy_hook)
+		polar_register_password_policy_hook(stmt->type, roleid);
+	/* POLAR end */
 
 	/*
 	 * Advance command counter so we can see new record; else tests in
@@ -1075,6 +1086,13 @@ DropRole(DropRoleStmt *stmt)
 		 * Remove settings for this role.
 		 */
 		DropSetting(InvalidOid, roleid);
+
+		/*
+		 * POLAR: Remove the password policy information of this role.
+		 */
+		if (polar_register_password_policy_hook)
+			polar_register_password_policy_hook(stmt->type, roleid);
+		/* POLAR end */
 
 		/*
 		 * Advance command counter so that later iterations of this loop will

@@ -15,6 +15,7 @@
 #include "catalog/indexing.h"
 #include "catalog/namespace.h"
 #include "commands/extension.h"
+#include "commands/user.h"
 #include "fmgr.h"
 #include "utils/acl.h"
 #include "utils/builtins.h"
@@ -751,6 +752,68 @@ polar_unbind_password_policy(PG_FUNCTION_ARGS)
 	PG_RETURN_VOID();
 }
 
+/*
+ * When dropping a user,
+ * delete the binding relationship between the user and the password policy.
+ */
+static void
+polar_clear_password_policy_info(Oid rolid)
+{
+	Oid			schid;
+	Oid			relid;
+	Oid			indid;
+	Relation	rel;
+	ScanKeyData skey;
+	SysScanDesc scan;
+	HeapTuple	tup;
+
+	schid = get_namespace_oid(POLAR_PASSWORD_POLICY_SCHEMA, false);
+	relid = get_relname_relid(POLAR_PASSWORD_POLICY_BINDING, schid);
+	indid = get_relname_relid(POLAR_PASSWORD_POLICY_BINDING_ROLE_INDEX, schid);
+	if (!OidIsValid(relid) || !OidIsValid(indid))
+		return;
+
+	rel = table_open(relid, RowExclusiveLock);
+
+	/* Form a scan key and fetch a tuple */
+	ScanKeyInit(&skey,
+				Anum_polar_password_policy_binding_role,
+				BTEqualStrategyNumber, F_OIDEQ,
+				ObjectIdGetDatum(rolid));
+	scan = systable_beginscan(rel, indid, true, NULL, 1, &skey);
+	while ((tup = systable_getnext(scan)) != NULL)
+		CatalogTupleDelete(rel, &tup->t_self);
+
+	systable_endscan(scan);
+	table_close(rel, RowExclusiveLock);
+}
+
+/*
+ * When creating or dropping a user, this function is triggered to handle the password policy.
+ */
+static void
+polar_password_policy_hook(NodeTag node, Oid rolid)
+{
+	if (!polar_password_policy_enable)
+		return;
+
+	switch (node)
+	{
+		case T_CreateRoleStmt:
+			/* Bind the user to the default password policy */
+			polar_bind_password_policy_to_user(rolid, DEFAULT_PASSWORD_POLICY);
+			break;
+
+		case T_DropRoleStmt:
+			/* Clean up the password policy information of the user */
+			polar_clear_password_policy_info(rolid);
+			break;
+
+		default:
+			break;
+	}
+}
+
 void
 _PG_init(void)
 {
@@ -765,4 +828,7 @@ _PG_init(void)
 							 NULL,
 							 NULL,
 							 NULL);
+
+	/* Install hooks */
+	polar_register_password_policy_hook = polar_password_policy_hook;
 }

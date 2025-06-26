@@ -35,10 +35,14 @@ extern void ReassignOwnedObjects(ReassignOwnedStmt *stmt);
 extern List *roleSpecsToIds(List *memberNames);
 
 /*
- * POLAR: login history
+ * POLAR: security feature
  */
+/* login history */
 typedef void (*polar_register_delete_login_history_hook_type) (List *);
 extern PGDLLIMPORT polar_register_delete_login_history_hook_type polar_register_delete_login_history_hook;
+/* password policy */
+typedef void (*polar_register_password_policy_hook_type) (NodeTag, Oid);
+extern PGDLLIMPORT polar_register_password_policy_hook_type polar_register_password_policy_hook;
 /* POLAR end */
 
 #endif							/* USER_H */
