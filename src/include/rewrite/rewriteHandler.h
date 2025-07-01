@@ -17,6 +17,13 @@
 #include "nodes/parsenodes.h"
 #include "utils/relcache.h"
 
+/*
+ * POLAR: Hook for masking plugin after rewrite
+ */
+typedef void (*polar_post_rewrite_query_hook_type) (List *query_list);
+extern PGDLLIMPORT polar_post_rewrite_query_hook_type polar_post_rewrite_query_hook;
+/* POLAR end */
+
 extern List *QueryRewrite(Query *parsetree);
 extern void AcquireRewriteLocks(Query *parsetree,
 								bool forExecute,

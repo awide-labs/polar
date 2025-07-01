@@ -46,6 +46,12 @@
 #include "utils/lsyscache.h"
 #include "utils/rel.h"
 
+/*
+ * POLAR: Hook for masking plugin after rewrite
+ */
+polar_post_rewrite_query_hook_type polar_post_rewrite_query_hook = NULL;
+
+/* POLAR end */
 
 /* We use a list of these to detect recursion in RewriteQuery */
 typedef struct rewrite_event
@@ -4352,6 +4358,13 @@ QueryRewrite(Query *parsetree)
 
 	if (!foundOriginalQuery && lastInstead != NULL)
 		lastInstead->canSetTag = true;
+
+	/* POLAR */
+	if (polar_post_rewrite_query_hook)
+	{
+		polar_post_rewrite_query_hook(results);
+	}
+	/* POLAR */
 
 	return results;
 }

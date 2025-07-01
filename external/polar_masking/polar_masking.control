@@ -1,0 +1,5 @@
+# polar_masking extension
+comment = 'provides data masking for polardb'
+default_version = '1.0.0'
+module_pathname = '$libdir/polar_masking'
+relocatable = true
