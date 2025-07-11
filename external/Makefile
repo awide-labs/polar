@@ -8,6 +8,7 @@ SUBDIRS =
 
 # multi-arch/0-dependency/fast-compile extensions can be added here
 # sort extention by names, less git conflict
+SUBDIRS += polar_audit
 SUBDIRS += polar_feature_utils
 SUBDIRS += polar_io_stat
 SUBDIRS += polar_login_history

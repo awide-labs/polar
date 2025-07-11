@@ -1,5 +1,0 @@
-# plaudit extension
-comment = 'provides auditing functionality'
-default_version = '1.0.0'
-module_pathname = '$libdir/plaudit'
-relocatable = true
