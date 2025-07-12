@@ -5,6 +5,8 @@ OBJS = polar_password_policy.o
 
 EXTENSION = polar_password_policy
 DATA = polar_password_policy--1.0.sql
+REGRESS = polar_password_policy
+REGRESS_OPTS = --temp-config polar_password_policy.conf
 
 NO_INSTALLCHECK = 1
 
