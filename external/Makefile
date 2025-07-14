@@ -12,6 +12,7 @@ SUBDIRS += polar_audit
 SUBDIRS += polar_feature_utils
 SUBDIRS += polar_io_stat
 SUBDIRS += polar_login_history
+SUBDIRS += polar_masking
 SUBDIRS += polar_monitor
 SUBDIRS += polar_monitor_preload
 SUBDIRS += polar_parameter_manager

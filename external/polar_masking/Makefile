@@ -1,7 +1,8 @@
 MODULE_big = polar_masking
 OBJS = \
 	$(WIN32RES) \
-	polar_masking.o
+	polar_masking.o \
+	polar_masking_label.o
 
 EXTENSION = polar_masking
 DATA = polar_masking--1.0.0.sql

@@ -11,6 +11,9 @@
 #ifndef _POLAR_MASKING_H_
 #define _POLAR_MASKING_H_
 
+#include "catalog/namespace.h"
+#include "commands/sequence.h"
+
 #define MASKING_SCHEMA_NAME "polar_masking"
 
 /*
@@ -44,5 +47,25 @@
 #define Anum_polar_masking_policy_operator 3
 #define Natts_polar_masking_policy 3
 #define MASKING_POLICY_LABELID_IDXNAME "polar_masking_policy_labelid_idx"
+
+/*
+ * Definiton of sequence and function to get labelid, labelid value: 1 - 2147483647
+ */
+#define MASKING_LABELID_SEQNAME "polar_masking_labelid_sequence"
+#define GetNextMaskingLabelid() ((int32) nextval_internal(get_relname_relid(MASKING_LABELID_SEQNAME, POLAR_MASKING_NAMESPACE), false))
+
+#define InvalidMaskingLabelId 0
+#define POLAR_MASKING_NAMESPACE (get_namespace_oid(MASKING_SCHEMA_NAME, true))
+
+/*
+ * Definition of functions to get objectid of polar masking relations and
+ * indexes.
+ */
+#define GetPolarMaskingLabelTabRelid() (get_relname_relid(MASKING_LABEL_TAB_RELNAME, POLAR_MASKING_NAMESPACE))
+#define GetPolarMaskingLabelColRelid() (get_relname_relid(MASKING_LABEL_COL_RELNAME, POLAR_MASKING_NAMESPACE))
+#define GetPolarMaskingPolicyRelid() (get_relname_relid(MASKING_POLICY_RELNAME, POLAR_MASKING_NAMESPACE))
+#define GetPolarMaskingLabelTabRelidIdxid() (get_relname_relid(MASKING_LABEL_TAB_RELID_IDXNAME, POLAR_MASKING_NAMESPACE))
+#define GetPolarMaskingLabelColRelidColidIdxid() (get_relname_relid(MASKING_LABEL_COL_RELID_COLID_IDXNAME, POLAR_MASKING_NAMESPACE))
+#define GetPolarMaskingPolicyLabelidIdxid() (get_relname_relid(MASKING_POLICY_LABELID_IDXNAME, POLAR_MASKING_NAMESPACE))
 
 #endif
