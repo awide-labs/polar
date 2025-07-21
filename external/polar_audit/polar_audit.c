@@ -181,6 +181,27 @@ static AuditEventStackItem * auditEventStack = NULL;
 static int64 stackTotal = 0;
 
 /*
+ * Check that an item is on the stack.  If not, an error will be raised since
+ * this is a bad state to be in and it might mean audit records are being lost.
+ */
+static void
+stack_valid(int64 stackId)
+{
+	AuditEventStackItem *nextItem = auditEventStack;
+
+	/* Look through the stack for the stack entry */
+	while (nextItem != NULL && nextItem->stackId != stackId)
+		nextItem = nextItem->next;
+
+	/* If we didn't find it, something went wrong. */
+	if (nextItem == NULL)
+		elog(ERROR, "plaudit stack item " INT64_FORMAT
+			 " not found - top of stack is " INT64_FORMAT "",
+			 stackId,
+			 auditEventStack == NULL ? (int64) -1 : auditEventStack->stackId);
+}
+
+/*
  * Respond to callbacks registered with MemoryContextRegisterResetCallback().
  * Removes the event(s) off the stack that have become obsolete once the
  * MemoryContext has been freed.  The callback should always be freeing the top
@@ -481,7 +502,6 @@ polar_audit_ExecutorCheckPerms_hook(List *rangeTabls, bool abort)
 	return true;
 }
 
-
 /*
  * Hook ProcessUtility to do session auditing for DDL and utility commands.
  */
@@ -495,7 +515,118 @@ polar_audit_ProcessUtility_hook(PlannedStmt *pstmt,
 								DestReceiver *dest,
 								QueryCompletion *qc)
 {
-	return;
+	int64		stackId = 0;
+	AuditEventStackItem *stackItem = NULL;
+
+	/*
+	 * Don't audit substatements.  All the substatements we care about should
+	 * be covered by the event triggers.
+	 */
+	if (context <= PROCESS_UTILITY_QUERY && !IsAbortedTransactionBlockState())
+	{
+		/* Process top level utility statement */
+		if (context == PROCESS_UTILITY_TOPLEVEL)
+		{
+			/*
+			 * If the stack is not empty then the only allowed entries are
+			 * call statements or open, select, show, and explain cursors
+			 */
+			if (auditEventStack != NULL)
+			{
+				AuditEventStackItem *nextItem = auditEventStack;
+
+				do
+				{
+					if (nextItem->auditEvent.commandTag != T_SelectStmt &&
+						nextItem->auditEvent.commandTag != T_VariableShowStmt &&
+						nextItem->auditEvent.commandTag != T_ExplainStmt &&
+						nextItem->auditEvent.commandTag != T_CallStmt)
+					{
+						elog(ERROR, "plaudit stack is not empty");
+					}
+
+					nextItem = nextItem->next;
+				}
+				while (nextItem != NULL);
+			}
+
+			stackItem = stack_push();
+			stackItem->auditEvent.paramList = copyParamList(params);
+		}
+		else
+			stackItem = stack_push();
+
+		stackId = stackItem->stackId;
+		stackItem->auditEvent.logStmtLevel = GetCommandLogLevel(pstmt->utilityStmt);
+		stackItem->auditEvent.commandTag = nodeTag(pstmt->utilityStmt);
+		stackItem->auditEvent.command = CreateCommandTag(pstmt->utilityStmt);
+		stackItem->auditEvent.commandText = queryString;
+		stackItem->auditEvent.auditOid = get_role_oid(auditRole, true);
+
+		/*
+		 * If this is a DO block log it before calling the next ProcessUtility
+		 * hook.
+		 */
+		if (auditLogBitmap & LOG_FUNCTION &&
+			stackItem->auditEvent.commandTag == T_DoStmt &&
+			!IsAbortedTransactionBlockState())
+			log_audit_event(stackItem);
+
+		/*
+		 * If this is a create/alter extension command log it before calling
+		 * the next ProcessUtility hook. Otherwise, any warnings will be
+		 * emitted before the create/alter is logged and errors will prevent
+		 * it from being logged at all.
+		 */
+		if (auditLogBitmap & LOG_DDL &&
+			(stackItem->auditEvent.commandTag == T_CreateExtensionStmt ||
+			 stackItem->auditEvent.commandTag == T_AlterExtensionStmt) &&
+			!IsAbortedTransactionBlockState())
+			log_audit_event(stackItem);
+
+		/*
+		 * A close will free the open cursor which will also free the close
+		 * audit entry. Immediately log the close and set stackItem to NULL so
+		 * it won't be logged later.
+		 */
+		if (stackItem->auditEvent.commandTag == T_ClosePortalStmt)
+		{
+			if (auditLogBitmap & LOG_MISC && !IsAbortedTransactionBlockState())
+				log_audit_event(stackItem);
+
+			stackItem = NULL;
+		}
+	}
+
+	/* Call the standard process utility chain. */
+	if (next_ProcessUtility_hook)
+		(*next_ProcessUtility_hook) (pstmt, queryString, readOnlyTree, context,
+									 params, queryEnv, dest, qc);
+	else
+		standard_ProcessUtility(pstmt, queryString, readOnlyTree, context,
+								params, queryEnv, dest, qc);
+
+	/*
+	 * Process the audit event if there is one.  Also check that this event
+	 * was not popped off the stack by a memory context being free'd
+	 * elsewhere.
+	 */
+	if (stackItem && !IsAbortedTransactionBlockState())
+	{
+		/*
+		 * Make sure the item we want to log is still on the stack - if not
+		 * then something has gone wrong and an error will be raised.
+		 */
+		stack_valid(stackId);
+
+		/*
+		 * Log the utility command if logging is on, the command has not
+		 * already been logged by another hook, and the transaction is not
+		 * aborted.
+		 */
+		if (auditLogBitmap != 0 && !stackItem->auditEvent.logged)
+			log_audit_event(stackItem);
+	}
 }
 
 /*
