@@ -860,9 +860,9 @@ ecpg_store_input(const int lineno, const bool force_indicator, const struct vari
 					numeric    *nval;
 
 					if (var->arrsize > 1)
-						mallocedval = ecpg_strdup("{", lineno);
+						mallocedval = ecpg_strdup("{", lineno, NULL);
 					else
-						mallocedval = ecpg_strdup("", lineno);
+						mallocedval = ecpg_strdup("", lineno, NULL);
 
 					if (!mallocedval)
 						return false;
@@ -923,9 +923,9 @@ ecpg_store_input(const int lineno, const bool force_indicator, const struct vari
 					int			slen;
 
 					if (var->arrsize > 1)
-						mallocedval = ecpg_strdup("{", lineno);
+						mallocedval = ecpg_strdup("{", lineno, NULL);
 					else
-						mallocedval = ecpg_strdup("", lineno);
+						mallocedval = ecpg_strdup("", lineno, NULL);
 
 					if (!mallocedval)
 						return false;
@@ -970,9 +970,9 @@ ecpg_store_input(const int lineno, const bool force_indicator, const struct vari
 					int			slen;
 
 					if (var->arrsize > 1)
-						mallocedval = ecpg_strdup("{", lineno);
+						mallocedval = ecpg_strdup("{", lineno, NULL);
 					else
-						mallocedval = ecpg_strdup("", lineno);
+						mallocedval = ecpg_strdup("", lineno, NULL);
 
 					if (!mallocedval)
 						return false;
@@ -1017,9 +1017,9 @@ ecpg_store_input(const int lineno, const bool force_indicator, const struct vari
 					int			slen;
 
 					if (var->arrsize > 1)
-						mallocedval = ecpg_strdup("{", lineno);
+						mallocedval = ecpg_strdup("{", lineno, NULL);
 					else
-						mallocedval = ecpg_strdup("", lineno);
+						mallocedval = ecpg_strdup("", lineno, NULL);
 
 					if (!mallocedval)
 						return false;
@@ -1998,7 +1998,8 @@ ecpg_do_prologue(int lineno, const int compat, const int force_indicator,
 #ifdef HAVE__CONFIGTHREADLOCALE
 	stmt->oldthreadlocale = _configthreadlocale(_ENABLE_PER_THREAD_LOCALE);
 #endif
-	stmt->oldlocale = ecpg_strdup(setlocale(LC_NUMERIC, NULL), lineno);
+	stmt->oldlocale = ecpg_strdup(setlocale(LC_NUMERIC, NULL), lineno,
+								  NULL);
 	if (stmt->oldlocale == NULL)
 	{
 		ecpg_do_epilogue(stmt);
@@ -2027,7 +2028,14 @@ ecpg_do_prologue(int lineno, const int compat, const int force_indicator,
 		statement_type = ECPGst_execute;
 	}
 	else
-		stmt->command = ecpg_strdup(query, lineno);
+	{
+		stmt->command = ecpg_strdup(query, lineno, NULL);
+		if (!stmt->command)
+		{
+			ecpg_do_epilogue(stmt);
+			return false;
+		}
+	}
 
 	stmt->name = NULL;
 
@@ -2039,7 +2047,12 @@ ecpg_do_prologue(int lineno, const int compat, const int force_indicator,
 		if (command)
 		{
 			stmt->name = stmt->command;
-			stmt->command = ecpg_strdup(command, lineno);
+			stmt->command = ecpg_strdup(command, lineno, NULL);
+			if (!stmt->command)
+			{
+				ecpg_do_epilogue(stmt);
+				return false;
+			}
 		}
 		else
 		{
@@ -2172,7 +2185,12 @@ ecpg_do_prologue(int lineno, const int compat, const int force_indicator,
 
 			if (!is_prepared_name_set && stmt->statement_type == ECPGst_prepare)
 			{
-				stmt->name = ecpg_strdup(var->value, lineno);
+				stmt->name = ecpg_strdup(var->value, lineno, NULL);
+				if (!stmt->name)
+				{
+					ecpg_do_epilogue(stmt);
+					return false;
+				}
 				is_prepared_name_set = true;
 			}
 		}
