@@ -24,3 +24,9 @@ VOLATILE LANGUAGE C AS 'MODULE_PATHNAME', 'polar_masking_create_label';
 
 CREATE FUNCTION polar_masking.polar_masking_drop_label(label_name text) RETURNS VOID
 VOLATILE LANGUAGE C AS 'MODULE_PATHNAME', 'polar_masking_drop_label';
+
+CREATE FUNCTION polar_masking.polar_masking_apply_label_to_table(label_name text, shema_name text, table_name text) RETURNS VOID
+VOLATILE LANGUAGE C AS 'MODULE_PATHNAME', 'polar_masking_apply_label_to_table';
+
+CREATE FUNCTION polar_masking.polar_masking_remove_table_from_label(label_name text, shema_name text, table_name text) RETURNS VOID
+VOLATILE LANGUAGE C AS 'MODULE_PATHNAME', 'polar_masking_remove_table_from_label';
