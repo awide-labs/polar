@@ -30,3 +30,11 @@ VOLATILE LANGUAGE C AS 'MODULE_PATHNAME', 'polar_masking_apply_label_to_table';
 
 CREATE FUNCTION polar_masking.polar_masking_remove_table_from_label(label_name text, shema_name text, table_name text) RETURNS VOID
 VOLATILE LANGUAGE C AS 'MODULE_PATHNAME', 'polar_masking_remove_table_from_label';
+
+CREATE FUNCTION polar_masking.polar_masking_apply_label_to_column(label_name text, shema_name text, table_name text, column_name text) RETURNS VOID
+VOLATILE LANGUAGE C AS 'MODULE_PATHNAME', 'polar_masking_apply_label_to_column';
+REVOKE ALL ON FUNCTION polar_masking.polar_masking_apply_label_to_column FROM PUBLIC;
+
+CREATE FUNCTION polar_masking.polar_masking_remove_column_from_label(label_name text, shema_name text, table_name text, column_name text) RETURNS VOID
+VOLATILE LANGUAGE C AS 'MODULE_PATHNAME', 'polar_masking_remove_column_from_label';
+REVOKE ALL ON FUNCTION polar_masking.polar_masking_remove_column_from_label FROM PUBLIC;
