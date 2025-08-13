@@ -311,7 +311,64 @@ log_audit_event(AuditEventStackItem * stackItem)
 static void
 polar_audit_ExecutorStart_hook(QueryDesc *queryDesc, int eflags)
 {
-	return;
+	AuditEventStackItem *stackItem = NULL;
+
+	/* Push the audit even onto the stack */
+	stackItem = stack_push();
+
+	switch (queryDesc->operation)
+	{
+		case CMD_SELECT:
+			stackItem->auditEvent.logStmtLevel = LOGSTMT_ALL;
+			stackItem->auditEvent.commandTag = T_SelectStmt;
+			stackItem->auditEvent.command = CMDTAG_SELECT;
+			break;
+
+		case CMD_INSERT:
+			stackItem->auditEvent.logStmtLevel = LOGSTMT_MOD;
+			stackItem->auditEvent.commandTag = T_InsertStmt;
+			stackItem->auditEvent.command = CMDTAG_INSERT;
+			break;
+
+		case CMD_UPDATE:
+			stackItem->auditEvent.logStmtLevel = LOGSTMT_MOD;
+			stackItem->auditEvent.commandTag = T_UpdateStmt;
+			stackItem->auditEvent.command = CMDTAG_UPDATE;
+			break;
+
+		case CMD_DELETE:
+			stackItem->auditEvent.logStmtLevel = LOGSTMT_MOD;
+			stackItem->auditEvent.commandTag = T_DeleteStmt;
+			stackItem->auditEvent.command = CMDTAG_DELETE;
+			break;
+
+		default:
+			stackItem->auditEvent.logStmtLevel = LOGSTMT_ALL;
+			stackItem->auditEvent.commandTag = T_Invalid;
+			stackItem->auditEvent.command = CMDTAG_UNKNOWN;
+			break;
+	}
+
+	/* Initialize the audit event */
+	stackItem->auditEvent.commandText = queryDesc->sourceText;
+	stackItem->auditEvent.paramList = copyParamList(queryDesc->params);
+
+	/* Call the previous hook or standard function */
+	if (next_ExecutorStart_hook)
+		next_ExecutorStart_hook(queryDesc, eflags);
+	else
+		standard_ExecutorStart(queryDesc, eflags);
+
+	/*
+	 * Move the stack memory context to the query memory context.  This needs
+	 * to be done here because the query context does not exist before the
+	 * call to standard_ExecutorStart() but the stack item is required by
+	 * plaudit_ExecutorCheckPerms_hook() which is called during
+	 * standard_ExecutorStart().
+	 */
+	if (stackItem)
+		MemoryContextSetParent(stackItem->contextAudit,
+							   queryDesc->estate->es_query_cxt);
 }
 
 /*
@@ -630,6 +687,58 @@ polar_audit_ProcessUtility_hook(PlannedStmt *pstmt,
 }
 
 /*
+ * Create audit event for non-catalog function execution, as detected by
+ * log_object_access() below.
+ */
+static void
+log_function_execute(Oid objectId)
+{
+	HeapTuple	proctup;
+	Form_pg_proc proc;
+	AuditEventStackItem *stackItem;
+
+	/* Get info about the function. */
+	proctup = SearchSysCache1(PROCOID, ObjectIdGetDatum(objectId));
+
+	if (!proctup)
+		elog(ERROR, "cache lookup failed for function %u", objectId);
+
+	proc = (Form_pg_proc) GETSTRUCT(proctup);
+
+	/*
+	 * Logging execution of all pg_catalog functions would make the log
+	 * unusably noisy.
+	 */
+	if (IsCatalogNamespace(proc->pronamespace))
+	{
+		ReleaseSysCache(proctup);
+		return;
+	}
+
+	/* Push audit event onto the stack */
+	stackItem = stack_push();
+
+	/* Generate the fully-qualified function name. */
+	stackItem->auditEvent.objectName =
+		quote_qualified_identifier(get_namespace_name(proc->pronamespace),
+								   NameStr(proc->proname));
+	ReleaseSysCache(proctup);
+
+	/* Log the function call */
+	stackItem->auditEvent.logStmtLevel = LOGSTMT_ALL;
+	stackItem->auditEvent.commandTag = T_DoStmt;
+	stackItem->auditEvent.command = CMDTAG_EXECUTE;
+	stackItem->auditEvent.objectType = OBJECT_TYPE_FUNCTION;
+	stackItem->auditEvent.commandText = stackItem->next->auditEvent.commandText;
+	stackItem->auditEvent.auditOid = get_role_oid(auditRole, true);
+
+	log_audit_event(stackItem);
+
+	/* Pop audit event from the stack */
+	stack_pop(stackItem->stackId);
+}
+
+/*
  * Hook object_access_hook to provide fully-qualified object names for function
  * calls.
  */
@@ -640,10 +749,12 @@ polar_audit_object_access_hook(ObjectAccessType access,
 							   int subId,
 							   void *arg)
 {
-	/* Temporary code to avoid compile warning. */
-	stack_push();
-	stack_pop(0);
-	return;
+	if (auditLogBitmap & LOG_FUNCTION && access == OAT_FUNCTION_EXECUTE &&
+		auditEventStack && !IsAbortedTransactionBlockState())
+		log_function_execute(objectId);
+
+	if (next_object_access_hook)
+		(*next_object_access_hook) (access, classId, objectId, subId, arg);
 }
 
 /*
