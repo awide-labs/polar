@@ -68,4 +68,20 @@
 #define GetPolarMaskingLabelColRelidColidIdxid() (get_relname_relid(MASKING_LABEL_COL_RELID_COLID_IDXNAME, POLAR_MASKING_NAMESPACE))
 #define GetPolarMaskingPolicyLabelidIdxid() (get_relname_relid(MASKING_POLICY_LABELID_IDXNAME, POLAR_MASKING_NAMESPACE))
 
+/*
+ * define the enum value of masking operators
+ */
+enum
+{
+	MASKING_UNKNOWN, //masking opeator not set
+	MASKING_CREDITCARD, //creditcardmasking
+	MASKING_BASICEMAIL, //basicemailmasking
+	MASKING_FULLEMAIL, //fullemailmasking
+	MASKING_ALLDIGITS, //alldigitsmasking
+	MASKING_SHUFFLE, //shufflemasking
+	MASKING_RANDOM, //randommasking
+	MASKING_REGEXP, //regexpmasking
+	MASKING_ALL // maskall
+};
+
 #endif

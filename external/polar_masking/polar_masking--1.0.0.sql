@@ -38,3 +38,7 @@ REVOKE ALL ON FUNCTION polar_masking.polar_masking_apply_label_to_column FROM PU
 CREATE FUNCTION polar_masking.polar_masking_remove_column_from_label(label_name text, shema_name text, table_name text, column_name text) RETURNS VOID
 VOLATILE LANGUAGE C AS 'MODULE_PATHNAME', 'polar_masking_remove_column_from_label';
 REVOKE ALL ON FUNCTION polar_masking.polar_masking_remove_column_from_label FROM PUBLIC;
+
+CREATE FUNCTION polar_masking.polar_masking_alter_label_maskingop(label_name text, maskingop text) RETURNS VOID
+VOLATILE LANGUAGE C AS 'MODULE_PATHNAME', 'polar_masking_alter_label_maskingop';
+REVOKE ALL ON FUNCTION polar_masking.polar_masking_alter_label_maskingop FROM PUBLIC;

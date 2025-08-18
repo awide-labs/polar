@@ -25,10 +25,12 @@ PG_FUNCTION_INFO_V1(polar_masking_apply_label_to_table);
 PG_FUNCTION_INFO_V1(polar_masking_remove_table_from_label);
 PG_FUNCTION_INFO_V1(polar_masking_apply_label_to_column);
 PG_FUNCTION_INFO_V1(polar_masking_remove_column_from_label);
+PG_FUNCTION_INFO_V1(polar_masking_alter_label_maskingop);
 
 static int	get_labelid_applied_on_table_or_column(Relation label_tab_rel, Relation label_col_rel, Oid relid, AttrNumber colid);
 static Oid	check_schema_table_exist(char *schemaname, char *tabname);
 static int	get_masking_labelid_ifexist(Relation policy_rel, char *labelname);
+static int16 get_masking_operator_value_by_name(char *masking_op);
 
 /*
  * get the labelid if table or the column of table is set a masking label
@@ -158,6 +160,54 @@ get_masking_labelid_ifexist(Relation policy_rel, char *labelname)
 
 	systable_endscan(sscan);
 	return labelid;
+}
+
+/*
+ * Get masking operate value by operator name.
+ */
+static int16
+get_masking_operator_value_by_name(char *opname)
+{
+	if (!strcasecmp(opname, "creditcardmasking"))
+	{
+		return MASKING_CREDITCARD;
+	}
+	else if (!strcasecmp(opname, "basicemailmasking"))
+	{
+		return MASKING_BASICEMAIL;
+	}
+	else if (!strcasecmp(opname, "fullemailmasking"))
+	{
+		return MASKING_FULLEMAIL;
+	}
+	else if (!strcasecmp(opname, "randommasking"))
+	{
+		return MASKING_RANDOM;
+	}
+	else if (!strcasecmp(opname, "alldigitsmasking"))
+	{
+		return MASKING_ALLDIGITS;
+	}
+	else if (!strcasecmp(opname, "shufflemasking"))
+	{
+		return MASKING_SHUFFLE;
+	}
+	else if (!strcasecmp(opname, "regexpmasking"))
+	{
+		return MASKING_REGEXP;
+	}
+	else if (!strcasecmp(opname, "maskall"))
+	{
+		return MASKING_ALL;
+	}
+	else if (!strcasecmp(opname, "none"))
+	{
+		return MASKING_UNKNOWN;
+	}
+
+	ereport(ERROR,
+			(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+			 errmsg("unknown masking operator name %s", opname)));
 }
 
 /*
@@ -809,6 +859,106 @@ polar_masking_remove_column_from_label(PG_FUNCTION_ARGS)
 
 	systable_endscan(sscan);
 	table_close(label_col_rel, ExclusiveLock);
+	table_close(policy_rel, ExclusiveLock);
+	PG_RETURN_NULL();
+}
+
+/*
+ * alter the masking operator of the masking label
+ */
+Datum
+polar_masking_alter_label_maskingop(PG_FUNCTION_ARGS)
+{
+	Relation	policy_rel;
+	HeapTuple	tuple;
+	HeapTuple	new_tuple;
+	ScanKeyData scankey;
+	SysScanDesc sscan;
+	char	   *labelname;
+	char	   *opname;
+	int16		opval;
+	int16		oldopval;
+	bool		isNull;
+	Datum		new_record[Natts_polar_masking_policy];
+	bool		new_record_nulls[Natts_polar_masking_policy];
+	bool		new_record_repls[Natts_polar_masking_policy];
+	Oid			policy_rel_oid = GetPolarMaskingPolicyRelid();
+
+	if (!OidIsValid(policy_rel_oid))
+	{
+		elog(ERROR, "cannot find masking relations");
+	}
+
+	if (PG_ARGISNULL(0))
+	{
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("the label name can not be null")));
+	}
+	else
+	{
+		labelname = TextDatumGetCString(PG_GETARG_DATUM(0));
+	}
+
+	if (PG_ARGISNULL(1))
+	{
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("the masking operator name can not be null")));
+	}
+	else
+	{
+		opname = TextDatumGetCString(PG_GETARG_DATUM(1));
+	}
+
+	opval = get_masking_operator_value_by_name(opname);
+
+	if (opval == MASKING_REGEXP)
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("the function cannnot set regexpmasking"),
+				 errhint("please use function \"masking_alter_label_maskingop_set_regexpmasking\" to set regexpmasking")));
+
+	policy_rel = table_open(policy_rel_oid, ExclusiveLock);
+
+	ScanKeyInit(&scankey,
+				Anum_polar_masking_policy_name,
+				BTEqualStrategyNumber, F_TEXTEQ,
+				CStringGetTextDatum(labelname));
+	sscan = systable_beginscan(policy_rel, InvalidOid, false,
+							   NULL, 1, &scankey);
+	if (!HeapTupleIsValid(tuple = systable_getnext(sscan)))
+	{
+		systable_endscan(sscan);
+		table_close(policy_rel, ExclusiveLock);
+		ereport(ERROR,
+				(errcode(ERRCODE_UNDEFINED_OBJECT),
+				 errmsg("masking label name: \"%s\" does not exist",
+						labelname)));
+	}
+
+	oldopval = DatumGetInt16(heap_getattr(tuple, Anum_polar_masking_policy_operator,
+										  RelationGetDescr(policy_rel), &isNull));
+	if (oldopval == opval)
+	{
+		systable_endscan(sscan);
+		table_close(policy_rel, ExclusiveLock);
+		elog(WARNING, "the masking operator of masking label \"%s\" is already \"%s\", no need to update", labelname, opname);
+		PG_RETURN_NULL();
+	}
+
+	MemSet(new_record, 0, sizeof(new_record));
+	MemSet(new_record_nulls, false, sizeof(new_record_nulls));
+	MemSet(new_record_repls, false, sizeof(new_record_repls));
+
+	new_record[Anum_polar_masking_policy_operator - 1] = Int16GetDatum(opval);
+	new_record_repls[Anum_polar_masking_policy_operator - 1] = true;
+
+	new_tuple = heap_modify_tuple(tuple, RelationGetDescr(policy_rel), new_record, new_record_nulls, new_record_repls);
+	CatalogTupleUpdate(policy_rel, &tuple->t_self, new_tuple);
+
+	systable_endscan(sscan);
+
 	table_close(policy_rel, ExclusiveLock);
 	PG_RETURN_NULL();
 }
