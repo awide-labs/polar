@@ -26,11 +26,14 @@ PG_FUNCTION_INFO_V1(polar_masking_remove_table_from_label);
 PG_FUNCTION_INFO_V1(polar_masking_apply_label_to_column);
 PG_FUNCTION_INFO_V1(polar_masking_remove_column_from_label);
 PG_FUNCTION_INFO_V1(polar_masking_alter_label_maskingop);
+PG_FUNCTION_INFO_V1(polar_masking_alter_label_maskingop_set_regexpmasking);
 
 static int	get_labelid_applied_on_table_or_column(Relation label_tab_rel, Relation label_col_rel, Oid relid, AttrNumber colid);
 static Oid	check_schema_table_exist(char *schemaname, char *tabname);
 static int	get_masking_labelid_ifexist(Relation policy_rel, char *labelname);
 static int16 get_masking_operator_value_by_name(char *masking_op);
+static void remove_regexpmasking_parameters(int labelid);
+static void set_regexpmasking_parameters(int labelid, int startpos, int endpos, char *regex, char *replacetext);
 
 /*
  * get the labelid if table or the column of table is set a masking label
@@ -211,6 +214,102 @@ get_masking_operator_value_by_name(char *opname)
 }
 
 /*
+ * remove regexpmasking parameters in polar_masking_policy_regex
+ */
+static void
+remove_regexpmasking_parameters(int labelid)
+{
+	Relation	regexp_rel;
+	HeapTuple	tuple;
+	ScanKeyData scankey;
+	SysScanDesc sscan;
+	Oid			regex_rel_oid = GetPolarMaskingPolicyRegexRelid();
+
+	if (!OidIsValid(regex_rel_oid))
+	{
+		elog(ERROR, "cannot find masking relations");
+	}
+
+	regexp_rel = table_open(regex_rel_oid, ExclusiveLock);
+
+	ScanKeyInit(&scankey,
+				Anum_polar_masking_policy_regex_labelid,
+				BTEqualStrategyNumber, F_INT4EQ,
+				Int32GetDatum(labelid));
+
+	sscan = systable_beginscan(regexp_rel, GetPolarMaskingPolicyRegexLabelidIdxid(), true,
+							   NULL, 1, &scankey);
+
+	if (HeapTupleIsValid(tuple = systable_getnext(sscan)))
+	{
+		CatalogTupleDelete(regexp_rel, &tuple->t_self);
+	}
+
+	systable_endscan(sscan);
+	table_close(regexp_rel, ExclusiveLock);
+}
+
+/*
+ * alter regexpmasking parameters int polar_masking_policy_regex
+ */
+static void
+set_regexpmasking_parameters(int labelid, int startpos, int endpos, char *regex, char *replacetext)
+{
+	Relation	regexp_rel;
+	HeapTuple	tuple;
+	HeapTuple	new_tuple;
+	ScanKeyData scankey;
+	SysScanDesc sscan;
+	Datum		new_record[Natts_polar_masking_policy_regex];
+	bool		new_record_nulls[Natts_polar_masking_policy_regex];
+	bool		new_record_repls[Natts_polar_masking_policy_regex];
+	Oid			regex_rel_oid = GetPolarMaskingPolicyRegexRelid();
+
+	if (!OidIsValid(regex_rel_oid))
+	{
+		elog(ERROR, "cannot find masking relations");
+	}
+
+	MemSet(new_record, 0, sizeof(new_record));
+	MemSet(new_record_nulls, false, sizeof(new_record_nulls));
+
+	regexp_rel = table_open(regex_rel_oid, ExclusiveLock);
+
+	ScanKeyInit(&scankey,
+				Anum_polar_masking_policy_regex_labelid,
+				BTEqualStrategyNumber, F_INT4EQ,
+				Int32GetDatum(labelid));
+
+	sscan = systable_beginscan(regexp_rel, GetPolarMaskingPolicyRegexLabelidIdxid(), true,
+							   NULL, 1, &scankey);
+
+	if (HeapTupleIsValid(tuple = systable_getnext(sscan)))
+	{
+		new_record[Anum_polar_masking_policy_regex_start_pos - 1] = Int32GetDatum(startpos);
+		new_record[Anum_polar_masking_policy_regex_end_pos - 1] = Int32GetDatum(endpos);
+		new_record[Anum_polar_masking_policy_regex_regex - 1] = CStringGetTextDatum(regex);
+		new_record[Anum_polar_masking_policy_regex_replace_text - 1] = CStringGetTextDatum(replacetext);
+		MemSet(new_record_repls, true, sizeof(new_record_repls));
+		new_record_repls[Anum_polar_masking_policy_regex_labelid - 1] = false;
+		new_tuple = heap_modify_tuple(tuple, RelationGetDescr(regexp_rel), new_record, new_record_nulls, new_record_repls);
+		CatalogTupleUpdate(regexp_rel, &tuple->t_self, new_tuple);
+	}
+	else
+	{
+		new_record[Anum_polar_masking_policy_regex_labelid - 1] = Int32GetDatum(labelid);
+		new_record[Anum_polar_masking_policy_regex_start_pos - 1] = Int32GetDatum(startpos);
+		new_record[Anum_polar_masking_policy_regex_end_pos - 1] = Int32GetDatum(endpos);
+		new_record[Anum_polar_masking_policy_regex_regex - 1] = CStringGetTextDatum(regex);
+		new_record[Anum_polar_masking_policy_regex_replace_text - 1] = CStringGetTextDatum(replacetext);
+		tuple = heap_form_tuple(RelationGetDescr(regexp_rel), new_record, new_record_nulls);
+		CatalogTupleInsert(regexp_rel, tuple);
+	}
+
+	systable_endscan(sscan);
+	table_close(regexp_rel, ExclusiveLock);
+}
+
+/*
  * create masking label
  */
 Datum
@@ -357,6 +456,11 @@ polar_masking_drop_label(PG_FUNCTION_ARGS)
 		CatalogTupleDelete(label_col_rel, &tuple->t_self);
 	}
 	systable_endscan(sscan);
+
+	/*
+	 * if exists, remove labels in polar_masking_policy_regex
+	 */
+	remove_regexpmasking_parameters(labelid);
 
 	table_close(label_col_rel, ExclusiveLock);
 	table_close(label_tab_rel, ExclusiveLock);
@@ -883,6 +987,7 @@ polar_masking_alter_label_maskingop(PG_FUNCTION_ARGS)
 	bool		new_record_nulls[Natts_polar_masking_policy];
 	bool		new_record_repls[Natts_polar_masking_policy];
 	Oid			policy_rel_oid = GetPolarMaskingPolicyRelid();
+	int			labelid;
 
 	if (!OidIsValid(policy_rel_oid))
 	{
@@ -917,7 +1022,7 @@ polar_masking_alter_label_maskingop(PG_FUNCTION_ARGS)
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 				 errmsg("the function cannnot set regexpmasking"),
-				 errhint("please use function \"masking_alter_label_maskingop_set_regexpmasking\" to set regexpmasking")));
+				 errhint("please use function \"polar_masking_alter_label_maskingop_set_regexpmasking\" to set regexpmasking")));
 
 	policy_rel = table_open(policy_rel_oid, ExclusiveLock);
 
@@ -947,6 +1052,9 @@ polar_masking_alter_label_maskingop(PG_FUNCTION_ARGS)
 		PG_RETURN_NULL();
 	}
 
+	labelid = DatumGetInt32(heap_getattr(tuple, Anum_polar_masking_policy_labelid,
+										 RelationGetDescr(policy_rel), &isNull));
+
 	MemSet(new_record, 0, sizeof(new_record));
 	MemSet(new_record_nulls, false, sizeof(new_record_nulls));
 	MemSet(new_record_repls, false, sizeof(new_record_repls));
@@ -958,6 +1066,155 @@ polar_masking_alter_label_maskingop(PG_FUNCTION_ARGS)
 	CatalogTupleUpdate(policy_rel, &tuple->t_self, new_tuple);
 
 	systable_endscan(sscan);
+
+	if (oldopval == MASKING_REGEXP)
+	{
+		remove_regexpmasking_parameters(labelid);
+	}
+
+	table_close(policy_rel, ExclusiveLock);
+	PG_RETURN_NULL();
+}
+
+/*
+ * alter the masking operator to regexpmasking
+ */
+Datum
+polar_masking_alter_label_maskingop_set_regexpmasking(PG_FUNCTION_ARGS)
+{
+	Relation	policy_rel;
+	HeapTuple	tuple;
+	HeapTuple	new_tuple;
+	ScanKeyData scankey;
+	SysScanDesc sscan;
+	char	   *labelname;
+	int			labelid;
+	int16		oldopval;
+	bool		isNull;
+	int			startpos;
+	int			endpos;
+	char	   *regex;
+	char	   *replacetext;
+	Datum		new_record[Natts_polar_masking_policy];
+	bool		new_record_nulls[Natts_polar_masking_policy];
+	bool		new_record_repls[Natts_polar_masking_policy];
+	Oid			policy_rel_oid = GetPolarMaskingPolicyRelid();
+
+	if (!OidIsValid(policy_rel_oid))
+	{
+		elog(ERROR, "cannot find masking relations");
+	}
+
+	if (PG_ARGISNULL(0))
+	{
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("the label name can not be null")));
+	}
+	else
+	{
+		labelname = TextDatumGetCString(PG_GETARG_DATUM(0));
+	}
+
+	if (PG_ARGISNULL(1))
+	{
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("the regexpmasking start postion can not be null")));
+	}
+	else
+	{
+		startpos = Int32GetDatum(PG_GETARG_DATUM(1));
+	}
+
+	if (PG_ARGISNULL(2))
+	{
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("the regexpmasking end postion can not be null")));
+	}
+	else
+	{
+		endpos = Int32GetDatum(PG_GETARG_DATUM(2));
+	}
+
+	if (startpos < 0 || endpos < 0)
+	{
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("the start or end position should >= 0")));
+	}
+
+	if (startpos > endpos && endpos != 0)
+	{
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("the start position should not greater than end position(%d > %d) in regexpmasking", startpos, endpos)));
+	}
+
+
+	if (PG_ARGISNULL(3))
+	{
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("the masking operator name can not be null")));
+	}
+	else
+	{
+		regex = TextDatumGetCString(PG_GETARG_DATUM(3));
+	}
+
+	if (PG_ARGISNULL(4))
+	{
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("the label name can not be null")));
+	}
+	else
+	{
+		replacetext = TextDatumGetCString(PG_GETARG_DATUM(4));
+	}
+
+	policy_rel = table_open(policy_rel_oid, ExclusiveLock);
+
+	ScanKeyInit(&scankey,
+				Anum_polar_masking_policy_name,
+				BTEqualStrategyNumber, F_TEXTEQ,
+				CStringGetTextDatum(labelname));
+	sscan = systable_beginscan(policy_rel, InvalidOid, false,
+							   NULL, 1, &scankey);
+	if (!HeapTupleIsValid(tuple = systable_getnext(sscan)))
+	{
+		systable_endscan(sscan);
+		table_close(policy_rel, ExclusiveLock);
+		ereport(ERROR,
+				(errcode(ERRCODE_UNDEFINED_OBJECT),
+				 errmsg("masking label name: \"%s\" does not exist",
+						labelname)));
+	}
+
+	oldopval = DatumGetInt16(heap_getattr(tuple, Anum_polar_masking_policy_operator,
+										  RelationGetDescr(policy_rel), &isNull));
+	labelid = DatumGetInt32(heap_getattr(tuple, Anum_polar_masking_policy_labelid,
+										 RelationGetDescr(policy_rel), &isNull));
+
+	if (oldopval != MASKING_REGEXP)
+	{
+		MemSet(new_record, 0, sizeof(new_record));
+		MemSet(new_record_nulls, false, sizeof(new_record_nulls));
+		MemSet(new_record_repls, false, sizeof(new_record_repls));
+
+		new_record[Anum_polar_masking_policy_operator - 1] = Int16GetDatum(MASKING_REGEXP);
+		new_record_repls[Anum_polar_masking_policy_operator - 1] = true;
+
+		new_tuple = heap_modify_tuple(tuple, RelationGetDescr(policy_rel), new_record, new_record_nulls, new_record_repls);
+		CatalogTupleUpdate(policy_rel, &tuple->t_self, new_tuple);
+
+	}
+
+	systable_endscan(sscan);
+
+	set_regexpmasking_parameters(labelid, startpos, endpos, regex, replacetext);
 
 	table_close(policy_rel, ExclusiveLock);
 	PG_RETURN_NULL();

@@ -49,6 +49,19 @@
 #define MASKING_POLICY_LABELID_IDXNAME "polar_masking_policy_labelid_idx"
 
 /*
+ * Some definiton for polar_masking_policy_regex.
+ * The relation is used for saving parameters of regexpmasking masking operators.
+ */
+#define MASKING_POLICY_REGEX_RELNAME "polar_masking_policy_regex"
+#define Anum_polar_masking_policy_regex_labelid 1
+#define Anum_polar_masking_policy_regex_start_pos 2
+#define Anum_polar_masking_policy_regex_end_pos 3
+#define Anum_polar_masking_policy_regex_regex 4
+#define Anum_polar_masking_policy_regex_replace_text 5
+#define Natts_polar_masking_policy_regex 5
+#define MASKING_POLICY_REGEX_LABELID_IDXNAME "polar_masking_policy_regex_labelid_idx"
+
+/*
  * Definiton of sequence and function to get labelid, labelid value: 1 - 2147483647
  */
 #define MASKING_LABELID_SEQNAME "polar_masking_labelid_sequence"
@@ -64,9 +77,11 @@
 #define GetPolarMaskingLabelTabRelid() (get_relname_relid(MASKING_LABEL_TAB_RELNAME, POLAR_MASKING_NAMESPACE))
 #define GetPolarMaskingLabelColRelid() (get_relname_relid(MASKING_LABEL_COL_RELNAME, POLAR_MASKING_NAMESPACE))
 #define GetPolarMaskingPolicyRelid() (get_relname_relid(MASKING_POLICY_RELNAME, POLAR_MASKING_NAMESPACE))
+#define GetPolarMaskingPolicyRegexRelid() (get_relname_relid(MASKING_POLICY_REGEX_RELNAME, POLAR_MASKING_NAMESPACE))
 #define GetPolarMaskingLabelTabRelidIdxid() (get_relname_relid(MASKING_LABEL_TAB_RELID_IDXNAME, POLAR_MASKING_NAMESPACE))
 #define GetPolarMaskingLabelColRelidColidIdxid() (get_relname_relid(MASKING_LABEL_COL_RELID_COLID_IDXNAME, POLAR_MASKING_NAMESPACE))
 #define GetPolarMaskingPolicyLabelidIdxid() (get_relname_relid(MASKING_POLICY_LABELID_IDXNAME, POLAR_MASKING_NAMESPACE))
+#define GetPolarMaskingPolicyRegexLabelidIdxid() (get_relname_relid(MASKING_POLICY_REGEX_LABELID_IDXNAME, POLAR_MASKING_NAMESPACE))
 
 /*
  * define the enum value of masking operators

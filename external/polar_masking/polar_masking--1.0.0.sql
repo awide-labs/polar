@@ -12,6 +12,9 @@ CREATE UNIQUE INDEX polar_masking_label_col_relid_colid_idx ON polar_masking.pol
 CREATE TABLE polar_masking.polar_masking_policy(labelid INT, name TEXT, operator SMALLINT);
 CREATE UNIQUE INDEX polar_masking_policy_labelid_idx ON polar_masking.polar_masking_policy (labelid);
 
+create table polar_masking.polar_masking_policy_regex(labelid INT, start_pos Integer, end_pos Integer, regex text, replace_text text);
+CREATE UNIQUE INDEX polar_masking_policy_regex_labelid_idx ON polar_masking.polar_masking_policy_regex (labelid);
+
 CREATE SEQUENCE polar_masking.polar_masking_labelid_sequence
     START WITH 1
     INCREMENT BY 1
@@ -33,12 +36,12 @@ VOLATILE LANGUAGE C AS 'MODULE_PATHNAME', 'polar_masking_remove_table_from_label
 
 CREATE FUNCTION polar_masking.polar_masking_apply_label_to_column(label_name text, shema_name text, table_name text, column_name text) RETURNS VOID
 VOLATILE LANGUAGE C AS 'MODULE_PATHNAME', 'polar_masking_apply_label_to_column';
-REVOKE ALL ON FUNCTION polar_masking.polar_masking_apply_label_to_column FROM PUBLIC;
 
 CREATE FUNCTION polar_masking.polar_masking_remove_column_from_label(label_name text, shema_name text, table_name text, column_name text) RETURNS VOID
 VOLATILE LANGUAGE C AS 'MODULE_PATHNAME', 'polar_masking_remove_column_from_label';
-REVOKE ALL ON FUNCTION polar_masking.polar_masking_remove_column_from_label FROM PUBLIC;
 
 CREATE FUNCTION polar_masking.polar_masking_alter_label_maskingop(label_name text, maskingop text) RETURNS VOID
 VOLATILE LANGUAGE C AS 'MODULE_PATHNAME', 'polar_masking_alter_label_maskingop';
-REVOKE ALL ON FUNCTION polar_masking.polar_masking_alter_label_maskingop FROM PUBLIC;
+
+CREATE FUNCTION polar_masking.polar_masking_alter_label_maskingop_set_regexpmasking(label_name text, start_pos Integer, end_pos Integer, regex text, replace_text text) RETURNS VOID
+VOLATILE LANGUAGE C AS 'MODULE_PATHNAME', 'polar_masking_alter_label_maskingop_set_regexpmasking';
