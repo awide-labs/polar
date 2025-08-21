@@ -83,6 +83,9 @@ void		_PG_init(void);
 
 #define OBJECT_TYPE_UNKNOWN         "UNKNOWN"
 
+#define TOKEN_PASSWORD             "password"
+#define TOKEN_REDACTED             "<REDACTED>"
+
 /* GUC variable for polar_audit.log, which defines the classes to log. */
 static char *auditLog = NULL;
 
@@ -294,13 +297,345 @@ stack_pop(int64 stackId)
 }
 
 /*
+ * Appends a properly quoted CSV field to StringInfo.
+ */
+static void
+append_valid_csv(StringInfoData *buffer, const char *appendStr)
+{
+	const char *pChar;
+
+	/*
+	 * If the append string is null then do nothing.  NULL fields are not
+	 * quoted in CSV.
+	 */
+	if (appendStr == NULL)
+		return;
+
+	/* Only format for CSV if appendStr contains: ", comma, \n, \r */
+	if (strstr(appendStr, ",") || strstr(appendStr, "\"") ||
+		strstr(appendStr, "\n") || strstr(appendStr, "\r"))
+	{
+		appendStringInfoCharMacro(buffer, '"');
+
+		for (pChar = appendStr; *pChar; pChar++)
+		{
+			if (*pChar == '"')	/* double single quotes */
+				appendStringInfoCharMacro(buffer, *pChar);
+
+			appendStringInfoCharMacro(buffer, *pChar);
+		}
+
+		appendStringInfoCharMacro(buffer, '"');
+	}
+	/* Else just append */
+	else
+		appendStringInfoString(buffer, appendStr);
+}
+
+/*
  * Gets an AuditEvent, classifies it, then logs it if appropriate.
  */
 static void
 log_audit_event(AuditEventStackItem * stackItem)
 {
-	/* avoid warning */
-	return;
+	/* By default, put everything in the MISC class. */
+	int			class = LOG_MISC;
+	const char *className = CLASS_MISC;
+	MemoryContext contextOld;
+	StringInfoData auditStr;
+	bool		needs_mask = false;
+
+	/*
+	 * Skip logging script statements if an extension is currently being
+	 * created or altered. PostgreSQL reports the statement text for each
+	 * statement in the script as the entire script text, which can blow up
+	 * the logs. The create/alter statement will still be logged.
+	 *
+	 * Since a superuser is responsible for determining which extensions are
+	 * available, and in most cases installing them, it should not be
+	 * necessary to log each statement in the script.
+	 */
+	if (creating_extension)
+		return;
+
+	/* If user is not permited, so return */
+	if (stackItem->auditEvent.auditOid == InvalidOid ||
+		!is_member_of_role(GetUserId(), stackItem->auditEvent.auditOid))
+		return;
+
+	/* If this event has already been logged don't log it again */
+	if (stackItem->auditEvent.logged)
+		return;
+
+	/* Classify the statement using log stmt level and the command tag */
+	switch (stackItem->auditEvent.logStmtLevel)
+	{
+			/* All mods go in WRITE class, except EXECUTE */
+		case LOGSTMT_MOD:
+			className = CLASS_WRITE;
+			class = LOG_WRITE;
+
+			switch (stackItem->auditEvent.commandTag)
+			{
+					/*
+					 * Currently, only            // (errmsg("AUDIT: %s,"
+					 * INT64_FORMAT "," INT64_FORMAT ",%s,%s", EXECUTE is
+					 * different
+					 */
+				case T_ExecuteStmt:
+					className = CLASS_MISC;
+					class = LOG_MISC;
+					break;
+				default:
+					break;
+			}
+			break;
+
+			/* These are DDL, unless they are ROLE */
+		case LOGSTMT_DDL:
+			className = CLASS_DDL;
+			class = LOG_DDL;
+
+			switch (stackItem->auditEvent.commandTag)
+			{
+				case T_CreateRoleStmt:
+				case T_AlterRoleStmt:
+				case T_AlterRoleSetStmt:
+				case T_CreateForeignServerStmt:
+				case T_AlterForeignServerStmt:
+				case T_CreateUserMappingStmt:
+				case T_AlterUserMappingStmt:
+					needs_mask = true;
+				default:
+					break;
+			}
+
+			/* Identify role statements */
+			switch (stackItem->auditEvent.commandTag)
+			{
+					/*
+					 * In the case of create and alter role redact all text in
+					 * the command after the password token for security. This
+					 * doesn't cover all possible cases where passwords can be
+					 * leaked but should take care of the most common usage.
+					 */
+				case T_CreateRoleStmt:
+				case T_AlterRoleStmt:
+
+					if (stackItem->auditEvent.commandText != NULL)
+					{
+						char	   *commandStr;
+						char	   *passwordToken;
+						int			i;
+						int			passwordPos;
+
+						/* Copy the command string and convert to lower case */
+						commandStr = pstrdup(stackItem->auditEvent.commandText);
+
+						for (i = 0; commandStr[i]; i++)
+							commandStr[i] =
+								(char) pg_tolower((unsigned char) commandStr[i]);
+
+						/* Find index of password token */
+						passwordToken = strstr(commandStr, TOKEN_PASSWORD);
+
+						if (passwordToken != NULL)
+						{
+							/* Copy command string up to password token */
+							passwordPos = (passwordToken - commandStr) +
+								strlen(TOKEN_PASSWORD);
+
+							commandStr = palloc(passwordPos + 1 +
+												strlen(TOKEN_REDACTED) + 1);
+
+							strncpy(commandStr,
+									stackItem->auditEvent.commandText,
+									passwordPos);
+
+							/* And append redacted token */
+							commandStr[passwordPos] = ' ';
+
+							strcpy(commandStr + passwordPos + 1, TOKEN_REDACTED);
+
+							/* Assign new command string */
+							stackItem->auditEvent.commandText = commandStr;
+						}
+					}
+
+					/* Fall through */
+
+					/* Classify role statements */
+				case T_GrantStmt:
+				case T_GrantRoleStmt:
+				case T_DropRoleStmt:
+				case T_AlterRoleSetStmt:
+				case T_AlterDefaultPrivilegesStmt:
+					className = CLASS_ROLE;
+					class = LOG_ROLE;
+					break;
+
+					/*
+					 * Rename and Drop are general and therefore we have to do
+					 * an additional check against the command string to see
+					 * if they are role or regular DDL.
+					 */
+				case T_RenameStmt:
+				case T_DropStmt:
+					if (stackItem->auditEvent.command == CMDTAG_ALTER_ROLE ||
+						stackItem->auditEvent.command == CMDTAG_DROP_ROLE)
+					{
+						className = CLASS_ROLE;
+						class = LOG_ROLE;
+					}
+					break;
+
+				default:
+					break;
+			}
+			break;
+
+			/* Classify the rest */
+		case LOGSTMT_ALL:
+			switch (stackItem->auditEvent.commandTag)
+			{
+					/* READ statements */
+				case T_CopyStmt:
+				case T_DeclareCursorStmt:
+				case T_SelectStmt:
+				case T_PrepareStmt:
+				case T_PlannedStmt:
+					className = CLASS_READ;
+					class = LOG_READ;
+					break;
+
+					/* FUNCTION statements */
+				case T_DoStmt:
+					className = CLASS_FUNCTION;
+					class = LOG_FUNCTION;
+					break;
+
+					/*
+					 * SET statements reported as MISC but filtered by
+					 * MISC_SET flags to maintain existing functionality.
+					 */
+				case T_VariableSetStmt:
+					className = CLASS_MISC;
+					class = LOG_MISC_SET;
+					break;
+
+				default:
+					break;
+			}
+			break;
+
+		case LOGSTMT_NONE:
+			break;
+	}
+
+	/*
+	 * Only log the statement if:
+	 *
+	 * The statement belongs to a class that is being logged
+	 */
+	if (!(auditLogBitmap & class))
+		return;
+
+	/*
+	 * Use audit memory context in case something is not free'd while
+	 * appending strings and parameters.
+	 */
+	contextOld = MemoryContextSwitchTo(stackItem->contextAudit);
+
+	/*
+	 * Create the audit substring
+	 *
+	 * The type-of-audit-log and statement/substatement ID are handled below,
+	 * this string is everything else.
+	 */
+	initStringInfo(&auditStr);
+	append_valid_csv(&auditStr, GetCommandTagName(stackItem->auditEvent.command));
+
+	appendStringInfoCharMacro(&auditStr, ',');
+	append_valid_csv(&auditStr, stackItem->auditEvent.objectType);
+
+	appendStringInfoCharMacro(&auditStr, ',');
+	append_valid_csv(&auditStr, stackItem->auditEvent.objectName);
+
+	appendStringInfoCharMacro(&auditStr, ',');
+	if (auditLogStatement)
+	{
+		append_valid_csv(&auditStr, stackItem->auditEvent.commandText);
+
+		appendStringInfoCharMacro(&auditStr, ',');
+
+		/* Handle parameter logging, if enabled. */
+		if (auditLogParameter)
+		{
+			int			paramIdx;
+			int			numParams;
+			StringInfoData paramStrResult;
+			ParamListInfo paramList = stackItem->auditEvent.paramList;
+
+			numParams = paramList == NULL ? 0 : paramList->numParams;
+
+			/* Create the param substring */
+			initStringInfo(&paramStrResult);
+
+			/* Iterate through all params */
+			for (paramIdx = 0; paramList != NULL && paramIdx < numParams;
+				 paramIdx++)
+			{
+				ParamExternData *prm = &paramList->params[paramIdx];
+				Oid			typeOutput;
+				bool		typeIsVarLena;
+				char	   *paramStr;
+
+				/* Add a comma for each param */
+				if (paramIdx != 0)
+					appendStringInfoCharMacro(&paramStrResult, ',');
+
+				/* Skip if null or if oid is invalid */
+				if (prm->isnull || !OidIsValid(prm->ptype))
+					continue;
+
+				/* Output the string */
+				getTypeOutputInfo(prm->ptype, &typeOutput, &typeIsVarLena);
+				paramStr = OidOutputFunctionCall(typeOutput, prm->value);
+
+				append_valid_csv(&paramStrResult, paramStr);
+				pfree(paramStr);
+			}
+
+			if (numParams == 0)
+				appendStringInfoString(&auditStr, "<none>");
+			else
+				append_valid_csv(&auditStr, paramStrResult.data);
+		}
+		else
+			appendStringInfoString(&auditStr, "<not logged>");
+	}
+	/* we were asked to not log it */
+	else
+		appendStringInfoString(&auditStr,
+							   "<not logged>,<not logged>");
+
+	/*
+	 * Log the audit entry.  Note: use of INT64_FORMAT here is bad for
+	 * translatability, but we currently haven't got translation support in
+	 * plaudit anyway.
+	 */
+	ereport(LOG_SERVER_ONLY,
+			(errmsg("AUDIT: %s,%s",
+					className,
+					auditStr.data),
+			 errhidestmt(true),
+			 polar_mark_audit_log(true),
+			 polar_mark_needs_mask(needs_mask),
+			 errhidecontext(true)));
+
+	stackItem->auditEvent.logged = true;
+
+	MemoryContextSwitchTo(contextOld);
 }
 
 /*
