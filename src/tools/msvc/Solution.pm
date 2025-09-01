@@ -321,7 +321,6 @@ sub GenerateFiles
 		HAVE_MBARRIER_H => undef,
 		HAVE_MBSTOWCS_L => 1,
 		HAVE_MEMORY_H => 1,
-		HAVE_MEMSET_S => undef,
 		HAVE_MINIDUMP_TYPE => 1,
 		HAVE_MKDTEMP => undef,
 		HAVE_NETINET_TCP_H => undef,

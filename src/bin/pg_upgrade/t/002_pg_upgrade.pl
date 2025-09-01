@@ -201,7 +201,7 @@ if (defined($ENV{oldinstall}))
 # that we need to use pg_dumpall from the new node here.
 my @dump_command = (
 	'pg_dumpall', '--no-sync', '-d', $oldnode->connstr('postgres'),
-	'-f', $dump1_file);
+	'--restrict-key=test', '-f', $dump1_file);
 # --extra-float-digits is needed when upgrading from a version older than 11.
 push(@dump_command, '--extra-float-digits', '0')
   if ($oldnode->pg_version < 12);
@@ -364,7 +364,7 @@ if (-d $log_path)
 # Second dump from the upgraded instance.
 @dump_command = (
 	'pg_dumpall', '--no-sync', '-d', $newnode->connstr('postgres'),
-	'-f', $dump2_file);
+	'--restrict-key=test', '-f', $dump2_file);
 # --extra-float-digits is needed when upgrading from a version older than 11.
 push(@dump_command, '--extra-float-digits', '0')
   if ($oldnode->pg_version < 12);
