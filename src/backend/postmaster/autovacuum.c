@@ -2162,6 +2162,12 @@ do_autovacuum(void)
 				}
 			}
 		}
+
+		/* Release stuff to avoid per-relation leakage */
+		if (relopts)
+			pfree(relopts);
+		if (tabentry)
+			pfree(tabentry);
 	}
 
 	table_endscan(relScan);
@@ -2178,7 +2184,8 @@ do_autovacuum(void)
 		Form_pg_class classForm = (Form_pg_class) GETSTRUCT(tuple);
 		PgStat_StatTabEntry *tabentry;
 		Oid			relid;
-		AutoVacOpts *relopts = NULL;
+		AutoVacOpts *relopts;
+		bool		free_relopts = false;
 		bool		dovacuum;
 		bool		doanalyze;
 		bool		wraparound;
@@ -2196,7 +2203,9 @@ do_autovacuum(void)
 		 * main rel
 		 */
 		relopts = extract_autovac_opts(tuple, pg_class_desc);
-		if (relopts == NULL)
+		if (relopts)
+			free_relopts = true;
+		else
 		{
 			av_relation *hentry;
 			bool		found;
@@ -2217,6 +2226,12 @@ do_autovacuum(void)
 		/* ignore analyze for toast tables */
 		if (dovacuum)
 			table_oids = lappend_oid(table_oids, relid);
+
+		/* Release stuff to avoid leakage */
+		if (free_relopts)
+			pfree(relopts);
+		if (tabentry)
+			pfree(tabentry);
 	}
 
 	table_endscan(relScan);
@@ -2308,6 +2323,12 @@ do_autovacuum(void)
 						get_namespace_name(classForm->relnamespace),
 						NameStr(classForm->relname))));
 
+		/*
+		 * Deletion might involve TOAST table access, so ensure we have a
+		 * valid snapshot.
+		 */
+		PushActiveSnapshot(GetTransactionSnapshot());
+
 		object.classId = RelationRelationId;
 		object.objectId = relid;
 		object.objectSubId = 0;
@@ -2320,6 +2341,7 @@ do_autovacuum(void)
 		 * To commit the deletion, end current transaction and start a new
 		 * one.  Note this also releases the locks we took.
 		 */
+		PopActiveSnapshot();
 		CommitTransactionCommand();
 		StartTransactionCommand();
 
@@ -2580,6 +2602,8 @@ deleted:
 		VacuumCostLimit = stdVacuumCostLimit;
 	}
 
+	list_free(table_oids);
+
 	/*
 	 * Perform additional work items, as requested by backends.
 	 */
@@ -2757,8 +2781,8 @@ deleted2:
 /*
  * extract_autovac_opts
  *
- * Given a relation's pg_class tuple, return the AutoVacOpts portion of
- * reloptions, if set; otherwise, return NULL.
+ * Given a relation's pg_class tuple, return a palloc'd copy of the
+ * AutoVacOpts portion of reloptions, if set; otherwise, return NULL.
  *
  * Note: callers do not have a relation lock on the table at this point,
  * so the table could have been dropped, and its catalog rows gone, after
@@ -2807,6 +2831,7 @@ table_recheck_autovac(Oid relid, HTAB *table_toast_map,
 	autovac_table *tab = NULL;
 	bool		wraparound;
 	AutoVacOpts *avopts;
+	bool		free_avopts = false;
 
 	/* fetch the relation's relcache entry */
 	classTup = SearchSysCacheCopy1(RELOID, ObjectIdGetDatum(relid));
@@ -2819,8 +2844,10 @@ table_recheck_autovac(Oid relid, HTAB *table_toast_map,
 	 * main table reloptions if the toast table itself doesn't have.
 	 */
 	avopts = extract_autovac_opts(classTup, pg_class_desc);
-	if (classForm->relkind == RELKIND_TOASTVALUE &&
-		avopts == NULL && table_toast_map != NULL)
+	if (avopts)
+		free_avopts = true;
+	else if (classForm->relkind == RELKIND_TOASTVALUE &&
+			 table_toast_map != NULL)
 	{
 		av_relation *hentry;
 		bool		found;
@@ -2929,6 +2956,8 @@ table_recheck_autovac(Oid relid, HTAB *table_toast_map,
 						 avopts->vacuum_cost_delay >= 0));
 	}
 
+	if (free_avopts)
+		pfree(avopts);
 	heap_freetuple(classTup);
 	return tab;
 }
@@ -2959,6 +2988,10 @@ recheck_relation_needs_vacanalyze(Oid relid,
 	relation_needs_vacanalyze(relid, avopts, classForm, tabentry,
 							  effective_multixact_freeze_max_age,
 							  dovacuum, doanalyze, wraparound);
+
+	/* Release tabentry to avoid leakage */
+	if (tabentry)
+		pfree(tabentry);
 
 	/* ignore ANALYZE for toast tables */
 	if (classForm->relkind == RELKIND_TOASTVALUE)
