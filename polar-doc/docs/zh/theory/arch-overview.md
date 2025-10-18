@@ -135,7 +135,7 @@ PolarDB 支持一套 OLTP 场景型的数据在如下两种计算引擎下使用
 2. WAL meta 记录该条日志修改了哪些 Page。
 3. 将该条 WAL meta 插入到 LogIndex 中，key 是 PageID，value 是 LSN。
 4. 一条 WAL 日志可能更新了多个 Page（索引分裂），在 LogIndex 对有多条记录。
-5. 同时在 BufferPool 中给该该 Page 打上 outdate 标记，以便使得下次读取的时候从 LogIndex 重回放对应的日志。
+5. 同时在 BufferPool 中给该 Page 打上 outdate 标记，以便使得下次读取的时候从 LogIndex 重回放对应的日志。
 6. 当内存达到一定阈值时，LogIndex 异步将内存中的 hash 刷到盘上。
 
 ![image.png](../imgs/8_solution_to_outdated_pages_LogIndex.png)
@@ -217,7 +217,7 @@ PolarDB 支持一套 OLTP 场景型的数据在如下两种计算引擎下使用
 1. 如果对应 Page 不在内存中，仅仅记录 LogIndex。
 1. 如果对应的 Page 在内存中，则标记为 Outdate，并记录 LogIndex，回放过程完成。
 1. 用户 session 进程在读取 Page 时，读取正确的 Page 到 BufferPool 中，并通过 LogIndex 来回放相应的日志。
-1. 可以看到，主要的 IO 操作有原来的单个回放进程 offload 到了多个用户进程。
+1. 可以看到，主要的 IO 操作由原来的单个回放进程 offload 到了多个用户进程。
 
 通过上述优化，能显著减少回放的延迟，比 AWS Aurora 快 30 倍。
 
