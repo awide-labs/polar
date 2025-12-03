@@ -63,7 +63,7 @@ BAIL_OUT('startup process is gone!') if $pid eq 0;
 my ($time, $out, $err);
 for ($time = 0; $time < 60; $time = $time + 1)
 {
-	($out, $err) = $node_replica->run_command([ 'pstack', $pid ]);
+	($out, $err) = $node_replica->run_command([ 'eu-stack', '-p', $pid ]);
 	note "stdout: $out\nstderr: $err\n";
 	# make sure that target process is stopped at right stack
 	if ($out =~ /pg_usleep/)
