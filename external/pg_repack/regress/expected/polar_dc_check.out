@@ -52,19 +52,8 @@ INFO: repacking index "repack_normal.normal_idx_gist_c"
 INFO: repacking index "repack_normal.normal_pkey"
 -- partitioned table
 --- OK
-\! pg_repack -T 3600 -k -U polar_repack_superuser --dbname=contrib_regression_pg_repack --parent-table=repack_part_schema.prt --polar-dc-check
-INFO: repacking table "repack_part_schema.prt_p_0"
-NOTICE:  consistency check of table "repack_part_schema.prt_p_0" passed
-INFO: repacking table "repack_part_schema.prt_p_1"
-NOTICE:  consistency check of table "repack_part_schema.prt_p_1" passed
-INFO: repacking table "repack_part_schema.prt_p_2"
-NOTICE:  consistency check of table "repack_part_schema.prt_p_2" passed
-INFO: repacking table "repack_part_schema.prt_p_def_p_0"
-NOTICE:  consistency check of table "repack_part_schema.prt_p_def_p_0" passed
-INFO: repacking table "repack_part_schema.prt_p_def_p_1"
-NOTICE:  consistency check of table "repack_part_schema.prt_p_def_p_1" passed
-INFO: repacking table "repack_part_schema."prt_p_def_P_2""
-NOTICE:  consistency check of table "repack_part_schema."prt_p_def_P_2"" passed
+-- redirect following pg_repack call's stderr to /dev/null due to collation dependent output
+\! pg_repack -T 3600 -k -U polar_repack_superuser --dbname=contrib_regression_pg_repack --parent-table=repack_part_schema.prt --polar-dc-check 2>/dev/null
 --- ERROR, community bug
 -- \! pg_repack -T 3600 -k -U polar_repack_superuser --dbname=contrib_regression_pg_repack --parent-table=repack_part_schema.prt --polar-dc-check --only-indexes
 -- partition

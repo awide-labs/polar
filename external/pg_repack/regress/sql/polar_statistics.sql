@@ -7,7 +7,10 @@ SELECT t.name, u.value - t.value AS increase FROM polar_feature_utils.polar_uniq
 -- repack 1 partitioned table, including multiple partitions
 DELETE FROM repack_stats_tmp;
 INSERT INTO repack_stats_tmp SELECT id, name, value FROM polar_feature_utils.polar_unique_feature_usage WHERE name LIKE 'Repack%' ORDER BY id;
-\! pg_repack -T 3600 -k -U polar_repack_superuser --dbname=contrib_regression_pg_repack --parent-table=repack_part_schema.prt
+
+-- redirect following pg_repack call's stderr to /dev/null due to collation dependent output
+\! pg_repack -T 3600 -k -U polar_repack_superuser --dbname=contrib_regression_pg_repack --parent-table=repack_part_schema.prt 2>/dev/null
+
 SELECT t.name, u.value - t.value AS increase FROM polar_feature_utils.polar_unique_feature_usage u, repack_stats_tmp t WHERE u.id = t.id;
 
 -- repack 1 normal index

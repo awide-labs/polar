@@ -41,7 +41,7 @@ CREATE INDEX "prt_idx_HASH_d" on prt USING hash (d_num);
 -- show table definition
 \d+ prt
 \d+ prt_p_0
-\d+ prt_p_def
+\d prt_p_def
 \d prt_p_def_p_0
 
 -- Force index scan to prove the index is ok after repacking
@@ -53,8 +53,11 @@ SET enable_seqscan TO off;
 SELECT count(*) FROM prt;
 --- ERROR, cannot use --table for partitioned table
 \! pg_repack -T 3600 -k -U polar_repack_superuser --dbname=contrib_regression_pg_repack --table=repack_part_schema.prt
+
 --- OK, can only use --parent-table for partitioned table
-\! pg_repack -T 3600 -k -U polar_repack_superuser --dbname=contrib_regression_pg_repack --parent-table=repack_part_schema.prt
+-- redirect following pg_repack call's stderr to /dev/null due to collation dependent output
+\! pg_repack -T 3600 -k -U polar_repack_superuser --dbname=contrib_regression_pg_repack --parent-table=repack_part_schema.prt 2>/dev/null
+
 SELECT count(*) FROM prt;
 
 --
@@ -88,12 +91,19 @@ EXPLAIN (COSTS off) SELECT * FROM prt WHERE d_num = 0;
 SELECT count(*) FROM prt_p_def;
 --- ERROR, cannot use --table for partitioned partition
 \! pg_repack -T 3600 -k -U polar_repack_superuser --dbname=contrib_regression_pg_repack --table=repack_part_schema.prt_p_def
+
 --- OK, can only use --parent-table for partitioned partition
-\! pg_repack -T 3600 -k -U polar_repack_superuser --dbname=contrib_regression_pg_repack --parent-table=repack_part_schema.prt_p_def
+-- redirect following pg_repack call's stderr to /dev/null due to collation dependent output
+\! pg_repack -T 3600 -k -U polar_repack_superuser --dbname=contrib_regression_pg_repack --parent-table=repack_part_schema.prt_p_def 2>/dev/null
+
 --- OK, partitioned table and partitioned partition
-\! pg_repack -T 3600 -k -U polar_repack_superuser --dbname=contrib_regression_pg_repack --parent-table=repack_part_schema.prt --parent-table=repack_part_schema.prt_p_def
+-- redirect following pg_repack call's stderr to /dev/null due to collation dependent output
+\! pg_repack -T 3600 -k -U polar_repack_superuser --dbname=contrib_regression_pg_repack --parent-table=repack_part_schema.prt --parent-table=repack_part_schema.prt_p_def 2>/dev/null
+
 --- OK, partitioned table and sub-partition
-\! pg_repack -T 3600 -k -U polar_repack_superuser --dbname=contrib_regression_pg_repack --parent-table=repack_part_schema.prt --table=repack_part_schema.prt_p_def_p_1
+-- redirect following pg_repack call's stderr to /dev/null due to collation dependent output
+\! pg_repack -T 3600 -k -U polar_repack_superuser --dbname=contrib_regression_pg_repack --parent-table=repack_part_schema.prt --table=repack_part_schema.prt_p_def_p_1 2>/dev/null
+
 SELECT count(*) FROM prt_p_def;
 -- Scan by index, prove that index is ok after repacking partitioned partition
 SELECT * FROM prt WHERE a_int = 50;
@@ -113,8 +123,11 @@ SELECT count(*) FROM prt_p_def;
 \! pg_repack -T 3600 -k -U polar_repack_superuser --dbname=contrib_regression_pg_repack --table=repack_part_schema.prt_p_def_p_1
 --- OK
 \! pg_repack -T 3600 -k -U polar_repack_superuser --dbname=contrib_regression_pg_repack --parent-table=repack_part_schema.prt_p_def_p_1
+
 --- OK for multi sub-partition
-\! pg_repack -T 3600 -k -U polar_repack_superuser --dbname=contrib_regression_pg_repack --table=repack_part_schema.prt_p_def_p_0 --table=repack_part_schema.prt_p_def_p_1 --table='repack_part_schema."prt_p_def_P_2"'
+-- redirect following pg_repack call's stderr to /dev/null due to collation dependent output
+\! pg_repack -T 3600 -k -U polar_repack_superuser --dbname=contrib_regression_pg_repack --table=repack_part_schema.prt_p_def_p_0 --table=repack_part_schema.prt_p_def_p_1 --table='repack_part_schema."prt_p_def_P_2"' 2>/dev/null
+
 --- Error, upper case name should be preserved by '' and ""
 \! pg_repack -T 3600 -k -U polar_repack_superuser --dbname=contrib_regression_pg_repack --table=repack_part_schema.prt_p_def_p_0 --table=repack_part_schema.prt_p_def_p_1 --table=repack_part_schema.prt_p_def_P_2
 \! pg_repack -T 3600 -k -U polar_repack_superuser --dbname=contrib_regression_pg_repack --table=repack_part_schema.prt_p_def_p_0 --table=repack_part_schema.prt_p_def_p_1 --table="repack_part_schema.prt_p_def_P_2"
