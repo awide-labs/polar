@@ -37,7 +37,10 @@ DELETE FROM repack_normal.normal;
 
 -- partitioned table
 --- OK
-\! pg_repack -T 3600 -k -U polar_repack_superuser --dbname=contrib_regression_pg_repack --parent-table=repack_part_schema.prt --polar-dc-check
+
+-- redirect following pg_repack call's stderr to /dev/null due to collation dependent output
+\! pg_repack -T 3600 -k -U polar_repack_superuser --dbname=contrib_regression_pg_repack --parent-table=repack_part_schema.prt --polar-dc-check 2>/dev/null
+
 --- ERROR, community bug
 -- \! pg_repack -T 3600 -k -U polar_repack_superuser --dbname=contrib_regression_pg_repack --parent-table=repack_part_schema.prt --polar-dc-check --only-indexes
 
