@@ -59,7 +59,12 @@ sub exclude_some_cases
 		# which change guc in global mode to make bulk extend in different size
 		'polar_index_bulk_extend_for_coverage',
 		# which contains polar_parted_column_consistency_check to make deadlock in RO
-		'polar_check_partitioned_cols_consistency');
+		'polar_check_partitioned_cols_consistency',
+		# skip following core tests due to their need
+		# for special locales, collations or encodings
+		'collate.icu.utf8', 'collate.linux.utf8',
+		'json_encoding', 'jsonpath_encoding',
+		'unicode');
 	foreach my $case (@excluded_test_cases)
 	{
 		$all =~ s/[^\s]*$case//g;
@@ -202,7 +207,6 @@ foreach my $res (@prepare_results)
 		{
 			print `ps -ef | grep postgres: | xargs -n 1 -P 0 gcore`;
 		}
-		sleep(864000);
 		die "Failed to prepare test cases phase one for schedule [@{$res}]\n";
 	}
 
@@ -240,7 +244,6 @@ foreach my $res (@prepare_results)
 		{
 			print `ps -ef | grep postgres: | xargs -n 1 -P 0 gcore`;
 		}
-		sleep(864000);
 		die "Failed to prepare test cases phase two for schedule [@{$res}]\n";
 	}
 
