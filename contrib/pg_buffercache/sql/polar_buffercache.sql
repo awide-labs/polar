@@ -18,7 +18,7 @@ SELECT polar_drop_relation_buffers('test', 'main');
 --------------
 -- CLEAN UP
 --------------
-\c - postgres;
+RESET ROLE;
 DO LANGUAGE plpgsql
 $$
 begin
