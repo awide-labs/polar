@@ -9,6 +9,9 @@ SELECT * FROM t ORDER BY val LIMIT 1;
 
 DROP TABLE t;
 
+-- Save session user and database
+SELECT session_user AS initial_user, current_database() AS initial_db \gset
+
 -- uperuser
 create user test superuser;
 \c - test
@@ -22,7 +25,9 @@ SELECT * FROM t WHERE val = '[1,2,3]';
 SELECT * FROM t ORDER BY val LIMIT 1;
 DROP TABLE t;
 drop extension vector;
-\c - postgres
-\c postgres
+
+-- Reconnect to initial database as initial user
+\c :initial_db :initial_user
+
 drop database test_db;
 drop user test;
