@@ -114,7 +114,6 @@ foreach my $schedule (@prepared_schedules)
 		{
 			print `ps -ef | grep postgres: | xargs -n 1 -P 0 gcore`;
 		}
-		sleep(864000);
 		die
 		  "PolarDB regression test for [$schedule] with $replica_count RO nodes";
 	}
