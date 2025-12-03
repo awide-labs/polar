@@ -8,6 +8,18 @@ DATA = polar_parameter_manager--1.1.sql polar_parameter_manager--1.1--1.2.sql
 REGRESS = polar_parameter_manager polar_alter_force polar_cluster_settings
 POLAR_NO_EXTENSION_USER = 1
 
+# Apply locale and encoding settings only for "make check"
+ifeq ($(MAKECMDGOALS),check)
+NO_LOCALE = 1
+
+check: check-locale-message
+
+check-locale-message:
+	@echo "=================================================================="
+	@echo " Running polar_parameter_manager tests with collation and ctype: C"
+	@echo "=================================================================="
+endif
+
 NO_INSTALLCHECK = 1
 
 TAP_TESTS = 1
