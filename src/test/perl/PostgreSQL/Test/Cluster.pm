@@ -4076,17 +4076,17 @@ sub stop_child
 
 	PostgreSQL::Test::Utils::system_or_bail('kill', '-19', $pid);
 
-	my ($out, $err) = $self->run_command([ 'which', 'pstack' ]);
-	if ($err =~ qr/which:\s*no\s+pstack\s+in/i || (!$out && !$err))
+	my ($out, $err) = $self->run_command([ 'which', 'eu-stack' ]);
+	if ($err =~ qr/which:\s*no\s+eu-stack\s+in/i || (!$out && !$err))
 	{
-		note "There's no pstack command!\n";
+		note "There's no eu-stack command!\n";
 		return;
 	}
 
 	# try to recheck whether process's stack is safe after sigstop
 	while ($time < $timeout)
 	{
-		($out, $err) = $self->run_command([ 'pstack', $pid ]);
+		($out, $err) = $self->run_command([ 'eu-stack', '-p', $pid ]);
 		note "stdout: $out\nstderr: $err\n";
 		# make sure that target process is stopped at right stack
 		if ($out =~ /WaitLatch/)
