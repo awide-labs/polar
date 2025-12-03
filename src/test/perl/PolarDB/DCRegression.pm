@@ -1639,7 +1639,7 @@ sub prepare_one_case_phase_1
 			if (   $cur_crosstab eq 1
 				|| ($cur_trans_sql eq "" && $cur_trans_sqlstate ne "")
 				|| $cur_trans_sql =~ qr/\s*\\gexec\s+/i
-				|| $primary_ret->{_stder} =~
+				|| $primary_ret->{_stderr} =~
 				qr/\s+there is no transaction in progress/i)
 			{
 				$last_line = pop(@dst_sql_array);
