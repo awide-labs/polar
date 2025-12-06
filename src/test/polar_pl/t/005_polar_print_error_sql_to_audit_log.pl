@@ -25,8 +25,6 @@ use warnings;
 use PostgreSQL::Test::Cluster;
 use PostgreSQL::Test::Utils;
 use Test::More;
-use threads;
-use threads::shared;
 
 my $node_primary = PostgreSQL::Test::Cluster->new('primary');
 $node_primary->init(allows_streaming => 1);
@@ -39,44 +37,72 @@ $node_primary->append_conf(
 		logging_collector = on
 		log_statement = ddl
         polar_enable_multi_syslogger = true
+        polar_syslogger_num = 1
         log_destination = 'polar_multi_dest'
 	]
 );
 
 $node_primary->start;
-my $psql_session =
-  $node_primary->background_psql('postgres', on_error_stop => 0);
 my $data_dir = $node_primary->data_dir();
 my $log_dir = "$data_dir\/log";
-
-sub check_log
+sub audit_log_count
 {
-	my ($pattern, $check_func) = @_;
-	my $timeout = 60;
-	my $success = 0;
-	my $ret = 0;
+	my ($pattern) = @_;
+	my @files = glob("$log_dir/*audit*");
+	my $count = 0;
 
-	for $_ (1 .. $timeout)
+	for my $file (@files)
 	{
-		sleep(1);
-		$ret =
-		  qx{/bin/bash -c 'grep -wrn "$pattern" $log_dir/*audit* | wc -l'};
-		if ($check_func->($ret))
+		next unless -f $file;
+		open my $fh, '<', $file or next;
+		while (my $line = <$fh>)
 		{
-			$success = 1;
-			last;
+			$count++ if index($line, $pattern) != -1;
 		}
+		close $fh;
 	}
 
-	ok($success, "check log success: $ret");
+	return $count;
+}
+
+sub wait_for_audit_log
+{
+	my ($pattern, $predicate, $timeout) = @_;
+	$timeout //= 30;
+	my $count = 0;
+
+	for (1 .. $timeout)
+	{
+		$count = audit_log_count($pattern);
+		last if $predicate->($count);
+		sleep 1;
+	}
+
+	return $count;
+}
+
+sub clear_logs
+{
+	system('/bin/bash', '-c', "rm -rf $log_dir/*");
+}
+
+sub log_file_count
+{
+	my @files = glob("$log_dir/*");
+	return scalar(@files);
 }
 
 
-$psql_session->query("SELECT * FROM non_exist_table;");
-check_log("non_exist_table", sub { $_[0] > 0 });
+$node_primary->psql(
+	'postgres',
+	"SELECT * FROM non_exist_table;" . ("select pg_sleep(1);" x 2),
+	on_error_stop => 0);
 
-qx{/bin/bash -c "rm -rf $log_dir/*"};
-my $log_count = qx{/bin/bash -c "ls $log_dir | wc -l"};
+my $count = wait_for_audit_log("non_exist_table", sub { $_[0] > 0 });
+ok($count > 0, "audit log contains errors: $count");
+
+clear_logs();
+my $log_count = log_file_count();
 ok($log_count == 0, "log remove init ok");
 
 $node_primary->append_conf(
@@ -85,15 +111,17 @@ $node_primary->append_conf(
 	]
 );
 
-$psql_session->quit;
 $node_primary->restart;
-$psql_session =
-  $node_primary->background_psql('postgres', on_error_stop => 0);
-$psql_session->query("SELECT * FROM non_exist_table;");
-check_log("non_exist_table", sub { $_[0] == 0 });
+$node_primary->psql(
+	'postgres',
+	"SELECT * FROM non_exist_table;" . ("select pg_sleep(1);" x 2),
+	on_error_stop => 0);
 
-qx{/bin/bash -c "rm -rf $log_dir/*"};
-$log_count = qx{/bin/bash -c "ls $log_dir | wc -l"};
+$count = wait_for_audit_log("non_exist_table", sub { $_[0] > 0 }, 1);
+ok($count == 0, "audit log suppressed when disabled: $count");
+
+clear_logs();
+$log_count = log_file_count();
 ok($log_count == 0, "log remove init ok");
 
 $node_primary->append_conf(
@@ -103,15 +131,17 @@ $node_primary->append_conf(
 	]
 );
 
-$psql_session->quit;
 $node_primary->restart;
-$psql_session =
-  $node_primary->background_psql('postgres', on_error_stop => 0);
-$psql_session->query("SELECT * FROM non_exist_table;");
-check_log("non_exist_table", sub { $_[0] == 0 });
+$node_primary->psql(
+	'postgres',
+	"SELECT * FROM non_exist_table;" . ("select pg_sleep(1);" x 2),
+	on_error_stop => 0);
 
-qx{/bin/bash -c "rm -rf $log_dir/*"};
-$log_count = qx{/bin/bash -c "ls $log_dir | wc -l"};
+$count = wait_for_audit_log("non_exist_table", sub { $_[0] > 0 }, 1);
+ok($count == 0, "log_statement none hides SQL: $count");
+
+clear_logs();
+$log_count = log_file_count();
 ok($log_count == 0, "log remove init ok");
 
 $node_primary->append_conf(
@@ -122,13 +152,13 @@ $node_primary->append_conf(
 	]
 );
 
-$psql_session->quit;
 $node_primary->restart;
-$psql_session =
-  $node_primary->background_psql('postgres', on_error_stop => 0);
-$psql_session->query("SELECT * FROM non_exist_table;");
-check_log("42P01", sub { $_[0] == 1 });
-
+$node_primary->psql(
+	'postgres',
+	"SELECT * FROM non_exist_table;" . ("select pg_sleep(1);" x 2),
+	on_error_stop => 0);
+$count = wait_for_audit_log("42P01", sub { $_[0] > 0 });
+ok($count == 1, "error code logged once: $count");
 # done with the node
 $node_primary->stop;
 
