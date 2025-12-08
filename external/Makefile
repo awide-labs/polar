@@ -23,13 +23,13 @@ SUBDIRS += polar_worker
 ifeq ($(enable_minimal),no)
 # will be ignored under minimal mode
 # sort extention by names, less git conflict
-SUBDIRS += hll
-SUBDIRS += ip4r
-SUBDIRS += log_fdw
-SUBDIRS += pase
-SUBDIRS += pg_bigm
+#SUBDIRS += hll
+#SUBDIRS += ip4r
+#SUBDIRS += log_fdw
+#SUBDIRS += pase
+#SUBDIRS += pg_bigm
 SUBDIRS += pg_cron
-SUBDIRS += pg_jieba
+#SUBDIRS += pg_jieba
 SUBDIRS += pg_partman
 SUBDIRS += pg_profile
 SUBDIRS += pg_repack
@@ -41,7 +41,7 @@ SUBDIRS += pgtap
 SUBDIRS += pldebugger
 SUBDIRS += polar_advisor
 SUBDIRS += prefix
-SUBDIRS += roaringbitmap
+#SUBDIRS += roaringbitmap
 SUBDIRS += sequential_uuids
 SUBDIRS += varbitx
 endif # enable_minimal
