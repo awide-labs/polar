@@ -41,6 +41,7 @@ $node_primary->append_conf(
         polar_enable_output_search_path_to_log = true
         polar_enable_error_to_audit_log = true
         polar_enable_multi_syslogger = true
+        polar_syslogger_num = 1
         log_destination = 'polar_multi_dest'
 	]
 );
@@ -49,11 +50,30 @@ $node_primary->start;
 my $data_dir = $node_primary->data_dir();
 my $log_dir = "$data_dir\/log";
 
+sub wait_for_log_entry
+{
+	my ($pattern, $log_type, $tail_lines) = @_;
+	$tail_lines = 1 unless defined $tail_lines;
+	my $max_retries = 30;
+	my $retry = 0;
+	my $result = '';
+
+	while ($retry < $max_retries)
+	{
+		$result = qx{/bin/bash -c "if [ `ls $log_dir | wc -l` != \'0\' ] ; then cat `ls -t $log_dir/*${log_type}* | head -1` | tail -${tail_lines} | head -1; fi"};
+		if (index($result, $pattern) >= 0)
+		{
+			return $result;
+		}
+		sleep(1);
+		$retry++;
+	}
+	return $result;
+}
 
 # simple query to audit log
 $node_primary->safe_psql('postgres', "CREATE TABLE log_contain1(i int);");
-my $result =
-  qx{/bin/bash -c "if [ `ls $log_dir | wc -l` != \'0\' ] ; then cat `ls -t $log_dir/*audit* | head -1` | tail -1 | head -1; fi"};
+my $result = wait_for_log_entry("CREATE TABLE log_contain1(i int);", "audit");
 print("simple query to audit log result: " . $result);
 ok( index($result, "CREATE TABLE log_contain1(i int);") > 0
 	  && index($result, "\/*\"\$user\", public*\/") > 0,
@@ -61,8 +81,7 @@ ok( index($result, "CREATE TABLE log_contain1(i int);") > 0
 
 # simple query to slow log
 $node_primary->safe_psql('postgres', "SELECT pg_sleep(2);");
-$result =
-  qx{/bin/bash -c "if [ `ls $log_dir | wc -l` != \'0\' ] ; then cat `ls -t $log_dir/*slow* | head -1` | tail -1 | head -1; fi"};
+$result = wait_for_log_entry("SELECT pg_sleep(2);", "slow");
 print("simple query to slow log result: " . $result);
 ok( index($result, "SELECT pg_sleep(2);") > 0
 	  && index($result, "\/*\"\$user\", public*\/") > 0,
@@ -70,8 +89,7 @@ ok( index($result, "SELECT pg_sleep(2);") > 0
 
 # error msg to audit log
 $node_primary->psql('postgres', "SELECT 1/0;", on_error_stop => 0);
-$result =
-  qx{/bin/bash -c "if [ `ls $log_dir | wc -l` != \'0\' ] ; then cat `ls -t $log_dir/*audit* | head -1` | tail -1 | head -1; fi"};
+$result = wait_for_log_entry("SELECT 1/0;", "audit");
 print("error msg to audit log result: " . $result);
 ok( index($result, "SELECT 1/0;") > 0
 	  && index($result, "\/*\"\$user\", public*\/") > 0,
@@ -94,8 +112,7 @@ $node_primary->pgbench(
 	});
 
 # execute query to slow log
-$result =
-  qx{/bin/bash -c "if [ `ls $log_dir | wc -l` != \'0\' ] ; then cat `ls -t $log_dir/*slow* | head -1` | tail -2 | head -1; fi"};
+$result = wait_for_log_entry("select pg_sleep(1.5);", "slow", 2);
 print("execute query to slow log result: " . $result);
 ok( index($result, "select pg_sleep(1.5);") > 0
 	  && index($result, "\/*\"\$user\", public*\/") > 0,
@@ -118,8 +135,7 @@ $node_primary->pgbench(
 	});
 
 # execute query to audit log
-$result =
-  qx{/bin/bash -c "if [ `ls $log_dir | wc -l` != \'0\' ] ; then cat `ls -t $log_dir/*audit* | head -1` | tail -2 | head -1; fi"};
+$result = wait_for_log_entry("CREATE TABLE log_contain2(i int);", "audit", 2);
 print("execute query to audit log result: " . $result);
 ok( index($result, "CREATE TABLE log_contain2(i int);") > 0
 	  && index($result, "\/*\"\$user\", public*\/") > 0,
