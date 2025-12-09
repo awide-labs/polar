@@ -1357,11 +1357,12 @@ polar_set_main_data(void *data, uint32 len)
 	static XLogRecData polar_mainrdata;
 
 	Assert(mainrdata_last == (XLogRecData *) &mainrdata_head);
+	Assert(mainrdata_head == NULL);
 	Assert(mainrdata_len == 0);
 	polar_mainrdata.next = NULL;
 	polar_mainrdata.data = data;
 	polar_mainrdata.len = len;
-	mainrdata_last->next = &polar_mainrdata;
+	mainrdata_head = &polar_mainrdata;
 	mainrdata_last = &polar_mainrdata;
 	mainrdata_len += len;
 }
