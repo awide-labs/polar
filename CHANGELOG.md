@@ -15,5 +15,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   space reservation process, eliminating a major bottleneck where packets were
   marked as free by writing into the queue while holding a global spinlock
   (XCOM-39)
+- Reduce contention on XLogCtl->info_lck by publishing replay LSN updates with
+  atomic writes and a seqlock (XCOM-35)
 
 [unreleased]: https://bitbucket.org/awydex/polardb/branches/compare/POLARDB_15_STABLE..v15.14.5.0
