@@ -39,6 +39,7 @@ $node_primary->append_conf(
         polar_enable_syslog_pipe_buffer = false
         polar_enable_syslog_file_buffer = false
         polar_enable_multi_syslogger = true
+        polar_syslogger_num = 1
         log_destination = 'polar_multi_dest'
 	]
 );
