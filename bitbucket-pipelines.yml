@@ -88,7 +88,7 @@ pipelines:
           script:
             - |
               export CONTAINER_IMAGES="rocky9 ubuntu24.04"
-              export DEBUG_MODES="on"
+              export DEBUG_MODES="off"
               export RULES="precheck-ci"
             - *build-test-script
 
