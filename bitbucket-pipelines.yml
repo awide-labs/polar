@@ -65,7 +65,7 @@ definitions:
                    if [ -f /etc/bashrc ]; then source /etc/bashrc; fi && \
                    set -eu && \
                    JOBS=\$(nproc) && \
-                   eatmydata ./build.sh --wr=1 --debug=${debug_mode} --jobs=\$JOBS --ec='--enable-tap-tests' && \
+                   eatmydata ./build.sh --noinstall --debug=${debug_mode} --jobs=\$JOBS --ec='--enable-tap-tests' && \
                    for rule in $RULES; do \
                      echo \"=== Running \$rule ===\" && \
                      eatmydata make \$rule -j\$JOBS || (echo \"=== \$rule FAILED ===\" && exit 1); \
