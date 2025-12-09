@@ -1742,11 +1742,27 @@ END
 		if ($node->polar_get_node_type ne 'replica')
 		{
 			my $datadir = $node->data_dir;
-			PostgreSQL::Test::Utils::system_or_bail('pg_checksums', '-D',
-				$datadir)
-			  if ( $datadir
+			if ( $datadir
 				&& -e `printf $datadir`
-				&& $node->{_enable_data_checksums});
+				&& $node->{_enable_data_checksums})
+			{
+				# Capture output from pg_checksums to diagnose failures
+				# Note: test should have already called stop() before END block
+				my ($stdout, $stderr);
+				my $result = IPC::Run::run [ 'pg_checksums', '-D', $datadir ],
+					'>', \$stdout, '2>', \$stderr;
+				my $checksum_exit = $?;
+				my $exit_code = ($checksum_exit >> 8);
+				
+				if (!$result || $exit_code != 0)
+				{
+					# Build diagnostic message including stdout and stderr
+					my $diag = "command \"pg_checksums -D $datadir\" exited with value $exit_code";
+					$diag .= "\nstdout: $stdout" if $stdout;
+					$diag .= "\nstderr: $stderr" if $stderr;
+					BAIL_OUT($diag);
+				}
+			}
 			next;
 		}
 
