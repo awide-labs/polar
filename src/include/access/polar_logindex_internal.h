@@ -57,7 +57,7 @@
 /* Define macro for const config value */
 #define LOG_INDEX_MEM_TBL_SEG_NUM           4096
 #define LOG_INDEX_MEM_TBL_HASH_NUM          (LOG_INDEX_MEM_TBL_SEG_NUM/2)
-#define LOG_INDEX_MEM_TBL_HASH_LOCK_NUM     (LOG_INDEX_MEM_TBL_HASH_NUM/64)
+#define LOG_INDEX_MEM_TBL_HASH_LOCK_NUM     (LOG_INDEX_MEM_TBL_HASH_NUM/2)
 #define LOG_INDEX_MEM_TBL_HASH_PAGE(tag) \
 	(tag_hash(tag, sizeof(BufferTag)) % LOG_INDEX_MEM_TBL_HASH_NUM)
 
@@ -369,7 +369,7 @@ typedef struct log_index_promoted_info_t
 
 typedef struct log_index_snapshot_t
 {
-	polar_lwlock_mini_padded *lwlock_array;
+	LWLockPadded *lwlock_array;
 	int			mem_tbl_size;
 	logindex_table_flushable table_flushable;
 	void	   *extra_data;		/* Extra data for table_flushable to use. */

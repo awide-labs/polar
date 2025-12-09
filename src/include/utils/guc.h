@@ -254,7 +254,7 @@ typedef enum
 #define GUC_UNIT				(GUC_UNIT_MEMORY | GUC_UNIT_TIME)
 
 /* POLAR defines start */
-#define MAX_NUM_OF_PARALLEL_BGWRITER	24
+#define MAX_NUM_OF_PARALLEL_BGWRITER	64
 /* POLAR end */
 
 /*
