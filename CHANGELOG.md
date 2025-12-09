@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Removed
+
+- The following third-party extensions have been removed (XCOM-61):
+  - hll
+  - log_fdw
+  - pase
+  - pg_bigm
+  - pg_jieba
+  - pgvector
+  - roaringbitmap
+
 ### Performance
 
 - Reduce contention on the flush list on RW node by splitting it into multiple
