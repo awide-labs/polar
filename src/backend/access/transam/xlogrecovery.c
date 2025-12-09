@@ -56,6 +56,7 @@
 #include "storage/pmsignal.h"
 #include "storage/proc.h"
 #include "storage/procarray.h"
+#include "storage/seqlock.h"
 #include "storage/spin.h"
 #include "utils/builtins.h"
 #include "utils/guc.h"
@@ -342,17 +343,21 @@ typedef struct XLogRecoveryCtlData
 	/*
 	 * Last record successfully replayed.
 	 */
-	XLogRecPtr	lastReplayedReadRecPtr; /* start position */
-	pg_atomic_uint64 lastReplayedEndRecPtr; /* end+1 position */
-	TimeLineID	lastReplayedTLI;	/* timeline */
+	char				lastReplayedRecPad[PG_CACHE_LINE_SIZE];
+	pg_seqlock			lastReplayedRecSeq;
+	pg_atomic_uint64	lastReplayedReadRecPtr; /* start position */
+	pg_atomic_uint64	lastReplayedEndRecPtr; /* end+1 position */
+	pg_atomic_uint32	lastReplayedTLI;	/* timeline */
 
 	/*
 	 * When we're currently replaying a record, ie. in a redo function,
 	 * replayEndRecPtr points to the end+1 of the record being replayed,
 	 * otherwise it's equal to lastReplayedEndRecPtr.
 	 */
-	XLogRecPtr	replayEndRecPtr;
-	TimeLineID	replayEndTLI;
+	char				replayEndRecPad[PG_CACHE_LINE_SIZE];
+	pg_seqlock			replayEndRecSeq;
+	pg_atomic_uint64	replayEndRecPtr;
+	pg_atomic_uint32	replayEndTLI;
 	/* timestamp of last COMMIT/ABORT record replayed (or being replayed) */
 	TimestampTz recoveryLastXTime;
 
@@ -1531,8 +1536,15 @@ FinishWalRecovery(void)
 	}
 	else
 	{
-		lastRec = XLogRecoveryCtl->lastReplayedReadRecPtr;
-		lastRecTLI = XLogRecoveryCtl->lastReplayedTLI;
+		for (;;)
+		{
+			uint64 seq = pg_seqlock_read_begin(&XLogRecoveryCtl->lastReplayedRecSeq);
+			lastRec = (XLogRecPtr) pg_atomic_read_u64(&XLogRecoveryCtl->lastReplayedReadRecPtr);
+			lastRecTLI = (TimeLineID) pg_atomic_read_u32(&XLogRecoveryCtl->lastReplayedTLI);
+			if (likely(!pg_seqlock_read_retry(&XLogRecoveryCtl->lastReplayedRecSeq, seq)))
+				break;
+			pg_spin_delay();
+		}
 	}
 
 	if (result->polar_logindex_promote_ro)
@@ -1565,8 +1577,11 @@ FinishWalRecovery(void)
 	if (POLAR_ENABLE_XLOG_BUFFER())
 	{
 		XLogRecPtr	end_lsn;
+		XLogRecPtr	lastReplayedRead;
 
-		if (lastRec == XLogRecoveryCtl->lastReplayedReadRecPtr)
+		lastReplayedRead = pg_atomic_read_u64(&XLogRecoveryCtl->lastReplayedReadRecPtr);
+
+		if (lastRec == lastReplayedRead)
 			end_lsn = pg_atomic_read_u64(&XLogRecoveryCtl->lastReplayedEndRecPtr);
 		else
 			end_lsn = lastRec + XLOG_BLCKSZ;
@@ -1728,19 +1743,19 @@ PerformWalRecovery(void)
 	SpinLockAcquire(&XLogRecoveryCtl->info_lck);
 	if (RedoStartLSN < CheckPointLoc)
 	{
-		XLogRecoveryCtl->lastReplayedReadRecPtr = InvalidXLogRecPtr;
+		pg_atomic_write_u64(&XLogRecoveryCtl->lastReplayedReadRecPtr, InvalidXLogRecPtr);
 		pg_atomic_write_u64(&XLogRecoveryCtl->lastReplayedEndRecPtr, RedoStartLSN);
-		XLogRecoveryCtl->lastReplayedTLI = RedoStartTLI;
+		pg_atomic_write_u32(&XLogRecoveryCtl->lastReplayedTLI, RedoStartTLI);
 	}
 	else
 	{
-		XLogRecoveryCtl->lastReplayedReadRecPtr = xlogreader->ReadRecPtr;
+		pg_atomic_write_u64(&XLogRecoveryCtl->lastReplayedReadRecPtr, xlogreader->ReadRecPtr);
 		pg_atomic_write_u64(&XLogRecoveryCtl->lastReplayedEndRecPtr, xlogreader->EndRecPtr);
-		XLogRecoveryCtl->lastReplayedTLI = CheckPointTLI;
+		pg_atomic_write_u32(&XLogRecoveryCtl->lastReplayedTLI, CheckPointTLI);
 	}
 	/* POLAR: init shared replay read_recptr as lastReplayedEndRecPtr */
 	pg_atomic_write_u64(&XLogRecoveryCtl->polar_replay_read_recptr, pg_atomic_read_u64(&XLogRecoveryCtl->lastReplayedEndRecPtr));
-	XLogRecoveryCtl->replayEndRecPtr = pg_atomic_read_u64(&XLogRecoveryCtl->lastReplayedEndRecPtr);
+	pg_atomic_write_u64(&XLogRecoveryCtl->replayEndRecPtr, pg_atomic_read_u64(&XLogRecoveryCtl->lastReplayedEndRecPtr));
 	XLogRecoveryCtl->replayEndTLI = XLogRecoveryCtl->lastReplayedTLI;
 	XLogRecoveryCtl->recoveryLastXTime = 0;
 	XLogRecoveryCtl->currentChunkStartTime = 0;
@@ -2091,11 +2106,11 @@ ApplyWalRecord(XLogReaderState *xlogreader, XLogRecord *record,
 	 *
 	 * POLAR: update shared replay read_recptr too.
 	 */
-	SpinLockAcquire(&XLogRecoveryCtl->info_lck);
+	pg_seqlock_write_begin(&XLogRecoveryCtl->replayEndRecSeq);
 	pg_atomic_write_u64(&XLogRecoveryCtl->polar_replay_read_recptr, xlogreader->ReadRecPtr);
-	XLogRecoveryCtl->replayEndRecPtr = xlogreader->EndRecPtr;
-	XLogRecoveryCtl->replayEndTLI = *replayTLI;
-	SpinLockRelease(&XLogRecoveryCtl->info_lck);
+	pg_atomic_write_u64(&XLogRecoveryCtl->replayEndRecPtr, xlogreader->EndRecPtr);
+	pg_atomic_write_u32(&XLogRecoveryCtl->replayEndTLI, *replayTLI);
+	pg_seqlock_write_end(&XLogRecoveryCtl->replayEndRecSeq);
 
 	/*
 	 * If we are attempting to enter Hot Standby mode, process XIDs we see
@@ -2187,11 +2202,11 @@ ApplyWalRecord(XLogReaderState *xlogreader, XLogRecord *record,
 	 * Update lastReplayedEndRecPtr after this record has been successfully
 	 * replayed.
 	 */
-	SpinLockAcquire(&XLogRecoveryCtl->info_lck);
-	XLogRecoveryCtl->lastReplayedReadRecPtr = xlogreader->ReadRecPtr;
+	pg_seqlock_write_begin(&XLogRecoveryCtl->lastReplayedRecSeq);
+	pg_atomic_write_u64(&XLogRecoveryCtl->lastReplayedReadRecPtr, xlogreader->ReadRecPtr);
 	pg_atomic_write_u64(&XLogRecoveryCtl->lastReplayedEndRecPtr, xlogreader->EndRecPtr);
-	XLogRecoveryCtl->lastReplayedTLI = *replayTLI;
-	SpinLockRelease(&XLogRecoveryCtl->info_lck);
+	pg_atomic_write_u32(&XLogRecoveryCtl->lastReplayedTLI, *replayTLI);
+	pg_seqlock_write_end(&XLogRecoveryCtl->lastReplayedRecSeq);
 
 	/*
 	 * POLAR: If logindex_mini_trans_lsn is valid which means we parse xlog in
@@ -2366,9 +2381,16 @@ CheckRecoveryConsistency(void)
 	 * assume that we are called in the startup process, and hence don't need
 	 * a lock to read lastReplayedEndRecPtr
 	 */
-	lastReplayedReadRecPtr = XLogRecoveryCtl->lastReplayedReadRecPtr;
-	lastReplayedEndRecPtr = pg_atomic_read_u64(&XLogRecoveryCtl->lastReplayedEndRecPtr);
-	lastReplayedTLI = XLogRecoveryCtl->lastReplayedTLI;
+	for (;;)
+	{
+		uint64 seq = pg_seqlock_read_begin(&XLogRecoveryCtl->lastReplayedRecSeq);
+		lastReplayedReadRecPtr = pg_atomic_read_u64(&XLogRecoveryCtl->lastReplayedReadRecPtr);
+		lastReplayedEndRecPtr = pg_atomic_read_u64(&XLogRecoveryCtl->lastReplayedEndRecPtr);
+		lastReplayedTLI = pg_atomic_read_u32(&XLogRecoveryCtl->lastReplayedTLI);
+		if (likely(!pg_seqlock_read_retry(&XLogRecoveryCtl->lastReplayedRecSeq, seq)))
+			break;
+		pg_spin_delay();
+	}
 
 	/*
 	 * Have we reached the point where our base backup was completed?
@@ -4887,13 +4909,23 @@ GetXLogReplayRecPtr(TimeLineID *replayTLI)
 	XLogRecPtr	recptr;
 	TimeLineID	tli;
 
-	SpinLockAcquire(&XLogRecoveryCtl->info_lck);
-	recptr = pg_atomic_read_u64(&XLogRecoveryCtl->lastReplayedEndRecPtr);
-	tli = XLogRecoveryCtl->lastReplayedTLI;
-	SpinLockRelease(&XLogRecoveryCtl->info_lck);
+	if (replayTLI == NULL)
+	{
+		recptr = pg_atomic_read_u64(&XLogRecoveryCtl->lastReplayedEndRecPtr);
+		return recptr;
+	}
 
-	if (replayTLI)
-		*replayTLI = tli;
+	for (;;)
+	{
+		uint64 seq = pg_seqlock_read_begin(&XLogRecoveryCtl->lastReplayedRecSeq);
+		recptr = pg_atomic_read_u64(&XLogRecoveryCtl->lastReplayedEndRecPtr);
+		tli = pg_atomic_read_u32(&XLogRecoveryCtl->lastReplayedTLI);
+		if (likely(!pg_seqlock_read_retry(&XLogRecoveryCtl->lastReplayedRecSeq, seq)))
+			break;
+		pg_spin_delay();
+	}
+
+	*replayTLI = tli;
 	return recptr;
 }
 
@@ -4917,13 +4949,23 @@ GetCurrentReplayRecPtr(TimeLineID *replayEndTLI)
 	XLogRecPtr	recptr;
 	TimeLineID	tli;
 
-	SpinLockAcquire(&XLogRecoveryCtl->info_lck);
-	recptr = XLogRecoveryCtl->replayEndRecPtr;
-	tli = XLogRecoveryCtl->replayEndTLI;
-	SpinLockRelease(&XLogRecoveryCtl->info_lck);
+	if (replayEndTLI == NULL)
+	{
+		recptr = pg_atomic_read_u64(&XLogRecoveryCtl->replayEndRecPtr);
+		return recptr;
+	}
 
-	if (replayEndTLI)
-		*replayEndTLI = tli;
+	for (;;)
+	{
+		uint64 seq = pg_seqlock_read_begin(&XLogRecoveryCtl->replayEndRecSeq);
+		recptr = pg_atomic_read_u64(&XLogRecoveryCtl->replayEndRecPtr);
+		tli = pg_atomic_read_u32(&XLogRecoveryCtl->replayEndTLI);
+		if (likely(!pg_seqlock_read_retry(&XLogRecoveryCtl->replayEndRecSeq, seq)))
+			break;
+		pg_spin_delay();
+	}
+
+	*replayEndTLI = tli;
 	return recptr;
 }
 
@@ -5302,9 +5344,7 @@ polar_get_last_replayed_read_ptr(void)
 {
 	XLogRecPtr	lsn;
 
-	SpinLockAcquire(&XLogRecoveryCtl->info_lck);
-	lsn = XLogRecoveryCtl->lastReplayedReadRecPtr;
-	SpinLockRelease(&XLogRecoveryCtl->info_lck);
+	lsn = pg_atomic_read_u64(&XLogRecoveryCtl->lastReplayedReadRecPtr);
 
 	return lsn;
 }

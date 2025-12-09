@@ -95,6 +95,7 @@
 #include "storage/procarray.h"
 #include "storage/reinit.h"
 #include "storage/sinvaladt.h"
+#include "storage/seqlock.h"
 #include "storage/smgr.h"
 #include "storage/spin.h"
 #include "storage/sync.h"
