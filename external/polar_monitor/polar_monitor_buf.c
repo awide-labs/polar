@@ -457,7 +457,9 @@ polar_flushlist(PG_FUNCTION_ARGS)
 
 	TupleDesc	tupdesc;
 	Datum		values[FLUSH_LIST_COLUMN_SIZE];
+	uint64		values_u64[FLUSH_LIST_COLUMN_SIZE];
 	bool		nulls[FLUSH_LIST_COLUMN_SIZE];
+	int			i;
 
 	if (!polar_flush_list_enabled())
 		PG_RETURN_NULL();
@@ -474,15 +476,27 @@ polar_flushlist(PG_FUNCTION_ARGS)
 	tupdesc = BlessTupleDesc(tupdesc);
 
 	MemSet(nulls, 0, sizeof(nulls));
+	MemSet(values_u64, 0, sizeof(values_u64));
 
-	values[0] = Int64GetDatum(pg_atomic_read_u32(&polar_flush_ctl->count));
-	values[1] = UInt64GetDatum(pg_atomic_read_u64(&polar_flush_ctl->insert));
-	values[2] = UInt64GetDatum(pg_atomic_read_u64(&polar_flush_ctl->remove));
-	values[3] = UInt64GetDatum(pg_atomic_read_u64(&polar_flush_ctl->find));
-	values[4] = UInt64GetDatum(pg_atomic_read_u64(&polar_flush_ctl->batch_read));
-	values[5] = UInt64GetDatum(pg_atomic_read_u64(&polar_flush_ctl->cbuf));
-	values[6] = UInt64GetDatum(pg_atomic_read_u64(&polar_flush_ctl->vm_insert));
-	values[7] = UInt64GetDatum(pg_atomic_read_u64(&polar_flush_ctl->vm_remove));
+	for (i = 0; i < POLAR_FLUSHLIST_PARTITIONS; i++)
+	{
+		values_u64[0] += pg_atomic_read_u32(&polar_flush_ctl->lists[i].count);
+		values_u64[1] += pg_atomic_read_u64(&polar_flush_ctl->lists[i].insert);
+		values_u64[2] += pg_atomic_read_u64(&polar_flush_ctl->lists[i].remove);
+		values_u64[3] += pg_atomic_read_u64(&polar_flush_ctl->lists[i].find);
+		values_u64[4] += pg_atomic_read_u64(&polar_flush_ctl->lists[i].batch_read);
+		values_u64[5] += pg_atomic_read_u64(&polar_flush_ctl->lists[i].cbuf);
+		values_u64[6] += pg_atomic_read_u64(&polar_flush_ctl->lists[i].vm_insert);
+		values_u64[7] += pg_atomic_read_u64(&polar_flush_ctl->lists[i].vm_remove);
+		/*
+		 * fake_lsn has been deleted, for compatibility with older versions,
+		 * we reserve this column and set it to 0.
+		 */
+	}
+
+	for (i = 0; i < FLUSH_LIST_COLUMN_SIZE; i++) {
+		values[i] = UInt64GetDatum(values_u64[i]);
+	}
 
 	PG_RETURN_DATUM(HeapTupleGetDatum(heap_form_tuple(tupdesc, values, nulls)));
 }

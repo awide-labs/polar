@@ -287,7 +287,6 @@ extern XLogRecPtr polar_get_consistent_lsn(void);
 extern void polar_checkpointer_do_reload(void);
 extern void polar_set_available_state(bool state);
 extern bool polar_get_available_state(void);
-extern XLogRecPtr polar_get_xlog_insert_ptr_nolock(void);
 
 /*
  * Routines used by xlogrecovery.c to call back into xlog.c during recovery.
