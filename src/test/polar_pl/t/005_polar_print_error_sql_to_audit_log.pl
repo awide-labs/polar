@@ -25,8 +25,6 @@ use warnings;
 use PostgreSQL::Test::Cluster;
 use PostgreSQL::Test::Utils;
 use Test::More;
-use threads;
-use threads::shared;
 
 my $node_primary = PostgreSQL::Test::Cluster->new('primary');
 $node_primary->init(allows_streaming => 1);
@@ -39,6 +37,7 @@ $node_primary->append_conf(
 		logging_collector = on
 		log_statement = ddl
         polar_enable_multi_syslogger = true
+        polar_syslogger_num = 1
         log_destination = 'polar_multi_dest'
 	]
 );
@@ -46,35 +45,64 @@ $node_primary->append_conf(
 $node_primary->start;
 my $data_dir = $node_primary->data_dir();
 my $log_dir = "$data_dir\/log";
-my $ret : shared;
-$ret = 0;
-
-sub check_log
+sub audit_log_count
 {
-	my $sleep_time = shift;
-	my $pattern = shift;
+	my ($pattern) = @_;
+	my @files = glob("$log_dir/*audit*");
+	my $count = 0;
 
-	sleep $sleep_time;
+	for my $file (@files)
+	{
+		next unless -f $file;
+		open my $fh, '<', $file or next;
+		while (my $line = <$fh>)
+		{
+			$count++ if index($line, $pattern) != -1;
+		}
+		close $fh;
+	}
 
-	$ret =
-	  qx{/bin/bash -c 'grep -wrn "non_exist_table" $log_dir/*audit* | wc -l'};
+	return $count;
+}
 
-	print("thread result: " . $ret);
+sub wait_for_audit_log
+{
+	my ($pattern, $predicate, $timeout) = @_;
+	$timeout //= 30;
+	my $count = 0;
+
+	for (1 .. $timeout)
+	{
+		$count = audit_log_count($pattern);
+		last if $predicate->($count);
+		sleep 1;
+	}
+
+	return $count;
+}
+
+sub clear_logs
+{
+	system('/bin/bash', '-c', "rm -rf $log_dir/*");
+}
+
+sub log_file_count
+{
+	my @files = glob("$log_dir/*");
+	return scalar(@files);
 }
 
 
-my $thr = threads->create('check_log', 1, "non_exist_table");
 $node_primary->psql(
 	'postgres',
 	"SELECT * FROM non_exist_table;" . ("select pg_sleep(1);" x 2),
 	on_error_stop => 0);
-$thr->join();
 
-ok($ret > 0, "thread check log success: $ret");
-$ret = -1;
+my $count = wait_for_audit_log("non_exist_table", sub { $_[0] > 0 });
+ok($count > 0, "audit log contains errors: $count");
 
-qx{/bin/bash -c "rm -rf $log_dir/*"};
-my $log_count = qx{/bin/bash -c "ls $log_dir | wc -l"};
+clear_logs();
+my $log_count = log_file_count();
 ok($log_count == 0, "log remove init ok");
 
 $node_primary->append_conf(
@@ -84,18 +112,16 @@ $node_primary->append_conf(
 );
 
 $node_primary->restart;
-$thr = threads->create('check_log', 1, "non_exist_table");
 $node_primary->psql(
 	'postgres',
 	"SELECT * FROM non_exist_table;" . ("select pg_sleep(1);" x 2),
 	on_error_stop => 0);
-$thr->join();
 
-ok($ret == 0, "thread check log success: $ret");
-$ret = -1;
+$count = wait_for_audit_log("non_exist_table", sub { $_[0] > 0 }, 1);
+ok($count == 0, "audit log suppressed when disabled: $count");
 
-qx{/bin/bash -c "rm -rf $log_dir/*"};
-$log_count = qx{/bin/bash -c "ls $log_dir | wc -l"};
+clear_logs();
+$log_count = log_file_count();
 ok($log_count == 0, "log remove init ok");
 
 $node_primary->append_conf(
@@ -106,18 +132,16 @@ $node_primary->append_conf(
 );
 
 $node_primary->restart;
-$thr = threads->create('check_log', 1, "non_exist_table");
 $node_primary->psql(
 	'postgres',
 	"SELECT * FROM non_exist_table;" . ("select pg_sleep(1);" x 2),
 	on_error_stop => 0);
-$thr->join();
 
-ok($ret == 0, "thread check log success: $ret");
-$ret = -1;
+$count = wait_for_audit_log("non_exist_table", sub { $_[0] > 0 }, 1);
+ok($count == 0, "log_statement none hides SQL: $count");
 
-qx{/bin/bash -c "rm -rf $log_dir/*"};
-$log_count = qx{/bin/bash -c "ls $log_dir | wc -l"};
+clear_logs();
+$log_count = log_file_count();
 ok($log_count == 0, "log remove init ok");
 
 $node_primary->append_conf(
@@ -129,14 +153,12 @@ $node_primary->append_conf(
 );
 
 $node_primary->restart;
-$thr = threads->create('check_log', 1, "42P01");
 $node_primary->psql(
 	'postgres',
 	"SELECT * FROM non_exist_table;" . ("select pg_sleep(1);" x 2),
 	on_error_stop => 0);
-$thr->join();
-
-ok($ret == 1, "thread check log success: $ret");
+$count = wait_for_audit_log("42P01", sub { $_[0] > 0 });
+ok($count == 1, "error code logged once: $count");
 # done with the node
 $node_primary->stop;
 
