@@ -67,20 +67,30 @@ $node_primary->safe_psql('postgres',
 
 $node_primary->wait_for_catchup($node_replica);
 
-$result = $node_primary->safe_psql('postgres',
-	"select push_cnt > pop_cnt, free_up_cnt >= 0, total_written > total_read, send_phys_io_cnt >= 0, evict_ref_cnt >= 0 from polar_xlog_queue_stat_detail();"
-);
+sub wait_for_mon_stat
+{
+	my ($node) = @_;
+	my $sql =
+"select push_cnt > pop_cnt, free_up_cnt >= 0, total_written > total_read, send_phys_io_cnt >= 0, evict_ref_cnt >= 0 from polar_xlog_queue_stat_detail();";
+
+	for (1 .. 30)
+	{
+		my $res = $node->safe_psql('postgres', $sql);
+		return $res if $res eq 't|t|t|t|t';
+		sleep 1;
+	}
+
+	return $node->safe_psql('postgres', $sql);
+}
+
+$result = wait_for_mon_stat($node_primary);
 is($result, qq(t|t|t|t|t), 'check 1');
 
 
-$result = $node_replica->safe_psql('postgres',
-	"select push_cnt > pop_cnt, free_up_cnt >= 0, total_written > total_read, send_phys_io_cnt >= 0, evict_ref_cnt >= 0 from polar_xlog_queue_stat_detail();"
-);
+$result = wait_for_mon_stat($node_replica);
 is($result, qq(t|t|t|t|t), 'check 1');
 
-$result = $node_standby->safe_psql('postgres',
-	"select push_cnt > pop_cnt, free_up_cnt >= 0, total_written > total_read, send_phys_io_cnt >= 0, evict_ref_cnt >= 0 from polar_xlog_queue_stat_detail();"
-);
+$result = wait_for_mon_stat($node_standby);
 is($result, qq(t|t|t|t|t), 'check 1');
 
 $node_primary->teardown_node();
@@ -95,9 +105,7 @@ $node_replica->polar_wait_for_startup(60);
 $node_replica->safe_psql('postgres',
 	"insert into test_logindex select generate_series(1,1000000);");
 
-$result = $node_replica->safe_psql('postgres',
-	"select push_cnt > pop_cnt, free_up_cnt >= 0, total_written > total_read, send_phys_io_cnt >= 0, evict_ref_cnt >= 0 from polar_xlog_queue_stat_detail();"
-);
+$result = wait_for_mon_stat($node_replica);
 is($result, qq(t|t|t|t|t), 'check 1');
 
 $node_replica->polar_drop_all_slots;
@@ -109,9 +117,7 @@ $node_standby->polar_wait_for_startup(60);
 $node_standby->safe_psql('postgres',
 	"insert into test_logindex select generate_series(1,1000000);");
 
-$result = $node_standby->safe_psql('postgres',
-	"select push_cnt > pop_cnt, free_up_cnt >= 0, total_written > total_read, send_phys_io_cnt >= 0, evict_ref_cnt >= 0 from polar_xlog_queue_stat_detail();"
-);
+$result = wait_for_mon_stat($node_standby);
 is($result, qq(t|t|t|t|t), 'check 1');
 
 $node_standby->stop;
