@@ -637,7 +637,7 @@ endif
 # PolarDB vfs and pfsd lib
 
 ifeq ($(with_pfsd),yes)
-polar_libpfsd = -L/usr/local/polarstore/pfsd/lib -lpfsd -lpthread
+polar_libpfsd = -L/usr/local/polarstore/pfsd/lib -lpfsd -lpthread -lfolly -lstdc++ -lglog -lgflags -ldouble-conversion -lfmt -levent -lboost_filesystem -lboost_regex -liberty -ldl -lm
 polar_flagpfsd = -I/usr/local/polarstore/pfsd/include -fPIC
 endif
 
