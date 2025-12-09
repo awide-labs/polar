@@ -101,12 +101,12 @@
 	} while (0)
 
 /* Log information of BufferDesc and FlushList */
-#define POLAR_LOG_BUFFER_DESC_WITH_FLUSHLIST(buf) \
+#define POLAR_LOG_BUFFER_DESC_WITH_FLUSHLIST(buf, ctl) \
 	do { \
 		ereport(LOG, errmsg("%s buffer tag info: page_tag='[%u, %u, %u], %d, %u', state=%u, oldest_lsn=%X/%X, polar_flags=%u, flush list size: %d, flush_prev: %d, flush_next: %d", \
 							PG_FUNCNAME_MACRO, (buf)->tag.rnode.spcNode, (buf)->tag.rnode.dbNode, (buf)->tag.rnode.relNode, \
 							(buf)->tag.forkNum, (buf)->tag.blockNum, pg_atomic_read_u32(&((buf)->state)), \
-							LSN_FORMAT_ARGS((buf)->oldest_lsn), (buf)->polar_flags, FLUSH_LIST_LEN, (buf)->flush_prev, (buf)->flush_next), \
+							LSN_FORMAT_ARGS((buf)->oldest_lsn), (buf)->polar_flags, FLUSH_LIST_LEN(ctl), (buf)->flush_prev, (buf)->flush_next), \
 					 errhidestmt(true), errhidecontext(true)); \
 	} while (0)
 
