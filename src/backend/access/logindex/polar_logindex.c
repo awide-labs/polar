@@ -120,7 +120,7 @@ log_index_bloom_shmem_size(int bloom_blocks)
 static Size
 log_index_lwlock_shmem_size(uint64 logindex_mem_tbl_size)
 {
-	Size		size = mul_size(sizeof(polar_lwlock_mini_padded), LOG_INDEX_LWLOCK_NUM(logindex_mem_tbl_size));
+	Size		size = mul_size(sizeof(LWLockPadded), LOG_INDEX_LWLOCK_NUM(logindex_mem_tbl_size));
 
 	return MAXALIGN(size);
 }
@@ -654,7 +654,7 @@ polar_logindex_snapshot_shmem_init(const char *name, uint64 logindex_mem_tbl_siz
 	snprintf(item_name, POLAR_MAX_SHMEM_NAME, "%s%s", name, LOGINDEX_LOCK_SUFFIX);
 
 	/* Align lwlocks to cacheline boundary */
-	logindex_snapshot->lwlock_array = (polar_lwlock_mini_padded *)
+	logindex_snapshot->lwlock_array = (LWLockPadded *)
 		ShmemInitStruct(item_name, log_index_lwlock_shmem_size(logindex_mem_tbl_size),
 						&found_locks);
 
