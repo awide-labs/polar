@@ -33,7 +33,7 @@ SUBDIRS += pase
 SUBDIRS += pg_bigm
 SUBDIRS += pg_jieba
 SUBDIRS += pg_repack
-SUBDIRS += pgvector
+# SUBDIRS += pgvector
 SUBDIRS += polar_sql_mapping
 SUBDIRS += roaringbitmap
 endif # enable_minimal

@@ -1,0 +1,128 @@
+# bitbucket-pipelines.yml
+image: atlassian/default-image:latest
+
+definitions:
+  services:
+    docker:
+      memory: 6144  # Increased to 6GB to handle build memory requirements
+
+  step-template: &base-step-template
+    size: 2x  # Increased from default 1x to 2x (4 cores, 8192MB)
+    services:
+      - docker
+    caches:
+      - docker
+
+  changeset-paths: &changeset-paths
+    includePaths:
+      - "bitbucket-pipelines.yml"
+      - "config/**"
+      - "contrib/**"
+      - "external/**"
+      - "src/**"
+      - "configure*"
+      - "build.sh"
+
+  build-test-script: &build-test-script |
+    # Building and testing
+    for container_image in ${CONTAINER_IMAGES}; do
+      for debug_mode in ${DEBUG_MODES}; do
+        echo "Running with container_image=$container_image, debug_mode=$debug_mode"
+        echo "Executing rules: $RULES"
+
+        # Limit WAL size
+        grep -n "DEFAULT_XLOG_SEG_SIZE" src/include/pg_config_manual.h | cut -d: -f1 | xargs -I {} sed -i '{}s/.*/#define DEFAULT_XLOG_SEG_SIZE (16*1024*1024)/' src/include/pg_config_manual.h
+
+        # Create and start the container (runs as postgres user by default)
+        docker create                                                  \
+          -t                                                           \
+          --name polardb_${container_image}                 \
+          -v `pwd`:/home/postgres/PolarDB-for-PostgreSQL               \
+          polardb/polardb_pg_devel:${container_image} \
+          bash
+        docker start polardb_${container_image}
+
+        # Make files writable for postgres user in container
+        # This allows postgres user to write to mounted files without chown errors
+        docker exec                                            \
+          polardb_${container_image}                \
+          bash -c "cd /home/postgres/PolarDB-for-PostgreSQL && \
+                   sudo chmod -R a+rwX . 2>/dev/null || true && \
+                   sudo find . -type d -exec chmod g+s {} + 2>/dev/null || true"
+
+        # Build and run defined checks in sequence
+        # Use all available CPU cores for faster builds and tests
+        docker exec                                                \
+          polardb_${container_image}                    \
+          bash -c "set -x && \
+                   if command -v yum >/dev/null 2>&1; then \
+                     sudo yum install -y eatmydata; \
+                   elif command -v apt-get >/dev/null 2>&1; then \
+                     sudo apt-get update -y && \
+                     sudo apt-get install -y eatmydata; \
+                   fi && \
+                   cd /home/postgres/PolarDB-for-PostgreSQL && \
+                   if [ -f /etc/bashrc ]; then source /etc/bashrc; fi && \
+                   set -eu && \
+                   JOBS=\$(nproc) && \
+                   eatmydata ./build.sh --wr=1 --debug=${debug_mode} --jobs=\$JOBS --ec='--enable-tap-tests' && \
+                   for rule in $RULES; do \
+                     echo \"=== Running \$rule ===\" && \
+                     eatmydata make \$rule -j\$JOBS || (echo \"=== \$rule FAILED ===\" && exit 1); \
+                   done"
+
+        # Clean up container
+        docker stop polardb_${container_image} || true
+        docker rm polardb_${container_image} || true
+      done
+    done
+
+pipelines:
+  branches:
+    POLARDB_15_STABLE:
+      - step:
+          <<: *base-step-template
+          name: Main branch push trigger
+          condition:
+            changesets: *changeset-paths
+          script:
+            - |
+              export CONTAINER_IMAGES="rocky9 ubuntu24.04"
+              export DEBUG_MODES="on"
+              export RULES="precheck-ci"
+            - *build-test-script
+
+  # Pull request trigger
+  pull-requests:
+    '**':  # Run on all pull requests
+      - step:
+          <<: *base-step-template
+          name: Pull request trigger
+          condition:
+            changesets: *changeset-paths
+          script:
+            - |
+              export CONTAINER_IMAGES="rocky9"
+              export DEBUG_MODES="on"
+              export RULES="precheck-ci"
+            - *build-test-script
+
+  # Manual trigger
+  custom:
+    manual:
+      - variables:
+          - name: CONTAINER_IMAGES
+            default: rocky9
+          - name: DEBUG_MODES
+            default: "on"
+            allowed-values:
+              - "on"
+              - "off"
+              - "on off"
+          - name: RULES
+            default: precheck-ci
+      - step:
+          <<: *base-step-template
+          name: Manual trigger
+          script:
+            - *build-test-script

@@ -195,7 +195,7 @@ done
 # 3.2 compiler and configure flags setting
 make_flag="-j$jobs"
 if [[ $debug == "on" ]]; then
-  compiler_flag+=" -O0 -fstack-protector-strong --param=ssp-buffer-size=4"
+  compiler_flag+=" -O2 -fstack-protector-strong --param=ssp-buffer-size=4"
   configure_flag+=" --enable-debug --enable-cassert --enable-tap-tests --enable-fault-injector"
 else
   compiler_flag+=" -O2"
