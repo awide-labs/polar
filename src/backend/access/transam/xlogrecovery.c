@@ -2142,8 +2142,7 @@ ApplyWalRecord(XLogReaderState *xlogreader, XLogRecord *record,
 	 * POLAR: if this record related to a async lock not got, we should wait
 	 * until get all the lock of this transaction.
 	 */
-	if (polar_allow_alr() &&
-		record->xl_rmid != RM_XACT_ID &&
+	if (record->xl_rmid != RM_XACT_ID &&
 		polar_alr_xact_is_replaying(record->xl_xid))
 	{
 		POLAR_ALR_LOG(LOG, "startup", "replaying record lsn: "
