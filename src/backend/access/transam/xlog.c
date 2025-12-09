@@ -1145,13 +1145,15 @@ ReserveXLogInsertLocation(int size, XLogRecPtr *StartPos, XLogRecPtr *EndPos,
 
 		if (likely(polar_logindex_redo_instance))
 		{
-			if (!POLAR_XLOG_QUEUE_FREE_SIZE(polar_logindex_redo_instance->xlog_queue, polar_rbuf_len))
-			{
+			ssize_t idx =
+				POLAR_XLOG_QUEUE_CHECK_SIZE_AND_RESERVE(polar_logindex_redo_instance->xlog_queue,
+														polar_rbuf_len);
+			if (idx < 0) {
 				SpinLockRelease(&Insert->insertpos_lck);
-				POLAR_XLOG_QUEUE_FREE_UP(polar_logindex_redo_instance->xlog_queue, polar_rbuf_len);;
+				POLAR_XLOG_QUEUE_FREE_UP(polar_logindex_redo_instance->xlog_queue, polar_rbuf_len);
 				continue;
 			}
-			*polar_rbuf_pos = POLAR_XLOG_QUEUE_RESERVE(polar_logindex_redo_instance->xlog_queue, polar_rbuf_len);
+			*polar_rbuf_pos = idx;
 		}
 
 		startbytepos = pg_atomic_read_u64(&Insert->CurrBytePos);
@@ -1224,13 +1226,15 @@ ReserveXLogSwitch(XLogRecPtr *StartPos, XLogRecPtr *EndPos, XLogRecPtr *PrevPtr,
 
 		if (likely(polar_logindex_redo_instance))
 		{
-			if (!POLAR_XLOG_QUEUE_FREE_SIZE(polar_logindex_redo_instance->xlog_queue, polar_rbuf_len))
-			{
+			ssize_t idx =
+				POLAR_XLOG_QUEUE_CHECK_SIZE_AND_RESERVE(polar_logindex_redo_instance->xlog_queue,
+														polar_rbuf_len);
+			if (idx < 0) {
 				SpinLockRelease(&Insert->insertpos_lck);
 				POLAR_XLOG_QUEUE_FREE_UP(polar_logindex_redo_instance->xlog_queue, polar_rbuf_len);
 				continue;
 			}
-			*polar_rbuf_pos = POLAR_XLOG_QUEUE_RESERVE(polar_logindex_redo_instance->xlog_queue, polar_rbuf_len);
+			*polar_rbuf_pos = idx;
 		}
 
 		endbytepos = startbytepos + size;
