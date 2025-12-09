@@ -47,6 +47,8 @@
 static HTAB *xact_tbl;
 static HTAB *lock_tbl;
 
+bool lock_tbl_empty = true;
+
 /* For debugging, record last add and replay infomation */
 static polar_alr_lock last_add_lock;
 static polar_alr_lock last_replay_lock;
@@ -264,6 +266,8 @@ polar_alr_shmem_init(void)
 								 &hash_ctl,
 								 HASH_ELEM | HASH_BLOBS);
 
+		lock_tbl_empty = true;
+
 		memset(&hash_ctl, 0, sizeof(hash_ctl));
 		hash_ctl.keysize = sizeof(TransactionId);
 		hash_ctl.entrysize = sizeof(polar_alr_xact);
@@ -417,6 +421,8 @@ polar_alr_add_async_lock(xl_standby_lock *lock, XLogRecPtr lsn,
 	polar_alr_lock *alr_lock;
 	polar_alr_xact *alr_xact;
 
+	Assert(AmStartupProcess());
+
 	LWLockAcquire(&polar_alr_ctl->lock, LW_EXCLUSIVE);
 
 	alr_lock = hash_search(lock_tbl, &lsn, HASH_ENTER, &found);
@@ -428,6 +434,8 @@ polar_alr_add_async_lock(xl_standby_lock *lock, XLogRecPtr lsn,
 		alr_lock->state = POLAR_ALR_IDLE;
 		POLAR_ALR_DEBUG("startup", "add " ALR_LOCK_FORMAT,
 						ALR_LOCK_FORMAT_ARGS(alr_lock));
+
+		lock_tbl_empty = false;
 	}
 	else
 		goto ret;
@@ -537,7 +545,20 @@ polar_alr_xact_is_replaying(TransactionId xid)
 	dlist_iter	iter;
 	polar_alr_xact *alr_xact;
 
+	Assert(AmStartupProcess());
+
+	if (lock_tbl_empty)
+	{
+		return false;
+	}
+
 	LWLockAcquire(&polar_alr_ctl->lock, LW_SHARED);
+	if (hash_get_num_entries(xact_tbl) == 0)
+	{
+		lock_tbl_empty = true;
+		LWLockRelease(&polar_alr_ctl->lock);
+		return false;
+	}
 	alr_xact = hash_search(xact_tbl, &xid, HASH_FIND, NULL);
 	if (alr_xact && !alr_xact->running)
 		POLAR_ALR_LOG(PANIC, "startup", "%s", "replaying WAL on finished xact");

@@ -17,5 +17,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   (XCOM-39)
 - Reduce contention on XLogCtl->info_lck by publishing replay LSN updates with
   atomic writes and a seqlock (XCOM-35)
+- Optimize asynchronous DDL processing by the startup process when
+  `polar_enable_async_ddl_lock_replay` is enabled (XCOM-35)
 
 [unreleased]: https://bitbucket.org/awydex/polardb/branches/compare/POLARDB_15_STABLE..v15.14.5.0
