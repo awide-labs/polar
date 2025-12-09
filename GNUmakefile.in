@@ -157,15 +157,29 @@ cpluspluscheck: submake-generated-headers
 # POLAR
 #
 LAST_COMMIT = HEAD~1
-PROVE_FLAGS = "--timer"
+
+# Use 1.5x CPU cores as PROVE_JOBS, but allow overriding with
+# "make PROVE_FLAGS=...""
+PROVE_JOBS := $(shell cores=$$(nproc 2>/dev/null || echo 2); echo $$(( cores * 3 / 2 )) )
+# Override PROVE_FLAGS with our calculated value if not set externally
+ifneq (,$(findstring command line,$(origin PROVE_FLAGS)))
+  # PROVE_FLAGS was set via command line - keep it
+else ifneq (,$(findstring environment,$(origin PROVE_FLAGS)))
+  # PROVE_FLAGS was set via environment - keep it
+else
+  # PROVE_FLAGS was set in Makefile.global, override it
+  PROVE_FLAGS = --timer --jobs=$(PROVE_JOBS)
+endif
 
 precheck-main: | temp-install
-	$(MAKE) check-world EXTRA_TESTS=numeric_big PG_TEST_EXTRA='kerberos ldap ssl' USE_MODULE_DB=1 PROVE_FLAGS=$(PROVE_FLAGS)
+	$(MAKE) check-world EXTRA_TESTS=numeric_big PG_TEST_EXTRA='kerberos ldap ssl' USE_MODULE_DB=1 PROVE_FLAGS="$(PROVE_FLAGS)"
 	$(MAKE) installcheck-world EXTRA_TESTS=numeric_big PG_TEST_EXTRA='kerberos ldap ssl' USE_MODULE_DB=1 NO_TAP_TESTS=1
-	$(MAKE) polar-check PG_TEST_EXTRA='kerberos ldap ssl' USE_MODULE_DB=1 PROVE_FLAGS=$(PROVE_FLAGS)
+	$(MAKE) polar-check PG_TEST_EXTRA='kerberos ldap ssl' USE_MODULE_DB=1 PROVE_FLAGS="$(PROVE_FLAGS)"
 	$(MAKE) polar-installcheck PG_TEST_EXTRA='kerberos ldap ssl' USE_MODULE_DB=1 NO_TAP_TESTS=1
 
 precheck: plcheck dccheck-lite precheck-main
+
+precheck-ci: precheck-main plcheck
 
 covcheck: coverage-html
 	$(top_srcdir)/src/tools/delta_coverage.pl -f coverage/delta_coverage.txt -p $(LAST_COMMIT)
@@ -186,7 +200,7 @@ stylecheck:
 	$(top_srcdir)/src/tools/pgindent/pgperltidy
 
 plcheck: | temp-install
-	$(MAKE) -C src/test/polar_pl check PROVE_FLAGS=$(PROVE_FLAGS)
+	$(MAKE) -C src/test/polar_pl check PROVE_FLAGS="$(PROVE_FLAGS)"
 
 dccheck-lite: | temp-install
 	$(MAKE) -C src/test/polar_consistency check
