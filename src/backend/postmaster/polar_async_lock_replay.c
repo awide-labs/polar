@@ -545,7 +545,7 @@ polar_alr_xact_is_replaying(TransactionId xid)
 	dlist_iter	iter;
 	polar_alr_xact *alr_xact;
 
-	Assert(AmStartupProcess());
+	Assert(AmStartupProcess() || !IsPostmasterEnvironment);
 
 	if (lock_tbl_empty)
 	{

@@ -256,9 +256,6 @@ polar_ringbuf_pkt_reserve(polar_ringbuf_t rbuf, size_t len)
 	pg_atomic_write_u64(&rbuf->pwrite,
 						(idx + len) % rbuf->size);
 
-	pg_atomic_fetch_add_u64(&rbuf->prs.push_cnt, 1);
-	pg_atomic_fetch_add_u64(&rbuf->prs.total_written, len);
-
 	return idx;
 }
 
@@ -335,6 +332,9 @@ polar_ringbuf_set_pkt_length(polar_ringbuf_t rbuf, size_t idx, uint32 len)
 	}
 
 	memcpy(rbuf->data + idx, buf, todo);
+
+	pg_atomic_fetch_add_u64(&rbuf->prs.push_cnt, 1);
+	pg_atomic_fetch_add_u64(&rbuf->prs.total_written, len);
 }
 
 /*
