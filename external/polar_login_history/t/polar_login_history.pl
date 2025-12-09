@@ -59,7 +59,13 @@ is( $node_standby->safe_psql('postgres', 'show polar_login_history.enable;'),
 
 ############### log in to the database with the new user ##############
 $node_primary->safe_psql('postgres', 'create user zhangsan;');
-$node_replica->restart;
+# Wait for user to be replicated to replica
+$node_replica->poll_query_until('postgres',
+	"SELECT EXISTS(SELECT 1 FROM pg_roles WHERE rolname = 'zhangsan')", 't');
+# Wait for user to be replicated to standby
+$node_standby->poll_query_until('postgres',
+	"SELECT EXISTS(SELECT 1 FROM pg_roles WHERE rolname = 'zhangsan')", 't');
+
 
 is( $node_primary->psql(
 		'postgres', undef, extra_params => [ '-U', 'zhangsan' ]),
