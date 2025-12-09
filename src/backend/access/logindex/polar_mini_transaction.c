@@ -366,8 +366,14 @@ polar_logindex_mini_trans_key_lock(mini_trans_t trans, BufferTag *tag, uint32 ke
 polar_page_lock_t
 polar_logindex_mini_trans_lock(mini_trans_t trans, BufferTag *tag, LWLockMode mode, XLogRecPtr *lsn)
 {
-	uint32		key = MINI_TRANSACTION_HASH_PAGE(tag);
-	uint32		l = polar_logindex_mini_trans_key_lock(trans, tag, key, mode, lsn);
+	uint32		key;
+	uint32		l;
+
+	if (!trans->started)
+		return POLAR_INVALID_PAGE_LOCK;
+
+	key = MINI_TRANSACTION_HASH_PAGE(tag);
+	l = polar_logindex_mini_trans_key_lock(trans, tag, key, mode, lsn);
 
 	if (l == POLAR_INVALID_PAGE_LOCK)
 		ereport(PANIC, (errmsg("The mini transaction hash table is full")));
@@ -381,7 +387,10 @@ polar_logindex_mini_trans_unlock(mini_trans_t trans, polar_page_lock_t l)
 	mini_trans_info_t *info = trans->info;
 	uint32		i;
 
-	if (l == POLAR_INVALID_PAGE_LOCK || l > MINI_TRANSACTION_TABLE_SIZE)
+	if (l == POLAR_INVALID_PAGE_LOCK)
+		return;
+
+	if (l > MINI_TRANSACTION_TABLE_SIZE)
 		ereport(PANIC, (errmsg("The mini transaction hash slot value is incorrect")));
 
 	i = l - 1;
@@ -471,7 +480,10 @@ polar_logindex_mini_trans_set_page_added(mini_trans_t trans, polar_page_lock_t l
 {
 	uint32		i;
 
-	if (lock == POLAR_INVALID_PAGE_LOCK || lock > MINI_TRANSACTION_TABLE_SIZE
+	if (lock == POLAR_INVALID_PAGE_LOCK)
+		return;
+
+	if (lock > MINI_TRANSACTION_TABLE_SIZE
 		|| !MINI_TRANS_IS_OCCUPIED(trans, lock))
 		ereport(PANIC, (errmsg("The mini transaction hash slot value is incorrect")));
 
