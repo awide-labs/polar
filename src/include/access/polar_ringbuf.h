@@ -98,8 +98,12 @@ typedef struct polar_ringbuf_data_t
 {
 	/* This lock is used to manage slot */
 	LWLock		lock;
+	/* Break cache line to avoid false sharing */
+	char		pad1[PG_CACHE_LINE_SIZE];
 	/* The least read position of this ring buffer */
 	pg_atomic_uint64 pread;
+	/* Break cache line to avoid false sharing */
+	char		pad2[PG_CACHE_LINE_SIZE];
 	/* The write position of this ring buffer */
 	pg_atomic_uint64 pwrite;
 	/* Increase this counter for each new reference */
@@ -249,10 +253,6 @@ polar_ringbuf_pkt_reserve(polar_ringbuf_t rbuf, size_t len)
 {
 	size_t		idx = pg_atomic_read_u64(&rbuf->pwrite);
 
-	rbuf->data[idx] = POLAR_RINGBUF_PKT_FREE;
-
-	/* ensure set packet flag before update pwrite */
-	pg_write_barrier();
 	pg_atomic_write_u64(&rbuf->pwrite,
 						(idx + len) % rbuf->size);
 
@@ -260,6 +260,31 @@ polar_ringbuf_pkt_reserve(polar_ringbuf_t rbuf, size_t len)
 	pg_atomic_fetch_add_u64(&rbuf->prs.total_written, len);
 
 	return idx;
+}
+
+/*
+ * Reserve space from ring buffer for future write
+ * This function should be protected by exclusive lock
+ */
+static inline ssize_t
+polar_ringbuf_pkt_check_size_and_reserve(polar_ringbuf_t rbuf, size_t len)
+{
+	ssize_t pread = pg_atomic_read_u64(&rbuf->pread);
+	ssize_t pwrite = pg_atomic_read_u64(&rbuf->pwrite);
+	ssize_t free_bytes = pread - pwrite;
+
+	if (free_bytes < 0)
+		free_bytes += rbuf->size;
+
+	--free_bytes;
+
+	if (free_bytes < len)
+	{
+		return -1;
+	}
+
+	pg_atomic_write_u64(&rbuf->pwrite, (pwrite + len) % rbuf->size);
+	return pwrite;
 }
 
 /*

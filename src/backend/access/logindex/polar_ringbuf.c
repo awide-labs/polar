@@ -78,6 +78,9 @@ polar_ringbuf_init(uint8 *data, size_t len, int tranche_id)
 
 	rbuf->size = len - offsetof(polar_ringbuf_data_t, data);
 	rbuf->occupied = 0;
+
+	MemSet(rbuf->data, POLAR_RINGBUF_PKT_FREE, rbuf->size);
+
 	return rbuf;
 }
 
@@ -331,6 +334,7 @@ polar_ringbuf_update_pread(polar_ringbuf_t rbuf)
 	uint64		min_visit = UINT64_MAX;
 	bool		updated = false;
 	uint64		occupied = rbuf->occupied;
+	uint64		last_pread = pg_atomic_read_u64(&rbuf->pread);
 
 	while (occupied)
 	{
@@ -349,9 +353,20 @@ polar_ringbuf_update_pread(polar_ringbuf_t rbuf)
 	if (min_slot != POLAR_RINGBUF_MAX_SLOT && rbuf->min_visit != min_visit)
 	{
 		uint64		pre_pread = pg_atomic_read_u64(&rbuf->pread);
+		uint64		new_pread = rbuf->slot[min_slot].pread;
 
 		rbuf->min_visit = min_visit;
-		pg_atomic_write_u64(&rbuf->pread, rbuf->slot[min_slot].pread);
+		if (last_pread <= new_pread)
+		{
+			MemSet(&rbuf->data[last_pread], POLAR_RINGBUF_PKT_FREE, new_pread - last_pread);
+		}
+		else
+		{
+			MemSet(&rbuf->data[last_pread], POLAR_RINGBUF_PKT_FREE, rbuf->size - last_pread);
+			MemSet(&rbuf->data[0], POLAR_RINGBUF_PKT_FREE, new_pread);
+		}
+		pg_write_barrier();
+		pg_atomic_write_u64(&rbuf->pread, new_pread);
 		updated = true;
 
 		if (rbuf->slot[min_slot].pread <= pre_pread)
@@ -507,6 +522,7 @@ polar_ringbuf_reset(polar_ringbuf_t rbuf)
 
 		pg_atomic_write_u64(&rbuf->pread, 0);
 		pg_atomic_write_u64(&rbuf->pwrite, 0);
+		MemSet(rbuf->data, POLAR_RINGBUF_PKT_FREE, rbuf->size);
 		LWLockRelease(&rbuf->lock);
 		break;
 	}
