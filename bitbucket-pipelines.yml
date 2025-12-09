@@ -16,6 +16,7 @@ definitions:
   changeset-paths: &changeset-paths
     includePaths:
       - "bitbucket-pipelines.yml"
+      - ".ci/**"
       - "config/**"
       - "contrib/**"
       - "external/**"
@@ -25,55 +26,26 @@ definitions:
 
   build-test-script: &build-test-script |
     # Building and testing
+    # Count total combinations to determine if cleanup is needed
+    set -euo pipefail
+    container_count=0
     for container_image in ${CONTAINER_IMAGES}; do
       for debug_mode in ${DEBUG_MODES}; do
-        echo "Running with container_image=$container_image, debug_mode=$debug_mode"
-        echo "Executing rules: $RULES"
-
-        # Limit WAL size
-        grep -n "DEFAULT_XLOG_SEG_SIZE" src/include/pg_config_manual.h | cut -d: -f1 | xargs -I {} sed -i '{}s/.*/#define DEFAULT_XLOG_SEG_SIZE (16*1024*1024)/' src/include/pg_config_manual.h
-
-        # Create and start the container (runs as postgres user by default)
-        docker create                                                  \
-          -t                                                           \
-          --name polardb_${container_image}                 \
-          -v `pwd`:/home/postgres/PolarDB-for-PostgreSQL               \
-          polardb/polardb_pg_devel:${container_image} \
-          bash
-        docker start polardb_${container_image}
-
-        # Make files writable for postgres user in container
-        # This allows postgres user to write to mounted files without chown errors
-        docker exec                                            \
-          polardb_${container_image}                \
-          bash -c "cd /home/postgres/PolarDB-for-PostgreSQL && \
-                   sudo chmod -R a+rwX . 2>/dev/null || true && \
-                   sudo find . -type d -exec chmod g+s {} + 2>/dev/null || true"
-
-        # Build and run defined checks in sequence
-        # Use all available CPU cores for faster builds and tests
-        docker exec                                                \
-          polardb_${container_image}                    \
-          bash -c "set -x && \
-                   if command -v yum >/dev/null 2>&1; then \
-                     sudo yum install -y eatmydata; \
-                   elif command -v apt-get >/dev/null 2>&1; then \
-                     sudo apt-get update -y && \
-                     sudo apt-get install -y eatmydata; \
-                   fi && \
-                   cd /home/postgres/PolarDB-for-PostgreSQL && \
-                   if [ -f /etc/bashrc ]; then source /etc/bashrc; fi && \
-                   set -eu && \
-                   JOBS=\$(nproc) && \
-                   eatmydata ./build.sh --noinstall --debug=${debug_mode} --jobs=\$JOBS --ec='--enable-tap-tests' && \
-                   for rule in $RULES; do \
-                     echo \"=== Running \$rule ===\" && \
-                     eatmydata make \$rule -j\$JOBS || (echo \"=== \$rule FAILED ===\" && exit 1); \
-                   done"
-
-        # Clean up container
-        docker stop polardb_${container_image} || true
-        docker rm polardb_${container_image} || true
+        container_count=$((container_count + 1))
+      done
+    done
+    # Run containers, only cleanup intermediate ones (not the last)
+    current=0
+    for container_image in ${CONTAINER_IMAGES}; do
+      for debug_mode in ${DEBUG_MODES}; do
+        current=$((current + 1))
+        # Enable cleanup only if this is not the last container
+        if [ $current -lt $container_count ]; then
+          CLEANUP_FLAG="true"
+        else
+          CLEANUP_FLAG="false"
+        fi
+        .ci/ci-test.sh "$container_image" "$debug_mode" "$RULES" "$CLEANUP_FLAG"
       done
     done
 
