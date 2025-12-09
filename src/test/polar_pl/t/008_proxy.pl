@@ -37,6 +37,7 @@ my @client_addr = ($client_host, $client_port);
 
 my $session_id_base = 10000000;
 my $session_id = 11111111;
+my $proxy_session_id = 19999999;
 my $cancel_key = 999;
 my @session_info = ($session_id, $cancel_key);
 
@@ -53,6 +54,9 @@ my $pid_sql = 'select pg_backend_pid()';
 my $dummy_sql = 'select 1';
 my $count_proxy_sql =
   " select count(*) from pg_stat_activity where pid > $session_id_base";
+my $wait_proxy_sql =
+  " select count(*) from pg_stat_activity where pid = $proxy_session_id"
+  . " and state = 'active'";
 my $display_sql = 'set polar_session_id_display_method=';
 
 sub set_env
@@ -101,11 +105,11 @@ sub start_proxy_backend
 {
 	my ($node) = @_;
 	Task::start_new_task('proxy sleep', [$node], \&proxy_psql,
-		[ 'select pg_sleep(3);', @client_addr, 19999999, $cancel_key ],
+		[ 'select pg_sleep(3);', @client_addr, $proxy_session_id, $cancel_key ],
 		Task::EXEC_ONCE, -3);
 	while (
 		$node->safe_psql($dbname,
-			$display_sql . 'force_proxy;' . $count_proxy_sql) < 1)
+			$display_sql . 'force_proxy;' . $wait_proxy_sql) < 1)
 	{
 		sleep(0.1);
 	}
@@ -403,7 +407,7 @@ is( proxy_psql($node_primary, $pid_sql, @client_addr, 200000000, $cancel_key),
 	0,
 	'set large proxy sid');
 ## fault injection
-is( proxy_psql($node_primary, $pid_sql, @client_addr, 19999999, $cancel_key),
+is( proxy_psql($node_primary, $pid_sql, @client_addr, $proxy_session_id, $cancel_key),
 	2,
 	'set same proxy sid');
 is( proxy_psql($node_primary, $pid_sql, @client_addr, 10000000, $cancel_key),
@@ -430,32 +434,34 @@ is( proxy_psql(
 	3,
 	'proxy cancel self by pid with cancel key set');
 ## Cancel another backend
-proxy_safe_psql($node_primary, 'select pg_terminate_backend(19999999)',
+proxy_safe_psql($node_primary,
+	'select pg_terminate_backend(' . $proxy_session_id . ')',
 	@client_addr);
 start_proxy_backend($node_primary);
 is( proxy_safe_psql(
-		$node_primary, 'select pg_terminate_backend(19999999)',
+		$node_primary,
+		'select pg_terminate_backend(' . $proxy_session_id . ')',
 		@client_addr),
 	't',
 	'proxy terminate another');
 start_proxy_backend($node_primary);
 is( proxy_safe_psql(
 		$node_primary,
-		$display_sql . 'local; select pg_cancel_backend(19999999)',
+		$display_sql . 'local; select pg_cancel_backend(' . $proxy_session_id . ')',
 		@client_addr),
 	't',
 	'proxy cancel another display method local');
 start_proxy_backend($node_primary);
 is( proxy_safe_psql(
 		$node_primary,
-		$display_sql . 'proxy; select pg_cancel_backend(19999999)',
+		$display_sql . 'proxy; select pg_cancel_backend(' . $proxy_session_id . ')',
 		@client_addr),
 	't',
 	'proxy cancel another display method proxy');
 start_proxy_backend($node_primary);
 is( proxy_safe_psql(
 		$node_primary,
-		$display_sql . 'force_proxy; select pg_cancel_backend(19999999)',
+		$display_sql . 'force_proxy; select pg_cancel_backend(' . $proxy_session_id . ')',
 		@client_addr),
 	't',
 	'proxy cancel another display method force_proxy');
@@ -466,12 +472,12 @@ is( proxy_safe_psql(
 		$node_primary, $display_sql . 'force_proxy;' . $count_proxy_sql),
 	1,
 	'proxy connections before cancel');
-$node_primary->cancel_backend(19999999, 0);
+$node_primary->cancel_backend($proxy_session_id, 0);
 is( proxy_safe_psql(
 		$node_primary, $display_sql . 'force_proxy;' . $count_proxy_sql),
 	1,
 	'proxy connections wrong cancel key');
-$node_primary->cancel_backend(19999999, $cancel_key);
+$node_primary->cancel_backend($proxy_session_id, $cancel_key);
 sleep 1;
 is( proxy_safe_psql(
 		$node_primary, $display_sql . 'force_proxy;' . $count_proxy_sql),
