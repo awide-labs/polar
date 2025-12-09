@@ -1,7 +1,7 @@
 -- Test parallel background writer.
 --
 -- alter parallel bgwriter workers to a big value.
-alter system set polar_parallel_flush_workers = 20;
+alter system set polar_parallel_flush_workers = 33;
 
 alter system set polar_parallel_flush_workers = 8;
 select pg_reload_conf();
