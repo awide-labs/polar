@@ -606,7 +606,10 @@ polar_logindex_parse_xlog(polar_logindex_redo_ctl_t instance, RmgrId rmid, XLogR
 			if (unlikely(polar_trace_logindex_messages <= DEBUG4))
 				polar_xlog_log(LOG, state, PG_FUNCNAME_MACRO);
 
-			polar_logindex_mini_trans_start(instance->mini_trans, state->EndRecPtr);
+			if (XLogRecMaxBlockId(state) > 0)
+			{
+				polar_logindex_mini_trans_start(instance->mini_trans, state->EndRecPtr);
+			}
 			redo = polar_idx_redo[rmid].rm_polar_idx_parse(instance, state);
 
 			/*
@@ -619,7 +622,10 @@ polar_logindex_parse_xlog(polar_logindex_redo_ctl_t instance, RmgrId rmid, XLogR
 			 * end mini transaction after startup process update
 			 * XLogRecoveryCtl->lastReplayedEndRecPtr.
 			 */
-			*mini_trans_lsn = state->EndRecPtr;
+			if (XLogRecMaxBlockId(state) > 0)
+			{
+				*mini_trans_lsn = state->EndRecPtr;
+			}
 		}
 	}
 	/* POLAR: create and save logindex in primary and standby. */
