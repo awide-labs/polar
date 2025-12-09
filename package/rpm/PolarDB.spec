@@ -46,7 +46,47 @@ AutoReqProv: none
 
 %define copy_dir /u01/polardb_pg_%{polar_release_date}
 
-# Requires: libicu
+
+BuildRequires: polarfs
+
+Requires: audit-libs
+Requires: boost-filesystem
+Requires: boost-regex
+Requires: cyrus-sasl-lib
+Requires: double-conversion
+Requires: fmt
+Requires: gflags
+Requires: glibc
+Requires: glog
+Requires: keyutils-libs
+Requires: krb5-libs
+Requires: libcap-ng
+Requires: libcom_err
+Requires: libeconf
+Requires: libedit
+Requires: libevent
+Requires: libffi
+Requires: libgcc
+Requires: libicu
+Requires: libselinux
+Requires: libstdc++
+Requires: libuuid
+Requires: libxcrypt
+Requires: libxml2
+Requires: libxslt
+Requires: llvm15-libs
+Requires: ncurses-libs
+Requires: openldap
+Requires: openssl-libs
+Requires: pam
+Requires: pcre2
+Requires: perl-libs
+Requires: polarfs
+Requires: python3-libs
+Requires: tcl
+Requires: xerces-c
+Requires: xz-libs
+Requires: zlib
 
 %description
 CodeBranch: %{code_branch}
