@@ -7,7 +7,7 @@ PG_CPPFLAGS = -fopenmp -Wno-uninitialized
 PG_LIBS = -fopenmp
 DATA = pase--0.0.1.sql
 PGFILEDESC = "pase - ai similarity search"
-REGRESS = $(EXTENSION)
+REGRESS =
 
 ifeq ($(GCC), yes)
 override CFLAGS := -ftree-coalesce-vars
