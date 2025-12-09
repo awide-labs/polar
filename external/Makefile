@@ -26,16 +26,16 @@ SUBDIRS += polar_worker
 ifeq ($(enable_minimal),no)
 # will be ignored under minimal mode
 # sort extention by names, less git conflict
-SUBDIRS += hll
+# SUBDIRS += hll
 SUBDIRS += hypopg
-SUBDIRS += log_fdw
-SUBDIRS += pase
-SUBDIRS += pg_bigm
-SUBDIRS += pg_jieba
+#SUBDIRS += log_fdw
+#SUBDIRS += pase
+#SUBDIRS += pg_bigm
+#SUBDIRS += pg_jieba
 SUBDIRS += pg_repack
 # SUBDIRS += pgvector
 SUBDIRS += polar_sql_mapping
-SUBDIRS += roaringbitmap
+#SUBDIRS += roaringbitmap
 endif # enable_minimal
 
 ifeq ($(enable_fault_injector),yes)
