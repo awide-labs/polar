@@ -459,8 +459,8 @@ typedef struct XLogCtlInsert
 	 * prev-link of the next record. These are stored as "usable byte
 	 * positions" rather than XLogRecPtrs (see XLogBytePosToRecPtr()).
 	 */
-	uint64		CurrBytePos;
-	uint64		PrevBytePos;
+	pg_atomic_uint64 CurrBytePos;
+	pg_atomic_uint64 PrevBytePos;
 
 	/*
 	 * Make sure the above heavily-contended spinlock and byte positions are
@@ -1301,11 +1301,11 @@ ReserveXLogInsertLocation(int size, XLogRecPtr *StartPos, XLogRecPtr *EndPos,
 		pg_atomic_write_u64(valid_meta_at, *polar_rbuf_pos);
 	}
 
-	startbytepos = Insert->CurrBytePos;
+	startbytepos = pg_atomic_read_u64(&Insert->CurrBytePos);
 	endbytepos = startbytepos + size;
-	prevbytepos = Insert->PrevBytePos;
-	Insert->CurrBytePos = endbytepos;
-	Insert->PrevBytePos = startbytepos;
+	prevbytepos = pg_atomic_read_u64(&Insert->PrevBytePos);
+	pg_atomic_write_u64(&Insert->CurrBytePos, endbytepos);
+	pg_atomic_write_u64(&Insert->PrevBytePos, startbytepos);
 
 	SpinLockRelease(&Insert->insertpos_lck);
 
@@ -1361,7 +1361,7 @@ ReserveXLogSwitch(XLogRecPtr *StartPos, XLogRecPtr *EndPos, XLogRecPtr *PrevPtr,
 	 */
 	SpinLockAcquire(&Insert->insertpos_lck);
 
-	startbytepos = Insert->CurrBytePos;
+	startbytepos = pg_atomic_read_u64(&Insert->CurrBytePos);
 
 	ptr = XLogBytePosToEndRecPtr(startbytepos);
 	if (XLogSegmentOffset(ptr, wal_segment_size) == 0)
@@ -1378,7 +1378,7 @@ ReserveXLogSwitch(XLogRecPtr *StartPos, XLogRecPtr *EndPos, XLogRecPtr *PrevPtr,
 	}
 
 	endbytepos = startbytepos + size;
-	prevbytepos = Insert->PrevBytePos;
+	prevbytepos = pg_atomic_read_u64(&Insert->PrevBytePos);
 
 	*StartPos = XLogBytePosToRecPtr(startbytepos);
 	*EndPos = XLogBytePosToEndRecPtr(endbytepos);
@@ -1390,8 +1390,8 @@ ReserveXLogSwitch(XLogRecPtr *StartPos, XLogRecPtr *EndPos, XLogRecPtr *PrevPtr,
 		*EndPos += segleft;
 		endbytepos = XLogRecPtrToBytePos(*EndPos);
 	}
-	Insert->CurrBytePos = endbytepos;
-	Insert->PrevBytePos = startbytepos;
+	pg_atomic_write_u64(&Insert->CurrBytePos, endbytepos);
+	pg_atomic_write_u64(&Insert->PrevBytePos, startbytepos);
 
 	SpinLockRelease(&Insert->insertpos_lck);
 
@@ -1710,9 +1710,7 @@ WaitXLogInsertionsToFinish(XLogRecPtr upto)
 		return inserted;
 
 	/* Read the current insert position */
-	SpinLockAcquire(&Insert->insertpos_lck);
-	bytepos = Insert->CurrBytePos;
-	SpinLockRelease(&Insert->insertpos_lck);
+	bytepos = pg_atomic_read_u64(&Insert->CurrBytePos);
 	reservedUpto = XLogBytePosToEndRecPtr(bytepos);
 
 	/*
@@ -6597,8 +6595,8 @@ StartupXLOG(void)
 	 * previous incarnation.
 	 */
 	Insert = &XLogCtl->Insert;
-	Insert->PrevBytePos = XLogRecPtrToBytePos(endOfRecoveryInfo->lastRec);
-	Insert->CurrBytePos = XLogRecPtrToBytePos(EndOfLog);
+	pg_atomic_write_u64(&Insert->PrevBytePos, XLogRecPtrToBytePos(endOfRecoveryInfo->lastRec));
+	pg_atomic_write_u64(&Insert->CurrBytePos, XLogRecPtrToBytePos(EndOfLog));
 
 	/*
 	 * Tricky point here: lastPage contains the *last* block that the LastRec
@@ -6646,8 +6644,8 @@ StartupXLOG(void)
 
 	/* POLAR: make sure some important LSNs are expected. */
 	RefreshXLogWriteResult(LogwrtResult);
-	if (unlikely(Insert->PrevBytePos < XLogRecPtrToBytePos(endOfRecoveryInfo->lastRec) ||
-				 Insert->CurrBytePos <= XLogRecPtrToBytePos(endOfRecoveryInfo->lastRec) ||
+	if (unlikely(pg_atomic_read_u64(&Insert->PrevBytePos) < XLogRecPtrToBytePos(endOfRecoveryInfo->lastRec) ||
+				 pg_atomic_read_u64(&Insert->CurrBytePos) <= XLogRecPtrToBytePos(endOfRecoveryInfo->lastRec) ||
 				 LogwrtResult.Flush <= endOfRecoveryInfo->lastRec ||
 				 LogwrtResult.Write <= endOfRecoveryInfo->lastRec ||
 				 XLogCtl->LogwrtRqst.Flush <= endOfRecoveryInfo->lastRec ||
@@ -6657,7 +6655,8 @@ StartupXLOG(void)
 			 "LogwrtResult.Flush is %X/%X, LogwrtResult.Write is %X/%X, " \
 			 "LogwrtRqst.Flush is %X/%X, LogwrtRqst.Write is %X/%X, " \
 			 "LastRec is %X/%X, last usable byte position is 0x%lX",
-			 Insert->PrevBytePos, Insert->CurrBytePos, LSN_FORMAT_ARGS(LogwrtResult.Flush),
+			 pg_atomic_read_u64(&Insert->PrevBytePos), pg_atomic_read_u64(&Insert->CurrBytePos),
+			 LSN_FORMAT_ARGS(LogwrtResult.Flush),
 			 LSN_FORMAT_ARGS(LogwrtResult.Write), LSN_FORMAT_ARGS(XLogCtl->LogwrtRqst.Flush),
 			 LSN_FORMAT_ARGS(XLogCtl->LogwrtRqst.Write), LSN_FORMAT_ARGS(endOfRecoveryInfo->lastRec),
 			 XLogRecPtrToBytePos(endOfRecoveryInfo->lastRec));
@@ -7753,7 +7752,8 @@ CreateCheckPoint(int flags)
 
 	if (shutdown)
 	{
-		XLogRecPtr	curInsert = XLogBytePosToRecPtr(Insert->CurrBytePos);
+		uint64		curBytePos = pg_atomic_read_u64(&Insert->CurrBytePos);
+		XLogRecPtr	curInsert = XLogBytePosToRecPtr(curBytePos);
 
 		/*
 		 * POLAR: we store the end of last record for shutdown checkpoint.
@@ -7765,7 +7765,7 @@ CreateCheckPoint(int flags)
 		 * a FATAL, like 'xlog flush request ... is not satisfied --- flushed
 		 * only to ...'.
 		 */
-		polar_last_lsn = XLogBytePosToEndRecPtr(Insert->CurrBytePos);
+		polar_last_lsn = XLogBytePosToEndRecPtr(curBytePos);
 		Assert(!polar_is_inc);
 
 		/*
@@ -10609,19 +10609,7 @@ GetXLogInsertRecPtr(void)
 	XLogCtlInsert *Insert = &XLogCtl->Insert;
 	uint64		current_bytepos;
 
-	SpinLockAcquire(&Insert->insertpos_lck);
-	current_bytepos = Insert->CurrBytePos;
-	SpinLockRelease(&Insert->insertpos_lck);
-
-	return XLogBytePosToRecPtr(current_bytepos);
-}
-
-/* POLAR: get xlog insert pointer without lock */
-XLogRecPtr
-polar_get_xlog_insert_ptr_nolock(void)
-{
-	XLogCtlInsert *Insert = &XLogCtl->Insert;
-	uint64		current_bytepos = Insert->CurrBytePos;
+	current_bytepos = pg_atomic_read_u64(&Insert->CurrBytePos);
 
 	return XLogBytePosToRecPtr(current_bytepos);
 }
@@ -11017,9 +11005,7 @@ polar_get_fake_latest_lsn(void)
 	XLogCtlInsert *insert = &XLogCtl->Insert;
 
 	/* Read the current insert position */
-	SpinLockAcquire(&insert->insertpos_lck);
-	bytepos = insert->CurrBytePos;
-	SpinLockRelease(&insert->insertpos_lck);
+	bytepos = pg_atomic_read_u64(&insert->CurrBytePos);
 
 	return XLogBytePosToEndRecPtr(bytepos);
 }

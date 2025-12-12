@@ -368,7 +368,6 @@ extern struct ControlFileData *polar_get_control_file(void);
 extern bool polar_read_control_file(char *polar_ctl_file_path,
 									struct ControlFileData *polar_control_file_buffer,
 									int error_level, int *saved_errno);
-extern XLogRecPtr polar_get_xlog_insert_ptr_nolock(void);
 extern int	get_sync_bit(int method);
 
 /* POLAR: from xlogrecovery.c move here */

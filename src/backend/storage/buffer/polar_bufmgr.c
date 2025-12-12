@@ -133,17 +133,41 @@ polar_cal_cur_consistent_lsn(void)
 	BufferDesc *buf;
 	XLogRecPtr	clsn;
 	XLogRecPtr	lsn;
+	XLogRecPtr	min_flush_list_lsn;
+	int			i;
+	bool		all_flush_lists_empty;
 
 	Assert(polar_flush_list_enabled());
 
-	SpinLockAcquire(&polar_flush_ctl->flushlist_lock);
-	if (polar_flush_list_is_empty())
+	all_flush_lists_empty = true;
+	min_flush_list_lsn = InvalidXLogRecPtr;
+
+	for (i = 0; i < POLAR_FLUSHLIST_PARTITIONS; i++)
+	{
+		FlushList  *list = &polar_flush_ctl->lists[i];
+
+		SpinLockAcquire(&list->flushlist_lock);
+		if (!polar_flush_list_is_empty(list))
+		{
+			all_flush_lists_empty = false;
+
+			Assert(list->first_flush_buffer >= 0);
+
+			buf = GetBufferDescriptor(list->first_flush_buffer);
+			lsn = pg_atomic_read_u64((pg_atomic_uint64 *) &buf->oldest_lsn);
+
+			if (min_flush_list_lsn == InvalidXLogRecPtr || lsn < min_flush_list_lsn)
+				min_flush_list_lsn = lsn;
+		}
+		SpinLockRelease(&list->flushlist_lock);
+	}
+
+	if (all_flush_lists_empty)
 	{
 		if (unlikely(polar_bg_redo_state_is_parallel(polar_logindex_redo_instance)))
 			lsn = polar_get_oldest_replayed_lsn(polar_logindex_redo_instance);
 		else
 			lsn = polar_max_valid_lsn();
-		SpinLockRelease(&polar_flush_ctl->flushlist_lock);
 
 		if (unlikely(polar_enable_debug))
 			elog(DEBUG1,
@@ -153,18 +177,11 @@ polar_cal_cur_consistent_lsn(void)
 		return lsn;
 	}
 
-	Assert(polar_flush_ctl->first_flush_buffer >= 0);
-
-	buf = GetBufferDescriptor(polar_flush_ctl->first_flush_buffer);
-	lsn = pg_atomic_read_u64((pg_atomic_uint64 *) &buf->oldest_lsn);
-
-	SpinLockRelease(&polar_flush_ctl->flushlist_lock);
-
 	clsn = polar_copy_buffers_get_oldest_lsn();
 	if (!XLogRecPtrIsInvalid(clsn))
-		lsn = Min(lsn, clsn);
+		min_flush_list_lsn = Min(min_flush_list_lsn, clsn);
 
-	return lsn;
+	return min_flush_list_lsn;
 }
 
 bool
@@ -553,11 +570,23 @@ polar_buffer_sync(WritebackContext *wb_context,
 		int			num;
 		int			num_total;
 		int			num_skipped;
+		FlushList  *list;
+
+		/* Pick partition with minimum LSN */
+		list = polar_flush_list_flush_begin();
+		if (list == NULL)
+		{
+			/* All lists are being flushed by other bgwriters */
+			break;
+		}
 
 		/* Get buffers from flush list */
-		num_total = num = polar_get_batch_buffer(batch_buf, batch_buf_size);
+		num_total = num = polar_get_batch_buffer(batch_buf, batch_buf_size, list);
 		if (num == 0 || batch_buf == NULL)
+		{
+			polar_flush_list_flush_end(list);
 			break;
+		}
 
 retry:
 		i = 0;
@@ -590,6 +619,8 @@ retry:
 			memcpy(batch_buf, skip_buf, sizeof(int) * num_skipped);
 			goto retry;
 		}
+
+		polar_flush_list_flush_end(list);
 
 		sync_count += num_total;
 	}
@@ -1198,7 +1229,7 @@ polar_buffer_need_fullpage_snapshot(BufferDesc *buf_hdr, XLogRecPtr oldest_apply
 
 	if (cur_insert_lsn < buf_oldest_lsn + oldest_lsn_threshold * ONE_MB)
 	{
-		cur_insert_lsn = polar_get_xlog_insert_ptr_nolock();
+		cur_insert_lsn = GetXLogInsertRecPtr();
 
 		if (cur_insert_lsn < buf_oldest_lsn + oldest_lsn_threshold * ONE_MB)
 			return false;

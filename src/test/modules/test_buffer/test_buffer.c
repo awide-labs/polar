@@ -71,7 +71,7 @@ check_two_buffers(int front, int back)
 }
 
 static void
-check_one_batch_buffer()
+check_one_batch_buffer(int index)
 {
 	int			first,
 				last,
@@ -81,15 +81,15 @@ check_one_batch_buffer()
 	BufferDesc *first_buf = NULL;
 
 	/* Do not hold this lock too long. */
-	SpinLockAcquire(&polar_flush_ctl->flushlist_lock);
-	first = polar_flush_ctl->first_flush_buffer;
-	last = polar_flush_ctl->last_flush_buffer;
+	SpinLockAcquire(&polar_flush_ctl->lists[index].flushlist_lock);
+	first = polar_flush_ctl->lists[index].first_flush_buffer;
+	last = polar_flush_ctl->lists[index].last_flush_buffer;
 
 	/* Flushlist is empty. */
 	if (first == POLAR_FLUSHNEXT_END_OF_LIST)
 	{
 		Assert(last == POLAR_FLUSHNEXT_END_OF_LIST);
-		SpinLockRelease(&polar_flush_ctl->flushlist_lock);
+		SpinLockRelease(&polar_flush_ctl->lists[index].flushlist_lock);
 		return;
 	}
 
@@ -109,11 +109,11 @@ check_one_batch_buffer()
 		check++;
 	}
 
-	SpinLockRelease(&polar_flush_ctl->flushlist_lock);
+	SpinLockRelease(&polar_flush_ctl->lists[index].flushlist_lock);
 }
 
 static void
-check_consistent_lsn()
+check_consistent_lsn(int index)
 {
 	XLogRecPtr	first_lsn;
 	XLogRecPtr	consistent_lsn;
@@ -122,18 +122,18 @@ check_consistent_lsn()
 	consistent_lsn = polar_get_consistent_lsn();
 
 	/* Do not hold this lock too much time. */
-	SpinLockAcquire(&polar_flush_ctl->flushlist_lock);
-	first = polar_flush_ctl->first_flush_buffer;
+	SpinLockAcquire(&polar_flush_ctl->lists[index].flushlist_lock);
+	first = polar_flush_ctl->lists[index].first_flush_buffer;
 
 	/* Flushlist is empty. */
 	if (first == POLAR_FLUSHNEXT_END_OF_LIST)
 	{
-		SpinLockRelease(&polar_flush_ctl->flushlist_lock);
+		SpinLockRelease(&polar_flush_ctl->lists[index].flushlist_lock);
 		return;
 	}
 
 	first_lsn = polar_buffer_get_oldest_lsn(GetBufferDescriptor(first));
-	SpinLockRelease(&polar_flush_ctl->flushlist_lock);
+	SpinLockRelease(&polar_flush_ctl->lists[index].flushlist_lock);
 
 	Assert(!XLogRecPtrIsInvalid(first_lsn));
 	/* Check consistent lsn. */
@@ -142,13 +142,13 @@ check_consistent_lsn()
 }
 
 static void
-check_some_buffers()
+check_some_buffers(int index)
 {
 	int			batch = 0;
 
 	while (batch <= CHECK_BUFFER_BATCH)
 	{
-		check_one_batch_buffer();
+		check_one_batch_buffer(index);
 		batch++;
 	}
 }
@@ -160,8 +160,11 @@ test_flushlist()
 		return;
 
 	Assert(polar_flush_ctl != NULL);
-	check_some_buffers();
-	check_consistent_lsn();
+	for (int index = 0; index < POLAR_FLUSHLIST_PARTITIONS; index++)
+	{
+		check_some_buffers(index);
+		check_consistent_lsn(index);
+	}
 }
 
 static void

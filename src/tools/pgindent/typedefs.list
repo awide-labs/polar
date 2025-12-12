@@ -767,6 +767,7 @@ FDWCollateState
 FD_SET
 FILE
 FILETIME
+FLushListHeapNode
 FSMAddress
 FSMPage
 FSMPageData
@@ -800,6 +801,8 @@ FixedParamState
 FlagMode
 Float
 FlushControl
+FlushList
+FlushListMinHeap
 FlushPosition
 FmgrBuiltin
 FmgrHookEventType

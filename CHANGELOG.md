@@ -23,4 +23,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   - pg_jieba
   - roaringbitmap
 
+### Performance
+
+- Reduce contention on the flush list on RW node by splitting it into multiple
+  partitions (currently 64), with each partition having its own lock, control
+  structure and statistics (XCOM-195)
+
 [unreleased]: https://github.com/awide-labs/polar/compare/248cd221718..POLARDB_17_STABLE
