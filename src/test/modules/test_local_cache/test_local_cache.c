@@ -738,7 +738,7 @@ test_local_cache_remove_worker(Datum main_arg)
 			{
 				if (test_meta->read_min_page - test_meta->min_page > BLOCK_PER_SEGMENT)
 				{
-					segno = test_meta->min_page % BLOCK_PER_SEGMENT;
+					segno = test_meta->min_page / BLOCK_PER_SEGMENT;
 					need_remove = true;
 				}
 			}
