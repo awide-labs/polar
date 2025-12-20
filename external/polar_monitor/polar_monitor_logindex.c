@@ -222,8 +222,9 @@ polar_xlog_queue_stat_detail(PG_FUNCTION_ARGS)
 
 		free_up_cnt = pg_atomic_read_u64(&queue->prs.free_up_cnt);
 		recv_phys_io_cnt = pg_atomic_read_u64(&queue->prs.recv_phys_io_cnt);
-		total_written = pg_atomic_read_u64(&queue->pwrite);
-		total_read = pg_atomic_read_u64(&queue->pread);
+		/* report as physical positions in [0, size) */
+		total_written = pg_atomic_read_u64(&queue->pwrite) % queue->size;
+		total_read = pg_atomic_read_u64(&queue->pread) % queue->size;
 		evict_ref_cnt = pg_atomic_read_u64(&queue->prs.evict_ref_cnt);
 	}
 
@@ -274,6 +275,10 @@ polar_get_xlog_queue_ref_info_func(PG_FUNCTION_ARGS)
 		rbuf_occupied = queue->occupied;
 		memcpy(slots_info, queue->slot, sizeof(polar_ringbuf_slot_t) * POLAR_RINGBUF_MAX_SLOT);
 		LWLockRelease(&queue->lock.lock);
+
+		/* report as physical positions in [0, size) */
+		for (i = 0; i < POLAR_RINGBUF_MAX_SLOT; i++)
+			slots_info[i].pread %= queue->size;
 
 		fctx->max_calls = POLAR_RINGBUF_MAX_SLOT;
 		MemoryContextSwitchTo(mctx);

@@ -50,23 +50,14 @@ extern double polar_xlog_queue_data_keep_ratio;
 #define POLAR_XLOG_QUEUE_FREE_SIZE(queue, size) \
 	(polar_ringbuf_free_size(queue) >= POLAR_XLOG_PKT_SIZE(size))
 
-#define POLAR_XLOG_QUEUE_FREE_SIZE_AT_PWRITE(queue, pos, size) \
-	(polar_ringbuf_free_size_at_pwrite(queue, pos) >= POLAR_XLOG_PKT_SIZE(size))
-
 #define POLAR_XLOG_QUEUE_FREE_UP(queue, len) \
 	polar_ringbuf_free_up((queue), POLAR_RINGBUF_PWRITE(queue), POLAR_XLOG_PKT_SIZE(len), NULL)
-
-#define POLAR_XLOG_QUEUE_FREE_UP_AT_PWRITE(queue, pos, len) \
-	polar_ringbuf_free_up((queue), pos, POLAR_XLOG_PKT_SIZE(len), NULL)
 
 #define POLAR_XLOG_QUEUE_SET_PKT_LEN(queue, idx, size) \
 	polar_ringbuf_set_pkt_length((queue), (idx), (size) + POLAR_XLOG_HEAD_SIZE)
 
 #define POLAR_XLOG_QUEUE_RESERVE(queue, size) \
 	polar_ringbuf_pkt_reserve((queue), POLAR_XLOG_PKT_SIZE(size))
-
-#define POLAR_XLOG_QUEUE_RESERVE_SPACE(queue, pos) \
-	polar_ringbuf_pkt_reserve_space((queue), pos)
 
 #define POLAR_COPY_QUEUE_CONTENT(ref, offset, _dst, _size) \
 	do {\

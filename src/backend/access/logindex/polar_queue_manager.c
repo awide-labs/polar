@@ -1404,12 +1404,6 @@ polar_xlog_recv_queue_push(polar_ringbuf_t queue, char *buf, size_t len, polar_i
 
 		idx = polar_ringbuf_pkt_reserve(queue, POLAR_RINGBUF_PKT_SIZE(pktlen));
 
-		if (idx >= queue->size)
-		{
-			ereport(PANIC, (errmsg("Failed to reserve space from xlog recv queue, idx=%ld, queue size=%ld",
-								   idx, queue->size)));
-		}
-
 		polar_ringbuf_set_pkt_length(queue, idx, pktlen);
 		write_len = polar_ringbuf_pkt_write(queue, idx, 0, (uint8 *) buf, pktlen);
 

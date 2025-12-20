@@ -423,7 +423,6 @@ typedef struct
 	LWLock		lock;
 	pg_atomic_uint64 insertingAt;
 	XLogRecPtr	lastImportantAt;
-	pg_atomic_uint64 polar_valid_meta_at;
 } WALInsertLock;
 
 /*
@@ -1064,15 +1063,6 @@ XLogInsertRecord(XLogRecData *rdata,
 			WALInsertLocks[lockno].l.lastImportantAt = StartPos;
 		}
 
-		if (xlog_queue)
-		{
-			int			lockno = holdingAllLocks ? 0 : MyLockNo;
-
-			if (!POLAR_XLOG_QUEUE_FREE_SIZE_AT_PWRITE(xlog_queue, polar_rbuf_pos, polar_rbuf_len))
-				POLAR_XLOG_QUEUE_FREE_UP_AT_PWRITE(xlog_queue, polar_rbuf_pos, polar_rbuf_len);
-			POLAR_XLOG_QUEUE_RESERVE_SPACE(xlog_queue, polar_rbuf_pos);
-			pg_atomic_write_u64(&WALInsertLocks[lockno].l.polar_valid_meta_at, PG_UINT64_MAX);
-		}
 	}
 	else
 	{
@@ -1089,11 +1079,18 @@ XLogInsertRecord(XLogRecData *rdata,
 	WALInsertLockRelease();
 
 	/*
-	 * POLAR: must be inside CRIT_SECTION. Hold off signal to avoid mess up
-	 * queue data.
+	 * POLAR: must run inside CRIT_SECTION so signals/aborts can't interrupt
+	 * us mid-publish and leave the queue with an unwritten slot.
+	 *
+	 * Wait for our reserved queue region to be free (readers may not have
+	 * consumed it yet), then write the packet header and data.  No insert
+	 * locks are held during the wait, so walwriter and the logindex saver can
+	 * make progress — no deadlock with walwriter+logindex writer.
 	 */
 	if (inserted && xlog_queue)
 	{
+		polar_ringbuf_wait_for_space(xlog_queue, polar_rbuf_pos,
+									 POLAR_XLOG_PKT_SIZE(polar_rbuf_len));
 		POLAR_XLOG_QUEUE_SET_PKT_LEN(xlog_queue, polar_rbuf_pos, polar_rbuf_len);
 		if (polar_xlog_send_queue_push(xlog_queue, polar_rbuf_pos, rdata, polar_rbuf_len,
 									   EndPos, EndPos - StartPos))
@@ -1267,9 +1264,8 @@ ReserveXLogInsertLocation(int size, XLogRecPtr *StartPos, XLogRecPtr *EndPos,
 	uint64		startbytepos;
 	uint64		endbytepos;
 	uint64		prevbytepos;
+	uint64		idx = 0;
 
-	int			lockno = holdingAllLocks ? 0 : MyLockNo;
-	pg_atomic_uint64 *valid_meta_at = &WALInsertLocks[lockno].l.polar_valid_meta_at;
 	polar_ringbuf_t xlog_queue = NULL;
 
 	if (likely(polar_logindex_redo_instance))
@@ -1292,13 +1288,27 @@ ReserveXLogInsertLocation(int size, XLogRecPtr *StartPos, XLogRecPtr *EndPos,
 	 * positions (XLogRecPtrs) can be done outside the locked region, and
 	 * because the usable byte position doesn't include any headers, reserving
 	 * X bytes from WAL is almost as simple as "CurrBytePos += X".
+	 *
+	 * The xlog queue reservation is optimistic: inside the spinlock we only
+	 * advance pwrite (and CurrBytePos/PrevBytePos), without checking whether
+	 * the queue actually has free space.  pread is not read inside the lock,
+	 * so there is no cross-cache-line contention with readers.  pwrite may
+	 * temporarily run ahead of what readers have consumed; backpressure is
+	 * applied later by polar_ringbuf_wait_for_space() in XLogInsertRecord,
+	 * after all WAL insert locks are released.  Because that wait holds no
+	 * insert locks, walwriter and the logindex saver can make progress and
+	 * the queue can drain — no deadlock with walwriter+logindex writer.
 	 */
 	SpinLockAcquire(&Insert->insertpos_lck);
 
 	if (likely(xlog_queue))
 	{
-		*polar_rbuf_pos = pg_atomic_fetch_add_u64(&xlog_queue->pwrite, polar_rbuf_len);
-		pg_atomic_write_u64(valid_meta_at, *polar_rbuf_pos);
+		/*
+		 * Reserve queue space: just advance pwrite, no free-space check.
+		 * The spinlock serializes producers; no need for an atomic RMW.
+		 */
+		idx = pg_atomic_read_u64(&xlog_queue->pwrite);
+		pg_atomic_write_u64(&xlog_queue->pwrite, idx + polar_rbuf_len);
 	}
 
 	startbytepos = pg_atomic_read_u64(&Insert->CurrBytePos);
@@ -1308,6 +1318,9 @@ ReserveXLogInsertLocation(int size, XLogRecPtr *StartPos, XLogRecPtr *EndPos,
 	pg_atomic_write_u64(&Insert->PrevBytePos, startbytepos);
 
 	SpinLockRelease(&Insert->insertpos_lck);
+
+	if (likely(xlog_queue))
+		*polar_rbuf_pos = idx;
 
 	*StartPos = XLogBytePosToRecPtr(startbytepos);
 	*EndPos = XLogBytePosToEndRecPtr(endbytepos);
@@ -1339,12 +1352,11 @@ ReserveXLogSwitch(XLogRecPtr *StartPos, XLogRecPtr *EndPos, XLogRecPtr *PrevPtr,
 	uint64		startbytepos;
 	uint64		endbytepos;
 	uint64		prevbytepos;
+	uint64		idx = 0;
 	uint32		size = MAXALIGN(SizeOfXLogRecord);
 	XLogRecPtr	ptr;
 	uint32		segleft;
 
-	int			lockno = holdingAllLocks ? 0 : MyLockNo;
-	pg_atomic_uint64 *valid_meta_at = &WALInsertLocks[lockno].l.polar_valid_meta_at;
 	polar_ringbuf_t xlog_queue = NULL;
 
 	if (likely(polar_logindex_redo_instance))
@@ -1373,8 +1385,12 @@ ReserveXLogSwitch(XLogRecPtr *StartPos, XLogRecPtr *EndPos, XLogRecPtr *PrevPtr,
 
 	if (likely(xlog_queue))
 	{
-		*polar_rbuf_pos = pg_atomic_fetch_add_u64(&xlog_queue->pwrite, polar_rbuf_len);
-		pg_atomic_write_u64(valid_meta_at, *polar_rbuf_pos);
+		/*
+		 * Reserve queue space: just advance pwrite, no free-space check.
+		 * The spinlock serializes producers; no need for an atomic RMW.
+		 */
+		idx = pg_atomic_read_u64(&xlog_queue->pwrite);
+		pg_atomic_write_u64(&xlog_queue->pwrite, idx + polar_rbuf_len);
 	}
 
 	endbytepos = startbytepos + size;
@@ -1394,6 +1410,9 @@ ReserveXLogSwitch(XLogRecPtr *StartPos, XLogRecPtr *EndPos, XLogRecPtr *PrevPtr,
 	pg_atomic_write_u64(&Insert->PrevBytePos, startbytepos);
 
 	SpinLockRelease(&Insert->insertpos_lck);
+
+	if (likely(xlog_queue))
+		*polar_rbuf_pos = idx;
 
 	*PrevPtr = XLogBytePosToRecPtr(prevbytepos);
 
@@ -5517,7 +5536,6 @@ XLOGShmemInit(void)
 		LWLockInitialize(&WALInsertLocks[i].l.lock, LWTRANCHE_WAL_INSERT);
 		pg_atomic_init_u64(&WALInsertLocks[i].l.insertingAt, InvalidXLogRecPtr);
 		WALInsertLocks[i].l.lastImportantAt = InvalidXLogRecPtr;
-		pg_atomic_init_u64(&WALInsertLocks[i].l.polar_valid_meta_at, PG_UINT64_MAX);
 	}
 
 	/*
@@ -11221,48 +11239,6 @@ polar_reset_wal_buffer_stat(void)
 			}
 		}
 	}
-}
-
-/*
- * POLAR：Get the minimum valid meta position.
- *
- * Need to acquire spinlock to get the pwrite value here, because:
- * this function first retrieves the pwrite value, then iterates through
- * the polar_valid_meta_at values recorded on each WAL insert lock, and
- * takes the minimum value among all as min_valid_meta_pos.
- *
- * Since both pwrite and polar_valid_meta_at on WAL insert locks are modified
- * atomically under spinlock protection, we must hold the spinlock when acquiring
- * the pwrite value. Otherwise, this could lead to an incorrectly large computed
- * result, which may cause reading from uninitialized memory regions in the XLOG queue.
- *
- * The frequency of calling this function has been minimized. It is only executed
- * when each XLOG queue ref finds no available space to read after checking its own
- * pread position. Moreover, all XLOG queue refs store the min_valid_meta_pos value
- * obtained by this function into a shared memory variable that can be accessed by
- * all XLOG queue refs. Therefore, theoretically, there should not be frequent
- * spinlock contention.
- */
-uint64
-polar_get_min_valid_meta_pos(polar_ringbuf_t xlog_queue)
-{
-	int			i;
-	uint64		valid_meta_pos;
-	XLogCtlInsert *Insert = &XLogCtl->Insert;
-
-	SpinLockAcquire(&Insert->insertpos_lck);
-	valid_meta_pos = pg_atomic_read_u64(&xlog_queue->pwrite);
-	SpinLockRelease(&Insert->insertpos_lck);
-
-	for (i = 0; i < NUM_XLOGINSERT_LOCKS; i++)
-	{
-		uint64		cur_meta_pos = pg_atomic_read_u64(&WALInsertLocks[i].l.polar_valid_meta_at);
-
-		if (valid_meta_pos > cur_meta_pos)
-			valid_meta_pos = cur_meta_pos;
-	}
-
-	return valid_meta_pos;
 }
 
 /* POLAR end */

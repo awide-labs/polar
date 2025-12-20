@@ -65,7 +65,6 @@ polar_ringbuf_init(uint8 *data, size_t len, int tranche_id)
 
 	pg_atomic_init_u64(&rbuf->pread, 0);
 	pg_atomic_init_u64(&rbuf->pwrite, 0);
-	pg_atomic_init_u64(&rbuf->valid_pwrite, 0);
 
 	pg_atomic_init_u64(&rbuf->prs.free_up_cnt, 0);
 	pg_atomic_init_u64(&rbuf->prs.recv_phys_io_cnt, 0);
@@ -75,6 +74,9 @@ polar_ringbuf_init(uint8 *data, size_t len, int tranche_id)
 
 	rbuf->size = len - offsetof(polar_ringbuf_data_t, data);
 	rbuf->occupied = 0;
+
+	MemSet(rbuf->data, POLAR_RINGBUF_PKT_FREE, rbuf->size);
+
 	return rbuf;
 }
 
@@ -231,8 +233,9 @@ polar_ringbuf_read_next_pkt(polar_ringbuf_ref_t *ref,
 	size_t		todo;
 	size_t		split;
 	size_t		pktlen;
+	size_t		phys;
 	polar_ringbuf_t rbuf = ref->rbuf;
-	size_t		idx = rbuf->slot[ref->slot].pread;
+	uint64		idx = rbuf->slot[ref->slot].pread;
 
 	pktlen = polar_ringbuf_get_pkt_length(rbuf, idx);
 
@@ -242,19 +245,19 @@ polar_ringbuf_read_next_pkt(polar_ringbuf_ref_t *ref,
 	if ((offset + len) > pktlen)
 		len = pktlen - offset;
 
-	idx = (idx + POLAR_RINGBUF_PKTHDRSIZE + offset) % rbuf->size;
+	phys = POLAR_RINGBUF_IDX(rbuf, idx + POLAR_RINGBUF_PKTHDRSIZE + offset);
 	todo = len;
-	split = ((idx + len) > rbuf->size) ? rbuf->size - idx : 0;
+	split = ((phys + len) > rbuf->size) ? rbuf->size - phys : 0;
 
 	if (unlikely(split > 0))
 	{
-		memcpy(buf, rbuf->data + idx, split);
+		memcpy(buf, rbuf->data + phys, split);
 		buf += split;
 		todo -= split;
-		idx = 0;
+		phys = 0;
 	}
 
-	memcpy(buf, rbuf->data + idx, todo);
+	memcpy(buf, rbuf->data + phys, todo);
 
 	return len;
 }
@@ -264,28 +267,29 @@ polar_ringbuf_read_next_pkt(polar_ringbuf_ref_t *ref,
  * Support write from the offset of packet.
  */
 ssize_t
-polar_ringbuf_pkt_write(polar_ringbuf_t rbuf, size_t idx, int offset, uint8 *buf, size_t len)
+polar_ringbuf_pkt_write(polar_ringbuf_t rbuf, uint64 idx, int offset, uint8 *buf, size_t len)
 {
 	size_t		todo;
 	size_t		split;
+	size_t		phys;
 	size_t		pktlen = polar_ringbuf_get_pkt_length(rbuf, idx);
 
 	if (offset >= pktlen || (offset + len) > pktlen)
 		return -1;
 
-	idx = (idx + POLAR_RINGBUF_PKTHDRSIZE + offset) % rbuf->size;
-	split = (idx + len > rbuf->size) ? rbuf->size - idx : 0;
+	phys = POLAR_RINGBUF_IDX(rbuf, idx + POLAR_RINGBUF_PKTHDRSIZE + offset);
+	split = (phys + len > rbuf->size) ? rbuf->size - phys : 0;
 	todo = len;
 
 	if (split > 0)
 	{
-		memcpy(rbuf->data + idx, buf, split);
+		memcpy(rbuf->data + phys, buf, split);
 		buf += split;
 		todo -= split;
-		idx = 0;
+		phys = 0;
 	}
 
-	memcpy(rbuf->data + idx, buf, todo);
+	memcpy(rbuf->data + phys, buf, todo);
 
 	return len;
 }
@@ -300,6 +304,7 @@ polar_ringbuf_update_pread(polar_ringbuf_t rbuf)
 	bool		updated = false;
 	uint64		min_pread = POLAR_RINGBUF_INVALID_PREAD;
 	uint64		occupied = rbuf->occupied;
+	uint64		last_pread = pg_atomic_read_u64(&rbuf->pread);
 
 	while (occupied)
 	{
@@ -313,8 +318,30 @@ polar_ringbuf_update_pread(polar_ringbuf_t rbuf)
 	}
 
 	if (min_pread != POLAR_RINGBUF_INVALID_PREAD &&
-		pg_atomic_read_u64(&rbuf->pread) != min_pread)
+		last_pread != min_pread)
 	{
+		/*
+		 * Clear freed region in the physical data array.  With monotonic
+		 * counters, min_pread >= last_pread always, but the physical region
+		 * may wrap around the buffer boundary.
+		 */
+		size_t		phys_start = POLAR_RINGBUF_IDX(rbuf, last_pread);
+		size_t		phys_end = POLAR_RINGBUF_IDX(rbuf, min_pread);
+
+		if (phys_start < phys_end)
+		{
+			MemSet(&rbuf->data[phys_start], POLAR_RINGBUF_PKT_FREE,
+				   phys_end - phys_start);
+		}
+		else
+		{
+			/* Wraps around the buffer boundary */
+			MemSet(&rbuf->data[phys_start], POLAR_RINGBUF_PKT_FREE,
+				   rbuf->size - phys_start);
+			if (phys_end > 0)
+				MemSet(&rbuf->data[0], POLAR_RINGBUF_PKT_FREE, phys_end);
+		}
+		pg_write_barrier();
 		pg_atomic_write_u64(&rbuf->pread, min_pread);
 		updated = true;
 	}
@@ -389,6 +416,51 @@ polar_ringbuf_update_keep_data(polar_ringbuf_t rbuf)
 }
 
 /*
+ * Wait until a previously reserved region [idx, idx+len) is safe to write.
+ *
+ * With monotonic pwrite, a reservation can advance pwrite past what pread
+ * allows (optimistic reservation).  This function blocks until readers
+ * have consumed enough data that the physical region no longer overlaps
+ * unconsumed data, i.e. pread >= idx + len - (size - 1).
+ *
+ * Locking: must be called with NO WAL insert locks held.  Holding them
+ * here would re-create the walwriter+logindex-writer deadlock (walwriter
+ * blocks on WaitXLogInsertionsToFinish, the logindex writer can't drain,
+ * the queue stays full).
+ */
+void
+polar_ringbuf_wait_for_space(polar_ringbuf_t rbuf, uint64 idx, size_t len)
+{
+	uint64		end = idx + len;
+
+	/*
+	 * Fast path: our region is already free.  This is the common case when
+	 * the queue is large relative to the write rate.
+	 */
+	if ((ssize_t) (end - pg_atomic_read_u64(&rbuf->pread)) <= (ssize_t) (rbuf->size - 1))
+		return;
+
+	pgstat_report_wait_start(WAIT_EVENT_LOGINDEX_QUEUE_SPACE);
+	pg_atomic_fetch_add_u64(&rbuf->prs.free_up_cnt, 1);
+
+	while ((ssize_t) (end - pg_atomic_read_u64(&rbuf->pread)) > (ssize_t) (rbuf->size - 1))
+	{
+		LWLockAcquire(&rbuf->lock.lock, LW_EXCLUSIVE);
+		if (!polar_ringbuf_update_pread(rbuf) &&
+			!polar_ringbuf_evict_ref(rbuf))
+		{
+			LWLockRelease(&rbuf->lock.lock);
+			CHECK_FOR_INTERRUPTS();
+			pg_usleep(10);
+			continue;
+		}
+		LWLockRelease(&rbuf->lock.lock);
+	}
+
+	pgstat_report_wait_end();
+}
+
+/*
  * Free up space until free size larger than aimed length
  */
 void
@@ -447,7 +519,7 @@ polar_ringbuf_ref_keep_data(polar_ringbuf_ref_t *ref, float ratio, uint64_t new_
 		need_update_pread = true;
 	else
 	{
-		pwrite = polar_calc_latest_valid_pwrite(rbuf);
+		pwrite = pg_atomic_read_u64(&rbuf->pwrite);
 
 		Assert(pwrite >= new_pread);
 		if (pwrite > new_pread + keep_size)
@@ -458,13 +530,13 @@ polar_ringbuf_ref_keep_data(polar_ringbuf_ref_t *ref, float ratio, uint64_t new_
 		}
 	}
 
-	pwrite = polar_calc_latest_valid_pwrite(rbuf);
+	pwrite = pg_atomic_read_u64(&rbuf->pwrite);
 	while (pwrite > rbuf->slot[ref->slot].pread + keep_size)
 	{
 		polar_ringbuf_update_ref(ref);
 		updated = true;
 		if (pwrite <= rbuf->slot[ref->slot].pread + keep_size)
-			pwrite = polar_calc_latest_valid_pwrite(rbuf);
+			pwrite = pg_atomic_read_u64(&rbuf->pwrite);
 	}
 
 	if (updated)
@@ -488,7 +560,7 @@ polar_ringbuf_reset(polar_ringbuf_t rbuf)
 
 		pg_atomic_write_u64(&rbuf->pread, 0);
 		pg_atomic_write_u64(&rbuf->pwrite, 0);
-		pg_atomic_write_u64(&rbuf->valid_pwrite, 0);
+		MemSet(rbuf->data, POLAR_RINGBUF_PKT_FREE, rbuf->size);
 		LWLockRelease(&rbuf->lock.lock);
 		break;
 	}

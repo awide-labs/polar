@@ -25,6 +25,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Performance
 
+- Improve RW performance with logindex enabled by optimizing the XLOG queue
+  space reservation process, eliminating a major bottleneck where packets were
+  marked as free by writing into the queue while holding a global spinlock
+  (XCOM-195)
 - Reduce contention on the flush list on RW node by splitting it into multiple
   partitions (currently 64), with each partition having its own lock, control
   structure and statistics (XCOM-195)
