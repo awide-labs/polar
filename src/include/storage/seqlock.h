@@ -56,14 +56,17 @@ static inline uint64 pg_seqlock_read_begin(pg_seqlock *lock) {
 	uint64 seq;
 	for (;;) {
 		seq = pg_atomic_read_u64(&lock->seq);
-		if ((seq & 1) == 0)
+		if ((seq & 1) == 0) {
+			pg_read_barrier();
 			return seq;
+		}
 		/* busy-wait */
 		pg_spin_delay();
 	}
 }
 
 static inline bool pg_seqlock_read_retry(pg_seqlock *lock, uint64 startseq) {
+	pg_read_barrier();
 	return (startseq != pg_atomic_read_u64(&lock->seq)) || (startseq & 1);
 }
 
