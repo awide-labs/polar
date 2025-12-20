@@ -173,5 +173,18 @@ select * from pfs_info();
  
 (1 row)
 
+-- check polar wal pipeline view
+select COUNT(*)  >= 0 AS result from polar_wal_pipeline_info;
+ result 
+--------
+ t
+(1 row)
+
+select COUNT(*)  >= 0 AS result from polar_wal_pipeline_stats;
+ result 
+--------
+ t
+(1 row)
+
 --cleanup
 drop extension polar_monitor;

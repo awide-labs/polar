@@ -23,6 +23,14 @@
  */
 #include "polar_vfs/polar_vfs_interface.h"
 
+/* polar wal pipeline */
+#ifndef FRONTEND
+#include "storage/s_lock.h"
+
+extern bool multi_thread_vfs;
+extern slock_t polar_wal_pipeline_vfs_lck;
+#endif
+
 #define POLAR_VFS_FD_MASK 0x40000000
 #define POLAR_VFS_FD_MASK_ADD(fd) \
 do { \
@@ -47,13 +55,13 @@ do { \
 } while (0)
 
 #ifndef FRONTEND
-#define VFS_HOLD_INTERRUPTS() HOLD_INTERRUPTS()
+#define VFS_HOLD_INTERRUPTS() (pg_atomic_fetch_add_u32((pg_atomic_uint32 *)&InterruptHoldoffCount, 1))
 #else
 #define VFS_HOLD_INTERRUPTS()
 #endif
 
 #ifndef FRONTEND
-#define VFS_RESUME_INTERRUPTS() RESUME_INTERRUPTS()
+#define VFS_RESUME_INTERRUPTS() (pg_atomic_fetch_sub_u32((pg_atomic_uint32 *)&InterruptHoldoffCount, 1))
 #else
 #define VFS_RESUME_INTERRUPTS()
 #endif
@@ -66,7 +74,7 @@ static int	num_vfs_dir_descs = 0;
 static int	max_vfs_dir_descs = 0;
 static vfs_dir_desc *vfs_dir_descs = NULL;
 static bool mounted = false;
-static bool fd_reentrant = false;
+__thread bool fd_reentrant = false;
 
 static int	vfs_env_init(void);
 static int	vfs_env_destroy(void);
@@ -1184,6 +1192,12 @@ vfs_allocate_vfd(void)
 
 	Assert(size_vfd_cache > 0);
 
+#ifndef FRONTEND
+	/* polar wal pipeline */
+	if (multi_thread_vfs)
+		SpinLockAcquire(&polar_wal_pipeline_vfs_lck);
+#endif
+
 	if (vfs_vfd_cache[0].next_free == 0)
 	{
 		Size		new_cache_size = size_vfd_cache * 2;
@@ -1217,6 +1231,12 @@ vfs_allocate_vfd(void)
 	file = vfs_vfd_cache[0].next_free;
 	vfs_vfd_cache[0].next_free = vfs_vfd_cache[file].next_free;
 
+#ifndef FRONTEND
+	/* polar wal pipeline */
+	if (multi_thread_vfs)
+		SpinLockRelease(&polar_wal_pipeline_vfs_lck);
+#endif
+
 	return file;
 }
 
@@ -1234,10 +1254,21 @@ vfs_free_vfd(int file)
 		vfdP->file_name = NULL;
 	}
 
+#ifndef FRONTEND
+	/* polar wal pipeline */
+	if (multi_thread_vfs)
+		SpinLockAcquire(&polar_wal_pipeline_vfs_lck);
+#endif
+
 	vfdP->kind = POLAR_VFS_UNKNOWN_FILE;
 	vfdP->next_free = vfs_vfd_cache[0].next_free;
 	vfs_vfd_cache[0].next_free = file;
 
+#ifndef FRONTEND
+	/* polar wal pipeline */
+	if (multi_thread_vfs)
+		SpinLockRelease(&polar_wal_pipeline_vfs_lck);
+#endif
 }
 
 static inline bool

@@ -678,3 +678,75 @@ CREATE FUNCTION polar_get_slot_node_type(slot_name text)
 RETURNS text
 AS 'MODULE_PATHNAME', 'polar_get_slot_node_type'
 LANGUAGE C PARALLEL SAFE;
+
+-- polar wal function and dynamic view
+CREATE FUNCTION polar_wal_pipeline_info(
+            OUT wal_current_insert_lsn          bigint,
+            OUT wal_continuous_insert_lsn       bigint,
+            OUT wal_write_lsn                   bigint,
+            OUT wal_flush_lsn                   bigint,
+            OUT unflushed_xlog_add_slot_no 		bigint,
+            OUT unflushed_xlog_del_slot_no 		bigint,
+			OUT last_notify_lsn1 				bigint,
+			OUT last_notify_lsn2 				bigint,
+			OUT last_notify_lsn3 				bigint,
+			OUT last_notify_lsn4 				bigint
+)
+RETURNS RECORD
+AS 'MODULE_PATHNAME', 'polar_wal_pipeline_info'
+LANGUAGE C PARALLEL SAFE;
+
+CREATE FUNCTION polar_wal_pipeline_stats(
+            OUT write_wroker_timeout_waits      bigint,
+            OUT write_wroker_wakeup_waits       bigint,
+            OUT advance_wroker_timeout_waits    bigint,
+            OUT advance_wroker_wakeup_waits     bigint,
+            OUT flush_wroker_timeout_waits      bigint,
+            OUT flush_wroker_wakeup_waits       bigint,
+            OUT notify_wroker1_timeout_waits    bigint,
+            OUT notify_wroker1_wakeup_waits     bigint,
+            OUT notify_wroker2_timeout_waits    bigint,
+            OUT notify_wroker2_wakeup_waits     bigint,
+            OUT notify_wroker3_timeout_waits    bigint,
+            OUT notify_wroker3_wakeup_waits     bigint,
+            OUT notify_wroker4_timeout_waits    bigint,
+            OUT notify_wroker4_wakeup_waits     bigint,
+            OUT total_user_group_commits        bigint,
+            OUT total_user_spin_commits         bigint,
+            OUT total_user_timeout_commits      bigint,
+            OUT total_user_wakeup_commits       bigint,
+			OUT total_user_miss_timeouts        bigint,
+            OUT total_user_miss_wakeups         bigint,
+            OUT total_advance_callups			bigint,
+            OUT total_advances                  bigint,
+            OUT total_write_callups             bigint,
+            OUT total_writes                    bigint,
+            OUT unflushed_xlog_slot_waits  		bigint,
+            OUT total_flush_callups             bigint,
+            OUT total_flushes                   bigint,
+            OUT total_flush_merges              bigint,
+            OUT total_notify_callups            bigint,
+            OUT total_notifies                  bigint,
+            OUT total_notified_users            bigint
+)
+RETURNS RECORD
+AS 'MODULE_PATHNAME', 'polar_wal_pipeline_stats'
+LANGUAGE C PARALLEL SAFE;
+
+CREATE VIEW polar_wal_pipeline_info AS
+  SELECT * FROM polar_wal_pipeline_info();
+
+CREATE VIEW polar_wal_pipeline_stats AS
+  SELECT * FROM polar_wal_pipeline_stats();
+
+CREATE FUNCTION polar_wal_pipeline_reset_stats()
+RETURNS BOOL
+AS 'MODULE_PATHNAME', 'polar_wal_pipeline_reset_stats'
+LANGUAGE C PARALLEL SAFE;
+
+-- only used by superuser
+REVOKE ALL ON FUNCTION polar_wal_pipeline_reset_stats FROM PUBLIC;
+REVOKE ALL ON FUNCTION polar_wal_pipeline_info FROM PUBLIC;
+REVOKE ALL ON FUNCTION polar_wal_pipeline_stats FROM PUBLIC;
+REVOKE ALL ON polar_wal_pipeline_info FROM PUBLIC;
+REVOKE ALL ON polar_wal_pipeline_stats FROM PUBLIC;

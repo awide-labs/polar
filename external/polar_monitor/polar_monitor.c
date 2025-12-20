@@ -31,6 +31,7 @@
 #include "access/polar_logindex_redo.h"
 #include "funcapi.h"
 #include "miscadmin.h"
+#include "postmaster/polar_wal_pipeliner.h"
 #include "storage/polar_fd.h"
 #include "utils/builtins.h"
 #include "utils/pg_lsn.h"
@@ -271,4 +272,121 @@ polar_get_slot_node_type(PG_FUNCTION_ARGS)
 		default:
 			PG_RETURN_TEXT_P(cstring_to_text(POLAR_UNKNOWN_STRING));
 	}
+}
+
+extern polar_wal_pipeline_stats_t* polar_wal_pipeline_get_stats();
+extern polar_wait_object_t* polar_wal_pipeline_get_worker_wait_obj(int thread_no);
+extern void polar_wal_pipeline_stats_reset(void);
+
+PG_FUNCTION_INFO_V1(polar_wal_pipeline_info);
+Datum
+polar_wal_pipeline_info(PG_FUNCTION_ARGS)
+{
+	TupleDesc   tupdesc;
+	Datum       values[10];
+	bool        nulls[10];
+	HeapTuple	tuple;
+	Datum		result;
+	int         i = 0;
+	int 		j;
+
+	/* Build a tuple descriptor for our result type */
+	if (get_call_result_type(fcinfo, NULL, &tupdesc) != TYPEFUNC_COMPOSITE)
+		elog(ERROR, "return type must be a row type");
+
+	memset(nulls, 0, sizeof(nulls));
+
+	values[i++] = UInt64GetDatum(polar_wal_pipeline_get_current_insert_lsn());
+	values[i++] = UInt64GetDatum(polar_wal_pipeline_get_continuous_insert_lsn());
+	values[i++] = UInt64GetDatum(polar_wal_pipeline_get_write_lsn());
+	values[i++] = UInt64GetDatum(polar_wal_pipeline_get_flush_lsn());
+	values[i++] = UInt64GetDatum(polar_wal_pipeline_get_unflushed_xlog_add_slot_no());
+	values[i++] = UInt64GetDatum(polar_wal_pipeline_get_unflushed_xlog_del_slot_no());
+	for (j = 0; j < POLAR_WAL_PIPELINE_NOTIFY_WORKER_NUM_MAX; j++)
+		values[i++] = UInt64GetDatum(polar_wal_pipeline_get_last_notify_lsn(j));
+
+	tuple = heap_form_tuple(BlessTupleDesc(tupdesc), values, nulls);
+	result = HeapTupleGetDatum(tuple);
+
+	PG_RETURN_DATUM(result);
+}
+
+PG_FUNCTION_INFO_V1(polar_wal_pipeline_stats);
+Datum
+polar_wal_pipeline_stats(PG_FUNCTION_ARGS)
+{
+	TupleDesc   tupdesc;
+	Datum       values[31];
+	bool        nulls[31];
+	HeapTuple	tuple;
+	Datum		result;
+	int         i = 0;
+	int			j;
+	polar_wal_pipeline_stats_t *stats = polar_wal_pipeline_get_stats();
+	uint64		user_stats[6];
+
+	/* Build a tuple descriptor for our result type */
+	if (get_call_result_type(fcinfo, NULL, &tupdesc) != TYPEFUNC_COMPOSITE)
+		elog(ERROR, "return type must be a row type");
+
+	memset(nulls, 0, sizeof(nulls));
+
+	for (j = 0; j < POLAR_WAL_PIPELINE_MAX_THREAD_NUM; j++)
+	{
+		if (POLAR_WAL_PIPELINER_ENABLE())
+		{
+			polar_wait_object_t *wait_obj = polar_wal_pipeline_get_worker_wait_obj(j);
+
+			values[i++] = UInt64GetDatum(pg_atomic_read_u64(&wait_obj->stats.timeout_waits));
+			values[i++] = UInt64GetDatum(pg_atomic_read_u64(&wait_obj->stats.wakeup_waits));
+		}
+		else
+		{
+			values[i++] = UInt64GetDatum(0);
+			values[i++] = UInt64GetDatum(0);
+		}
+	}
+
+	MemSet(user_stats, 0, sizeof(user_stats));
+	for (int k = 0; k < POLAR_WAL_PIPELINE_STAT_PARTITIONS; k++)
+	{
+		user_stats[0] += pg_atomic_read_u64(&stats->user_stats[k].total_user_group_commits);
+		user_stats[1] += pg_atomic_read_u64(&stats->user_stats[k].total_user_spin_commits);
+		user_stats[2] += pg_atomic_read_u64(&stats->user_stats[k].total_user_timeout_commits);
+		user_stats[3] += pg_atomic_read_u64(&stats->user_stats[k].total_user_wakeup_commits);
+		user_stats[4] += pg_atomic_read_u64(&stats->user_stats[k].total_user_miss_timeouts);
+		user_stats[5] += pg_atomic_read_u64(&stats->user_stats[k].total_user_miss_wakeups);
+	}
+	values[i++] = UInt64GetDatum(user_stats[0]);
+	values[i++] = UInt64GetDatum(user_stats[1]);
+	values[i++] = UInt64GetDatum(user_stats[2]);
+	values[i++] = UInt64GetDatum(user_stats[3]);
+	values[i++] = UInt64GetDatum(user_stats[4]);
+	values[i++] = UInt64GetDatum(user_stats[5]);
+	values[i++] = UInt64GetDatum(pg_atomic_read_u64(&stats->total_advance_callups));
+	values[i++] = UInt64GetDatum(pg_atomic_read_u64(&stats->total_advances));
+	values[i++] = UInt64GetDatum(pg_atomic_read_u64(&stats->total_write_callups));
+	values[i++] = UInt64GetDatum(pg_atomic_read_u64(&stats->total_writes));
+	values[i++] = UInt64GetDatum(pg_atomic_read_u64(&stats->unflushed_xlog_slot_waits));
+	values[i++] = UInt64GetDatum(pg_atomic_read_u64(&stats->total_flush_callups));
+	values[i++] = UInt64GetDatum(pg_atomic_read_u64(&stats->total_flushes));
+	values[i++] = UInt64GetDatum(pg_atomic_read_u64(&stats->total_flush_merges));
+	values[i++] = UInt64GetDatum(pg_atomic_read_u64(&stats->total_notify_callups));
+	values[i++] = UInt64GetDatum(pg_atomic_read_u64(&stats->total_notifies));
+	values[i++] = UInt64GetDatum(pg_atomic_read_u64(&stats->total_notified_users));
+
+	tuple = heap_form_tuple(BlessTupleDesc(tupdesc), values, nulls);
+	result = HeapTupleGetDatum(tuple);
+
+	PG_RETURN_DATUM(result);
+}
+
+PG_FUNCTION_INFO_V1(polar_wal_pipeline_reset_stats);
+
+Datum
+polar_wal_pipeline_reset_stats(PG_FUNCTION_ARGS)
+{
+	polar_wal_pipeline_stats_reset();
+
+	PG_RETURN_DATUM(true);
 }

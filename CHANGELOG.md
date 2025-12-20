@@ -34,5 +34,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   updates single page (XCOM-35)
 - Bump the maximum number of parallel bgwriters from 16 to 64 (XCOM-35)
 - Increase the number of buffer partitions and the number of logindex hash locks (XCOM-35)
+- Port WAL pipeline feature from PolarDB 11 to improve write throughput (XCOM-59)
+- Increase the number of WAL insertion locks (NUM_XLOGINSERT_LOCKS) from 8 to 64
+  to improve WAL insertion scalability (XCOM-59)
 
 [unreleased]: https://bitbucket.org/awydex/polardb/branches/compare/POLARDB_15_STABLE..v15.14.5.0

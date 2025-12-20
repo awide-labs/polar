@@ -102,6 +102,9 @@ sigjmp_buf *PG_exception_stack = NULL;
 
 extern bool redirection_done;
 
+/* polar wal pipeline */
+extern bool multi_thread_elog;
+
 /*
  * Hook for intercepting messages before they are sent to the server log.
  * Note that the hook will not get called for messages that are suppressed
@@ -376,6 +379,16 @@ errstart(int elevel, const char *domain)
 	bool		output_to_server;
 	bool		output_to_client = false;
 	int			i;
+
+	/*
+	 * In polar wal pipeline, we can not use elog
+	 */
+	if (multi_thread_elog)
+	{
+		if (elevel >= ERROR)
+			abort();
+		return false;
+	}
 
 	/*
 	 * Check some cases in which we want to promote an error into a more

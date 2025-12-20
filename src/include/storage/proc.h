@@ -429,6 +429,9 @@ typedef struct PROC_HDR
 	int			spins_per_delay;
 	/* Buffer id of the buffer that Startup process waits for pin on, or -1 */
 	int			startupBufferPinWaitBufId;
+
+	/* POLAR wal_pipeliner process's latch */
+	Latch	   	* volatile polar_wal_pipeliner_latch;
 } PROC_HDR;
 
 extern PGDLLIMPORT PROC_HDR *ProcGlobal;

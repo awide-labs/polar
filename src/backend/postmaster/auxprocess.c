@@ -20,6 +20,7 @@
 #include "pgstat.h"
 #include "postmaster/auxprocess.h"
 #include "postmaster/bgwriter.h"
+#include "postmaster/polar_wal_pipeliner.h"
 #include "postmaster/startup.h"
 #include "postmaster/walwriter.h"
 #include "replication/walreceiver.h"
@@ -82,6 +83,9 @@ AuxiliaryProcessMain(AuxProcType auxtype)
 			break;
 		case WalReceiverProcess:
 			MyBackendType = B_WAL_RECEIVER;
+			break;
+		case PolarWalPipelinerProcess:
+			MyBackendType = B_POLAR_WAL_PIPELINER;
 			break;
 		case LogIndexBgWriterProcess:
 			MyBackendType = B_BG_LOGINDEX;
@@ -165,6 +169,10 @@ AuxiliaryProcessMain(AuxProcType auxtype)
 
 		case WalReceiverProcess:
 			WalReceiverMain();
+			proc_exit(1);
+
+		case PolarWalPipelinerProcess:
+			polar_wal_pipeliner_main();        /* should never return*/
 			proc_exit(1);
 
 		case LogIndexBgWriterProcess:

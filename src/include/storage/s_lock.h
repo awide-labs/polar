@@ -1107,4 +1107,52 @@ init_spin_delay(SpinDelayStatus *status,
 extern void perform_spin_delay(SpinDelayStatus *status);
 extern void finish_spin_delay(SpinDelayStatus *status);
 
+/* POLAR wal pipeline begin */
+
+#include <pthread.h>
+#include "port/atomics.h"
+
+typedef enum polar_wait_result_t
+{
+	POLAR_WAIT_RES_SPIN,
+	POLAR_WAIT_RES_SPIN_OVER,
+	POLAR_WAIT_RES_TIMEOUT,
+	POLAR_WAIT_RES_WAKEUP
+} polar_wait_result_t;
+
+typedef struct polar_wait_object_stats_t
+{
+	pg_atomic_uint64 	waiters;
+	pg_atomic_uint64	timeout_waits;
+	pg_atomic_uint64	wakeup_waits;
+} polar_wait_object_stats_t;
+
+typedef struct polar_wait_object_t
+{
+	pthread_mutex_t mutex;
+	pthread_cond_t cond;
+	polar_wait_object_stats_t stats;
+} polar_wait_object_t;
+
+/*
+ * Support for spin delay which is used in polar wal pipeline
+ */
+typedef struct polar_spin_delay_status_t
+{
+	polar_wait_object_t *wait_obj;
+	int			spins_per_delay;
+	int			timeout_us;
+	int			spins;
+	int			cur_delay;
+} polar_spin_delay_status_t;
+
+void
+polar_init_spin_delay_mt(polar_spin_delay_status_t *status, polar_wait_object_t *wait_obj,
+						 int spins_per_delay, int timeout_us);
+int polar_get_spins_per_delay(void);
+void polar_compute_tv_delay(struct timespec *tv, long us);
+polar_wait_result_t polar_perform_spin_delay_mt(polar_spin_delay_status_t *status, bool need_lock, bool need_wait);
+void polar_reset_spin_delay_mt(polar_spin_delay_status_t *status);
+/* POLAR wal pipeline end */
+
 #endif	 /* S_LOCK_H */
