@@ -184,6 +184,9 @@ InitProcGlobal(void)
 	pg_atomic_init_u32(&ProcGlobal->procArrayGroupFirst, INVALID_PGPROCNO);
 	pg_atomic_init_u32(&ProcGlobal->clogGroupFirst, INVALID_PGPROCNO);
 
+	/* POLAR wal pipeline */
+	ProcGlobal->polar_wal_pipeliner_latch = NULL;
+
 	/*
 	 * Create and initialize all the PGPROC structures we'll need.  There are
 	 * five separate consumers: (1) normal backends, (2) autovacuum workers

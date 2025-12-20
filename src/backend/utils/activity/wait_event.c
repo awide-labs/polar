@@ -475,6 +475,12 @@ pgstat_get_wait_ipc(WaitEventIPC w)
 		case WAIT_EVENT_XACT_GROUP_UPDATE:
 			event_name = "XactGroupUpdate";
 			break;
+		case WAIT_EVENT_WAL_PIPELINE_WAIT_RECENT_WRITTEN_SPACE:
+			event_name = "PolarWALPipelineWaitRecentWrittenSpace";
+			break;
+		case WAIT_EVENT_WAL_PIPELINE_WAIT_UNFLUSHED_XLOG_SLOT:
+			event_name = "PolarWALPipelineWaitUnflushedXlogSlot";
+			break;
 			/* no default case, so that compiler will warn */
 	}
 
@@ -846,6 +852,9 @@ pgstat_get_wait_io(WaitEventIO w)
 		case WAIT_EVENT_CACHE_SHARED_STAT:
 			event_name = "PolarCacheSharedStat";
 			break;
+		case WAIT_EVENT_WAL_PIPELINE_COMMIT_WAIT:
+		 	event_name = "PolarWALPipelineCommitWait";
+		    break;
 			/* POLAR end */
 			/* no default case, so that compiler will warn */
 	}

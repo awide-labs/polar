@@ -408,6 +408,61 @@ extern int	polar_instance_spec_mem;
 extern bool polar_enable_async_lock_replay;
 extern bool polar_enable_async_lock_replay_debug;
 
+/* POLAR wal pipeline */
+
+/*
+ * For now, we just use native PG spin lock strategy to tune
+ * wal pipeline spin and wait.
+ */
+
+/*
+ * 1000 spin corresponds to 4us, we should spin at most 1ms
+ * 0 indicates no spin
+ */
+#define POLAR_MIN_WAIT_SPINS 	0
+#define POLAR_MAX_WAIT_SPINS 	250000
+
+/*
+ * how long does it take to wake up on timeout, depending on timeout:
+ *	1us ->    57us
+ *	10us ->   66us
+ *	20us ->   76us
+ *	50us ->   106us
+ *	100us ->  156us
+ *	1000us -> 1100us
+ *	reference MySQL 8.0
+ *  0 indicates no timeout
+ */
+#define POLAR_MIN_WAIT_TIMEOUT_USEC		0
+#define POLAR_MAX_WAIT_TIMEOUT_USEC		100000
+
+extern bool polar_wal_pipeline_enable;
+extern int  polar_wal_pipeline_mode;
+extern int	polar_wal_pipeline_wait_timeout;
+extern int	polar_wal_pipeline_flush_event_array_size;
+extern int	polar_wal_pipeline_flush_event_slot_size;
+extern int  polar_wal_pipeline_unflushed_xlog_array_size;
+extern int  polar_wal_pipeline_recent_written_array_size;
+
+extern int polar_wal_pipeline_commit_wait_spin_delay;
+extern int polar_wal_pipeline_commit_wait_timeout;
+
+extern int polar_wal_pipeline_advance_worker_spin_delay;
+extern int polar_wal_pipeline_advance_worker_timeout;
+extern int polar_wal_pipeline_advance_worker_write_max_size;
+
+extern int polar_wal_pipeline_write_worker_spin_delay;
+extern int polar_wal_pipeline_write_worker_timeout;
+
+extern int polar_wal_pipeline_flush_worker_spin_delay;
+extern int polar_wal_pipeline_flush_worker_timeout;
+
+extern int polar_wal_pipeline_notify_worker_spin_delay;
+extern int polar_wal_pipeline_notify_worker_timeout;
+#define POLAR_WAL_PIPELINE_NOTIFY_WORKER_NUM_MAX	4
+#define POLAR_WAL_PIPELINE_NOTIFY_WORKER_NUM_MIN	1
+extern int polar_wal_pipeline_notify_worker_num;
+
 /* POLAR GUCs end */
 
 extern bool polar_enable_coredump_print;

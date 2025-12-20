@@ -320,6 +320,9 @@ GetBackendTypeDesc(BackendType backendType)
 		case B_ARCHIVER:
 			backendDesc = "archiver";
 			break;
+		case B_POLAR_WAL_PIPELINER:
+			backendDesc = "polar wal pipeliner";
+			break;
 		case B_LOGGER:
 			backendDesc = "logger";
 			break;

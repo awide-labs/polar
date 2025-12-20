@@ -359,4 +359,50 @@ extern int	get_sync_bit(int method);
 #define POLAR_NON_EXCLUSIVE_BACKUP_LABEL_FILE	"polar_non_exclusive_backup_label"
 #define POLAR_NON_EXCLUSIVE_TABLESPACE_MAP	"polar_non_exclusive_tablespace_map"
 
+/* POLAR wal pipeline begin */
+
+/*
+ * polar wal pipeline is enable when:
+ * 1. polar_wal_pipeline_enable = true
+ * 2. not in bootstrap and single mode
+ */
+#define POLAR_WAL_PIPELINER_ENABLE() \
+	(polar_wal_pipeline_enable && IsPostmasterEnvironment)
+/*
+ * polar wal pipeliner is ready to work when:
+ * 1. POLAR_WAL_PIPELINE_ENABLE is true
+ * 2. not in recovery mode
+ * 3. all threads of wal pipeliner have started
+ */
+#define POLAR_WAL_PIPELINER_READY() \
+	(POLAR_WAL_PIPELINER_ENABLE() && !RecoveryInProgress() && ProcGlobal->polar_wal_pipeliner_latch != NULL)
+
+extern bool polar_wal_pipeline_advance(int ident);
+extern bool polar_wal_pipeline_write(int ident);
+extern bool polar_wal_pipeline_flush(int ident);
+extern bool polar_wal_pipeline_notify(int ident);
+
+extern void polar_wal_pipeline_set_last_notify_lsn(int ident, XLogRecPtr last_notify_lsn);
+extern void polar_wal_pipeline_set_ready_write_lsn(XLogRecPtr ready_write_lsn);
+extern XLogRecPtr polar_wal_pipeline_get_current_insert_lsn(void);
+extern XLogRecPtr polar_wal_pipeline_get_continuous_insert_lsn(void);
+extern XLogRecPtr polar_wal_pipeline_get_write_lsn(void);
+extern XLogRecPtr polar_wal_pipeline_get_flush_lsn(void);
+extern XLogRecPtr polar_wal_pipeline_get_last_notify_lsn(int ident);
+extern XLogRecPtr polar_wal_pipeline_get_ready_write_lsn(void);
+extern uint64 polar_wal_pipeline_get_unflushed_xlog_add_slot_no(void);
+extern uint64 polar_wal_pipeline_get_unflushed_xlog_del_slot_no(void);
+extern void polar_wal_pipeline_stats_reset(void);
+extern void polar_wal_pipeline_recent_written_add_link(XLogRecPtr start_lsn, XLogRecPtr end_lsn);
+extern void polar_wal_pipeline_commit_wait(XLogRecPtr flush_lsn);
+
+/*
+ *	Only for polar wal pipeline test
+ */
+extern void polar_wal_pipeline_set_local_recovery_mode(bool mode);
+
+extern void InitXLOGAccess(void);
+
+/* POLAR wal pipeline end */
+
 #endif							/* XLOG_H */

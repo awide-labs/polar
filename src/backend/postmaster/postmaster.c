@@ -264,6 +264,7 @@ static pid_t StartupPID = 0,
 			AutoVacPID = 0,
 			PgArchPID = 0,
 			SysLoggerPID = 0,
+			PolarWalPipelinerPID = 0,
 			LogIndexBgPID = 0;
 
 static pid_t SysLoggerPIDs[MAX_SYSLOGGER_NUM];	/* POLAR */
@@ -573,6 +574,7 @@ static void ShmemBackendArrayRemove(Backend *bn);
 #define StartWalWriter()		StartChildProcess(WalWriterProcess)
 #define StartWalReceiver()		StartChildProcess(WalReceiverProcess)
 #define StartLogIndexBgWriter() StartChildProcess(LogIndexBgWriterProcess)
+#define StartPolarWalPipeliner()	StartChildProcess(PolarWalPipelinerProcess)
 
 /* Macros to check exit status of a child process */
 #define EXIT_STATUS_0(st)  ((st) == 0)
@@ -1543,6 +1545,18 @@ PostmasterMain(int argc, char *argv[])
 	 * see what's happening.
 	 */
 	AddToDataDirLockFile(LOCK_FILE_LINE_PM_STATUS, PM_STATUS_STARTING);
+
+	/*
+	 * Must startup pipeliner before checkpointer,
+	 * because only wal pipeliner can write wal log.
+	 */
+	if (POLAR_WAL_PIPELINER_ENABLE() && PolarWalPipelinerPID == 0 && !polar_is_replica())
+	{
+		PolarWalPipelinerPID = StartPolarWalPipeliner();
+		/* wait until wal pipeliner ready */
+		while (ProcGlobal->polar_wal_pipeliner_latch == NULL)
+			SPIN_DELAY();
+	}
 
 	/* Start bgwriter and checkpointer so they can help with recovery */
 	if (CheckpointerPID == 0)
@@ -3402,6 +3416,18 @@ reaper(SIGNAL_ARGS)
 			connsAllowed = true;
 
 			/*
+			 * Must startup pipeliner before checkpointer,
+			 * because only wal pipeliner can write wal log.
+			 */
+			if (POLAR_WAL_PIPELINER_ENABLE() && PolarWalPipelinerPID == 0 && !polar_is_replica())
+			{
+				PolarWalPipelinerPID = StartPolarWalPipeliner();
+				/* wait until wal pipeliner ready */
+				while (ProcGlobal->polar_wal_pipeliner_latch == NULL)
+					SPIN_DELAY();
+			}
+
+			/*
 			 * Crank up the background tasks, if we didn't do that already
 			 * when we entered consistent recovery state.  It doesn't matter
 			 * if this fails, we'll just try again later.
@@ -3490,6 +3516,9 @@ reaper(SIGNAL_ARGS)
 				 */
 				SignalChildren(SIGUSR2);
 
+				if (PolarWalPipelinerPID != 0)
+					signal_child(PolarWalPipelinerPID, SIGUSR2);
+
 				pmState = PM_SHUTDOWN_2;
 			}
 			else
@@ -3516,6 +3545,14 @@ reaper(SIGNAL_ARGS)
 			if (!EXIT_STATUS_0(exitstatus))
 				HandleChildCrash(pid, exitstatus,
 								 _("WAL writer process"));
+			continue;
+		}
+
+		if (pid == PolarWalPipelinerPID)
+		{
+			PolarWalPipelinerPID = 0;
+			HandleChildCrash(pid, exitstatus,
+			                 _("WAL pipeliner process"));
 			continue;
 		}
 
@@ -4024,6 +4061,17 @@ HandleChildCrash(int pid, int exitstatus, const char *procname)
 		signal_child(WalWriterPID, (SendStop ? SIGSTOP : SIGQUIT));
 	}
 
+	if (pid == PolarWalPipelinerPID)
+		PolarWalPipelinerPID = 0;
+	else if (PolarWalPipelinerPID != 0 && take_action)
+	{
+		ereport(DEBUG2,
+				(errmsg_internal("sending %s to process %d",
+								 (SendStop ? "SIGSTOP" : "SIGQUIT"),
+								 (int) WalWriterPID)));
+		signal_child(PolarWalPipelinerPID, (SendStop ? SIGSTOP : SIGQUIT));
+	}
+
 	/* Take care of the walreceiver too */
 	if (pid == WalReceiverPID)
 		WalReceiverPID = 0;
@@ -4209,6 +4257,8 @@ PostmasterStateMachine(void)
 			signal_child(StartupPID, SIGTERM);
 		if (WalReceiverPID != 0)
 			signal_child(WalReceiverPID, SIGTERM);
+		if (PolarWalPipelinerPID != 0)
+			signal_child(PolarWalPipelinerPID, SIGTERM);
 		/* POLAR: and the logindex background process too */
 		if (LogIndexBgPID != 0)
 			signal_child(LogIndexBgPID, SIGTERM);
@@ -4291,6 +4341,8 @@ PostmasterStateMachine(void)
 					SignalChildren(SIGQUIT);
 					if (PgArchPID != 0)
 						signal_child(PgArchPID, SIGQUIT);
+					if (PolarWalPipelinerPID != 0)
+						signal_child(PolarWalPipelinerPID, SIGQUIT);
 				}
 			}
 		}
@@ -4304,7 +4356,7 @@ PostmasterStateMachine(void)
 		 * left by now anyway; what we're really waiting for is walsenders and
 		 * archiver.
 		 */
-		if (PgArchPID == 0 && CountChildren(BACKEND_TYPE_ALL) == 0)
+		if (PgArchPID == 0 && CountChildren(BACKEND_TYPE_ALL) == 0 && PolarWalPipelinerPID == 0)
 		{
 			pmState = PM_WAIT_DEAD_END;
 		}
@@ -4324,7 +4376,7 @@ PostmasterStateMachine(void)
 		 * normal state transition leading up to PM_WAIT_DEAD_END, or during
 		 * FatalError processing.
 		 */
-		if (dlist_is_empty(&BackendList) && PgArchPID == 0)
+		if (dlist_is_empty(&BackendList) && PgArchPID == 0 && PolarWalPipelinerPID == 0)
 		{
 			/* These other guys should be dead already */
 			Assert(StartupPID == 0);
@@ -4333,6 +4385,7 @@ PostmasterStateMachine(void)
 			Assert(CheckpointerPID == 0);
 			Assert(WalWriterPID == 0);
 			Assert(AutoVacPID == 0);
+			Assert(PolarWalPipelinerPID == 0);
 			Assert(LogIndexBgPID == 0);
 			/* syslogger is not considered here */
 			pmState = PM_NO_CHILDREN;
@@ -4566,6 +4619,8 @@ TerminateChildren(int signal)
 		signal_child(AutoVacPID, signal);
 	if (PgArchPID != 0)
 		signal_child(PgArchPID, signal);
+	if (PolarWalPipelinerPID != 0)
+		signal_child(PolarWalPipelinerPID, signal);
 	/* POLAR: signal logindex background process */
 	if (LogIndexBgPID != 0)
 		signal_child(LogIndexBgPID, signal);
@@ -5912,6 +5967,10 @@ StartChildProcess(AuxProcType type)
 			case WalReceiverProcess:
 				ereport(LOG,
 						(errmsg("could not fork WAL receiver process: %m")));
+				break;
+			case PolarWalPipelinerProcess:
+				ereport(LOG,
+						(errmsg("could not fork polar wal pipeliner process: %m")));
 				break;
 			case LogIndexBgWriterProcess:
 				ereport(LOG,

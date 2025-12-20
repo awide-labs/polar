@@ -92,5 +92,9 @@ select * from pfs_du_with_depth(1, 'mock/du_path');
 -- pfsadm info for unexists pdbName
 select * from pfs_info();
 
+-- check polar wal pipeline view
+select COUNT(*)  >= 0 AS result from polar_wal_pipeline_info;
+select COUNT(*)  >= 0 AS result from polar_wal_pipeline_stats;
+
 --cleanup
 drop extension polar_monitor;
