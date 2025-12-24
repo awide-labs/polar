@@ -4072,19 +4072,25 @@ process_pm_pmsignal(void)
 
 	/* Tell syslogger to rotate logfile if requested */
 	/* POLAR */
-	if (!polar_enable_multi_syslogger)
+	if (!polar_enable_multi_syslogger && SysLoggerPID != 0)
 	{
-		if (CheckPostmasterSignal(PMSIGNAL_ROTATE_LOGFILE) &&
-			SysLoggerPID != 0)
+		if (CheckLogrotateSignal())
+		{
+			signal_child(SysLoggerPID, SIGUSR1);
+			RemoveLogrotateSignalFiles();
+		}
+		else if (CheckPostmasterSignal(PMSIGNAL_ROTATE_LOGFILE))
 		{
 			/* Tell syslogger to rotate logfile */
 			signal_child(SysLoggerPID, SIGUSR1);
 		}
 	}
-	else
+	else if (polar_enable_multi_syslogger)
 	{
 		/* POLAR */
-		if (CheckPostmasterSignal(PMSIGNAL_ROTATE_LOGFILE) &&
+		bool rotation_via_signal_file = CheckLogrotateSignal();
+
+		if ((rotation_via_signal_file || CheckPostmasterSignal(PMSIGNAL_ROTATE_LOGFILE)) &&
 			polar_syslogger_num > 0)
 		{
 			int			i;
@@ -4094,6 +4100,9 @@ process_pm_pmsignal(void)
 				if (SysLoggerPIDs[i] != 0)
 					signal_child(SysLoggerPIDs[i], SIGUSR1);
 			}
+
+			if (rotation_via_signal_file)
+				RemoveLogrotateSignalFiles();
 		}
 	}
 	/* POLAR end */

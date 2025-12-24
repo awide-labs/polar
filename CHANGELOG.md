@@ -23,6 +23,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   - pg_jieba
   - roaringbitmap
 
+### Fixed
+
+- Fixed non-working log rotation via pg_ctl logrotate (XCOM-195)
+
 ### Performance
 
 - Reduce replica lag by avoiding a contended spinlock and publishing replay LSN
