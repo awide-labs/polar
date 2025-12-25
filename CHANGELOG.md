@@ -25,6 +25,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Performance
 
+- Reduce replica lag by avoiding a contended spinlock and publishing replay LSN
+  updates with optimized locking primitives (XCOM-195)
 - Improve RW performance with logindex enabled by optimizing the XLOG queue
   space reservation process, eliminating a major bottleneck where packets were
   marked as free by writing into the queue while holding a global spinlock
