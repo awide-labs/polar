@@ -29,6 +29,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Performance
 
+- Optimize asynchronous DDL processing by the startup process when
+  `polar_enable_async_ddl_lock_replay` is enabled (XCOM-195)
 - Reduce replica lag by avoiding a contended spinlock and publishing replay LSN
   updates with optimized locking primitives (XCOM-195)
 - Improve RW performance with logindex enabled by optimizing the XLOG queue
