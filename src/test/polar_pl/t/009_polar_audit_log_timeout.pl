@@ -25,6 +25,16 @@ use PostgreSQL::Test::Utils;
 use Test::More;
 use threads;
 
+sub wait_for_log_count {
+	my ($log_dir, $pattern, $expected_count) = @_;
+	for (my $i = 0; $i < 30; $i++) {
+		my $result = int(qx{/bin/bash -c 'grep -wrn "$pattern" $log_dir 2>/dev/null | wc -l'});
+		return $result if $result == $expected_count;
+		sleep(1);
+	}
+	return int(qx{/bin/bash -c 'grep -wrn "$pattern" $log_dir 2>/dev/null | wc -l'});
+}
+
 my $node_primary = PostgreSQL::Test::Cluster->new('primary');
 $node_primary->init(allows_streaming => 1);
 
@@ -58,9 +68,8 @@ while (1)
 	}
 }
 
-my $result = qx{/bin/bash -c 'grep -wrn "select 5432" $log_dir | wc -l'};
-print("select 5432 count: " . $result);
-
+my $result = wait_for_log_count($log_dir, "select 5432", 10);
+print("select 5432 count: " . $result . "\n");
 ok($result == 10, "flush exit success");
 
 
@@ -85,10 +94,8 @@ while (1)
 my $pid = $node_primary->safe_psql('postgres', "select pg_backend_pid()");
 qx{/bin/bash -c "kill $pid"};
 
-sleep 6;
-$result = qx{/bin/bash -c 'grep -wrn "select 5432" $log_dir | wc -l'};
-print("select 5432 count: " . $result);
-
+$result = wait_for_log_count($log_dir, "select 5432", 10);
+print("select 5432 count: " . $result . "\n");
 ok($result == 10, "flush kill success");
 
 qx{/bin/bash -c "rm -rf $log_dir/*"};
@@ -110,9 +117,8 @@ while (1)
 }
 $node_primary->stop;
 
-$result = qx{/bin/bash -c 'grep -wrn "select 5432" $log_dir | wc -l'};
-print("select 5432 count: " . $result);
-
+$result = wait_for_log_count($log_dir, "select 5432", 10);
+print("select 5432 count: " . $result . "\n");
 ok($result == 10, "flush master stop success");
 
 qx{/bin/bash -c "rm -rf $log_dir/*"};
@@ -143,11 +149,8 @@ $node_primary->pgbench(
 }
 	});
 
-sleep 6;
-
-$result = qx{/bin/bash -c 'grep -wrn "select 5432" $log_dir | wc -l'};
-print("select 5432 count: " . $result);
-
+$result = wait_for_log_count($log_dir, "select 5432", 100);
+print("select 5432 count: " . $result . "\n");
 ok($result == 100, "flush parallel success");
 
 # done with the node
