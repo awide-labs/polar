@@ -52,6 +52,7 @@ Usage:
     --clean, stop and clean existing cluster
     --nc,--nocompile, prevents recompile PolarDB
     --ni,--noinit, prevents init PolarDB cluster
+    --noinstall, prevents installation of PolarDB binaries
     --ws,--withstandby init the database with standby
     --wr,--withreplica init the database with replica
     --ec,--extra-configure=<configure flag>, pass extra flag to configure
@@ -82,8 +83,13 @@ function compile() {
   configure_flag+=" --prefix=$base_dir --with-pgport=$port ${extra_configure_flag-}"
   info "Begin configure, flags: $configure_flag"
   ./configure $configure_flag
-  info "Begin compile and install PolarDB, flags: $make_flag"
-  make install-world-bin $make_flag
+  if [[ $install == "on" ]]; then
+    info "Compiling and installing PolarDB, flags: $make_flag"
+    make install-world-bin $make_flag
+  else
+    info "Compiling PolarDB, flags: $make_flag"
+    make world-bin $make_flag
+  fi
 }
 
 function init_primary() {
@@ -175,6 +181,7 @@ linux_dist=$(awk -F= '/^ID=/{id=$2} /^VERSION_ID=/{vid=$2} END{print id vid}' /e
 # 2.3 other options
 clean=off
 init=on
+install=on
 compile=on
 replica_num=0
 standby_num=0
@@ -193,6 +200,7 @@ for arg do
     --clean)                    clean=on ;;
     --nc|--nocompile)           compile=off ;;
     --ni|--noinit)              init=off ;;
+    --noinstall)                install=off ;;
     --debug=*)                  debug="$val" ;;
     --jobs=*)                   jobs="$val" ;;
     --quiet=*)                  quiet="$val" ;;
@@ -207,6 +215,11 @@ for arg do
                                 exit 1 ;;
   esac
 done
+
+if [[ $install == "off" ]]; then
+  info "--noinstall implies --noinit, will not initialize a cluster"
+  init=off
+fi
 
 # 3.2 compiler and configure flags setting
 make_flag="-j$jobs"
