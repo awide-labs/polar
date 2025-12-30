@@ -29,6 +29,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Performance
 
+- Avoid mini transaction overhead by the startup process when replayed WAL record
+  updates a single page (XCOM-195)
 - Optimize asynchronous DDL processing by the startup process when
   `polar_enable_async_ddl_lock_replay` is enabled (XCOM-195)
 - Reduce replica lag by avoiding a contended spinlock and publishing replay LSN
