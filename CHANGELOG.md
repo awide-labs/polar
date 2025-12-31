@@ -29,6 +29,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Performance
 
+- Increase the number of buffer partitions and the number of logindex hash locks
+  (XCOM-195)
+- Bump the maximum number of parallel bgwriters from 16 to 64 (XCOM-195)
 - Avoid mini transaction overhead by the startup process when replayed WAL record
   updates a single page (XCOM-195)
 - Optimize asynchronous DDL processing by the startup process when

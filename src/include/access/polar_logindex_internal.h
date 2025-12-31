@@ -58,7 +58,7 @@ typedef uint64 log_idx_table_id_t;
 /* Define macro for const config value */
 #define LOG_INDEX_MEM_TBL_SEG_NUM           4096
 #define LOG_INDEX_MEM_TBL_HASH_NUM          (LOG_INDEX_MEM_TBL_SEG_NUM/2)
-#define LOG_INDEX_MEM_TBL_HASH_LOCK_NUM     (LOG_INDEX_MEM_TBL_HASH_NUM/64)
+#define LOG_INDEX_MEM_TBL_HASH_LOCK_NUM     (LOG_INDEX_MEM_TBL_HASH_NUM/2)
 #define LOG_INDEX_MEM_TBL_HASH_PAGE(tag) \
 	(tag_hash(tag, sizeof(BufferTag)) % LOG_INDEX_MEM_TBL_HASH_NUM)
 

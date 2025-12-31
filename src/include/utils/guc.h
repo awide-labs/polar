@@ -274,7 +274,7 @@ extern struct config_generic *polar_parameter_check_name_internal(const char *gu
 /* POLAR end */
 
 /* POLAR defines start */
-#define MAX_NUM_OF_PARALLEL_BGWRITER	48
+#define MAX_NUM_OF_PARALLEL_BGWRITER	64
 /* POLAR defines end */
 
 /* GUC vars that are actually defined in guc_tables.c, rather than elsewhere */

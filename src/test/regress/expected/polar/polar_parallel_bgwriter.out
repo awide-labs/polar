@@ -1,8 +1,8 @@
 -- Test parallel background writer.
 --
 -- alter parallel bgwriter workers to a big value.
-alter system set polar_parallel_flush_workers = 25;
-ERROR:  25 is outside the valid range for parameter "polar_parallel_flush_workers" (0 .. 24)
+alter system set polar_parallel_flush_workers = 33;
+ERROR:  33 is outside the valid range for parameter "polar_parallel_flush_workers" (0 .. 32)
 alter system set polar_parallel_flush_workers = 8;
 select pg_reload_conf();
  pg_reload_conf 
