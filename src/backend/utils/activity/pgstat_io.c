@@ -330,6 +330,7 @@ pgstat_tracks_io_bktype(BackendType bktype)
 		case B_WAL_RECEIVER:
 		case B_WAL_WRITER:
 		case B_WAL_SUMMARIZER:
+		case B_POLAR_WAL_PIPELINER:
 			return false;
 
 		case B_AUTOVAC_LAUNCHER:

@@ -46,6 +46,7 @@
 #include "postmaster/bgwriter.h"
 #include "postmaster/fork_process.h"
 #include "postmaster/pgarch.h"
+#include "postmaster/polar_wal_pipeliner.h"
 #include "postmaster/postmaster.h"
 #include "postmaster/startup.h"
 #include "postmaster/syslogger.h"
@@ -212,6 +213,7 @@ child_process_kind child_process_kinds[] = {
 	[B_WAL_SUMMARIZER] = {"wal_summarizer", WalSummarizerMain, true},
 	[B_WAL_WRITER] = {"wal_writer", WalWriterMain, true},
 	[B_BG_LOGINDEX] = {"logindex background worker", polar_logindex_bg_worker_main, true},
+	[B_POLAR_WAL_PIPELINER] = {"polar wal pipeliner", polar_wal_pipeliner_main, true},
 
 	[B_LOGGER] = {"syslogger", SysLoggerMain, false},
 };

@@ -259,6 +259,7 @@ static pid_t StartupPID = 0,
 			PgArchPID = 0,
 			SysLoggerPID = 0,
 			SlotSyncWorkerPID = 0,
+			PolarWalPipelinerPID = 0,
 			LogIndexBgPID = 0;
 
 static pid_t SysLoggerPIDs[MAX_SYSLOGGER_NUM];	/* POLAR */
@@ -1430,6 +1431,18 @@ PostmasterMain(int argc, char *argv[])
 	 * data_encryption_cipher is forked from postmaster.
 	 */
 	InitializeKmgr();
+
+	/*
+	 * Must startup pipeliner before checkpointer, because only wal pipeliner
+	 * can write wal log.
+	 */
+	if (POLAR_WAL_PIPELINER_ENABLE() && PolarWalPipelinerPID == 0 && !polar_is_replica())
+	{
+		PolarWalPipelinerPID = StartChildProcess(B_POLAR_WAL_PIPELINER);
+		/* wait until wal pipeliner ready */
+		while (ProcGlobal->polar_wal_pipeliner_latch == NULL)
+			SPIN_DELAY();
+	}
 
 	/* Start bgwriter and checkpointer so they can help with recovery */
 	if (CheckpointerPID == 0)
@@ -2636,6 +2649,18 @@ process_pm_child_exit(void)
 			connsAllowed = true;
 
 			/*
+			 * Must startup pipeliner before checkpointer, because only wal
+			 * pipeliner can write wal log.
+			 */
+			if (POLAR_WAL_PIPELINER_ENABLE() && PolarWalPipelinerPID == 0 && !polar_is_replica())
+			{
+				PolarWalPipelinerPID = StartChildProcess(B_POLAR_WAL_PIPELINER);
+				/* wait until wal pipeliner ready */
+				while (ProcGlobal->polar_wal_pipeliner_latch == NULL)
+					SPIN_DELAY();
+			}
+
+			/*
 			 * Crank up the background tasks, if we didn't do that already
 			 * when we entered consistent recovery state.  It doesn't matter
 			 * if this fails, we'll just try again later.
@@ -2726,6 +2751,9 @@ process_pm_child_exit(void)
 				if (PgArchPID != 0)
 					signal_child(PgArchPID, SIGUSR2);
 
+				if (PolarWalPipelinerPID != 0)
+					signal_child(PolarWalPipelinerPID, SIGUSR2);
+
 				/*
 				 * Waken walsenders for the last time. No regular backends
 				 * should be around anymore.
@@ -2758,6 +2786,14 @@ process_pm_child_exit(void)
 			if (!EXIT_STATUS_0(exitstatus))
 				HandleChildCrash(pid, exitstatus,
 								 _("WAL writer process"));
+			continue;
+		}
+
+		if (pid == PolarWalPipelinerPID)
+		{
+			PolarWalPipelinerPID = 0;
+			HandleChildCrash(pid, exitstatus,
+							 _("WAL pipeliner process"));
 			continue;
 		}
 
@@ -3251,6 +3287,11 @@ HandleChildCrash(int pid, int exitstatus, const char *procname)
 	else if (WalWriterPID != 0 && take_action)
 		sigquit_child(WalWriterPID);
 
+	if (pid == PolarWalPipelinerPID)
+		PolarWalPipelinerPID = 0;
+	else if (PolarWalPipelinerPID != 0 && take_action)
+		sigquit_child(PolarWalPipelinerPID);
+
 	/* Take care of the walreceiver too */
 	if (pid == WalReceiverPID)
 		WalReceiverPID = 0;
@@ -3517,6 +3558,8 @@ PostmasterStateMachine(void)
 					SignalChildren(SIGQUIT);
 					if (PgArchPID != 0)
 						signal_child(PgArchPID, SIGQUIT);
+					if (PolarWalPipelinerPID != 0)
+						signal_child(PolarWalPipelinerPID, SIGQUIT);
 				}
 			}
 		}
@@ -3530,7 +3573,7 @@ PostmasterStateMachine(void)
 		 * left by now anyway; what we're really waiting for is walsenders and
 		 * archiver.
 		 */
-		if (PgArchPID == 0 && CountChildren(BACKEND_TYPE_ALL) == 0)
+		if (PgArchPID == 0 && CountChildren(BACKEND_TYPE_ALL) == 0 && PolarWalPipelinerPID == 0)
 		{
 			pmState = PM_WAIT_DEAD_END;
 		}
@@ -3553,7 +3596,7 @@ PostmasterStateMachine(void)
 		 * normal state transition leading up to PM_WAIT_DEAD_END, or during
 		 * FatalError processing.
 		 */
-		if (dlist_is_empty(&BackendList) && PgArchPID == 0)
+		if (dlist_is_empty(&BackendList) && PgArchPID == 0 && PolarWalPipelinerPID == 0)
 		{
 			/* These other guys should be dead already */
 			Assert(StartupPID == 0);
@@ -3563,6 +3606,7 @@ PostmasterStateMachine(void)
 			Assert(CheckpointerPID == 0);
 			Assert(WalWriterPID == 0);
 			Assert(AutoVacPID == 0);
+			Assert(PolarWalPipelinerPID == 0);
 			Assert(SlotSyncWorkerPID == 0);
 			Assert(LogIndexBgPID == 0);
 			/* syslogger is not considered here */
@@ -3819,6 +3863,8 @@ TerminateChildren(int signal)
 		signal_child(AutoVacPID, signal);
 	if (PgArchPID != 0)
 		signal_child(PgArchPID, signal);
+	if (PolarWalPipelinerPID != 0)
+		signal_child(PolarWalPipelinerPID, signal);
 	if (SlotSyncWorkerPID != 0)
 		signal_child(SlotSyncWorkerPID, signal);
 	/* POLAR: signal logindex background process */
@@ -4088,7 +4134,7 @@ process_pm_pmsignal(void)
 	else if (polar_enable_multi_syslogger)
 	{
 		/* POLAR */
-		bool rotation_via_signal_file = CheckLogrotateSignal();
+		bool		rotation_via_signal_file = CheckLogrotateSignal();
 
 		if ((rotation_via_signal_file || CheckPostmasterSignal(PMSIGNAL_ROTATE_LOGFILE)) &&
 			polar_syslogger_num > 0)

@@ -165,6 +165,8 @@ XACT_GROUP_UPDATE	"Waiting for the group leader to update transaction status at 
 LOGINDEX_FORGET_INVALID_PAGE	"Waiting for parallel replay workers to forget invalid pages."
 LOGINDEX_CHECK_INVALID_PAGE	"Waiting for parallel replay workers to check invalid pages."
 PARALLEL_REPLAY_BROADCAST	"Waiting for parallel replay workers to finish broadcasted tasks."
+WAL_PIPELINE_WAIT_RECENT_WRITTEN_SPACE	"Waiting for free space in the WAL pipeline recent written array."
+WAL_PIPELINE_WAIT_UNFLUSHED_XLOG_SLOT	"Waiting for an unflushed WAL pipeline xlog slot."
 
 ABI_compatibility:
 
@@ -302,6 +304,7 @@ DATA_VFS_FILE_OPEN	"Waiting for a vfs file open."
 DATA_VFS_FILE_LSEEK	"Waiting for a vfs file seek."
 LOGINDEX_WAIT_FULLPAGE	"Waiting for restore old version of a future page."
 FULLPAGE_FILE_INIT_WRITE	"Waiting for init fullpage file."
+WAL_PIPELINE_COMMIT_WAIT	"Waiting for the WAL pipeline to commit."
 
 
 ABI_compatibility:

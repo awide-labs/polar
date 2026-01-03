@@ -440,6 +440,81 @@ typedef union WALInsertLockPadded
 	char		pad[PG_CACHE_LINE_SIZE];
 } WALInsertLockPadded;
 
+/* PolarDB wal pipeline begin */
+
+#include "postmaster/polar_wal_pipeliner.h"
+
+typedef enum polar_wal_pipeline_unflushed_xlog_type_t
+{
+	UNFLUSHED_XLOG_SLOT_TYPE_ADD,
+	UNFLUSHED_XLOG_SLOT_TYPE_DEL
+} polar_wal_pipeline_unflushed_xlog_type_t;
+
+typedef struct polar_wal_pipeline_unflushed_xlog_t
+{
+	XLogSegNo	seg_no;			/* xlog file segment number */
+	XLogRecPtr	end_lsn;		/* xlog file segment max lsn */
+	TimeLineID	tli;			/* xlog file time line id */
+	int			fd;				/* xlog file handle */
+	bool		need_close;		/* whether to close */
+} polar_wal_pipeline_unflushed_xlog_t;
+
+typedef struct polar_wal_pipeline_unflushed_xlog_slot_t
+{
+	pg_atomic_uint32 in_use;	/* slot whether in use */
+	polar_wal_pipeline_unflushed_xlog_t file_node;	/* xlog file node */
+} polar_wal_pipeline_unflushed_xlog_slot_t;
+
+typedef struct polar_wal_pipeline_unflushed_xlog_buffer_t
+{
+	pg_atomic_uint64 add_slot_no;
+	char		pad[PG_CACHE_LINE_SIZE];
+	pg_atomic_uint64 del_slot_no;
+	polar_wal_pipeline_unflushed_xlog_slot_t *unflushed_xlog_slots;
+} polar_wal_pipeline_unflushed_xlog_buffer_t;
+
+typedef polar_wait_object_t polar_wal_pipeline_flush_event_t;
+
+typedef struct polar_wal_pipeline_commit_wait_buffer_t
+{
+	int			slot_count;
+	int			slot_size;
+	polar_wal_pipeline_flush_event_t *flush_event_slots;
+} polar_wal_pipeline_commit_wait_buffer_t;
+
+typedef struct polar_wal_pipeline_recent_written_position_buffer_t
+{
+	/* We must use physical position not logical lsn */
+	pg_atomic_uint64 ready_write_position;
+	pg_atomic_uint64 *recent_written_position_slots;
+} polar_wal_pipeline_recent_written_position_buffer_t;
+
+typedef struct polar_wal_pipeline_notify_pos_t
+{
+	XLogRecPtr	lsn;
+	char		pad[PG_CACHE_LINE_SIZE];
+} polar_wal_pipeline_notify_pos_t;
+
+static void polar_wal_pipeline_stats_init(polar_wal_pipeline_stats_t *stats);
+static void polar_wait_obj_stats_init(polar_wait_object_stats_t * stats);
+static void polar_wait_obj_init(polar_wait_object_t * wait_obj,
+								pthread_mutexattr_t * mutex_attr, pthread_condattr_t * cond_attr);
+static Size polar_wal_pipeline_shmem_size(void);
+static char *polar_wal_pipeline_init(char *allocptr);
+static bool polar_wal_pipeline_recent_written_advance(void);
+static bool polar_wal_pipeline_recent_written_has_space(XLogRecPtr write_lsn);
+static void polar_wal_pipeline_unflushed_xlog_append(int fd, XLogSegNo seg_no, TimeLineID tli, XLogRecPtr end_lsn, bool need_close);
+static polar_wal_pipeline_unflushed_xlog_slot_t *polar_wal_pipeline_get_curr_unflushed_xlog_slot(polar_wal_pipeline_unflushed_xlog_type_t slot_type);
+static polar_wal_pipeline_unflushed_xlog_slot_t *polar_wal_pipeline_get_next_unflushed_xlog_slot(polar_wal_pipeline_unflushed_xlog_type_t slot_type);
+static void polar_wal_pipeline_advance_unflushed_xlog_slot_no(polar_wal_pipeline_unflushed_xlog_type_t slot_type);
+static void polar_wal_pipeline_flush_internal(void);
+static polar_wal_pipeline_flush_event_t * polar_wal_pipeline_flush_event_get_slot(int slot_no);
+
+extern polar_wal_pipeline_stats_t *polar_wal_pipeline_get_stats(void);
+extern polar_wait_object_t * polar_wal_pipeline_get_worker_wait_obj(int thread_no);
+
+/* PolarDB wal pipeline end */
+
 /*
  * Session status of running backup, used for sanity checks in SQL-callable
  * functions to start and stop backups.
@@ -631,6 +706,28 @@ typedef struct XLogCtlData
 	bool		polar_available_state;
 
 	polar_wal_buffer_stat_t wal_buffer_stat;	/* POLAR */
+
+	/*
+	 * polar wal pipeline
+	 */
+
+	/* Used for polar wal pipeline thread */
+	polar_wait_object_t *polar_wal_pipeline_wait_objs;
+
+	/* Used for pipeline commit/notify */
+	polar_wal_pipeline_commit_wait_buffer_t polar_wal_pipeline_commit_wait_buffer;
+
+	/* Used for pipeline advance continuous written lsn */
+	polar_wal_pipeline_recent_written_position_buffer_t polar_wal_pipeline_recent_written_position_buffer;
+
+	/* Used for pipeline write/flush xlog file */
+	polar_wal_pipeline_unflushed_xlog_buffer_t polar_wal_pipeline_unflushed_xlog_buffer;
+
+	/* Every notify worker should has its own last notify lsn */
+	polar_wal_pipeline_notify_pos_t polar_wal_pipeline_last_notify_pos[POLAR_WAL_PIPELINE_NOTIFY_WORKER_NUM_MAX];
+
+	/* Used for pipeline statistics */
+	polar_wal_pipeline_stats_t polar_wal_pipeline_stats;
 } XLogCtlData;
 
 /*
@@ -820,6 +917,882 @@ static void polar_accept_signal_for_checkpoint(int flags);
 static void polar_exit_archive_recovery(EndOfWalRecoveryInfo *endOfRecoveryInfo);
 
 /* POLAR end */
+
+/* POLAR wal pipeline begin */
+
+static Size
+polar_wal_pipeline_shmem_size(void)
+{
+	Size		size = 0;
+
+	/*
+	 * Cache line size align wait objects to avoid false sharing.
+	 */
+
+	/* extra alignment padding */
+	size = add_size(size, PG_CACHE_LINE_SIZE);
+
+	size = add_size(size, mul_size(TYPEALIGN(PG_CACHE_LINE_SIZE, sizeof(polar_wait_object_t)), POLAR_WAL_PIPELINE_MAX_THREAD_NUM));
+	size = add_size(size, mul_size(TYPEALIGN(PG_CACHE_LINE_SIZE, sizeof(polar_wal_pipeline_flush_event_t)), polar_wal_pipeline_flush_event_array_size));
+
+	size = add_size(size, mul_size(sizeof(polar_wal_pipeline_unflushed_xlog_slot_t), polar_wal_pipeline_unflushed_xlog_array_size));
+	size = add_size(size, mul_size(sizeof(pg_atomic_uint64), polar_wal_pipeline_recent_written_array_size));
+
+	return size;
+}
+
+static char *
+polar_wal_pipeline_init(char *allocptr)
+{
+	int			i;
+	int			ret;
+	pthread_mutexattr_t mutex_attr;
+	pthread_condattr_t cond_attr;
+
+	ret = pthread_mutexattr_init(&mutex_attr);
+	if (ret != 0)
+		elog(ERROR, "pthread mutex attribute init failed, errno is %d", ret);
+	ret = pthread_mutexattr_setpshared(&mutex_attr, PTHREAD_PROCESS_SHARED);
+	if (ret != 0)
+		elog(ERROR, "pthread mutex attribute setpshared failed, errno is %d", ret);
+
+	ret = pthread_condattr_init(&cond_attr);
+	if (ret != 0)
+		elog(ERROR, "pthread condition attribute init failed, errno is %d", ret);
+	ret = pthread_condattr_setpshared(&cond_attr, PTHREAD_PROCESS_SHARED);
+	if (ret != 0)
+		elog(ERROR, "pthread condition attribute setpshared failed, errno is %d", ret);
+	ret = pthread_condattr_setclock(&cond_attr, CLOCK_MONOTONIC);
+	if (ret != 0)
+		elog(ERROR, "pthread condition attribute setclock failed, errno is %d", ret);
+
+	allocptr = (char *) TYPEALIGN(PG_CACHE_LINE_SIZE, allocptr);
+
+	/*
+	 * wait object init
+	 */
+
+	XLogCtl->polar_wal_pipeline_wait_objs = (polar_wait_object_t *) allocptr;
+
+	for (i = 0; i < POLAR_WAL_PIPELINE_MAX_THREAD_NUM; i++)
+		polar_wait_obj_init(polar_wal_pipeline_get_worker_wait_obj(i), &mutex_attr, &cond_attr);
+
+	allocptr += TYPEALIGN(PG_CACHE_LINE_SIZE, sizeof(polar_wait_object_t)) * POLAR_WAL_PIPELINE_MAX_THREAD_NUM;
+
+	/*
+	 * commit wait buffer init
+	 */
+
+	XLogCtl->polar_wal_pipeline_commit_wait_buffer.slot_count = polar_wal_pipeline_flush_event_array_size;
+	XLogCtl->polar_wal_pipeline_commit_wait_buffer.slot_size = polar_wal_pipeline_flush_event_slot_size;
+	XLogCtl->polar_wal_pipeline_commit_wait_buffer.flush_event_slots = (polar_wal_pipeline_flush_event_t *) allocptr;
+
+	for (i = 0; i < polar_wal_pipeline_flush_event_array_size; i++)
+		polar_wait_obj_init(polar_wal_pipeline_flush_event_get_slot(i), &mutex_attr, &cond_attr);
+
+	allocptr += TYPEALIGN(PG_CACHE_LINE_SIZE, sizeof(polar_wal_pipeline_flush_event_t)) * polar_wal_pipeline_flush_event_array_size;
+
+	/*
+	 * recent written position buffer init
+	 */
+
+	XLogCtl->polar_wal_pipeline_recent_written_position_buffer.recent_written_position_slots = (pg_atomic_uint64 *) allocptr;
+	pg_atomic_init_u64(&XLogCtl->polar_wal_pipeline_recent_written_position_buffer.ready_write_position, 0);
+	for (i = 0; i < polar_wal_pipeline_recent_written_array_size; i++)
+		pg_atomic_init_u64(&XLogCtl->polar_wal_pipeline_recent_written_position_buffer.recent_written_position_slots[i], 0);
+	allocptr += (Size) polar_wal_pipeline_recent_written_array_size * sizeof(pg_atomic_uint64);
+
+	/*
+	 * unflushed xlog buffer init
+	 */
+
+	XLogCtl->polar_wal_pipeline_unflushed_xlog_buffer.unflushed_xlog_slots = (polar_wal_pipeline_unflushed_xlog_slot_t *) allocptr;
+	pg_atomic_init_u64(&XLogCtl->polar_wal_pipeline_unflushed_xlog_buffer.add_slot_no, 0);
+	pg_atomic_init_u64(&XLogCtl->polar_wal_pipeline_unflushed_xlog_buffer.del_slot_no, 0);
+	for (i = 0; i < polar_wal_pipeline_unflushed_xlog_array_size; i++)
+		pg_atomic_init_u32(&XLogCtl->polar_wal_pipeline_unflushed_xlog_buffer.unflushed_xlog_slots[i].in_use, 0);
+
+	/*
+	 * wal pipeline stats init
+	 */
+
+	polar_wal_pipeline_stats_init(&XLogCtl->polar_wal_pipeline_stats);
+
+	return allocptr;
+}
+
+static void
+polar_wal_pipeline_stats_init(polar_wal_pipeline_stats_t *stats)
+{
+	for (int i = 0; i < POLAR_WAL_PIPELINE_STAT_PARTITIONS; i++)
+	{
+		pg_atomic_init_u64(&stats->user_stats[i].total_user_group_commits, 0);
+		pg_atomic_init_u64(&stats->user_stats[i].total_user_spin_commits, 0);
+		pg_atomic_init_u64(&stats->user_stats[i].total_user_timeout_commits, 0);
+		pg_atomic_init_u64(&stats->user_stats[i].total_user_wakeup_commits, 0);
+		pg_atomic_init_u64(&stats->user_stats[i].total_user_miss_timeouts, 0);
+		pg_atomic_init_u64(&stats->user_stats[i].total_user_miss_wakeups, 0);
+	}
+	pg_atomic_init_u64(&stats->total_advance_callups, 0);
+	pg_atomic_init_u64(&stats->total_advances, 0);
+	pg_atomic_init_u64(&stats->total_write_callups, 0);
+	pg_atomic_init_u64(&stats->total_writes, 0);
+	pg_atomic_init_u64(&stats->unflushed_xlog_slot_waits, 0);
+	pg_atomic_init_u64(&stats->total_flush_callups, 0);
+	pg_atomic_init_u64(&stats->total_flushes, 0);
+	pg_atomic_init_u64(&stats->total_flush_merges, 0);
+	pg_atomic_init_u64(&stats->total_notify_callups, 0);
+	pg_atomic_init_u64(&stats->total_notifies, 0);
+	pg_atomic_init_u64(&stats->total_notified_users, 0);
+}
+
+static void
+polar_wait_obj_stats_init(polar_wait_object_stats_t * stats)
+{
+	pg_atomic_init_u64(&stats->waiters, 0);
+	pg_atomic_init_u64(&stats->timeout_waits, 0);
+	pg_atomic_init_u64(&stats->wakeup_waits, 0);
+}
+
+static void
+polar_wait_obj_init(polar_wait_object_t * wait_obj,
+					pthread_mutexattr_t * mutex_attr, pthread_condattr_t * cond_attr)
+{
+	int			ret;
+
+	ret = pthread_mutex_init(&wait_obj->mutex, mutex_attr);
+	if (ret != 0)
+		elog(ERROR, "pthread mutext init failed, errno is %d", ret);
+	ret = pthread_cond_init(&wait_obj->cond, cond_attr);
+	if (ret != 0)
+		elog(ERROR, "pthread condition init failed, errno is %d", ret);
+	polar_wait_obj_stats_init(&wait_obj->stats);
+}
+
+static int
+polar_wal_pipeline_flush_event_get_slot_no(XLogRecPtr flush_lsn)
+{
+	/*
+	 * flush_lsn-1 means when lsn is on boundary, we should return previous
+	 * slot, because flush_lsn is at the end of wal record
+	 */
+	return (flush_lsn - 1) / polar_wal_pipeline_flush_event_slot_size & (polar_wal_pipeline_flush_event_array_size - 1);
+}
+
+static polar_wal_pipeline_flush_event_t *
+polar_wal_pipeline_flush_event_get_slot(int slot_no)
+{
+	return (polar_wal_pipeline_flush_event_t *) ((char *) XLogCtl->polar_wal_pipeline_commit_wait_buffer.flush_event_slots + slot_no * TYPEALIGN(PG_CACHE_LINE_SIZE, sizeof(polar_wal_pipeline_flush_event_t)));
+}
+
+void
+polar_wal_pipeline_commit_wait(XLogRecPtr flush_lsn)
+{
+	polar_wait_result_t wait_res = POLAR_WAIT_RES_SPIN;
+	polar_spin_delay_status_t status;
+	int			slot_no = polar_wal_pipeline_flush_event_get_slot_no(flush_lsn);
+
+	if (flush_lsn <= LogwrtResult.Flush)
+	{
+		pg_atomic_fetch_add_u64(&XLogCtl->polar_wal_pipeline_stats.user_stats[MyProcPid % POLAR_WAL_PIPELINE_STAT_PARTITIONS].total_user_group_commits, 1);
+
+		return;
+	}
+
+	if (CommitDelay > 0 && enableFsync && MinimumActiveBackends(CommitSiblings))
+		pg_usleep(CommitDelay);
+
+	SpinLockAcquire(&XLogCtl->info_lck);
+	if (XLogCtl->LogwrtRqst.Write < flush_lsn)
+		XLogCtl->LogwrtRqst.Write = flush_lsn;
+	if (XLogCtl->LogwrtRqst.Flush < flush_lsn)
+		XLogCtl->LogwrtRqst.Flush = flush_lsn;
+	RefreshXLogWriteResult(LogwrtResult);
+	SpinLockRelease(&XLogCtl->info_lck);
+
+	if (flush_lsn <= LogwrtResult.Flush)
+	{
+		pg_atomic_fetch_add_u64(&XLogCtl->polar_wal_pipeline_stats.user_stats[MyProcPid % POLAR_WAL_PIPELINE_STAT_PARTITIONS].total_user_group_commits, 1);
+
+		return;
+	}
+
+	polar_wal_pipeliner_wakeup();
+
+	/*
+	 * Begin spin and wait
+	 */
+
+	polar_init_spin_delay_mt(&status, polar_wal_pipeline_flush_event_get_slot(slot_no),
+							 polar_wal_pipeline_commit_wait_spin_delay, polar_wal_pipeline_commit_wait_timeout);
+	pgstat_report_wait_start(WAIT_EVENT_WAL_PIPELINE_COMMIT_WAIT);
+
+	/* First spin */
+	while (flush_lsn > LogwrtResult.Flush)
+	{
+		wait_res = polar_perform_spin_delay_mt(&status, false, false);
+		if (wait_res == POLAR_WAIT_RES_SPIN_OVER)
+			break;
+
+		/*
+		 * We must update LogwrtResult.Flush, because caller may use
+		 * LogwrtResult to recheck the while condition
+		 */
+		LogwrtResult.Flush = pg_atomic_read_u64(&XLogCtl->logFlushResult);
+	}
+
+	/* Then wait */
+	if (wait_res == POLAR_WAIT_RES_SPIN_OVER)
+	{
+		pthread_mutex_lock(&status.wait_obj->mutex);
+		while (flush_lsn > LogwrtResult.Flush)
+		{
+			if (wait_res == POLAR_WAIT_RES_TIMEOUT)
+				pg_atomic_fetch_add_u64(&XLogCtl->polar_wal_pipeline_stats.user_stats[MyProcPid % POLAR_WAL_PIPELINE_STAT_PARTITIONS].total_user_miss_timeouts, 1);
+			else if (wait_res == POLAR_WAIT_RES_WAKEUP)
+				pg_atomic_fetch_add_u64(&XLogCtl->polar_wal_pipeline_stats.user_stats[MyProcPid % POLAR_WAL_PIPELINE_STAT_PARTITIONS].total_user_miss_wakeups, 1);
+
+			wait_res = polar_perform_spin_delay_mt(&status, false, true);
+
+			/*
+			 * We must update LogwrtResult.Flush, because caller may use
+			 * LogwrtResult to recheck the while condition
+			 */
+			LogwrtResult.Flush = pg_atomic_read_u64(&XLogCtl->logFlushResult);
+		}
+		pthread_mutex_unlock(&status.wait_obj->mutex);
+	}
+	pgstat_report_wait_end();
+
+	/* Update stats */
+	if (wait_res == POLAR_WAIT_RES_SPIN)
+		pg_atomic_fetch_add_u64(&XLogCtl->polar_wal_pipeline_stats.user_stats[MyProcPid % POLAR_WAL_PIPELINE_STAT_PARTITIONS].total_user_spin_commits, 1);
+	else if (wait_res == POLAR_WAIT_RES_TIMEOUT)
+		pg_atomic_fetch_add_u64(&XLogCtl->polar_wal_pipeline_stats.user_stats[MyProcPid % POLAR_WAL_PIPELINE_STAT_PARTITIONS].total_user_timeout_commits, 1);
+	else
+		pg_atomic_fetch_add_u64(&XLogCtl->polar_wal_pipeline_stats.user_stats[MyProcPid % POLAR_WAL_PIPELINE_STAT_PARTITIONS].total_user_wakeup_commits, 1);
+}
+
+void
+polar_wal_pipeline_set_last_notify_lsn(int thread_no, XLogRecPtr last_notify_lsn)
+{
+	XLogCtl->polar_wal_pipeline_last_notify_pos[thread_no].lsn = last_notify_lsn;
+}
+
+void
+polar_wal_pipeline_set_ready_write_lsn(XLogRecPtr ready_write_lsn)
+{
+	pg_atomic_write_u64(&XLogCtl->polar_wal_pipeline_recent_written_position_buffer.ready_write_position, XLogRecPtrToBytePos(ready_write_lsn));
+
+	/*
+	 * Keep logInsertResult in sync so the Insert >= Write invariant checked
+	 * in XLogWrite holds when the pipeliner runs the original write path.
+	 */
+	pg_atomic_monotonic_advance_u64(&XLogCtl->logInsertResult, ready_write_lsn);
+}
+
+XLogRecPtr
+polar_wal_pipeline_get_ready_write_lsn(void)
+{
+	return XLogBytePosToEndRecPtr(pg_atomic_read_u64(&XLogCtl->polar_wal_pipeline_recent_written_position_buffer.ready_write_position));
+}
+
+static uint32
+polar_wal_pipeline_get_recent_written_slot(uint64 write_pos)
+{
+	return write_pos & (polar_wal_pipeline_recent_written_array_size - 1);
+}
+
+static bool
+polar_wal_pipeline_recent_written_has_space(XLogRecPtr start_lsn)
+{
+	uint64		ready_write_position = pg_atomic_read_u64(&XLogCtl->polar_wal_pipeline_recent_written_position_buffer.ready_write_position);
+
+	return ready_write_position + polar_wal_pipeline_recent_written_array_size > XLogRecPtrToBytePos(start_lsn);
+}
+
+void
+polar_wal_pipeline_recent_written_add_link(XLogRecPtr start_lsn, XLogRecPtr end_lsn)
+{
+	int			slot_no;
+
+	pgstat_report_wait_start(WAIT_EVENT_WAL_PIPELINE_WAIT_RECENT_WRITTEN_SPACE);
+	while (!polar_wal_pipeline_recent_written_has_space(start_lsn))
+		pg_usleep(polar_wal_pipeline_wait_timeout);
+	pgstat_report_wait_end();
+
+	slot_no = polar_wal_pipeline_get_recent_written_slot(XLogRecPtrToBytePos(start_lsn));
+
+	/*
+	 * Ensure all WAL data writes (memcpy) complete before publishing the slot
+	 * value. On weakly-ordered architectures, this prevents the CPU from
+	 * reordering the memcpy operations after the atomic write.
+	 */
+	pg_write_barrier();
+
+	pg_atomic_write_u64(&XLogCtl->polar_wal_pipeline_recent_written_position_buffer.recent_written_position_slots[slot_no],
+						XLogRecPtrToBytePos(end_lsn) - XLogRecPtrToBytePos(start_lsn));
+}
+
+static bool
+polar_wal_pipeline_recent_written_advance(void)
+{
+	uint64		old_pos;
+	uint64		tail_pos;
+
+	old_pos = tail_pos = pg_atomic_read_u64(&XLogCtl->polar_wal_pipeline_recent_written_position_buffer.ready_write_position);
+
+	while (true)
+	{
+		/*
+		 * Get current link and the next-offset and check next value is
+		 * whether non-zero value. 0 means the log buffer is a hole (not
+		 * filling completely)
+		 */
+		int			slot_no = polar_wal_pipeline_get_recent_written_slot(tail_pos);
+
+		uint64		distance = pg_atomic_read_u64(&XLogCtl->polar_wal_pipeline_recent_written_position_buffer.recent_written_position_slots[slot_no]);
+
+		uint64		next = tail_pos + distance;
+
+		if (distance == 0)
+			break;
+
+		/*
+		 * Clear the link mark whose log buffer has been copied done
+		 */
+		pg_atomic_write_u64(&XLogCtl->polar_wal_pipeline_recent_written_position_buffer.recent_written_position_slots[slot_no], 0);
+
+		tail_pos = next;
+
+		/*
+		 * No more than polar_wal_pipeline_advance_worker_write_max_size per
+		 * advance 0 means no limit
+		 */
+		if (polar_wal_pipeline_advance_worker_write_max_size != 0
+			&& tail_pos - old_pos > polar_wal_pipeline_advance_worker_write_max_size)
+			break;
+	}
+
+	if (tail_pos > old_pos)
+	{
+		/*
+		 * Ensure all slot clearing operations complete before updating
+		 * ready_write_position. On weakly-ordered architectures, this
+		 * prevents the CPU from reordering the slot clearing after the
+		 * position update.
+		 */
+		pg_write_barrier();
+
+		polar_wal_pipeline_set_ready_write_lsn(XLogBytePosToEndRecPtr(tail_pos));
+
+		return true;
+	}
+
+	return false;
+}
+
+uint64
+polar_wal_pipeline_get_unflushed_xlog_add_slot_no(void)
+{
+	return pg_atomic_read_u64(&XLogCtl->polar_wal_pipeline_unflushed_xlog_buffer.add_slot_no);
+}
+
+uint64
+polar_wal_pipeline_get_unflushed_xlog_del_slot_no(void)
+{
+	return pg_atomic_read_u64(&XLogCtl->polar_wal_pipeline_unflushed_xlog_buffer.del_slot_no);
+}
+
+static void
+polar_wal_pipeline_advance_unflushed_xlog_slot_no(polar_wal_pipeline_unflushed_xlog_type_t slot_type)
+{
+	if (slot_type == UNFLUSHED_XLOG_SLOT_TYPE_ADD)
+		pg_atomic_fetch_add_u64(&XLogCtl->polar_wal_pipeline_unflushed_xlog_buffer.add_slot_no, 1);
+	else
+		pg_atomic_fetch_add_u64(&XLogCtl->polar_wal_pipeline_unflushed_xlog_buffer.del_slot_no, 1);
+}
+
+static polar_wal_pipeline_unflushed_xlog_slot_t *
+polar_wal_pipeline_get_curr_unflushed_xlog_slot(polar_wal_pipeline_unflushed_xlog_type_t slot_type)
+{
+	uint64		slot_no;
+
+	if (slot_type == UNFLUSHED_XLOG_SLOT_TYPE_ADD)
+		slot_no = polar_wal_pipeline_get_unflushed_xlog_add_slot_no();
+	else
+		slot_no = polar_wal_pipeline_get_unflushed_xlog_del_slot_no();
+
+	slot_no = slot_no % polar_wal_pipeline_unflushed_xlog_array_size;
+
+	return &XLogCtl->polar_wal_pipeline_unflushed_xlog_buffer.unflushed_xlog_slots[slot_no];
+}
+
+static polar_wal_pipeline_unflushed_xlog_slot_t *
+polar_wal_pipeline_get_next_unflushed_xlog_slot(polar_wal_pipeline_unflushed_xlog_type_t slot_type)
+{
+	polar_wal_pipeline_advance_unflushed_xlog_slot_no(slot_type);
+
+	return polar_wal_pipeline_get_curr_unflushed_xlog_slot(slot_type);
+}
+
+static void
+polar_wal_pipeline_unflushed_xlog_append(int fd, XLogSegNo seg_no, TimeLineID tli, XLogRecPtr end_lsn, bool need_close)
+{
+	polar_wal_pipeline_unflushed_xlog_slot_t *slot = polar_wal_pipeline_get_curr_unflushed_xlog_slot(UNFLUSHED_XLOG_SLOT_TYPE_ADD);
+	polar_wal_pipeline_unflushed_xlog_t *file = &slot->file_node;
+
+	pgstat_report_wait_start(WAIT_EVENT_WAL_PIPELINE_WAIT_UNFLUSHED_XLOG_SLOT);
+	while (pg_atomic_read_u32(&slot->in_use))
+	{
+		pg_usleep(polar_wal_pipeline_wait_timeout);
+		pg_atomic_fetch_add_u64(&XLogCtl->polar_wal_pipeline_stats.unflushed_xlog_slot_waits, 1);
+	}
+	pgstat_report_wait_end();
+
+	file->fd = fd;
+	file->seg_no = seg_no;
+	file->end_lsn = end_lsn;
+	file->tli = tli;
+	file->need_close = need_close;
+
+	/* complete data stores into slot before updating in_use */
+	pg_write_barrier();
+
+	pg_atomic_write_u32(&slot->in_use, 1);
+
+	polar_wal_pipeline_advance_unflushed_xlog_slot_no(UNFLUSHED_XLOG_SLOT_TYPE_ADD);
+}
+
+/*
+ * Replacing XLogFileClose
+ * use parameters instead of global variables
+ * openLogFile and openLogSegNo.
+ *
+ * In polar wal pipeline:
+ * write worker is responsible for open xlog file
+ * flush worker is responsible for fsync and close xlog file
+ */
+static void
+polar_wal_pipeline_xlog_close(int fd, XLogSegNo seg_no, TimeLineID tli)
+{
+	Assert(fd >= 0);
+
+	/*
+	 * WAL segment files will not be re-read in normal operation, so we advise
+	 * the OS to release any cached pages.  But do not do so if WAL archiving
+	 * or streaming is active, because archiver and walsender process could
+	 * use the cache to read the WAL segment.
+	 */
+#if defined(USE_POSIX_FADVISE) && defined(POSIX_FADV_DONTNEED)
+	/* POLAR: libpfs not support posix_fadvise */
+	if (!XLogIsNeeded() && !polar_enable_shared_storage_mode)
+		(void) posix_fadvise(fd, 0, 0, POSIX_FADV_DONTNEED);
+#endif
+
+	if (polar_close(fd))
+	{
+		char		xlogfname[MAXFNAMELEN];
+
+		XLogFileName(xlogfname, tli, seg_no, wal_segment_size);
+		ereport(PANIC,
+				(errcode_for_file_access(),
+				 errmsg("could not close log file %s: %m", xlogfname)));
+	}
+}
+
+/*
+ * Called by advance worker thread in polar wal pipeliner process.
+ *
+ * In polar wal pipeline mode, used to advance max be-written lsn in wal buffer.
+ */
+bool
+polar_wal_pipeline_advance(int ident)
+{
+	/* No need to work in standby mode */
+	if (RecoveryInProgress())
+		return false;
+
+	pg_atomic_fetch_add_u64(&XLogCtl->polar_wal_pipeline_stats.total_advance_callups, 1);
+
+	if (!polar_wal_pipeline_recent_written_advance())
+		return false;
+
+	pg_atomic_fetch_add_u64(&XLogCtl->polar_wal_pipeline_stats.total_advances, 1);
+
+	return true;
+}
+
+/*
+ * Replacing: XLogWrite
+ *
+ * Called by write worker thread in polar wal pipeliner process.
+ *
+ * In polar wal pipeline mode, used to write wal from wal buffer to OS cache.
+ */
+bool
+polar_wal_pipeline_write(int ident)
+{
+	XLogwrtRqst write_rqst;
+	XLogRecPtr	ready_write_lsn;
+	TimeLineID	insertTLI;
+
+	/* No need to work in standby mode */
+	if (RecoveryInProgress())
+		return false;
+
+	insertTLI = XLogCtl->InsertTimeLineID;
+
+	pg_atomic_fetch_add_u64(&XLogCtl->polar_wal_pipeline_stats.total_write_callups, 1);
+
+	write_rqst.Write = *(volatile XLogRecPtr *) (&XLogCtl->LogwrtRqst.Write);
+	write_rqst.Flush = *(volatile XLogRecPtr *) (&XLogCtl->LogwrtRqst.Flush);
+
+	LogwrtResult.Write = pg_atomic_read_u64(&XLogCtl->logWriteResult);
+
+	ready_write_lsn = polar_wal_pipeline_get_ready_write_lsn();
+
+	/*
+	 * Load the ready write position before reading WAL data. On
+	 * weakly-ordered architectures, this prevents the CPU from reordering the
+	 * WAL data reads before the ready write position load, ensuring we don't
+	 * read WAL data that hasn't been fully written yet.
+	 */
+	pg_read_barrier();
+
+	write_rqst.Write = Min(write_rqst.Write, ready_write_lsn);
+	write_rqst.Flush = Min(write_rqst.Flush, ready_write_lsn);
+
+	if (LogwrtResult.Write >= write_rqst.Write && LogwrtResult.Flush >= write_rqst.Flush)
+		return false;
+
+	pg_atomic_fetch_add_u64(&XLogCtl->polar_wal_pipeline_stats.total_writes, 1);
+
+	XLogWrite(write_rqst, insertTLI, false, false);
+
+	/*
+	 * For mode <= 3 XLogWrite has already written and flushed the WAL since
+	 * we set polar_wal_pipeline_enable = false for WAL pipeliner process in
+	 * these modes. Thus, now we need to wake notifiers.
+	 */
+	if (polar_wal_pipeline_mode <= 3)
+	{
+		polar_wal_pipeline_wakeup_notifier();
+		WalSndWakeupProcessRequests(true, !RecoveryInProgress());
+	}
+
+	return true;
+}
+
+/*
+ * Do flush work
+ * Try best to merge flush request before issue flush
+ */
+static void
+polar_wal_pipeline_flush_internal(void)
+{
+	polar_wal_pipeline_unflushed_xlog_slot_t *curr_del_slot = polar_wal_pipeline_get_curr_unflushed_xlog_slot(UNFLUSHED_XLOG_SLOT_TYPE_DEL);
+	polar_wal_pipeline_unflushed_xlog_t *curr_del_file = &curr_del_slot->file_node;
+
+	/* No del slot to process, just return */
+	if (!pg_atomic_read_u32(&curr_del_slot->in_use))
+		return;
+
+	/* Ensure curr slot data load happen after in_use check */
+	pg_read_barrier();
+
+	while (true)
+	{
+		polar_wal_pipeline_unflushed_xlog_slot_t *next_del_slot = polar_wal_pipeline_get_next_unflushed_xlog_slot(UNFLUSHED_XLOG_SLOT_TYPE_DEL);
+		polar_wal_pipeline_unflushed_xlog_t *next_del_file = &next_del_slot->file_node;
+		bool		do_file_flush = false;
+		bool		do_file_close = false;
+		bool		stop_loop = false;
+
+		if (!pg_atomic_read_u32(&next_del_slot->in_use))
+		{
+			if (!curr_del_file->need_close)
+				do_file_flush = true;
+			else
+			{
+				do_file_flush = true;
+				do_file_close = true;
+			}
+
+			stop_loop = true;
+		}
+		else
+		{
+			/* Ensure next slot data loads happen after in_use check */
+			pg_read_barrier();
+
+			if (curr_del_file->fd != next_del_file->fd)
+			{
+				do_file_flush = true;
+				do_file_close = true;
+			}
+			else if (next_del_file->need_close)
+				do_file_flush = true;
+			else
+			{
+				/* Can be merged, just update stat */
+				pg_atomic_fetch_add_u64(&XLogCtl->polar_wal_pipeline_stats.total_flush_merges, 1);
+			}
+		}
+
+		if (do_file_flush)
+		{
+			issue_xlog_fsync(curr_del_file->fd, curr_del_file->seg_no, curr_del_file->tli);
+
+			SpinLockAcquire(&XLogCtl->info_lck);
+			if (XLogCtl->LogwrtRqst.Flush < curr_del_file->end_lsn)
+				XLogCtl->LogwrtRqst.Flush = curr_del_file->end_lsn;
+			SpinLockRelease(&XLogCtl->info_lck);
+
+			/*
+			 * logWriteResult was advanced by the pipeliner's XLogWrite in a
+			 * different thread.  We observed that update via the acquire at
+			 * the top of this function (in_use read + pg_read_barrier), which
+			 * pairs with the release in
+			 * polar_wal_pipeline_unflushed_xlog_append.  The barrier below
+			 * keeps the logFlushResult store from being reordered ahead of
+			 * that observed state, so a reader doing RefreshXLogWriteResult
+			 * (Flush, read_barrier, Write) that sees the new Flush will also
+			 * see Write >= Flush.
+			 */
+			pg_write_barrier();
+			pg_atomic_write_u64(&XLogCtl->logFlushResult, curr_del_file->end_lsn);
+
+			/* signal that we need to wakeup walsenders later */
+			WalSndWakeupRequest();
+		}
+
+		if (do_file_close)
+		{
+			if (XLogArchivingActive())
+				XLogArchiveNotifySeg(curr_del_file->seg_no, curr_del_file->tli);
+
+			/*
+			 * Request a checkpoint if we've consumed too much xlog since the
+			 * last one.  For speed, we first check using the local copy of
+			 * RedoRecPtr, which might be out of date; if it looks like a
+			 * checkpoint is needed, forcibly update RedoRecPtr and recheck.
+			 */
+			if (IsUnderPostmaster && XLogCheckpointNeeded(curr_del_file->seg_no))
+			{
+				(void) GetRedoRecPtr();
+				if (XLogCheckpointNeeded(curr_del_file->seg_no))
+					RequestCheckpoint(CHECKPOINT_CAUSE_XLOG);
+			}
+
+			polar_wal_pipeline_xlog_close(curr_del_file->fd, curr_del_file->seg_no, curr_del_file->tli);
+		}
+
+		/* Ensure all slot operations complete before clearing in_use flag */
+		pg_write_barrier();
+
+		pg_atomic_write_u32(&curr_del_slot->in_use, 0);
+
+		curr_del_slot = next_del_slot;
+		curr_del_file = next_del_file;
+
+		if (stop_loop)
+			break;
+	}
+}
+
+/*
+ * Replacing: XLogWrite
+ *
+ * Called by flush worker thread in polar wal pipeliner process.
+ *
+ * In polar wal pipeline mode, used to flush wal from os cache to disk.
+ */
+bool
+polar_wal_pipeline_flush(int ident)
+{
+	XLogwrtResult write_result;
+
+	/* No need to work in standby mode */
+	if (RecoveryInProgress())
+		return false;
+
+	pg_atomic_fetch_add_u64(&XLogCtl->polar_wal_pipeline_stats.total_flush_callups, 1);
+
+	RefreshXLogWriteResult(write_result);
+
+	if (write_result.Flush >= write_result.Write)
+		return false;
+
+	pg_atomic_fetch_add_u64(&XLogCtl->polar_wal_pipeline_stats.total_flushes, 1);
+
+	polar_wal_pipeline_flush_internal();
+
+	polar_wal_pipeline_wakeup_notifier();
+
+	WalSndWakeupProcessRequests(true, !RecoveryInProgress());
+
+	return true;
+}
+
+/*
+ * Called by notify worker thread in polar wal pipeliner process.
+ *
+ * In polar wal pipeline mode, used to notify backend whose wait lsn
+ * less than current flush lsn.
+ */
+bool
+polar_wal_pipeline_notify(int ident)
+{
+	XLogRecPtr	start_lsn = XLogCtl->polar_wal_pipeline_last_notify_pos[ident].lsn;
+	XLogRecPtr	end_lsn = pg_atomic_read_u64(&XLogCtl->logFlushResult);
+	XLogRecPtr	aligned_end_lsn;
+	uint64		notified_users = 0;
+	uint64		total_notified_users;
+	polar_wait_object_t *wait_obj;
+
+	/* No need to work in standby mode */
+	if (RecoveryInProgress())
+		return false;
+
+	pg_atomic_fetch_add_u64(&XLogCtl->polar_wal_pipeline_stats.total_notify_callups, 1);
+
+	if (start_lsn == end_lsn)
+		return false;
+
+	if (unlikely(XLogRecPtrIsInvalid(start_lsn)))
+	{
+		XLogCtl->polar_wal_pipeline_last_notify_pos[ident].lsn = end_lsn;
+		return false;
+	}
+
+	pg_atomic_fetch_add_u64(&XLogCtl->polar_wal_pipeline_stats.total_notifies, 1);
+
+	/* Up align to slot boundary */
+	aligned_end_lsn = (end_lsn + polar_wal_pipeline_flush_event_slot_size - 1) & ~(polar_wal_pipeline_flush_event_slot_size - 1);
+	while (start_lsn <= aligned_end_lsn)
+	{
+		int			slot = polar_wal_pipeline_flush_event_get_slot_no(start_lsn);
+
+		if ((slot % polar_wal_pipeline_notify_worker_num) == ident)
+		{
+			polar_wal_pipeline_flush_event_t *flush_event = polar_wal_pipeline_flush_event_get_slot(slot);
+
+			pthread_mutex_lock(&flush_event->mutex);
+
+			pthread_cond_broadcast(&flush_event->cond);
+
+			notified_users += pg_atomic_read_u64(&flush_event->stats.waiters);
+
+			pthread_mutex_unlock(&flush_event->mutex);
+		}
+
+		start_lsn += polar_wal_pipeline_flush_event_slot_size;
+	}
+
+	polar_wal_pipeline_set_last_notify_lsn(ident, end_lsn);
+
+	/*
+	 * Update stats, use first notify thread's mutex to synchronize notify
+	 * threads
+	 */
+	wait_obj = polar_wal_pipeline_get_worker_wait_obj(NOTIFY_WORKER_THREAD_NO);
+
+	pthread_mutex_lock(&wait_obj->mutex);
+
+	total_notified_users = pg_atomic_read_u64(&XLogCtl->polar_wal_pipeline_stats.total_notified_users);
+
+	pg_atomic_write_u64(&XLogCtl->polar_wal_pipeline_stats.total_notified_users, total_notified_users + notified_users);
+
+	pthread_mutex_unlock(&wait_obj->mutex);
+
+	return true;
+}
+
+/*
+ * Added for polar wal pipeline stats info
+ */
+
+/* Max LSN already reserved fro insert */
+XLogRecPtr
+polar_wal_pipeline_get_current_insert_lsn(void)
+{
+	return XLogBytePosToEndRecPtr(pg_atomic_read_u64(&XLogCtl->Insert.CurrBytePos));
+}
+
+/*
+ * Max continuous wal content already write to wal buffer
+ */
+XLogRecPtr
+polar_wal_pipeline_get_continuous_insert_lsn(void)
+{
+	return polar_wal_pipeline_get_ready_write_lsn();
+}
+
+/* Max LSN already write to OS cache */
+XLogRecPtr
+polar_wal_pipeline_get_write_lsn(void)
+{
+	return pg_atomic_read_u64(&XLogCtl->logWriteResult);
+}
+
+/* Max LSN already flushed to disk */
+XLogRecPtr
+polar_wal_pipeline_get_flush_lsn(void)
+{
+	return pg_atomic_read_u64(&XLogCtl->logFlushResult);
+}
+
+XLogRecPtr
+polar_wal_pipeline_get_last_notify_lsn(int ident)
+{
+	return XLogCtl->polar_wal_pipeline_last_notify_pos[ident].lsn;
+}
+
+polar_wal_pipeline_stats_t *
+polar_wal_pipeline_get_stats(void)
+{
+	return &XLogCtl->polar_wal_pipeline_stats;
+}
+
+polar_wait_object_t *
+polar_wal_pipeline_get_worker_wait_obj(int thread_no)
+{
+	return (polar_wait_object_t *) ((char *) XLogCtl->polar_wal_pipeline_wait_objs + thread_no * TYPEALIGN(PG_CACHE_LINE_SIZE, sizeof(polar_wait_object_t)));
+}
+
+void
+polar_wal_pipeline_stats_reset(void)
+{
+	int			i;
+
+	for (i = 0; i < polar_wal_pipeline_flush_event_array_size; i++)
+	{
+		polar_wal_pipeline_flush_event_t *flush_event = polar_wal_pipeline_flush_event_get_slot(i);
+
+		polar_wait_obj_stats_init(&flush_event->stats);
+	}
+
+	for (i = 0; i < POLAR_WAL_PIPELINE_MAX_THREAD_NUM; i++)
+	{
+		polar_wait_object_t *wait_obj = polar_wal_pipeline_get_worker_wait_obj(i);
+
+		polar_wait_obj_stats_init(&wait_obj->stats);
+	}
+
+	polar_wal_pipeline_stats_init(&XLogCtl->polar_wal_pipeline_stats);
+}
+
+/*
+ *	Only for polar wal pipeline test
+ */
+void
+polar_wal_pipeline_set_local_recovery_mode(bool mode)
+{
+	LocalRecoveryInProgress = mode;
+}
+
+/* POLAR wal pipeline END */
 
 /*
  * Insert an XLOG record represented by an already-constructed chain of data
@@ -1100,6 +2073,10 @@ XLogInsertRecord(XLogRecData *rdata,
 			if (unlikely(polar_enable_debug))
 				ereport(LOG, (errmsg("%s push %X/%X to queue", __func__,
 									 LSN_FORMAT_ARGS(EndPos))));
+
+			/* In polar wal pipeline mode, should wakeup wal pipeliner */
+			if (POLAR_WAL_PIPELINER_READY())
+				polar_wal_pipeliner_wakeup();
 		}
 	}
 
@@ -1306,8 +2283,8 @@ ReserveXLogInsertLocation(int size, XLogRecPtr *StartPos, XLogRecPtr *EndPos,
 	if (likely(xlog_queue))
 	{
 		/*
-		 * Reserve queue space: just advance pwrite, no free-space check.
-		 * The spinlock serializes producers; no need for an atomic RMW.
+		 * Reserve queue space: just advance pwrite, no free-space check. The
+		 * spinlock serializes producers; no need for an atomic RMW.
 		 */
 		idx = pg_atomic_read_u64(&xlog_queue->pwrite);
 		pg_atomic_write_u64(&xlog_queue->pwrite, idx + polar_rbuf_len);
@@ -1388,8 +2365,8 @@ ReserveXLogSwitch(XLogRecPtr *StartPos, XLogRecPtr *EndPos, XLogRecPtr *PrevPtr,
 	if (likely(xlog_queue))
 	{
 		/*
-		 * Reserve queue space: just advance pwrite, no free-space check.
-		 * The spinlock serializes producers; no need for an atomic RMW.
+		 * Reserve queue space: just advance pwrite, no free-space check. The
+		 * spinlock serializes producers; no need for an atomic RMW.
 		 */
 		idx = pg_atomic_read_u64(&xlog_queue->pwrite);
 		pg_atomic_write_u64(&xlog_queue->pwrite, idx + polar_rbuf_len);
@@ -1468,6 +2445,13 @@ CopyXLogRecordToWAL(int write_len, bool isLogSwitch, XLogRecData *rdata,
 			 */
 			Assert(CurrPos % XLOG_BLCKSZ >= SizeOfXLogShortPHD || freespace == 0);
 			memcpy(currpos, rdata_data, freespace);
+
+			if (POLAR_WAL_PIPELINER_READY())
+			{
+				if (freespace != 0)
+					polar_wal_pipeline_recent_written_add_link(CurrPos, CurrPos + freespace);
+			}
+
 			rdata_data += freespace;
 			rdata_len -= freespace;
 			written += freespace;
@@ -1503,6 +2487,13 @@ CopyXLogRecordToWAL(int write_len, bool isLogSwitch, XLogRecData *rdata,
 
 		Assert(CurrPos % XLOG_BLCKSZ >= SizeOfXLogShortPHD || rdata_len == 0);
 		memcpy(currpos, rdata_data, rdata_len);
+
+		if (POLAR_WAL_PIPELINER_READY())
+		{
+			if (rdata_len != 0)
+				polar_wal_pipeline_recent_written_add_link(CurrPos, CurrPos + rdata_len);
+		}
+
 		currpos += rdata_len;
 		CurrPos += rdata_len;
 		freespace -= rdata_len;
@@ -1524,6 +2515,12 @@ CopyXLogRecordToWAL(int write_len, bool isLogSwitch, XLogRecData *rdata,
 
 		/* Assert that we did reserve the right amount of space */
 		Assert(XLogSegmentOffset(EndPos, wal_segment_size) == 0);
+
+		if (POLAR_WAL_PIPELINER_READY())
+		{
+			if (freespace != 0)
+				polar_wal_pipeline_recent_written_add_link(CurrPos, CurrPos + freespace);
+		}
 
 		/* Use up all the remaining space on the current page */
 		CurrPos += freespace;
@@ -1558,11 +2555,20 @@ CopyXLogRecordToWAL(int write_len, bool isLogSwitch, XLogRecData *rdata,
 			currpos = GetXLogBuffer(CurrPos, tli, true);
 			MemSet(currpos, 0, SizeOfXLogShortPHD);
 
+			if (POLAR_WAL_PIPELINER_READY())
+				polar_wal_pipeline_recent_written_add_link(CurrPos, CurrPos + XLOG_BLCKSZ);
+
 			CurrPos += XLOG_BLCKSZ;
 		}
 	}
 	else
 	{
+		if (POLAR_WAL_PIPELINER_READY())
+		{
+			if (CurrPos != EndPos)
+				polar_wal_pipeline_recent_written_add_link(CurrPos, EndPos);
+		}
+
 		/* Align the end position, so that the next record starts aligned */
 		CurrPos = MAXALIGN64(CurrPos);
 	}
@@ -2255,26 +3261,30 @@ AdvanceXLInsertBuffer(XLogRecPtr upto, TimeLineID tli, bool opportunistic,
 				 */
 				LWLockRelease(WALBufMappingLock);
 
-				WaitXLogInsertionsToFinish(OldPageRqstPtr);
-
-				LWLockAcquire(WALWriteLock, LW_EXCLUSIVE);
-
-				RefreshXLogWriteResult(LogwrtResult);
-				if (LogwrtResult.Write >= OldPageRqstPtr)
+				if (POLAR_WAL_PIPELINER_READY())
+					polar_wal_pipeline_commit_wait(OldPageRqstPtr);
 				{
-					/* OK, someone wrote it already */
-					LWLockRelease(WALWriteLock);
-				}
-				else
-				{
-					/* Have to write it ourselves */
-					TRACE_POSTGRESQL_WAL_BUFFER_WRITE_DIRTY_START();
-					WriteRqst.Write = OldPageRqstPtr;
-					WriteRqst.Flush = 0;
-					XLogWrite(WriteRqst, tli, false, polar_is_padding_zero);
-					LWLockRelease(WALWriteLock);
-					PendingWalStats.wal_buffers_full++;
-					TRACE_POSTGRESQL_WAL_BUFFER_WRITE_DIRTY_DONE();
+					WaitXLogInsertionsToFinish(OldPageRqstPtr);
+
+					LWLockAcquire(WALWriteLock, LW_EXCLUSIVE);
+
+					RefreshXLogWriteResult(LogwrtResult);
+					if (LogwrtResult.Write >= OldPageRqstPtr)
+					{
+						/* OK, someone wrote it already */
+						LWLockRelease(WALWriteLock);
+					}
+					else
+					{
+						/* Have to write it ourselves */
+						TRACE_POSTGRESQL_WAL_BUFFER_WRITE_DIRTY_START();
+						WriteRqst.Write = OldPageRqstPtr;
+						WriteRqst.Flush = 0;
+						XLogWrite(WriteRqst, tli, false, polar_is_padding_zero);
+						LWLockRelease(WALWriteLock);
+						PendingWalStats.wal_buffers_full++;
+						TRACE_POSTGRESQL_WAL_BUFFER_WRITE_DIRTY_DONE();
+					}
 				}
 				/* Re-acquire WALBufMappingLock and retry */
 				nosleep_after_write = LWLockAcquire(WALBufMappingLock, LW_EXCLUSIVE);
@@ -2608,7 +3618,8 @@ XLogWrite(XLogwrtRqst WriteRqst, TimeLineID tli, bool flexible,
 	/*
 	 * Update local LogwrtResult (caller probably did this already, but...)
 	 */
-	RefreshXLogWriteResult(LogwrtResult);
+	if (!POLAR_WAL_PIPELINER_READY())
+		RefreshXLogWriteResult(LogwrtResult);
 
 	/*
 	 * Since successive pages in the xlog cache are consecutively allocated,
@@ -2657,7 +3668,10 @@ XLogWrite(XLogwrtRqst WriteRqst, TimeLineID tli, bool flexible,
 			 */
 			Assert(npages == 0);
 			if (openLogFile >= 0)
-				XLogFileClose();
+			{
+				if (!POLAR_WAL_PIPELINER_READY())
+					XLogFileClose();
+			}
 			XLByteToPrevSeg(LogwrtResult.Write, openLogSegNo,
 							wal_segment_size);
 			openLogTLI = tli;
@@ -2844,35 +3858,43 @@ XLogWrite(XLogwrtRqst WriteRqst, TimeLineID tli, bool flexible,
 			 */
 			if (finishing_seg)
 			{
-				issue_xlog_fsync(openLogFile, openLogSegNo, tli);
-
-				/*
-				 * signal that we need to wakeup walsenders and logindex saver
-				 * later
-				 */
-				WalSndWakeupRequest();
-				polar_logindex_saver_wakeup_req();
-
-				LogwrtResult.Flush = LogwrtResult.Write;	/* end of page */
-
-				if (XLogArchivingActive())
-					XLogArchiveNotifySeg(openLogSegNo, tli);
-
-				XLogCtl->lastSegSwitchTime = (pg_time_t) time(NULL);
-				XLogCtl->lastSegSwitchLSN = LogwrtResult.Flush;
-
-				/*
-				 * Request a checkpoint if we've consumed too much xlog since
-				 * the last one.  For speed, we first check using the local
-				 * copy of RedoRecPtr, which might be out of date; if it looks
-				 * like a checkpoint is needed, forcibly update RedoRecPtr and
-				 * recheck.
-				 */
-				if (IsUnderPostmaster && XLogCheckpointNeeded(openLogSegNo))
+				if (POLAR_WAL_PIPELINER_READY())
 				{
-					(void) GetRedoRecPtr();
-					if (XLogCheckpointNeeded(openLogSegNo))
-						RequestCheckpoint(CHECKPOINT_CAUSE_XLOG);
+					polar_wal_pipeline_unflushed_xlog_append(openLogFile, openLogSegNo, openLogTLI, LogwrtResult.Write, true);
+					LogwrtResult.Flush = LogwrtResult.Write;
+				}
+				else
+				{
+					issue_xlog_fsync(openLogFile, openLogSegNo, tli);
+
+					/*
+					 * signal that we need to wakeup walsenders and logindex
+					 * saver later
+					 */
+					WalSndWakeupRequest();
+					polar_logindex_saver_wakeup_req();
+
+					LogwrtResult.Flush = LogwrtResult.Write;	/* end of page */
+
+					if (XLogArchivingActive())
+						XLogArchiveNotifySeg(openLogSegNo, tli);
+
+					XLogCtl->lastSegSwitchTime = (pg_time_t) time(NULL);
+					XLogCtl->lastSegSwitchLSN = LogwrtResult.Flush;
+
+					/*
+					 * Request a checkpoint if we've consumed too much xlog
+					 * since the last one.  For speed, we first check using
+					 * the local copy of RedoRecPtr, which might be out of
+					 * date; if it looks like a checkpoint is needed, forcibly
+					 * update RedoRecPtr and recheck.
+					 */
+					if (IsUnderPostmaster && XLogCheckpointNeeded(openLogSegNo))
+					{
+						(void) GetRedoRecPtr();
+						if (XLogCheckpointNeeded(openLogSegNo))
+							RequestCheckpoint(CHECKPOINT_CAUSE_XLOG);
+					}
 				}
 			}
 		}
@@ -2909,7 +3931,10 @@ XLogWrite(XLogwrtRqst WriteRqst, TimeLineID tli, bool flexible,
 			if (openLogFile >= 0 &&
 				!XLByteInPrevSeg(LogwrtResult.Write, openLogSegNo,
 								 wal_segment_size))
-				XLogFileClose();
+			{
+				if (!POLAR_WAL_PIPELINER_READY())
+					XLogFileClose();
+			}
 			if (openLogFile < 0)
 			{
 				XLByteToPrevSeg(LogwrtResult.Write, openLogSegNo,
@@ -2919,7 +3944,10 @@ XLogWrite(XLogwrtRqst WriteRqst, TimeLineID tli, bool flexible,
 				ReserveExternalFD();
 			}
 
-			issue_xlog_fsync(openLogFile, openLogSegNo, tli);
+			if (POLAR_WAL_PIPELINER_READY())
+				polar_wal_pipeline_unflushed_xlog_append(openLogFile, openLogSegNo, openLogTLI, LogwrtResult.Write, false);
+			else
+				issue_xlog_fsync(openLogFile, openLogSegNo, tli);
 		}
 
 		/* signal that we need to wakeup walsenders and logindex saver later */
@@ -2927,16 +3955,6 @@ XLogWrite(XLogwrtRqst WriteRqst, TimeLineID tli, bool flexible,
 		polar_logindex_saver_wakeup_req();
 
 		LogwrtResult.Flush = LogwrtResult.Write;
-	}
-	else if (polar_vfs_is_dio_mode &&
-			 LogwrtResult.Flush < LogwrtResult.Write)
-	{
-		/*
-		 * POLAR: If the system is currently in direct IO mode, synchronize
-		 * the 'Flush' and 'Write' position.
-		 */
-		LogwrtResult.Flush = LogwrtResult.Write;
-		polar_logindex_saver_wakeup_req();
 	}
 
 	/*
@@ -2946,41 +3964,53 @@ XLogWrite(XLogwrtRqst WriteRqst, TimeLineID tli, bool flexible,
 	 * 'result' values.  This is not absolutely essential, but it saves some
 	 * code in a couple of places.
 	 */
-	SpinLockAcquire(&XLogCtl->info_lck);
-	if (XLogCtl->LogwrtRqst.Write < LogwrtResult.Write)
-		XLogCtl->LogwrtRqst.Write = LogwrtResult.Write;
-	if (XLogCtl->LogwrtRqst.Flush < LogwrtResult.Flush)
-		XLogCtl->LogwrtRqst.Flush = LogwrtResult.Flush;
-	SpinLockRelease(&XLogCtl->info_lck);
+	if (!POLAR_WAL_PIPELINER_READY())
+	{
+		SpinLockAcquire(&XLogCtl->info_lck);
+		if (XLogCtl->LogwrtRqst.Write < LogwrtResult.Write)
+			XLogCtl->LogwrtRqst.Write = LogwrtResult.Write;
+		if (XLogCtl->LogwrtRqst.Flush < LogwrtResult.Flush)
+			XLogCtl->LogwrtRqst.Flush = LogwrtResult.Flush;
+		SpinLockRelease(&XLogCtl->info_lck);
 
-	/*
-	 * We write Write first, bar, then Flush.  When reading, the opposite must
-	 * be done (with a matching barrier in between), so that we always see a
-	 * Flush value that trails behind the Write value seen.
-	 */
-	pg_atomic_write_u64(&XLogCtl->logWriteResult, LogwrtResult.Write);
-	pg_write_barrier();
-	pg_atomic_write_u64(&XLogCtl->logFlushResult, LogwrtResult.Flush);
+		/*
+		 * We write Write first, bar, then Flush.  When reading, the opposite
+		 * must be done (with a matching barrier in between), so that we
+		 * always see a Flush value that trails behind the Write value seen.
+		 */
+		pg_atomic_write_u64(&XLogCtl->logWriteResult, LogwrtResult.Write);
+		pg_write_barrier();
+		pg_atomic_write_u64(&XLogCtl->logFlushResult, LogwrtResult.Flush);
 
 #ifdef USE_ASSERT_CHECKING
-	{
-		XLogRecPtr	Flush;
-		XLogRecPtr	Write;
-		XLogRecPtr	Insert;
+		{
+			XLogRecPtr	Flush;
+			XLogRecPtr	Write;
+			XLogRecPtr	Insert;
 
-		Flush = pg_atomic_read_u64(&XLogCtl->logFlushResult);
-		pg_read_barrier();
-		Write = pg_atomic_read_u64(&XLogCtl->logWriteResult);
-		pg_read_barrier();
-		Insert = pg_atomic_read_u64(&XLogCtl->logInsertResult);
+			Flush = pg_atomic_read_u64(&XLogCtl->logFlushResult);
+			pg_read_barrier();
+			Write = pg_atomic_read_u64(&XLogCtl->logWriteResult);
+			pg_read_barrier();
+			Insert = pg_atomic_read_u64(&XLogCtl->logInsertResult);
 
-		/* WAL written to disk is always ahead of WAL flushed */
-		Assert(Write >= Flush);
+			/* WAL written to disk is always ahead of WAL flushed */
+			Assert(Write >= Flush);
 
-		/* WAL inserted to buffers is always ahead of WAL written */
-		Assert(Insert >= Write);
-	}
+			/* WAL inserted to buffers is always ahead of WAL written */
+			Assert(Insert >= Write);
+		}
 #endif
+	}
+	else
+	{
+		SpinLockAcquire(&XLogCtl->info_lck);
+		if (XLogCtl->LogwrtRqst.Write < LogwrtResult.Write)
+			XLogCtl->LogwrtRqst.Write = LogwrtResult.Write;
+		SpinLockRelease(&XLogCtl->info_lck);
+
+		pg_atomic_write_u64(&XLogCtl->logWriteResult, LogwrtResult.Write);
+	}
 }
 
 /*
@@ -3033,6 +4063,10 @@ XLogSetAsyncXactLSN(XLogRecPtr asyncXactLSN)
 
 	if (wakeup && ProcGlobal->walwriterLatch)
 		SetLatch(ProcGlobal->walwriterLatch);
+
+	/* In polar wal pipeline mode, should wakeup wal pipeliner */
+	if (POLAR_WAL_PIPELINER_READY())
+		polar_wal_pipeliner_wakeup();
 }
 
 /*
@@ -3187,14 +4221,6 @@ XLogFlush(XLogRecPtr record)
 
 	START_CRIT_SECTION();
 
-	/*
-	 * Since fsync is usually a horribly expensive operation, we try to
-	 * piggyback as much data as we can on each fsync: if we see any more data
-	 * entered into the xlog buffer, we'll write and fsync that too, so that
-	 * the final value of LogwrtResult.Flush is as large as possible. This
-	 * gives us some chance of avoiding another fsync immediately after.
-	 */
-
 	/* initialize to given target; may increase below */
 	WriteRqstPtr = record;
 
@@ -3204,82 +4230,99 @@ XLogFlush(XLogRecPtr record)
 	 */
 	for (;;)
 	{
-		XLogRecPtr	insertpos;
-
-		/* done already? */
-		RefreshXLogWriteResult(LogwrtResult);
-		if (record <= LogwrtResult.Flush)
-			break;
-
-		/*
-		 * Before actually performing the write, wait for all in-flight
-		 * insertions to the pages we're about to write to finish.
-		 */
-		SpinLockAcquire(&XLogCtl->info_lck);
-		if (WriteRqstPtr < XLogCtl->LogwrtRqst.Write)
-			WriteRqstPtr = XLogCtl->LogwrtRqst.Write;
-		SpinLockRelease(&XLogCtl->info_lck);
-		insertpos = WaitXLogInsertionsToFinish(WriteRqstPtr);
-
-		/*
-		 * Try to get the write lock. If we can't get it immediately, wait
-		 * until it's released, and recheck if we still need to do the flush
-		 * or if the backend that held the lock did it for us already. This
-		 * helps to maintain a good rate of group committing when the system
-		 * is bottlenecked by the speed of fsyncing.
-		 */
-		if (!LWLockAcquireOrWait(WALWriteLock, LW_EXCLUSIVE))
+		if (POLAR_WAL_PIPELINER_READY())
+			polar_wal_pipeline_commit_wait(WriteRqstPtr);
+		else
 		{
+			XLogRecPtr	insertpos;
+
 			/*
-			 * The lock is now free, but we didn't acquire it yet. Before we
-			 * do, loop back to check if someone else flushed the record for
-			 * us already.
+			 * Since fsync is usually a horribly expensive operation, we try
+			 * to piggyback as much data as we can on each fsync: if we see
+			 * any more data entered into the xlog buffer, we'll write and
+			 * fsync that too, so that the final value of LogwrtResult.Flush
+			 * is as large as possible. This gives us some chance of avoiding
+			 * another fsync immediately after.
 			 */
-			continue;
-		}
 
-		/* Got the lock; recheck whether request is satisfied */
-		RefreshXLogWriteResult(LogwrtResult);
-		if (record <= LogwrtResult.Flush)
-		{
+			/* done already? */
+			RefreshXLogWriteResult(LogwrtResult);
+			if (record <= LogwrtResult.Flush)
+				break;
+
+			/*
+			 * Before actually performing the write, wait for all in-flight
+			 * insertions to the pages we're about to write to finish.
+			 */
+			SpinLockAcquire(&XLogCtl->info_lck);
+			if (WriteRqstPtr < XLogCtl->LogwrtRqst.Write)
+				WriteRqstPtr = XLogCtl->LogwrtRqst.Write;
+			SpinLockRelease(&XLogCtl->info_lck);
+			insertpos = WaitXLogInsertionsToFinish(WriteRqstPtr);
+
+			/*
+			 * Try to get the write lock. If we can't get it immediately, wait
+			 * until it's released, and recheck if we still need to do the
+			 * flush or if the backend that held the lock did it for us
+			 * already. This helps to maintain a good rate of group committing
+			 * when the system is bottlenecked by the speed of fsyncing.
+			 */
+			if (!LWLockAcquireOrWait(WALWriteLock, LW_EXCLUSIVE))
+			{
+				/*
+				 * The lock is now free, but we didn't acquire it yet. Before
+				 * we do, loop back to check if someone else flushed the
+				 * record for us already.
+				 */
+				continue;
+			}
+
+			/* Got the lock; recheck whether request is satisfied */
+			RefreshXLogWriteResult(LogwrtResult);
+			if (record <= LogwrtResult.Flush)
+			{
+				LWLockRelease(WALWriteLock);
+				break;
+			}
+
+			/*
+			 * Sleep before flush! By adding a delay here, we may give further
+			 * backends the opportunity to join the backlog of group commit
+			 * followers; this can significantly improve transaction
+			 * throughput, at the risk of increasing transaction latency.
+			 *
+			 * We do not sleep if enableFsync is not turned on, nor if there
+			 * are fewer than CommitSiblings other backends with active
+			 * transactions.
+			 */
+			if (CommitDelay > 0 && enableFsync &&
+				MinimumActiveBackends(CommitSiblings))
+			{
+				pg_usleep(CommitDelay);
+
+				/*
+				 * Re-check how far we can now flush the WAL. It's generally
+				 * not safe to call WaitXLogInsertionsToFinish while holding
+				 * WALWriteLock, because an in-progress insertion might need
+				 * to also grab WALWriteLock to make progress. But we know
+				 * that all the insertions up to insertpos have already
+				 * finished, because that's what the earlier
+				 * WaitXLogInsertionsToFinish() returned. We're only calling
+				 * it again to allow insertpos to be moved further forward,
+				 * not to actually wait for anyone.
+				 */
+				insertpos = WaitXLogInsertionsToFinish(insertpos);
+			}
+
+			/* try to write/flush later additions to XLOG as well */
+			WriteRqst.Write = insertpos;
+			WriteRqst.Flush = insertpos;
+
+			XLogWrite(WriteRqst, insertTLI, false, false);
+
 			LWLockRelease(WALWriteLock);
-			break;
 		}
 
-		/*
-		 * Sleep before flush! By adding a delay here, we may give further
-		 * backends the opportunity to join the backlog of group commit
-		 * followers; this can significantly improve transaction throughput,
-		 * at the risk of increasing transaction latency.
-		 *
-		 * We do not sleep if enableFsync is not turned on, nor if there are
-		 * fewer than CommitSiblings other backends with active transactions.
-		 */
-		if (CommitDelay > 0 && enableFsync &&
-			MinimumActiveBackends(CommitSiblings))
-		{
-			pg_usleep(CommitDelay);
-
-			/*
-			 * Re-check how far we can now flush the WAL. It's generally not
-			 * safe to call WaitXLogInsertionsToFinish while holding
-			 * WALWriteLock, because an in-progress insertion might need to
-			 * also grab WALWriteLock to make progress. But we know that all
-			 * the insertions up to insertpos have already finished, because
-			 * that's what the earlier WaitXLogInsertionsToFinish() returned.
-			 * We're only calling it again to allow insertpos to be moved
-			 * further forward, not to actually wait for anyone.
-			 */
-			insertpos = WaitXLogInsertionsToFinish(insertpos);
-		}
-
-		/* try to write/flush later additions to XLOG as well */
-		WriteRqst.Write = insertpos;
-		WriteRqst.Flush = insertpos;
-
-		XLogWrite(WriteRqst, insertTLI, false, false);
-
-		LWLockRelease(WALWriteLock);
 		/* done */
 		break;
 	}
@@ -3450,20 +4493,31 @@ XLogBackgroundFlush(void)
 			 LSN_FORMAT_ARGS(LogwrtResult.Flush));
 #endif
 
-	START_CRIT_SECTION();
-
-	/* now wait for any in-progress insertions to finish and get write lock */
-	WaitXLogInsertionsToFinish(WriteRqst.Write);
-	LWLockAcquire(WALWriteLock, LW_EXCLUSIVE);
-	RefreshXLogWriteResult(LogwrtResult);
-	if (WriteRqst.Write > LogwrtResult.Write ||
-		WriteRqst.Flush > LogwrtResult.Flush)
+	if (POLAR_WAL_PIPELINER_READY())
 	{
-		XLogWrite(WriteRqst, insertTLI, flexible, false);
+		if (WriteRqst.Write > LogwrtResult.Write || WriteRqst.Flush > LogwrtResult.Flush)
+			polar_wal_pipeline_commit_wait(WriteRqst.Flush);
 	}
-	LWLockRelease(WALWriteLock);
+	else
+	{
+		START_CRIT_SECTION();
 
-	END_CRIT_SECTION();
+		/*
+		 * now wait for any in-progress insertions to finish and get write
+		 * lock
+		 */
+		WaitXLogInsertionsToFinish(WriteRqst.Write);
+		LWLockAcquire(WALWriteLock, LW_EXCLUSIVE);
+		RefreshXLogWriteResult(LogwrtResult);
+		if (WriteRqst.Write > LogwrtResult.Write ||
+			WriteRqst.Flush > LogwrtResult.Flush)
+		{
+			XLogWrite(WriteRqst, insertTLI, flexible, false);
+		}
+		LWLockRelease(WALWriteLock);
+
+		END_CRIT_SECTION();
+	}
 
 	/*
 	 * wake up walsenders and logindex saver now that we've released heavily
@@ -5452,6 +6506,11 @@ XLOGShmemSize(void)
 	 * routine again below to compute the actual allocation size.
 	 */
 
+	/*
+	 * POLAR wal pipeline
+	 */
+	size = add_size(size, polar_wal_pipeline_shmem_size());
+
 	return size;
 }
 
@@ -5548,6 +6607,7 @@ XLOGShmemInit(void)
 	allocptr = (char *) TYPEALIGN(XLOG_BLCKSZ, allocptr);
 	XLogCtl->pages = allocptr;
 	memset(XLogCtl->pages, 0, (Size) XLOG_BLCKSZ * XLOGbuffers);
+	allocptr += (Size) XLOG_BLCKSZ * XLOGbuffers;
 
 	/*
 	 * Do basic initialization of XLogCtl shared data. (StartupXLOG will fill
@@ -5593,6 +6653,11 @@ XLOGShmemInit(void)
 		}
 	}
 	/* POLAR end */
+
+	/*
+	 * POLAR wal pipeline
+	 */
+	allocptr = polar_wal_pipeline_init(allocptr);
 }
 
 /*
@@ -6889,6 +7954,11 @@ StartupXLOG(void)
 	if (standbyState != STANDBY_DISABLED)
 		ShutdownRecoveryTransactionEnvironment();
 
+	if (POLAR_WAL_PIPELINER_ENABLE())
+	{
+		pg_atomic_write_u64(&XLogCtl->polar_wal_pipeline_recent_written_position_buffer.ready_write_position, pg_atomic_read_u64(&Insert->CurrBytePos));
+	}
+
 	/*
 	 * If there were cascading standby servers connected to us, nudge any wal
 	 * sender processes to notice that we've been promoted.
@@ -7144,6 +8214,13 @@ XLogInsertAllowed(void)
 	 */
 	if (RecoveryInProgress())
 		return false;
+
+	/*
+	 * In wal pipeline mode, we should wait for wal pipeliner ready before
+	 * write wal log
+	 */
+	if (POLAR_WAL_PIPELINER_ENABLE())
+		while (!POLAR_WAL_PIPELINER_READY());
 
 	/*
 	 * On exit from recovery, reset to "unconditionally true", since there is

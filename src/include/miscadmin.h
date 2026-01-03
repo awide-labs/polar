@@ -392,6 +392,7 @@ typedef enum BackendType
 	B_WAL_SUMMARIZER,
 	B_WAL_WRITER,
 	B_BG_LOGINDEX,
+	B_POLAR_WAL_PIPELINER,
 
 	/*
 	 * Logger is not connected to shared memory and does not have a PGPROC
@@ -417,6 +418,7 @@ extern PGDLLIMPORT BackendType MyBackendType;
 #define AmWalReceiverProcess()		(MyBackendType == B_WAL_RECEIVER)
 #define AmWalSummarizerProcess()	(MyBackendType == B_WAL_SUMMARIZER)
 #define AmWalWriterProcess()		(MyBackendType == B_WAL_WRITER)
+#define AmWalPipelinerProcess()		(MyBackendType == B_POLAR_WAL_PIPELINER)
 
 #define AmSpecialWorkerProcess() \
 	(AmAutoVacuumLauncherProcess() || \

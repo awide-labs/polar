@@ -1,0 +1,29 @@
+CREATE EXTENSION test_wal_pipeline;
+SELECT test_wal_pipeline();
+INFO:  ------------------------------
+INFO:  test_wal_pipeline_advance
+INFO:  case 1 test recovery mode
+INFO:  case 1 test recovery mode ok
+INFO:  case 2 test add link
+INFO:  case 2 test add link ok
+INFO:  case 3 test no space
+INFO:  case 3 test no space ok
+INFO:  ------------------------------
+INFO:  test_wal_pipeline_write
+INFO:  case 1 test recovery mode
+INFO:  case 1 test recovery mode ok
+INFO:  case 2 test write nothing
+INFO:  case 2 test write nothing ok
+INFO:  ------------------------------
+INFO:  test_wal_pipeline_flush
+INFO:  case 1 test recovery mode
+INFO:  case 1 test recovery mode ok
+INFO:  ------------------------------
+INFO:  test_wal_pipeline_notify
+INFO:  case 1 test recovery mode
+INFO:  case 1 test recovery mode ok
+ test_wal_pipeline 
+-------------------
+ 
+(1 row)
+

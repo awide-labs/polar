@@ -101,5 +101,9 @@ SELECT 1 AS dummy FROM polar_wal_buffer_stat_delta;
 SELECT distinct(context) FROM polar_wal_write_io_stat_delta GROUP BY context;
 SELECT polar_wal_buffer_stat_reset();
 
+-- check polar wal pipeline view
+select COUNT(*)  >= 0 AS result from polar_wal_pipeline_info;
+select COUNT(*)  >= 0 AS result from polar_wal_pipeline_stats;
+
 --cleanup
 drop extension polar_monitor;

@@ -51,6 +51,7 @@ SUBDIRS += test_coredump_handler
 SUBDIRS += test_logindex test_procpool
 SUBDIRS += test_polar_rsc
 SUBDIRS += test_polar_shm_limit
+SUBDIRS += test_wal_pipeline
 # POLAR end
 
 ifeq ($(enable_injection_points),yes)

@@ -19,6 +19,7 @@
 #include "pgstat.h"
 #include "postmaster/auxprocess.h"
 #include "postmaster/bgwriter.h"
+#include "postmaster/polar_wal_pipeliner.h"
 #include "postmaster/startup.h"
 #include "postmaster/walsummarizer.h"
 #include "postmaster/walwriter.h"

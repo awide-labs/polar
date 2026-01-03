@@ -317,6 +317,9 @@ GetBackendTypeDesc(BackendType backendType)
 		case B_CHECKPOINTER:
 			backendDesc = "checkpointer";
 			break;
+		case B_POLAR_WAL_PIPELINER:
+			backendDesc = "polar wal pipeliner";
+			break;
 		case B_LOGGER:
 			backendDesc = "logger";
 			break;

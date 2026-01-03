@@ -102,6 +102,7 @@
 #include "executor/nodeModifyTable.h"
 #include "mb/pg_wchar.h"
 #include "postmaster/polar_async_lock_replay.h"
+#include "postmaster/polar_wal_pipeliner.h"
 #include "storage/bulk_write.h"
 #include "storage/enc_common.h"
 #include "storage/kmgr.h"
@@ -825,6 +826,50 @@ bool		polar_enable_alloc_checkinterrupts;
 double		polar_instance_spec_cpu = 0;
 int			polar_instance_spec_mem = 0;
 
+/* POLAR wal pipeline */
+
+/* general params */
+bool		polar_wal_pipeline_enable = false;
+
+/*
+ * mode 1	advance+write+flush+notify 	1 thread
+ * mode 2	advance+write+flush notify	2 threads
+ * mode 3	advance write+flush notify  3 threads
+ * mode 4	advance+write flush notify  3 threads
+ * mode 5	advance write flush notify  4 threads
+ */
+int			polar_wal_pipeline_mode = 2;
+int			polar_wal_pipeline_wait_timeout = 10;	/* unit us */
+int			polar_wal_pipeline_commit_wait_spin_delay = 0;	/* 1000 spin corresponds
+															 * to 4us */
+int			polar_wal_pipeline_commit_wait_timeout = 10000; /* unit us */
+int			polar_wal_pipeline_flush_event_array_size = 128;	/* should be multiple of
+																 * 2 */
+int			polar_wal_pipeline_flush_event_slot_size = 1024;	/* should be multiple of
+																 * 2 */
+int			polar_wal_pipeline_unflushed_xlog_array_size = 1024;	/* should be multiple of
+																	 * 2 */
+
+/* params for advance worker */
+int			polar_wal_pipeline_advance_worker_spin_delay = 0;
+int			polar_wal_pipeline_advance_worker_timeout = 10;
+int			polar_wal_pipeline_advance_worker_write_max_size = 0;	/* 0 indicate no limit */
+int			polar_wal_pipeline_recent_written_array_size = 1024 * 1024; /* should be multiple of
+																		 * 2 */
+
+/* params for write worker */
+int			polar_wal_pipeline_write_worker_spin_delay = 0;
+int			polar_wal_pipeline_write_worker_timeout = 10000;
+
+/* params for flush worker */
+int			polar_wal_pipeline_flush_worker_spin_delay = 0;
+int			polar_wal_pipeline_flush_worker_timeout = 10000;
+
+/* params for notify worker */
+int			polar_wal_pipeline_notify_worker_spin_delay = 0;
+int			polar_wal_pipeline_notify_worker_timeout = 10;
+int			polar_wal_pipeline_notify_worker_num = 1;
+
 /*
  * Displayable names for context types (enum GucContext)
  *
@@ -1145,6 +1190,17 @@ struct config_bool ConfigureNamesBool[] =
 			GUC_NO_SHOW_ALL | GUC_NO_RESET_ALL | GUC_NOT_IN_SAMPLE | GUC_SUPERUSER_ONLY | POLAR_GUC_IS_UNCHANGEABLE | POLAR_GUC_IS_INVISIBLE
 		},
 		&polar_apply_global_guc_for_super,
+		false,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"polar_wal_pipeline_enable", PGC_POSTMASTER, UNGROUPED,
+			gettext_noop("whether enable wal pipeline"),
+			NULL,
+			GUC_NO_RESET_ALL | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_CHANGABLE
+		},
+		&polar_wal_pipeline_enable,
 		false,
 		NULL, NULL, NULL
 	},
@@ -3892,6 +3948,204 @@ struct config_int ConfigureNamesInt[] =
 		&polar_max_replica_streaming_delay,
 		30 * 1000, -1, INT_MAX,
 		polar_check_max_replica_streaming_delay, NULL, NULL
+	},
+
+	{
+		{"polar_wal_pipeline_mode", PGC_POSTMASTER, WAL_SETTINGS,
+			gettext_noop("Set mode for wal pipeline"),
+			NULL,
+			POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_CHANGABLE
+		},
+		&polar_wal_pipeline_mode,
+		2, 1, 5,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"polar_wal_pipeline_flush_event_array_size", PGC_POSTMASTER, WAL_SETTINGS,
+			gettext_noop("Set flush event array size for wal pipeline"),
+			NULL,
+			POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_CHANGABLE
+		},
+		&polar_wal_pipeline_flush_event_array_size,
+		128, 1, INT_MAX,
+		polar_check_wal_pipeline_flush_event_array_size, NULL, NULL
+	},
+
+	{
+		{"polar_wal_pipeline_flush_event_slot_size", PGC_POSTMASTER, WAL_SETTINGS,
+			gettext_noop("Set flush event slot size for wal pipeline"),
+			NULL,
+			POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_CHANGABLE
+		},
+		&polar_wal_pipeline_flush_event_slot_size,
+		1024, 1, INT_MAX,
+		polar_check_wal_pipeline_flush_event_slot_size, NULL, NULL
+	},
+
+	{
+		{"polar_wal_pipeline_unflushed_xlog_array_size", PGC_POSTMASTER, WAL_SETTINGS,
+			gettext_noop("Set unflushed xlog array size for wal pipeline"),
+			NULL,
+			POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_CHANGABLE
+		},
+		&polar_wal_pipeline_unflushed_xlog_array_size,
+		1024, 1, INT_MAX,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"polar_wal_pipeline_recent_written_array_size", PGC_POSTMASTER, WAL_SETTINGS,
+			gettext_noop("Set recent written array size for wal pipeline"),
+			NULL,
+			POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_CHANGABLE
+		},
+		&polar_wal_pipeline_recent_written_array_size,
+		1024 * 1024, 1, INT_MAX,
+		polar_check_wal_pipeline_recent_written_array_size, NULL, NULL
+	},
+
+	{
+		{"polar_wal_pipeline_wait_timeout", PGC_POSTMASTER, WAL_SETTINGS,
+			gettext_noop("Set default wait timeout for wal pipeline"),
+			NULL,
+			POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_CHANGABLE
+		},
+		&polar_wal_pipeline_wait_timeout,
+		10, POLAR_MIN_WAIT_TIMEOUT_USEC, POLAR_MAX_WAIT_TIMEOUT_USEC,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"polar_wal_pipeline_commit_wait_spin_delay", PGC_POSTMASTER, WAL_SETTINGS,
+			gettext_noop("Set commit wait spin delay for wal pipeline"),
+			NULL,
+			POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_CHANGABLE
+		},
+		&polar_wal_pipeline_commit_wait_spin_delay,
+		0, POLAR_MIN_WAIT_SPINS, POLAR_MAX_WAIT_SPINS,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"polar_wal_pipeline_commit_wait_timeout", PGC_POSTMASTER, WAL_SETTINGS,
+			gettext_noop("Set commit wait timeout for wal pipeline"),
+			NULL,
+			POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_CHANGABLE
+		},
+		&polar_wal_pipeline_commit_wait_timeout,
+		10000, POLAR_MIN_WAIT_TIMEOUT_USEC, POLAR_MAX_WAIT_TIMEOUT_USEC,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"polar_wal_pipeline_advance_worker_spin_delay", PGC_POSTMASTER, WAL_SETTINGS,
+			gettext_noop("Set spin delay of advance worker for wal pipeline"),
+			NULL,
+			POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_CHANGABLE
+		},
+		&polar_wal_pipeline_advance_worker_spin_delay,
+		0, POLAR_MIN_WAIT_SPINS, POLAR_MAX_WAIT_SPINS,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"polar_wal_pipeline_advance_worker_timeout", PGC_POSTMASTER, WAL_SETTINGS,
+			gettext_noop("Set timeout of advance worker for wal pipeline"),
+			NULL,
+			POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_CHANGABLE
+		},
+		&polar_wal_pipeline_advance_worker_timeout,
+		10, POLAR_MIN_WAIT_TIMEOUT_USEC, POLAR_MAX_WAIT_TIMEOUT_USEC,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"polar_wal_pipeline_advance_worker_write_max_size", PGC_POSTMASTER, WAL_SETTINGS,
+			gettext_noop("Set max wal size per advance of advance worker for wal pipeline"),
+			NULL,
+			POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_CHANGABLE
+		},
+		&polar_wal_pipeline_advance_worker_write_max_size,
+		0, 0, INT_MAX,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"polar_wal_pipeline_write_worker_spin_delay", PGC_POSTMASTER, WAL_SETTINGS,
+			gettext_noop("Set spin delay of write worker for wal pipeline"),
+			NULL,
+			POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_CHANGABLE
+		},
+		&polar_wal_pipeline_write_worker_spin_delay,
+		0, POLAR_MIN_WAIT_SPINS, POLAR_MAX_WAIT_SPINS,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"polar_wal_pipeline_write_worker_timeout", PGC_POSTMASTER, WAL_SETTINGS,
+			gettext_noop("Set timeout of write worker for wal pipeline"),
+			NULL,
+			POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_CHANGABLE
+		},
+		&polar_wal_pipeline_write_worker_timeout,
+		10000, POLAR_MIN_WAIT_TIMEOUT_USEC, POLAR_MAX_WAIT_TIMEOUT_USEC,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"polar_wal_pipeline_flush_worker_spin_delay", PGC_POSTMASTER, WAL_SETTINGS,
+			gettext_noop("Set spin delay of flush worker for wal pipeline"),
+			NULL,
+			POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_CHANGABLE
+		},
+		&polar_wal_pipeline_flush_worker_spin_delay,
+		0, POLAR_MIN_WAIT_SPINS, POLAR_MAX_WAIT_SPINS,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"polar_wal_pipeline_flush_worker_timeout", PGC_POSTMASTER, WAL_SETTINGS,
+			gettext_noop("Set timeout of flush worker for wal pipeline"),
+			NULL,
+			POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_CHANGABLE
+		},
+		&polar_wal_pipeline_flush_worker_timeout,
+		10000, POLAR_MIN_WAIT_TIMEOUT_USEC, POLAR_MAX_WAIT_TIMEOUT_USEC,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"polar_wal_pipeline_notify_worker_spin_delay", PGC_POSTMASTER, WAL_SETTINGS,
+			gettext_noop("Set spin delay of notify worker for wal pipeline"),
+			NULL,
+			POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_CHANGABLE
+		},
+		&polar_wal_pipeline_notify_worker_spin_delay,
+		0, POLAR_MIN_WAIT_SPINS, POLAR_MAX_WAIT_SPINS,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"polar_wal_pipeline_notify_worker_timeout", PGC_POSTMASTER, WAL_SETTINGS,
+			gettext_noop("Set timeout of notify worker for wal pipeline"),
+			NULL,
+			POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_CHANGABLE
+		},
+		&polar_wal_pipeline_notify_worker_timeout,
+		10, POLAR_MIN_WAIT_TIMEOUT_USEC, POLAR_MAX_WAIT_TIMEOUT_USEC,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"polar_wal_pipeline_notify_worker_num", PGC_POSTMASTER, WAL_SETTINGS,
+			gettext_noop("Set the number of notify worker for wal pipeline"),
+			NULL,
+			POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_CHANGABLE
+		},
+		&polar_wal_pipeline_notify_worker_num,
+		1, POLAR_WAL_PIPELINE_NOTIFY_WORKER_NUM_MIN, POLAR_WAL_PIPELINE_NOTIFY_WORKER_NUM_MAX,
+		NULL, NULL, NULL
 	},
 
 	/* POLAR int GUCs end */
