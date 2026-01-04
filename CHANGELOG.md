@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed `pg_ctl logrotate` functionality by restoring the missing check for the `logrotate` file in the data directory upon receiving SIGUSR1 (XCOM-87)
+
 ### Removed
 
 - The following third-party extensions have been removed (XCOM-61):
