@@ -426,7 +426,7 @@ typedef struct polar_wal_pipeline_unflushed_xlog_t
 
 typedef struct polar_wal_pipeline_unflushed_xlog_slot_t
 {
-	volatile bool 				in_use;		/* slot whether in use */
+	pg_atomic_uint32 				in_use;		/* slot whether in use */
 	polar_wal_pipeline_unflushed_xlog_t   	file_node;	/* xlog file node */
 } polar_wal_pipeline_unflushed_xlog_slot_t;
 
@@ -937,7 +937,7 @@ polar_wal_pipeline_init(char *allocptr)
 	pg_atomic_init_u64(&XLogCtl->polar_wal_pipeline_unflushed_xlog_buffer.add_slot_no, 0);
 	pg_atomic_init_u64(&XLogCtl->polar_wal_pipeline_unflushed_xlog_buffer.del_slot_no, 0);
 	for (i = 0; i < polar_wal_pipeline_unflushed_xlog_array_size; i++)
-		XLogCtl->polar_wal_pipeline_unflushed_xlog_buffer.unflushed_xlog_slots[i].in_use = false;
+		pg_atomic_init_u32(&XLogCtl->polar_wal_pipeline_unflushed_xlog_buffer.unflushed_xlog_slots[i].in_use, 0);
 
 	/*
 	 * wal pipeline stats init
@@ -1139,6 +1139,14 @@ polar_wal_pipeline_recent_written_add_link(XLogRecPtr start_lsn, XLogRecPtr end_
 
 	slot_no = polar_wal_pipeline_get_recent_written_slot(XLogRecPtrToBytePos(start_lsn));
 
+	/*
+	 * Ensure all WAL data writes (memcpy) complete before publishing
+	 * the slot value. On weakly-ordered architectures, this prevents
+	 * the CPU from reordering the memcpy operations after the atomic
+	 * write.
+	 */
+	pg_write_barrier();
+
 	pg_atomic_write_u64(&XLogCtl->polar_wal_pipeline_recent_written_position_buffer.recent_written_position_slots[slot_no],
 		XLogRecPtrToBytePos(end_lsn) - XLogRecPtrToBytePos(start_lsn));
 }
@@ -1184,6 +1192,14 @@ polar_wal_pipeline_recent_written_advance(void)
 
 	if (tail_pos > old_pos)
 	{
+		/*
+		 * Ensure all slot clearing operations complete before updating
+		 * ready_write_position. On weakly-ordered architectures, this
+		 * prevents the CPU from reordering the slot clearing after the
+		 * position update.
+		 */
+		pg_write_barrier();
+
 		pg_atomic_write_u64(&XLogCtl->polar_wal_pipeline_recent_written_position_buffer.ready_write_position, tail_pos);
 
 		return true;
@@ -1243,7 +1259,7 @@ polar_wal_pipeline_unflushed_xlog_append(int fd, XLogSegNo seg_no, XLogRecPtr en
 	polar_wal_pipeline_unflushed_xlog_t *file = &slot->file_node;
 
 	pgstat_report_wait_start(WAIT_EVENT_WAL_PIPELINE_WAIT_UNFLUSHED_XLOG_SLOT);
-	while (slot->in_use)
+	while (pg_atomic_read_u32(&slot->in_use))
 	{
 		pg_usleep(polar_wal_pipeline_wait_timeout);
 		pg_atomic_fetch_add_u64(&XLogCtl->polar_wal_pipeline_stats.unflushed_xlog_slot_waits, 1);
@@ -1255,10 +1271,10 @@ polar_wal_pipeline_unflushed_xlog_append(int fd, XLogSegNo seg_no, XLogRecPtr en
 	file->end_lsn = end_lsn;
 	file->need_close = need_close;
 
-	/* in_use should be last assigned */
+	/* complete data stores into slot before updating in_use */
 	pg_write_barrier();
 
-	slot->in_use = true;
+	pg_atomic_write_u32(&slot->in_use, 1);
 
 	polar_wal_pipeline_advance_unflushed_xlog_slot_no(UNFLUSHED_XLOG_SLOT_TYPE_ADD);
 }
@@ -1350,6 +1366,14 @@ polar_wal_pipeline_write(int ident)
 
 	ready_write_lsn = polar_wal_pipeline_get_ready_write_lsn();
 
+	/*
+	 * Load the ready write position before reading WAL data. On weakly-ordered
+	 * architectures, this prevents the CPU from reordering the WAL data reads
+	 * before the ready write position load, ensuring we don't read WAL data that
+	 * hasn't been fully written yet.
+	 */
+	pg_read_barrier();
+
 	write_rqst.Write = Min(write_rqst.Write, ready_write_lsn);
 	write_rqst.Flush = Min(write_rqst.Flush, ready_write_lsn);
 
@@ -1384,8 +1408,11 @@ polar_wal_pipeline_flush_internal(void)
 	TimeLineID		insertTLI;
 
 	/* No del slot to process, just return */
-	if (!curr_del_slot->in_use)
+	if (!pg_atomic_read_u32(&curr_del_slot->in_use))
 		return;
+
+	/* Ensure curr slot data load happen after in_use check */
+	pg_read_barrier();
 
 	insertTLI = XLogCtl->InsertTimeLineID;
 
@@ -1397,7 +1424,7 @@ polar_wal_pipeline_flush_internal(void)
 		bool do_file_close = false;
 		bool stop_loop = false;
 
-		if (!next_del_slot->in_use)
+		if (!pg_atomic_read_u32(&next_del_slot->in_use))
 		{
 			if (!curr_del_file->need_close)
 				do_file_flush = true;
@@ -1411,6 +1438,9 @@ polar_wal_pipeline_flush_internal(void)
 		}
 		else
 		{
+			/* Ensure next slot data loads happen after in_use check */
+			pg_read_barrier();
+
 			if (curr_del_file->fd != next_del_file->fd)
 			{
 				do_file_flush = true;
@@ -1461,7 +1491,10 @@ polar_wal_pipeline_flush_internal(void)
 			polar_wal_pipeline_xlog_close(curr_del_file->fd, curr_del_file->seg_no);
 		}
 
-		curr_del_slot->in_use = false;
+		/* Ensure all slot operations complete before clearing in_use flag */
+		pg_write_barrier();
+
+		pg_atomic_write_u32(&curr_del_slot->in_use, 0);
 
 		curr_del_slot = next_del_slot;
 		curr_del_file = next_del_file;
