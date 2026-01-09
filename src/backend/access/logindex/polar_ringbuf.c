@@ -446,6 +446,44 @@ polar_ringbuf_update_keep_data(polar_ringbuf_t rbuf)
 }
 
 /*
+ * Attempt to ensure there's enough free space in a ring buffer
+ * for a write operation of size len.
+ *
+ * When space is not immediately available, it tries to reclaim some
+ * free space by:
+ *
+ * - releasing space that has been processed by readers
+ * - trying to evict some of weak references
+ *
+ * Unlike polar_ringbuf_free_up() this function exits immediately
+ * instead of waiting indefinitely. This is used to avoid deadlock
+ * when holding WALInsertLock while waiting for xlog queue space to
+ * become available.
+ *
+ * Returns true if either:
+ *   - Space became available
+ *   - Progress was made (update_pread or evict_ref succeeded)
+ * Returns false if no progress could be made.
+ */
+bool
+polar_ringbuf_try_free_up(polar_ringbuf_t rbuf, size_t len)
+{
+	bool	progress, is_free;
+
+	LWLockAcquire(&rbuf->lock, LW_EXCLUSIVE);
+	is_free = (polar_ringbuf_free_size(rbuf) > len);
+
+	if (is_free)
+		progress = true;
+	else
+		progress = (polar_ringbuf_update_pread(rbuf) ||
+					polar_ringbuf_evict_ref(rbuf));
+
+	LWLockRelease(&rbuf->lock);
+	return progress;
+}
+
+/*
  * Free up space until free size larger than aimed length
  */
 void
