@@ -203,6 +203,7 @@ extern ssize_t polar_ringbuf_read_next_pkt(polar_ringbuf_ref_t *ref,
 										   int offset, uint8 *buf, size_t len);
 extern void polar_ringbuf_update_keep_data(polar_ringbuf_t rbuf);
 extern void polar_ringbuf_free_up(polar_ringbuf_t rbuf, size_t len, polar_interrupt_callback callback);
+extern bool polar_ringbuf_try_free_up(polar_ringbuf_t rbuf, size_t len);
 extern void polar_ringbuf_auto_release_ref(polar_ringbuf_ref_t *ref);
 extern bool polar_ringbuf_valid_ref(polar_ringbuf_ref_t *ref);
 

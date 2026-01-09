@@ -818,12 +818,12 @@ static void CopyXLogRecordToWAL(int write_len, bool isLogSwitch,
 								XLogRecData *rdata,
 								XLogRecPtr StartPos, XLogRecPtr EndPos,
 								TimeLineID tli);
-static void ReserveXLogInsertLocation(int size, XLogRecPtr *StartPos,
+static bool ReserveXLogInsertLocation(int size, XLogRecPtr *StartPos,
 									  XLogRecPtr *EndPos, XLogRecPtr *PrevPtr,
 									  uint32 polar_rbuf_len, size_t *polar_rbuf_pos);
 static bool ReserveXLogSwitch(XLogRecPtr *StartPos, XLogRecPtr *EndPos,
 							  XLogRecPtr *PrevPtr, uint32 polar_rbuf_len,
-							  size_t *polar_rbuf_pos);
+							  size_t *polar_rbuf_pos, bool *need_retry);
 static XLogRecPtr WaitXLogInsertionsToFinish(XLogRecPtr upto);
 static char *GetXLogBuffer(XLogRecPtr ptr, TimeLineID tli);
 static XLogRecPtr XLogBytePosToRecPtr(uint64 bytepos);
@@ -1743,6 +1743,7 @@ XLogInsertRecord(XLogRecData *rdata,
 	XLogRecPtr	EndPos;
 	bool		prevDoPageWrites = doPageWrites;
 	TimeLineID	insertTLI;
+	bool		need_retry = false;
 
 	/* POLAR: The reserved start point and length of ring buffer */
 	size_t		polar_rbuf_pos = 0;
@@ -1846,12 +1847,24 @@ XLogInsertRecord(XLogRecData *rdata,
 	 */
 	if (isLogSwitch)
 		inserted = ReserveXLogSwitch(&StartPos, &EndPos, &rechdr->xl_prev,
-									 polar_rbuf_len, &polar_rbuf_pos);
+									 polar_rbuf_len, &polar_rbuf_pos, &need_retry);
 	else
 	{
-		ReserveXLogInsertLocation(rechdr->xl_tot_len, &StartPos, &EndPos,
-								  &rechdr->xl_prev, polar_rbuf_len, &polar_rbuf_pos);
-		inserted = true;
+		inserted = ReserveXLogInsertLocation(rechdr->xl_tot_len, &StartPos, &EndPos,
+											 &rechdr->xl_prev, polar_rbuf_len, &polar_rbuf_pos);
+		if (!inserted)
+			need_retry = true;
+	}
+
+	if (need_retry)
+	{
+		/*
+		 * Xlog queue is full and cannot make progress.
+		 * Return InvalidXLogRecPtr to let caller retry.
+		 */
+		WALInsertLockRelease();
+		END_CRIT_SECTION();
+		return InvalidXLogRecPtr;
 	}
 
 	if (inserted)
@@ -2070,7 +2083,7 @@ XLogInsertRecord(XLogRecData *rdata,
  * NB: The space calculation here must match the code in CopyXLogRecordToWAL,
  * where we actually copy the record to the reserved space.
  */
-static void
+static bool
 ReserveXLogInsertLocation(int size, XLogRecPtr *StartPos, XLogRecPtr *EndPos,
 						  XLogRecPtr *PrevPtr, uint32 polar_rbuf_len, size_t *polar_rbuf_pos)
 {
@@ -2103,9 +2116,19 @@ ReserveXLogInsertLocation(int size, XLogRecPtr *StartPos, XLogRecPtr *EndPos,
 			ssize_t idx =
 				POLAR_XLOG_QUEUE_CHECK_SIZE_AND_RESERVE(polar_logindex_redo_instance->xlog_queue,
 														polar_rbuf_len);
-			if (idx < 0) {
+
+			if (idx < 0)
+			{
 				SpinLockRelease(&Insert->insertpos_lck);
-				POLAR_XLOG_QUEUE_FREE_UP(polar_logindex_redo_instance->xlog_queue, polar_rbuf_len);
+
+				/*
+				 * Try to free up space. If no progress can be made,
+				 * return false to let caller retry.
+				 */
+				if (!polar_ringbuf_try_free_up(polar_logindex_redo_instance->xlog_queue,
+												POLAR_XLOG_PKT_SIZE(polar_rbuf_len)))
+					return false;
+
 				continue;
 			}
 			*polar_rbuf_pos = idx;
@@ -2136,6 +2159,8 @@ ReserveXLogInsertLocation(int size, XLogRecPtr *StartPos, XLogRecPtr *EndPos,
 	Assert(XLogRecPtrToBytePos(*StartPos) == startbytepos);
 	Assert(XLogRecPtrToBytePos(*EndPos) == endbytepos);
 	Assert(XLogRecPtrToBytePos(*PrevPtr) == prevbytepos);
+
+	return true;
 }
 
 /*
@@ -2149,7 +2174,7 @@ ReserveXLogInsertLocation(int size, XLogRecPtr *StartPos, XLogRecPtr *EndPos,
 */
 static bool
 ReserveXLogSwitch(XLogRecPtr *StartPos, XLogRecPtr *EndPos, XLogRecPtr *PrevPtr,
-				  uint32 polar_rbuf_len, size_t *polar_rbuf_pos)
+				  uint32 polar_rbuf_len, size_t *polar_rbuf_pos, bool *need_retry)
 {
 	XLogCtlInsert *Insert = &XLogCtl->Insert;
 	uint64		startbytepos;
@@ -2158,6 +2183,8 @@ ReserveXLogSwitch(XLogRecPtr *StartPos, XLogRecPtr *EndPos, XLogRecPtr *PrevPtr,
 	uint32		size = MAXALIGN(SizeOfXLogRecord);
 	XLogRecPtr	ptr;
 	uint32		segleft;
+
+	*need_retry = false;
 
 	/*
 	 * These calculations are a bit heavy-weight to be done while holding a
@@ -2184,9 +2211,22 @@ ReserveXLogSwitch(XLogRecPtr *StartPos, XLogRecPtr *EndPos, XLogRecPtr *PrevPtr,
 			ssize_t idx =
 				POLAR_XLOG_QUEUE_CHECK_SIZE_AND_RESERVE(polar_logindex_redo_instance->xlog_queue,
 														polar_rbuf_len);
-			if (idx < 0) {
+
+			if (idx < 0)
+			{
 				SpinLockRelease(&Insert->insertpos_lck);
-				POLAR_XLOG_QUEUE_FREE_UP(polar_logindex_redo_instance->xlog_queue, polar_rbuf_len);
+
+				/*
+				 * Try to free up space. If no progress can be made,
+				 * return false to let caller retry.
+				 */
+				if (!polar_ringbuf_try_free_up(polar_logindex_redo_instance->xlog_queue,
+												POLAR_XLOG_PKT_SIZE(polar_rbuf_len)))
+				{
+					*need_retry = true;
+					return false;
+				}
+
 				continue;
 			}
 			*polar_rbuf_pos = idx;
