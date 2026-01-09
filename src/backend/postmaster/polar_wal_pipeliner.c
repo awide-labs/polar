@@ -92,9 +92,6 @@ bool multi_thread_elog = false;
 bool multi_thread_vfs;
 slock_t polar_wal_pipeline_vfs_lck;
 
-/* Signal handlers */
-static void polar_wal_pipeliner_quickdie(SIGNAL_ARGS);
-
 static void polar_wal_pipeliner_create_advance_worker(void);
 static void polar_wal_pipeliner_create_flush_worker(void);
 static void polar_wal_pipeliner_create_notify_worker(void);
@@ -131,18 +128,16 @@ polar_wal_pipeliner_main(void)
 	/*
 	 * Properly accept or ignore signals the postmaster might send us
 	 *
-	 * We have no particular use for SIGINT at the moment, but seems
-	 * reasonable to treat like SIGTERM.
+	 * We have no particular use for SIGINT and SIGTERM at the moment.
 	 */
 	pqsignal(SIGHUP, SignalHandlerForConfigReload);
-	pqsignal(SIGINT, SignalHandlerForShutdownRequest);
-	pqsignal(SIGTERM, SignalHandlerForShutdownRequest);
+	pqsignal(SIGINT, SIG_IGN);
+	pqsignal(SIGTERM, SIG_IGN);
 	/* SIGQUIT handler was already set up by InitPostmasterChild */
 	pqsignal(SIGALRM, SIG_IGN);
 	pqsignal(SIGPIPE, SIG_IGN);
 	pqsignal(SIGUSR1, procsignal_sigusr1_handler);
-	pqsignal(SIGUSR2, SIG_IGN); /* not used */
-	pqsignal(SIGQUIT, polar_wal_pipeliner_quickdie);	/* hard crash time */
+	pqsignal(SIGUSR2, SignalHandlerForShutdownRequest);
 
 	/*
 	 * Reset some signals that are accepted by postmaster but not here
@@ -155,6 +150,8 @@ polar_wal_pipeliner_main(void)
 
 	/* We allow SIGQUIT (quickdie) at all times */
 	sigdelset(&BlockSig, SIGQUIT);
+
+	before_shmem_exit(pgstat_before_server_shutdown, 0);
 
 	/*
 	 * Unblock signals (they were blocked when the postmaster forked us)
@@ -178,6 +175,9 @@ polar_wal_pipeliner_main(void)
 	for (;;)
 	{
 		int res;
+
+		if (ProcSignalBarrierPending)
+			ProcessProcSignalBarrier();
 
 		/*
 		 * Process any requests or signals received recently.
@@ -236,37 +236,6 @@ polar_wal_pipeliner_main(void)
 	}
 }
 
-/* --------------------------------
- *		signal handler routines
- * --------------------------------
- */
-
-/*
- * wal_quickdie() occurs when signalled SIGQUIT by the postmaster.
- *
- * Some backend has bought the farm,
- * so we need to stop what we're doing and exit.
- */
-static void
-polar_wal_pipeliner_quickdie(SIGNAL_ARGS)
-{
-	/*
-	 * We DO NOT want to run proc_exit() or atexit() callbacks -- we're here
-	 * because shared memory may be corrupted, so we don't want to try to
-	 * clean up our transaction.  Just nail the windows shut and get out of
-	 * town.  The callbacks wouldn't be safe to run from a signal handler,
-	 * anyway.
-	 *
-	 * Note we do _exit(2) not _exit(0).  This is to force the postmaster into
-	 * a system reset cycle if someone sends a manual SIGQUIT to a random
-	 * backend.  This is necessary precisely because we don't clean up our
-	 * shared memory state.  (The "dead man switch" mechanism in pmsignal.c
-	 * should ensure the postmaster sees this as a crash, too, but no harm in
-	 * being doubly sure.)
-	 */
-	_exit(2);
-}
-
 static void polar_wal_pipeliner_create_advance_worker(void)
 {
 	int err;
@@ -307,7 +276,7 @@ static void polar_wal_pipeliner_create_notify_worker(void)
 
 	for (i = 0; i < polar_wal_pipeline_notify_worker_num; i++)
 	{
-		polar_wal_pipeline_set_last_notify_lsn(i, GetFlushRecPtr(NULL));
+		polar_wal_pipeline_set_last_notify_lsn(i, InvalidXLogRecPtr);
 
 		args[thread_no].thread_no = thread_no;
 		args[thread_no].ident = i;

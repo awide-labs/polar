@@ -3510,14 +3510,14 @@ reaper(SIGNAL_ARGS)
 				if (PgArchPID != 0)
 					signal_child(PgArchPID, SIGUSR2);
 
+				if (PolarWalPipelinerPID != 0)
+					signal_child(PolarWalPipelinerPID, SIGUSR2);
+
 				/*
 				 * Waken walsenders for the last time. No regular backends
 				 * should be around anymore.
 				 */
 				SignalChildren(SIGUSR2);
-
-				if (PolarWalPipelinerPID != 0)
-					signal_child(PolarWalPipelinerPID, SIGUSR2);
 
 				pmState = PM_SHUTDOWN_2;
 			}
@@ -4257,8 +4257,6 @@ PostmasterStateMachine(void)
 			signal_child(StartupPID, SIGTERM);
 		if (WalReceiverPID != 0)
 			signal_child(WalReceiverPID, SIGTERM);
-		if (PolarWalPipelinerPID != 0)
-			signal_child(PolarWalPipelinerPID, SIGTERM);
 		/* POLAR: and the logindex background process too */
 		if (LogIndexBgPID != 0)
 			signal_child(LogIndexBgPID, SIGTERM);

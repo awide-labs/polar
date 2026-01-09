@@ -1564,6 +1564,12 @@ polar_wal_pipeline_notify(int ident)
 	if (start_lsn == end_lsn)
 		return false;
 
+	if (unlikely(XLogRecPtrIsInvalid(start_lsn)))
+	{
+		XLogCtl->polar_wal_pipeline_last_notify_pos[ident].lsn = end_lsn;
+		return false;
+	}
+
 	pg_atomic_fetch_add_u64(&XLogCtl->polar_wal_pipeline_stats.total_notifies, 1);
 
 	/* Up align to slot boundary */
@@ -3458,13 +3464,6 @@ XLogWrite(XLogwrtRqst WriteRqst, TimeLineID tli, bool flexible)
 
 		LogwrtResult.Flush = LogwrtResult.Write;
 	}
-
-	/*
-	 * POLAR: If the system is currently in direct IO mode, synchronize the
-	 * 'Flush' and 'Write' position.
-	 */
-	if (polar_vfs_is_dio_mode)
-		LogwrtResult.Flush = LogwrtResult.Write;
 
 	/*
 	 * Update shared-memory status
@@ -7382,7 +7381,7 @@ GetInsertRecPtr(void)
 XLogRecPtr
 GetFlushRecPtr(TimeLineID *insertTLI)
 {
-	Assert(XLogCtl->SharedRecoveryState == RECOVERY_STATE_DONE || AmWalPipelinerProcess());
+	Assert(XLogCtl->SharedRecoveryState == RECOVERY_STATE_DONE);
 
 	SpinLockAcquire(&XLogCtl->info_lck);
 	LogwrtResult = XLogCtl->LogwrtResult;
