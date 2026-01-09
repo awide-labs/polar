@@ -234,7 +234,8 @@ CheckpointerMain(void)
 	 * Walsenders are shut down after the checkpointer, but currently don't
 	 * report stats. If that changes, we need a more complicated solution.
 	 */
-	before_shmem_exit(pgstat_before_server_shutdown, 0);
+	if (!POLAR_WAL_PIPELINER_ENABLE())
+		before_shmem_exit(pgstat_before_server_shutdown, 0);
 
 	/*
 	 * Create a memory context that we will do all our work in.  We do this so
