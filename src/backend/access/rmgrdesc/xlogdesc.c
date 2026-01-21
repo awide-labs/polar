@@ -248,6 +248,24 @@ xlog_desc(StringInfo buf, XLogReaderState *record)
 					break;
 				}
 
+				/* POLAR: csnlog */
+			case PWT_CSNLOG_ZEROPAGE:
+				{
+					int			pageno;
+
+					memcpy(&pageno, rec + sizeof(PolarWalType), sizeof(int));
+					appendStringInfo(buf, "csnlog zero page %d", pageno);
+					break;
+				}
+			case PWT_CSNLOG_TRUNCATE:
+				{
+					int			pageno;
+
+					memcpy(&pageno, rec + sizeof(PolarWalType), sizeof(int));
+					appendStringInfo(buf, "csnlog truncate page %d", pageno);
+					break;
+				}
+
 			default:
 				appendStringInfo(buf, "unexpected POLAR_WAL record type: %d", type);
 				break;

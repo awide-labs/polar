@@ -103,6 +103,7 @@
 #include "mb/pg_wchar.h"
 #include "postmaster/polar_async_lock_replay.h"
 #include "postmaster/polar_wal_pipeliner.h"
+#include "access/polar_csnlog.h"
 #include "storage/bulk_write.h"
 #include "storage/enc_common.h"
 #include "storage/kmgr.h"
@@ -826,6 +827,13 @@ bool		polar_enable_alloc_checkinterrupts;
 double		polar_instance_spec_cpu = 0;
 int			polar_instance_spec_mem = 0;
 
+/* POLAR csn */
+bool		polar_csn_enable;
+bool		polar_csn_elog_panic_enable;
+bool		polar_csnlog_upperbound_enable;
+bool		polar_csn_xid_snapshot;
+int			polar_csnlog_slot_size = 0;
+
 /* POLAR wal pipeline */
 
 /* general params */
@@ -1201,6 +1209,47 @@ struct config_bool ConfigureNamesBool[] =
 			GUC_NO_RESET_ALL | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_CHANGABLE
 		},
 		&polar_wal_pipeline_enable,
+		false,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"polar_csn_xid_snapshot", PGC_SUSET, UNGROUPED,
+			gettext_noop("enable polar xid snapshot under csn mode"),
+			NULL,
+			GUC_NO_RESET_ALL | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_CHANGABLE
+		},
+		&polar_csn_xid_snapshot,
+		false,
+		NULL, NULL, NULL
+	},
+	{
+		{"polar_csn_enable", PGC_POSTMASTER, UNGROUPED,
+			gettext_noop("enable polar csn snapshot"),
+			NULL,
+			GUC_NO_RESET_ALL | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_CHANGABLE
+		},
+		&polar_csn_enable,
+		true,
+		NULL, NULL, NULL
+	},
+	{
+		{"polar_csn_elog_panic_enable", PGC_POSTMASTER, UNGROUPED,
+			gettext_noop("PANIC if subtransaction CSN state is inconsistent with parent"),
+			NULL,
+			GUC_NO_RESET_ALL | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_CHANGABLE
+		},
+		&polar_csn_elog_panic_enable,
+		true,
+		NULL, NULL, NULL
+	},
+	{
+		{"polar_csnlog_upperbound_enable", PGC_POSTMASTER, UNGROUPED,
+			gettext_noop("enable polar csn upperbound cache"),
+			NULL,
+			GUC_NO_RESET_ALL | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_CHANGABLE
+		},
+		&polar_csnlog_upperbound_enable,
 		false,
 		NULL, NULL, NULL
 	},
@@ -4145,6 +4194,28 @@ struct config_int ConfigureNamesInt[] =
 		},
 		&polar_wal_pipeline_notify_worker_num,
 		1, POLAR_WAL_PIPELINE_NOTIFY_WORKER_NUM_MIN, POLAR_WAL_PIPELINE_NOTIFY_WORKER_NUM_MAX,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"polar_csnlog_slot_size", PGC_POSTMASTER, UNGROUPED,
+			gettext_noop("polar_csnlog_slot_size."),
+			NULL,
+			POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_CHANGABLE
+		},
+		&polar_csnlog_slot_size,
+		8192, 128, SLRU_MAX_ALLOWED_BUFFERS,
+		check_csnlog_slot_size, NULL, NULL
+	},
+
+	{
+		{"polar_csnlog_max_local_cache_segments", PGC_POSTMASTER, UNGROUPED,
+			gettext_noop("Set the maximum number of local segment file cache for csnlog"),
+			NULL,
+			POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_CHANGABLE
+		},
+		&polar_csnlog_max_local_cache_segments,
+		256, 0, INT_MAX / 2,
 		NULL, NULL, NULL
 	},
 

@@ -1,0 +1,117 @@
+CREATE EXTENSION test_csn_xact;
+set polar_csn_xid_snapshot = true;
+SELECT test_csn_xact_xmin(false);
+NOTICE:  table "csn_xact_table_case1" does not exist, skipping
+NOTICE:  test 1.4: expected xid1's status is in progess, success
+NOTICE:  test 4.3: expected xid1's status is aborted, success
+ test_csn_xact_xmin 
+--------------------
+ 
+(1 row)
+
+SELECT test_csn_xact_xmin(true);
+NOTICE:  table "csn_xact_table_case1" does not exist, skipping
+NOTICE:  test 1.4: expected xid1's status is in progess, success
+NOTICE:  test 2.3: expected xid1's status is in progess, success
+NOTICE:  test 3.3: expected xid1's status is committed, success
+ test_csn_xact_xmin 
+--------------------
+ 
+(1 row)
+
+SELECT test_csn_xact_xmax(false);
+NOTICE:  table "csn_xact_table_case2" does not exist, skipping
+NOTICE:  test 1.3: expected xid1's status is in progress, success
+NOTICE:  test 4.3: expected xid1's status is aborted, success
+ test_csn_xact_xmax 
+--------------------
+ 
+(1 row)
+
+SELECT test_csn_xact_xmax(true);
+NOTICE:  table "csn_xact_table_case2" does not exist, skipping
+NOTICE:  test 1.3: expected xid1's status is in progress, success
+NOTICE:  test 2.4: expected xid1's status is in progess, success
+NOTICE:  test 3.3: expected xid1's status is committed, success
+ test_csn_xact_xmax 
+--------------------
+ 
+(1 row)
+
+SELECT test_csn_xact_multixact(false);
+NOTICE:  table "csn_xact_table_case3" does not exist, skipping
+NOTICE:  test 1.3: expected xid1's status is in progress, success
+NOTICE:  test 4.3: expected xid1's status is aborted, success
+ test_csn_xact_multixact 
+-------------------------
+ 
+(1 row)
+
+SELECT test_csn_xact_multixact(true);
+NOTICE:  table "csn_xact_table_case3" does not exist, skipping
+NOTICE:  test 1.3: expected xid1's status is in progress, success
+NOTICE:  test 2.3: expected xid1's status is in progess, success
+NOTICE:  test 3.3: expected xid1's status is committed, success
+ test_csn_xact_multixact 
+-------------------------
+ 
+(1 row)
+
+set polar_csn_xid_snapshot = false;
+SELECT test_csn_xact_xmin(false);
+NOTICE:  table "csn_xact_table_case1" does not exist, skipping
+NOTICE:  test 1.4: expected xid1's status is in progess, success
+NOTICE:  test 4.3: expected xid1's status is aborted, success
+ test_csn_xact_xmin 
+--------------------
+ 
+(1 row)
+
+SELECT test_csn_xact_xmin(true);
+NOTICE:  table "csn_xact_table_case1" does not exist, skipping
+NOTICE:  test 1.4: expected xid1's status is in progess, success
+NOTICE:  test 2.3: expected xid1's status is in progess, success
+NOTICE:  test 3.3: expected xid1's status is committed, success
+ test_csn_xact_xmin 
+--------------------
+ 
+(1 row)
+
+SELECT test_csn_xact_xmax(false);
+NOTICE:  table "csn_xact_table_case2" does not exist, skipping
+NOTICE:  test 1.3: expected xid1's status is in progress, success
+NOTICE:  test 4.3: expected xid1's status is aborted, success
+ test_csn_xact_xmax 
+--------------------
+ 
+(1 row)
+
+SELECT test_csn_xact_xmax(true);
+NOTICE:  table "csn_xact_table_case2" does not exist, skipping
+NOTICE:  test 1.3: expected xid1's status is in progress, success
+NOTICE:  test 2.4: expected xid1's status is in progess, success
+NOTICE:  test 3.3: expected xid1's status is committed, success
+ test_csn_xact_xmax 
+--------------------
+ 
+(1 row)
+
+SELECT test_csn_xact_multixact(false);
+NOTICE:  table "csn_xact_table_case3" does not exist, skipping
+NOTICE:  test 1.3: expected xid1's status is in progress, success
+NOTICE:  test 4.3: expected xid1's status is aborted, success
+ test_csn_xact_multixact 
+-------------------------
+ 
+(1 row)
+
+SELECT test_csn_xact_multixact(true);
+NOTICE:  table "csn_xact_table_case3" does not exist, skipping
+NOTICE:  test 1.3: expected xid1's status is in progress, success
+NOTICE:  test 2.3: expected xid1's status is in progess, success
+NOTICE:  test 3.3: expected xid1's status is committed, success
+ test_csn_xact_multixact 
+-------------------------
+ 
+(1 row)
+

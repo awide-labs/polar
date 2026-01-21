@@ -1,0 +1,5 @@
+# test_csn_xact extension
+comment = 'test csn xact commit/abort'
+default_version = '1.0'
+module_pathname = '$libdir/test_csn_xact'
+relocatable = true

@@ -476,6 +476,14 @@ extern int	polar_wal_pipeline_notify_worker_timeout;
 #define POLAR_WAL_PIPELINE_NOTIFY_WORKER_NUM_MIN	1
 extern int	polar_wal_pipeline_notify_worker_num;
 
+extern bool polar_csn_enable;
+extern bool polar_csn_elog_panic_enable;
+extern bool polar_csnlog_upperbound_enable;
+extern bool polar_csn_xid_snapshot;
+
+extern int	polar_csnlog_slot_size;
+extern int	polar_csnlog_max_local_cache_segments;
+
 /* POLAR GUCs end */
 
 

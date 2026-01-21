@@ -53,6 +53,8 @@ BEGIN
 	PERFORM 'SELECT accesssharelock from polar_stat_lock';
 	PERFORM 'SELECT accesssharelock from polar_stat_lock';
 	PERFORM 'SELECT accesssharelock from polar_stat_lock';
+	-- Normal query statements may not access ProcArray because polar_csn_enable is enabled by default.
+	EXECUTE 'checkpoint';
 
 	SELECT sh_acquire_count INTO STRICT after FROM polar_stat_lwlock WHERE name='ProcArray';
 

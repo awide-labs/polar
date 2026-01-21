@@ -70,6 +70,11 @@
 #include "access/polar_logindex_redo.h"
 /* POLAR end */
 
+/* POLAR csn */
+#include "access/polar_csnlog.h"
+#include "access/polar_csn_mvcc_vars.h"
+/* POLAR end */
+
 #define UINT32_ACCESS_ONCE(var)		 ((uint32)(*((volatile uint32 *)&(var))))
 
 /* Our shared memory area */
@@ -374,6 +379,14 @@ static inline FullTransactionId FullXidRelativeTo(FullTransactionId rel,
 												  TransactionId xid);
 static void GlobalVisUpdateApply(ComputeXidHorizonsResult *horizons);
 
+/* POLAR csn */
+static void AdvanceOldestActiveXidCSN(TransactionId myXid);
+static Snapshot GetSnapshotDataCSN(Snapshot snapshot);
+static void ProcArrayEndTransactionCSN(PGPROC *proc);
+static void ProcArrayRemoveCSN(PGPROC *proc);
+
+/* POLAR end */
+
 /*
  * Report shared-memory space needed by CreateSharedProcArray.
  */
@@ -579,6 +592,9 @@ ProcArrayRemove(PGPROC *proc, TransactionId latestXid)
 		DisplayXidCache();
 #endif
 
+	if (polar_csn_enable)
+		return ProcArrayRemoveCSN(proc);
+
 	/* See ProcGlobal comment explaining why both locks are held */
 	LWLockAcquire(ProcArrayLock, LW_EXCLUSIVE);
 	LWLockAcquire(XidGenLock, LW_EXCLUSIVE);
@@ -664,6 +680,100 @@ ProcArrayRemove(PGPROC *proc, TransactionId latestXid)
 	LWLockRelease(ProcArrayLock);
 }
 
+/*
+ * POLAR csn
+ * Like ProcArrayRemove, but we should also advance polar_oldest_active_xid
+ * like ProcArrayEndTransactionCSN
+ */
+static void
+ProcArrayRemoveCSN(PGPROC *proc)
+{
+	ProcArrayStruct *arrayP = procArray;
+	int			myoff;
+	int			movecount;
+	TransactionId myXid = proc->xid;
+
+#ifdef XIDCACHE_DEBUG
+	/* dump stats at backend shutdown, but not prepared-xact end */
+	if (proc->pid != 0)
+		DisplayXidCache();
+#endif
+
+	/* See ProcGlobal comment explaining why both locks are held */
+	LWLockAcquire(ProcArrayLock, LW_EXCLUSIVE);
+	LWLockAcquire(XidGenLock, LW_EXCLUSIVE);
+
+	/*
+	 * POLAR: ordinary users reuse the PGPROC structure of the last superuser
+	 * connection. After MyProc is added and before proc->issuper is reset,
+	 * the connection will be counted into the superuser connections. This
+	 * will trigger an alarm that the superuser connections exceed the limit.
+	 * We set proc->issuper false when removing proc to avoid this problem.
+	 */
+	proc->issuper = false;
+	/* POLAR end */
+
+	myoff = proc->pgxactoff;
+
+	ProcGlobal->xids[myoff] = InvalidTransactionId;
+	ProcGlobal->subxidStates[myoff].overflowed = false;
+	ProcGlobal->subxidStates[myoff].count = 0;
+
+	Assert(myoff >= 0 && myoff < arrayP->numProcs);
+	Assert(ProcGlobal->allProcs[arrayP->pgprocnos[myoff]].pgxactoff == myoff);
+
+	Assert(!TransactionIdIsValid(ProcGlobal->xids[myoff]));
+	Assert(ProcGlobal->subxidStates[myoff].count == 0);
+	Assert(ProcGlobal->subxidStates[myoff].overflowed == false);
+
+	ProcGlobal->statusFlags[myoff] = 0;
+
+	/* Keep the PGPROC array sorted. See notes above */
+	movecount = arrayP->numProcs - myoff - 1;
+	memmove(&arrayP->pgprocnos[myoff],
+			&arrayP->pgprocnos[myoff + 1],
+			movecount * sizeof(*arrayP->pgprocnos));
+	memmove(&ProcGlobal->xids[myoff],
+			&ProcGlobal->xids[myoff + 1],
+			movecount * sizeof(*ProcGlobal->xids));
+	memmove(&ProcGlobal->subxidStates[myoff],
+			&ProcGlobal->subxidStates[myoff + 1],
+			movecount * sizeof(*ProcGlobal->subxidStates));
+	memmove(&ProcGlobal->statusFlags[myoff],
+			&ProcGlobal->statusFlags[myoff + 1],
+			movecount * sizeof(*ProcGlobal->statusFlags));
+
+	arrayP->pgprocnos[arrayP->numProcs - 1] = -1;	/* for debugging */
+	arrayP->numProcs--;
+
+	/*
+	 * Adjust pgxactoff of following procs for removed PGPROC (note that
+	 * numProcs already has been decremented).
+	 */
+	for (int index = myoff; index < arrayP->numProcs; index++)
+	{
+		int			procno = arrayP->pgprocnos[index];
+
+		Assert(procno >= 0 && procno < (arrayP->maxProcs + NUM_AUXILIARY_PROCS));
+		Assert(allProcs[procno].pgxactoff - 1 == index);
+
+		allProcs[procno].pgxactoff = index;
+	}
+
+	/*
+	 * Release in reversed acquisition order, to reduce frequency of having to
+	 * wait for XidGenLock while holding ProcArrayLock.
+	 */
+	LWLockRelease(XidGenLock);
+	LWLockRelease(ProcArrayLock);
+
+
+	/*
+	 * If we were the oldest active XID, advance oldestXid. 2pc need this.
+	 */
+	if (TransactionIdIsValid(myXid))
+		AdvanceOldestActiveXidCSN(myXid);
+}
 
 /*
  * ProcArrayEndTransaction -- mark a transaction as no longer running
@@ -681,6 +791,9 @@ ProcArrayRemove(PGPROC *proc, TransactionId latestXid)
 void
 ProcArrayEndTransaction(PGPROC *proc, TransactionId latestXid)
 {
+	if (polar_csn_enable)
+		return ProcArrayEndTransactionCSN(proc);
+
 	if (TransactionIdIsValid(latestXid))
 	{
 		/*
@@ -789,6 +902,110 @@ ProcArrayEndTransactionInternal(PGPROC *proc, TransactionId latestXid)
 
 	/* Same with xactCompletionCount  */
 	TransamVariables->xactCompletionCount++;
+}
+
+static void
+ProcArrayEndTransactionCSN(PGPROC *proc)
+{
+	TransactionId myXid = proc->xid;
+	int			pgxactoff;
+
+	if (!TransactionIdIsValid(myXid))
+	{
+		/*
+		 * If we have no XID, we don't need to lock, since we won't affect
+		 * anyone else's calculation of a snapshot.  We might change their
+		 * estimate of global xmin, but that's OK.
+		 */
+		Assert(proc->subxidStatus.count == 0);
+		Assert(!proc->subxidStatus.overflowed);
+
+		proc->polar_csn = InvalidCommitSeqNo;
+		proc->vxid.lxid = InvalidLocalTransactionId;
+		proc->xmin = InvalidTransactionId;
+
+		/* be sure this is cleared in abort */
+		proc->delayChkptFlags = 0;
+
+		proc->recoveryConflictPending = false;
+
+		/* must be cleared with xid/xmin: */
+		/* avoid unnecessarily dirtying shared cachelines */
+		if (proc->statusFlags & PROC_VACUUM_STATE_MASK)
+		{
+			Assert(!LWLockHeldByMe(ProcArrayLock));
+			LWLockAcquire(ProcArrayLock, LW_SHARED);
+			Assert(proc->statusFlags == ProcGlobal->statusFlags[proc->pgxactoff]);
+			proc->statusFlags &= ~PROC_VACUUM_STATE_MASK;
+			ProcGlobal->statusFlags[proc->pgxactoff] = proc->statusFlags;
+			LWLockRelease(ProcArrayLock);
+		}
+
+		return;
+	}
+
+	/*
+	 * A shared lock is enough to modify our own fields in CSN mode, since CSN
+	 * snapshots don't scan ProcArray.
+	 */
+	LWLockAcquire(ProcArrayLock, LW_SHARED);
+
+	pgxactoff = proc->pgxactoff;
+
+	Assert(ProcGlobal->xids[pgxactoff] == proc->xid);
+
+	ProcGlobal->xids[pgxactoff] = InvalidTransactionId;
+	proc->xid = InvalidTransactionId;
+	proc->polar_csn = InvalidCommitSeqNo;
+	proc->vxid.lxid = InvalidLocalTransactionId;
+	proc->xmin = InvalidTransactionId;
+
+	/* be sure this is cleared in abort */
+	proc->delayChkptFlags = 0;
+
+	proc->recoveryConflictPending = false;
+
+	/* must be cleared with xid/xmin: */
+	/* avoid unnecessarily dirtying shared cachelines */
+	if (proc->statusFlags & PROC_VACUUM_STATE_MASK)
+	{
+		proc->statusFlags &= ~PROC_VACUUM_STATE_MASK;
+		ProcGlobal->statusFlags[proc->pgxactoff] = proc->statusFlags;
+	}
+
+	/* Clear the subtransaction-XID cache too while holding the lock */
+	Assert(ProcGlobal->subxidStates[pgxactoff].count == proc->subxidStatus.count &&
+		   ProcGlobal->subxidStates[pgxactoff].overflowed == proc->subxidStatus.overflowed);
+	if (proc->subxidStatus.count > 0 || proc->subxidStatus.overflowed)
+	{
+		ProcGlobal->subxidStates[pgxactoff].count = 0;
+		ProcGlobal->subxidStates[pgxactoff].overflowed = false;
+		proc->subxidStatus.count = 0;
+		proc->subxidStatus.overflowed = false;
+	}
+
+	/*
+	 * CSN snapshots don't use the xactCompletionCount-based snapshot reuse
+	 * mechanism (GetSnapshotDataReuse).  CSN visibility is determined by
+	 * polar_snapshot_csn which is read fresh each time. Therefore, we don't
+	 * need to increment xactCompletionCount here.
+	 */
+
+	LWLockRelease(ProcArrayLock);
+
+	AdvanceOldestActiveXidCSN(myXid);
+}
+
+void
+ProcArrayResetXminCSN(PGPROC *proc, TransactionId new_xmin)
+{
+	PGPROC	   *pgproc = proc;
+
+	/*
+	 * Note we can do this without locking because we assume that storing an
+	 * Xid is atomic.
+	 */
+	pgproc->xmin = new_xmin;
 }
 
 /*
@@ -943,6 +1160,7 @@ ProcArrayClearTransaction(PGPROC *proc)
 
 	ProcGlobal->xids[pgxactoff] = InvalidTransactionId;
 	proc->xid = InvalidTransactionId;
+	proc->polar_csn = InvalidCommitSeqNo;
 
 	proc->vxid.lxid = InvalidLocalTransactionId;
 	proc->xmin = InvalidTransactionId;
@@ -1035,7 +1253,7 @@ MaintainLatestCompletedXidRecovery(TransactionId latestXid)
  * while in recovery.
  */
 void
-ProcArrayInitRecovery(TransactionId initializedUptoXID)
+ProcArrayInitRecovery(TransactionId initializedUptoXID, TransactionId polar_oldest_active_xid)
 {
 	Assert(standbyState == STANDBY_INITIALIZED);
 	Assert(TransactionIdIsNormal(initializedUptoXID));
@@ -1048,6 +1266,12 @@ ProcArrayInitRecovery(TransactionId initializedUptoXID)
 	 */
 	latestObservedXid = initializedUptoXID;
 	TransactionIdRetreat(latestObservedXid);
+
+	if (polar_csn_enable)
+	{
+		/* also initialize oldestActiveXid */
+		pg_atomic_write_u32(&polar_shmem_csn_mvcc_var_cache->polar_oldest_active_xid, polar_oldest_active_xid);
+	}
 }
 
 /*
@@ -1254,7 +1478,14 @@ ProcArrayApplyRecoveryInfo(RunningTransactions running)
 	TransactionIdAdvance(latestObservedXid);
 	while (TransactionIdPrecedes(latestObservedXid, running->nextXid))
 	{
-		ExtendSUBTRANS(latestObservedXid);
+		/* no cover begin */
+		/*
+		 * In polar csn, we need not extend csnlog here, because csnlog write
+		 * zero page wal log like clog
+		 */
+		if (!polar_csn_enable)
+			ExtendSUBTRANS(latestObservedXid);
+		/* no cover end */
 		TransactionIdAdvance(latestObservedXid);
 	}
 	TransactionIdRetreat(latestObservedXid);	/* = running->nextXid - 1 */
@@ -1362,7 +1593,14 @@ ProcArrayApplyXidAssignment(TransactionId topxid,
 	 * have attempted to SubTransSetParent().
 	 */
 	for (i = 0; i < nsubxids; i++)
-		SubTransSetParent(subxids[i], topxid);
+	{
+		/* no cover begin */
+		if (polar_csn_enable)
+			polar_csnlog_set_parent(subxids[i], topxid);
+		else
+			SubTransSetParent(subxids[i], topxid);
+		/* no cover end */
+	}
 
 	/* KnownAssignedXids isn't maintained yet, so we're done for now */
 	if (standbyState == STANDBY_INITIALIZED)
@@ -1460,6 +1698,18 @@ TransactionIdIsInProgress(TransactionId xid)
 		return true;
 	}
 
+	/* POLAR csn */
+	if (polar_csn_enable)
+	{
+		/*
+		 * if xact is in progress, maybe the xact is inprogress before crash
+		 * recovery, check procArray again
+		 */
+		if (XID_IN_PROGRESS != polar_xact_get_status(xid))
+			return false;
+	}
+	/* POLAR end */
+
 	/*
 	 * If first time through, get workspace to remember main XIDs in. We
 	 * malloc it permanently to avoid repeated palloc/pfree overhead.
@@ -1489,8 +1739,15 @@ TransactionIdIsInProgress(TransactionId xid)
 	 * Now that we have the lock, we can check latestCompletedXid; if the
 	 * target Xid is after that, it's surely still running.
 	 */
-	latestCompletedXid =
-		XidFromFullTransactionId(TransamVariables->latestCompletedXid);
+	/* no cover begin */
+	if (polar_csn_enable)
+		latestCompletedXid =
+			XidFromFullTransactionId(FullTransactionIdFromU64(pg_atomic_read_u64(&polar_shmem_csn_mvcc_var_cache->polar_latest_completed_xid)));
+	else
+		latestCompletedXid =
+			XidFromFullTransactionId(TransamVariables->latestCompletedXid);
+	/* no cover end */
+
 	if (TransactionIdPrecedes(latestCompletedXid, xid))
 	{
 		LWLockRelease(ProcArrayLock);
@@ -1627,7 +1884,12 @@ TransactionIdIsInProgress(TransactionId xid)
 	 * is still running (or, more precisely, whether it was running when we
 	 * held ProcArrayLock).
 	 */
-	topxid = SubTransGetTopmostTransaction(xid);
+	/* no cover begin */
+	if (polar_csn_enable)
+		topxid = polar_csnlog_get_top(xid);
+	else
+		topxid = SubTransGetTopmostTransaction(xid);
+	/* no cover end */
 	Assert(TransactionIdIsValid(topxid));
 	if (!TransactionIdEquals(topxid, xid) &&
 		pg_lfind32(topxid, xids, nxids))
@@ -1689,6 +1951,96 @@ TransactionIdIsActive(TransactionId xid)
 	return result;
 }
 
+
+/*
+ * AdvanceOldestActiveXid --
+ *
+ * Advance oldestActiveXid. 'myXid' is the current value, and it's known to be
+ * finished now.
+ */
+static void
+AdvanceOldestActiveXidCSN(TransactionId myXid)
+{
+	TransactionId nextXid;
+	TransactionId xid;
+	TransactionId oldValue;
+
+	oldValue = pg_atomic_read_u32(&polar_shmem_csn_mvcc_var_cache->polar_oldest_active_xid);
+
+	/* Quick exit if we were not the oldest active XID. */
+	if (myXid != oldValue)
+		return;
+
+	xid = myXid;
+	TransactionIdAdvance(xid);
+
+	for (;;)
+	{
+		/*
+		 * Current nextXid is the upper bound, if there are no transactions
+		 * active at all.
+		 */
+		/* assume we can read nextXid atomically without holding XidGenlock. */
+		nextXid = XidFromFullTransactionId(TransamVariables->nextXid);
+		/* Scan the CSN Log for the next active xid */
+		xid = polar_csnlog_get_next_active_xid(xid, nextXid);
+
+		if (xid == oldValue)
+		{
+			/* nothing more to do */
+			break;
+		}
+
+		/*
+		 * Update oldestActiveXid with that value.
+		 */
+
+		/* no cover begin */
+		if (!pg_atomic_compare_exchange_u32(&polar_shmem_csn_mvcc_var_cache->polar_oldest_active_xid,
+											&oldValue,
+											xid))
+		{
+			/*
+			 * Someone beat us to it. This can happen if we hit the race
+			 * condition described below. That's OK. We're no longer the
+			 * oldest active XID in that case, so we're done.
+			 */
+			Assert(TransactionIdFollows(oldValue, myXid));
+			break;
+		}
+		/* no cover end */
+
+		/*
+		 * We're not necessarily done yet. It's possible that the XID that we
+		 * saw as still running committed just before we updated
+		 * oldestActiveXid. She didn't see herself as the oldest transaction,
+		 * so she wouldn't update oldestActiveXid. Loop back to check the XID
+		 * that we saw as the oldest in-progress one is still in-progress, and
+		 * if not, update oldestActiveXid again, on behalf of that
+		 * transaction.
+		 */
+		oldValue = xid;
+	}
+}
+
+/* Only used for test */
+void
+AdvanceOldestActiveXidCSNWrapper(TransactionId myXid)
+{
+	AdvanceOldestActiveXidCSN(myXid);
+}
+
+void
+polar_set_latestObservedXid(TransactionId latest_observed_xid)
+{
+	latestObservedXid = latest_observed_xid;
+}
+
+TransactionId
+polar_get_latestObservedXid(void)
+{
+	return latestObservedXid;
+}
 
 /*
  * Determine XID horizons.
@@ -1759,17 +2111,22 @@ ComputeXidHorizons(ComputeXidHorizonsResult *h)
 
 	LWLockAcquire(ProcArrayLock, LW_SHARED);
 
-	h->latest_completed = TransamVariables->latestCompletedXid;
-
 	/*
 	 * We initialize the MIN() calculation with latestCompletedXid + 1. This
 	 * is a lower bound for the XIDs that might appear in the ProcArray later,
 	 * and so protects us against overestimating the result due to future
 	 * additions.
+	 *
+	 * POLAR csn: In CSN mode, latest_completed comes from the atomic
+	 * polar_latest_completed_xid rather than TransamVariables.
 	 */
 	{
 		TransactionId initial;
 
+		if (polar_csn_enable)
+			h->latest_completed = FullTransactionIdFromU64(pg_atomic_read_u64(&polar_shmem_csn_mvcc_var_cache->polar_latest_completed_xid));
+		else
+			h->latest_completed = TransamVariables->latestCompletedXid;
 		initial = XidFromFullTransactionId(h->latest_completed);
 		Assert(TransactionIdIsValid(initial));
 		TransactionIdAdvance(initial);
@@ -2241,6 +2598,10 @@ GetSnapshotData(Snapshot snapshot)
 					 errmsg("out of memory")));
 	}
 
+	/* POLAR csn */
+	if (polar_csn_enable)
+		return GetSnapshotDataCSN(snapshot);
+
 	/* POLAR: wait for replay if polar_xact_split_wait_lsn is set */
 	if (!XLogRecPtrIsInvalid(polar_xact_split_wait_lsn))
 	{
@@ -2560,6 +2921,235 @@ GetSnapshotData(Snapshot snapshot)
 	return snapshot;
 }
 
+static Snapshot
+GetSnapshotDataCSN(Snapshot snapshot)
+{
+	TransactionId xmin;
+	TransactionId xmax;
+	CommitSeqNo snapshotcsn;
+	FullTransactionId latest_completed;
+
+	Assert(snapshot != NULL);
+
+	/*
+	 * The ProcArrayLock is not needed here. We only set our xmin if it's not
+	 * already set. There are only a few functions that check the xmin under
+	 * exclusive ProcArrayLock: 1) ProcArrayInstallRestored/ImportedXmin --
+	 * can only care about our xmin long after it has been first set. 2)
+	 * ProcArrayEndTransaction is not called concurrently with
+	 * GetSnapshotData.
+	 */
+
+	/* Anything older than oldestActiveXid is surely finished by now. */
+	xmin = pg_atomic_read_u32(&polar_shmem_csn_mvcc_var_cache->polar_oldest_active_xid);
+
+	/*
+	 * If no performance issue, we try best to maintain RecentXmin for xid
+	 * based snapshot
+	 */
+	RecentXmin = xmin;
+
+	/* Announce my xmin, to hold back GlobalXmin. */
+	if (!TransactionIdIsValid(MyProc->xmin))
+	{
+		TransactionId oldest_active_xid;
+
+		MyProc->xmin = xmin;
+		TransactionXmin = xmin;
+
+		/*
+		 * Recheck, if oldestActiveXid advanced after we read it.
+		 *
+		 * This protects against a race condition with ComputeXidHorizons().
+		 * If a transaction ends and ComputeXidHorizons() runs just after we
+		 * fetch polar_oldest_active_xid, but before we set MyProc->xmin, it's
+		 * possible that ComputeXidHorizons() computed horizons that don't
+		 * include the xmin that we got. To fix that, check
+		 * polar_oldest_active_xid again, after setting xmin. Redoing it once
+		 * is enough, we don't need to loop, because the (stale) xmin that we
+		 * set prevents the same race condition from advancing the horizons
+		 * again.
+		 *
+		 * For a brief moment, we can have the situation that our xmin is
+		 * lower than the global horizon, but it's OK because we don't use
+		 * that xmin until we've re-checked and corrected it if necessary.
+		 */
+
+		/*
+		 * memory barrier to make sure that setting the xmin in our PGPROC
+		 * entry is made visible to others, before the read below.
+		 */
+		pg_memory_barrier();
+
+		oldest_active_xid = pg_atomic_read_u32(&polar_shmem_csn_mvcc_var_cache->polar_oldest_active_xid);
+		if (oldest_active_xid != xmin)
+		{
+			/* no cover begin */
+			xmin = oldest_active_xid;
+
+			RecentXmin = xmin;
+			MyProc->xmin = xmin;
+			TransactionXmin = xmin;
+			/* no cover end */
+		}
+	}
+
+	/*
+	 * Get the current snapshot CSN. This serializes us with any concurrent
+	 * commits.
+	 */
+	snapshotcsn = pg_atomic_read_u64(&polar_shmem_csn_mvcc_var_cache->polar_next_csn);
+
+	/*
+	 * Also get xmax. It is always latestCompletedXid + 1. Make sure to read
+	 * it after CSN (see TransactionIdAsyncCommitTree())
+	 */
+	pg_read_barrier();
+	latest_completed = FullTransactionIdFromU64(pg_atomic_read_u64(&polar_shmem_csn_mvcc_var_cache->polar_latest_completed_xid));
+	xmax = XidFromFullTransactionId(latest_completed);
+	Assert(TransactionIdIsNormal(xmax));
+	TransactionIdAdvance(xmax);
+
+	/* maintain state for GlobalVis* */
+	{
+		TransactionId def_vis_xid;
+		TransactionId def_vis_xid_data;
+		FullTransactionId def_vis_fxid;
+		FullTransactionId def_vis_fxid_data;
+		FullTransactionId oldestfxid;
+		TransactionId myxid = MyProc->xid;
+
+		/*
+		 * Read GlobalVis-related variables without holding ProcArrayLock.
+		 *
+		 * In the original GetSnapshotData(), these are read while holding
+		 * ProcArrayLock. With CSN snapshots, we avoid taking the lock for
+		 * performance reasons.
+		 *
+		 * This is safe because these are horizon values that only advance
+		 * (never retreat). Reading slightly stale values is conservative: we
+		 * may keep data around longer than strictly necessary, but will never
+		 * incorrectly remove data that's still needed. This affects vacuum
+		 * efficiency, not correctness.
+		 */
+		TransactionId oldestxid = TransamVariables->oldestXid;
+		TransactionId replication_slot_xmin = procArray->replication_slot_xmin;
+		TransactionId replication_slot_catalog_xmin = procArray->replication_slot_catalog_xmin;
+
+		/*
+		 * Converting oldestXid is only safe when xid horizon cannot advance,
+		 * i.e. holding locks. While we don't hold the lock anymore, all the
+		 * necessary data has been gathered with lock held.
+		 */
+		oldestfxid = FullXidRelativeTo(latest_completed, oldestxid);
+
+		/* vacuum_defer_cleanup_age removed in PG17 upstream */
+		def_vis_xid_data = xmin;
+
+		/* Check whether there's a replication slot requiring an older xmin. */
+		def_vis_xid_data =
+			TransactionIdOlder(def_vis_xid_data, replication_slot_xmin);
+
+		/*
+		 * Rows in non-shared, non-catalog tables possibly could be vacuumed
+		 * if older than this xid.
+		 */
+		def_vis_xid = def_vis_xid_data;
+
+		/*
+		 * Check whether there's a replication slot requiring an older catalog
+		 * xmin.
+		 */
+		def_vis_xid =
+			TransactionIdOlder(replication_slot_catalog_xmin, def_vis_xid);
+
+		def_vis_fxid = FullXidRelativeTo(latest_completed, def_vis_xid);
+		def_vis_fxid_data = FullXidRelativeTo(latest_completed, def_vis_xid_data);
+
+		/*
+		 * Check if we can increase upper bound. As a previous
+		 * GlobalVisUpdate() might have computed more aggressive values, don't
+		 * overwrite them if so.
+		 */
+		GlobalVisSharedRels.definitely_needed =
+			FullTransactionIdNewer(def_vis_fxid,
+								   GlobalVisSharedRels.definitely_needed);
+		GlobalVisCatalogRels.definitely_needed =
+			FullTransactionIdNewer(def_vis_fxid,
+								   GlobalVisCatalogRels.definitely_needed);
+		GlobalVisDataRels.definitely_needed =
+			FullTransactionIdNewer(def_vis_fxid_data,
+								   GlobalVisDataRels.definitely_needed);
+		/* See temp_oldest_nonremovable computation in ComputeXidHorizons() */
+		if (TransactionIdIsNormal(myxid))
+			GlobalVisTempRels.definitely_needed =
+				FullXidRelativeTo(latest_completed, myxid);
+		else
+		{
+			GlobalVisTempRels.definitely_needed = latest_completed;
+			FullTransactionIdAdvance(&GlobalVisTempRels.definitely_needed);
+		}
+
+		/*
+		 * Check if we know that we can initialize or increase the lower
+		 * bound. Currently the only cheap way to do so is to use
+		 * TransamVariables->oldestXid as input.
+		 *
+		 * We should definitely be able to do better. We could e.g. put a
+		 * global lower bound value into TransamVariables.
+		 */
+		GlobalVisSharedRels.maybe_needed =
+			FullTransactionIdNewer(GlobalVisSharedRels.maybe_needed,
+								   oldestfxid);
+		GlobalVisCatalogRels.maybe_needed =
+			FullTransactionIdNewer(GlobalVisCatalogRels.maybe_needed,
+								   oldestfxid);
+		GlobalVisDataRels.maybe_needed =
+			FullTransactionIdNewer(GlobalVisDataRels.maybe_needed,
+								   oldestfxid);
+		/* accurate value known */
+		GlobalVisTempRels.maybe_needed = GlobalVisTempRels.definitely_needed;
+	}
+
+	snapshot->xmin = xmin;
+	snapshot->xmax = xmax;
+	snapshot->polar_snapshot_csn = snapshotcsn;
+	snapshot->polar_csn_xid_snapshot = false;
+	snapshot->xcnt = 0;
+	snapshot->subxcnt = 0;
+	snapshot->suboverflowed = false;
+	snapshot->curcid = GetCurrentCommandId(false);
+
+	/*
+	 * This is a new snapshot, so set both refcounts are zero, and mark it as
+	 * not copied in persistent memory.
+	 */
+	snapshot->active_count = 0;
+	snapshot->regd_count = 0;
+	snapshot->copied = false;
+	snapshot->lsn = InvalidXLogRecPtr;
+	snapshot->whenTaken = 0;
+
+	/*
+	 * We need xid snapshot, should generate it from csn snapshot. The logic
+	 * is: 1. Scan csnlog from xmin(inclusive) to xmax(exclusive) 2. Add xids
+	 * whose status are in_progress or committing or committed csn >=
+	 * snapshotcsn to xid array Like hot standby, we don't know which xids are
+	 * top-level and which are subxacts. So we use subxip to store xids as
+	 * more as possible.
+	 */
+	if (polar_csn_xid_snapshot)
+	{
+		if (TransactionIdPrecedes(xmin, xmax))
+			polar_csnlog_get_running_xids(xmin, xmax, snapshotcsn, GetMaxSnapshotSubxidCount(),
+										  &snapshot->subxcnt, snapshot->subxip, &snapshot->suboverflowed);
+
+		snapshot->polar_csn_xid_snapshot = true;
+	}
+
+	return snapshot;
+}
+
 /*
  * ProcArrayInstallImportedXmin -- install imported xmin into MyProc->xmin
  *
@@ -2583,7 +3173,11 @@ ProcArrayInstallImportedXmin(TransactionId xmin,
 		return false;
 
 	/* Get lock so source xact can't end while we're doing this */
-	LWLockAcquire(ProcArrayLock, LW_SHARED);
+	if (polar_csn_enable)
+		LWLockAcquire(ProcArrayLock, LW_EXCLUSIVE); /* In csn mode, we should
+													 * use exclusive lock */
+	else
+		LWLockAcquire(ProcArrayLock, LW_SHARED);
 
 	/*
 	 * Find the PGPROC entry of the source transaction. (This could use
@@ -2726,6 +3320,15 @@ ProcArrayInstallRestoredXmin(TransactionId xmin, PGPROC *proc)
  *
  * Note that if any transaction has overflowed its cached subtransactions
  * then there is no real need include any subtransactions.
+ *
+ * POLAR csn
+ * We also acquire CommitSeqNoLock but the caller is responsible for
+ * releasing it. Acquiring CommitSeqNoLock ensures that no transactions commit
+ * until the lock is released.
+ *
+ * When iterate ProcArray to find running xacts, we not only need check whether
+ * PGXACT->xid is valid, but also need check whether PGXACT->polar_csn is valid.
+ * If both field valid, we should not add it to running xids list
  */
 RunningTransactions
 GetRunningTransactionData(void)
@@ -2744,6 +3347,9 @@ GetRunningTransactionData(void)
 	int			count;
 	int			subcount;
 	bool		suboverflowed;
+
+	/* POLAR csn */
+	CommitSeqNo currentSystemCsn pg_attribute_unused() = InvalidCommitSeqNo;
 
 	Assert(!RecoveryInProgress());
 
@@ -2774,17 +3380,72 @@ GetRunningTransactionData(void)
 	count = subcount = 0;
 	suboverflowed = false;
 
-	/*
-	 * Ensure that no xids enter or leave the procarray while we obtain
-	 * snapshot.
-	 */
-	LWLockAcquire(ProcArrayLock, LW_SHARED);
-	LWLockAcquire(XidGenLock, LW_SHARED);
+	if (polar_csn_enable)
+	{
+		/*
+		 * ProcArrayEndTransaction hold share lock Ensure no xids leave
+		 * ProcArray
+		 */
+		LWLockAcquire(ProcArrayLock, LW_EXCLUSIVE);
 
-	latestCompletedXid =
-		XidFromFullTransactionId(TransamVariables->latestCompletedXid);
-	oldestDatabaseRunningXid = oldestRunningXid =
-		XidFromFullTransactionId(TransamVariables->nextXid);
+		/*
+		 * GetNewTransactionId hold exclusive lock Ensure no xids enter
+		 * ProcArray
+		 */
+		LWLockAcquire(XidGenLock, LW_SHARED);
+
+		/*
+		 * CommitTransaction hold share lock Ensure no xids commit csn and set
+		 * csn in ProcArray
+		 */
+		LWLockAcquire(CommitSeqNoLock, LW_EXCLUSIVE);
+
+		/*
+		 * When we get here, xacts in ProcArray should be in status as below:
+		 * 1. active with valid xid 2. aborted but with valid xid 3. committed
+		 * but with valid xid and csn < current polar_next_csn xacts satisfy
+		 * to 1 or 2 are running xids; xacts satisfy to 3 are not, because
+		 * their csns are less than current polar_next_csn, their update
+		 * should be visible to current xid snapshot
+		 */
+
+		/*
+		 * POLAR csn Order is not important here, because xacts can not commit
+		 * now, we just want to keep the order consistent with
+		 * GetSnapshotData.
+		 *
+		 * oldestRunningXid can be computed by two ways: 1. smallest xid in
+		 * running xacts 2. polar_oldest_active_xid polar_oldest_active_xid
+		 * may be less than smallest xid, but for consistency, we use
+		 * polar_oldest_active_xid
+		 */
+
+		oldestRunningXid = pg_atomic_read_u32(&polar_shmem_csn_mvcc_var_cache->polar_oldest_active_xid);
+
+		/*
+		 * polar_oldest_active_xid is global, but oldestDatabaseRunningXid
+		 * must only account for xacts in our database.  Start from nextXid
+		 * like the non-CSN path (XidGenLock is held) and let the loop below
+		 * lower it for same-database xacts.
+		 */
+		oldestDatabaseRunningXid = XidFromFullTransactionId(TransamVariables->nextXid);
+		currentSystemCsn = pg_atomic_read_u64(&polar_shmem_csn_mvcc_var_cache->polar_next_csn);
+		latestCompletedXid = XidFromFullTransactionId(FullTransactionIdFromU64(pg_atomic_read_u64(&polar_shmem_csn_mvcc_var_cache->polar_latest_completed_xid)));
+	}
+	else
+	{
+		/*
+		 * Ensure that no xids enter or leave the procarray while we obtain
+		 * snapshot.
+		 */
+		LWLockAcquire(ProcArrayLock, LW_SHARED);
+		LWLockAcquire(XidGenLock, LW_SHARED);
+
+		latestCompletedXid =
+			XidFromFullTransactionId(TransamVariables->latestCompletedXid);
+		oldestDatabaseRunningXid = oldestRunningXid =
+			XidFromFullTransactionId(TransamVariables->nextXid);
+	}
 
 	/*
 	 * Spin over procArray collecting all xids
@@ -2804,6 +3465,17 @@ GetRunningTransactionData(void)
 		 */
 		if (!TransactionIdIsValid(xid))
 			continue;
+
+		/* POLAR csn */
+		if (polar_csn_enable)
+		{
+			Assert(proc->polar_csn == InvalidCommitSeqNo || proc->polar_csn < currentSystemCsn);
+			if (proc->polar_csn != InvalidCommitSeqNo)
+			{
+				/* Committed xact can not be added to running xid list */
+				continue;
+			}
+		}
 
 		/*
 		 * Be careful not to exclude any xids before calculating the values of
@@ -2847,6 +3519,20 @@ GetRunningTransactionData(void)
 			int			pgprocno = arrayP->pgprocnos[index];
 			PGPROC	   *proc = &allProcs[pgprocno];
 			int			nsubxids;
+
+			/* POLAR csn */
+			if (polar_csn_enable)
+			{
+				Assert(proc->polar_csn == InvalidCommitSeqNo || proc->polar_csn < currentSystemCsn);
+				if (proc->polar_csn != InvalidCommitSeqNo)
+				{
+					/*
+					 * Subxids belong to committed xact can not be added to
+					 * running xid list either
+					 */
+					continue;
+				}
+			}
 
 			/*
 			 * Save subtransaction XIDs. Other backends can't add or remove
@@ -2922,6 +3608,9 @@ GetOldestActiveTransactionId(void)
 	int			index;
 
 	Assert(!RecoveryInProgress());
+
+	if (polar_csn_enable)
+		return pg_atomic_read_u32(&polar_shmem_csn_mvcc_var_cache->polar_oldest_active_xid);
 
 	/*
 	 * Read nextXid, as the upper bound of what's still active.
@@ -3017,6 +3706,15 @@ GetOldestSafeDecodingTransactionId(bool catalogOnly)
 							  oldestSafeXid))
 		oldestSafeXid = procArray->replication_slot_catalog_xmin;
 
+	if (polar_csn_enable)
+	{
+		/*
+		 * CommitTransaction hold share lock Ensure no xids commit csn and set
+		 * csn in ProcArray
+		 */
+		LWLockAcquire(CommitSeqNoLock, LW_EXCLUSIVE);
+	}
+
 	/*
 	 * If we're not in recovery, we walk over the procarray and collect the
 	 * lowest xid. Since we're called with ProcArrayLock held and have
@@ -3038,6 +3736,8 @@ GetOldestSafeDecodingTransactionId(bool catalogOnly)
 		 */
 		for (index = 0; index < arrayP->numProcs; index++)
 		{
+			int			pgprocno = arrayP->pgprocnos[index];
+			volatile PGPROC *pgxact = &allProcs[pgprocno];
 			TransactionId xid;
 
 			/* Fetch xid just once - see GetNewTransactionId */
@@ -3046,12 +3746,37 @@ GetOldestSafeDecodingTransactionId(bool catalogOnly)
 			if (!TransactionIdIsNormal(xid))
 				continue;
 
+			/* POLAR csn */
+			if (polar_csn_enable)
+			{
+				if (pgxact->polar_csn != InvalidCommitSeqNo)
+				{
+					/* Committed xact can not be active */
+					continue;
+				}
+			}
+
 			if (TransactionIdPrecedes(xid, oldestSafeXid))
 				oldestSafeXid = xid;
 		}
 	}
 
+	if (polar_csn_enable)
+	{
+		LWLockRelease(CommitSeqNoLock);
+	}
+
 	LWLockRelease(XidGenLock);
+
+	if (polar_csn_enable)
+	{
+		TransactionId oldest_active_xid;
+
+		oldest_active_xid = pg_atomic_read_u32(&polar_shmem_csn_mvcc_var_cache->polar_oldest_active_xid);
+		if (TransactionIdIsValid(oldest_active_xid) &&
+			TransactionIdPrecedes(oldest_active_xid, oldestSafeXid))
+			oldestSafeXid = oldest_active_xid;
+	}
 
 	return oldestSafeXid;
 }
@@ -4099,7 +4824,8 @@ XidCacheRemoveRunningXids(TransactionId xid,
 		elog(WARNING, "did not find subXID %u in MyProc", xid);
 
 	/* Also advance global latestCompletedXid while holding the lock */
-	MaintainLatestCompletedXid(latestXid);
+	if (!polar_csn_enable)
+		MaintainLatestCompletedXid(latestXid);
 
 	/* ... and xactCompletionCount */
 	TransamVariables->xactCompletionCount++;
@@ -4468,7 +5194,19 @@ RecordKnownAssignedTransactionIds(TransactionId xid)
 		while (TransactionIdPrecedes(next_expected_xid, xid))
 		{
 			TransactionIdAdvance(next_expected_xid);
-			ExtendSUBTRANS(next_expected_xid);
+
+			/*
+			 * POLAR we maintain subtrans info in csnlog
+			 */
+			/* no cover begin */
+
+			/*
+			 * In polar csn, we need not extend csnlog here, because csnlog
+			 * write zero page wal log like clog
+			 */
+			if (!polar_csn_enable)
+				ExtendSUBTRANS(next_expected_xid);
+			/* no cover end */
 		}
 		Assert(next_expected_xid == xid);
 
@@ -4525,6 +5263,12 @@ ExpireTreeKnownAssignedTransactionIds(TransactionId xid, int nsubxids,
 	TransamVariables->xactCompletionCount++;
 
 	LWLockRelease(ProcArrayLock);
+
+	if (polar_csn_enable)
+	{
+		/* If we were the oldest active XID, advance oldestXid */
+		AdvanceOldestActiveXidCSN(xid);
+	}
 }
 
 /*
@@ -4590,6 +5334,13 @@ ExpireOldKnownAssignedTransactionIds(TransactionId xid)
 		procArray->lastOverflowedXid = InvalidTransactionId;
 	KnownAssignedXidsRemovePreceding(xid);
 	LWLockRelease(ProcArrayLock);
+
+	/* advance oldestXid */
+	if (polar_csn_enable &&
+		TransactionIdFollows(xid, pg_atomic_read_u32(&polar_shmem_csn_mvcc_var_cache->polar_oldest_active_xid)))
+	{
+		pg_atomic_write_u32(&polar_shmem_csn_mvcc_var_cache->polar_oldest_active_xid, xid);
+	}
 }
 
 /*

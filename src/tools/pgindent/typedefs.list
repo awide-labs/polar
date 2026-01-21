@@ -3039,6 +3039,7 @@ TwoPhasePredicateXactRecord
 TwoPhaseRecordOnDisk
 TwoPhaseRmgrId
 TwoPhaseStateData
+TxidSnapshot
 Type
 TypeCacheEntry
 TypeCacheEnumData
@@ -3855,6 +3856,8 @@ polar_alr_state_names
 polar_alr_xact
 polar_checkpoint_ringbuf_t
 polar_checksum_err_action
+polar_csn_mvcc_var_cache
+polar_csnlog_ub_stat
 polar_database_state_t
 polar_db_state_t
 polar_flush_work_t

@@ -19,6 +19,7 @@
 #include "access/commit_ts.h"
 #include "access/multixact.h"
 #include "access/nbtree.h"
+#include "access/polar_csn_mvcc_vars.h"
 #include "access/subtrans.h"
 #include "access/syncscan.h"
 #include "access/transam.h"
@@ -58,6 +59,7 @@
 /* POLAR */
 #include <unistd.h>
 
+#include "access/polar_csnlog.h"
 #include "access/polar_logindex_redo.h"
 #include "common/file_perm.h"
 #include "postmaster/polar_async_lock_replay.h"
@@ -153,6 +155,9 @@ CalculateShmemSize(int *num_semaphores)
 	size = add_size(size, XLogRecoveryShmemSize());
 	size = add_size(size, CLOGShmemSize());
 	size = add_size(size, CommitTsShmemSize());
+	/* POLAR csn */
+	size = add_size(size, polar_csnlog_shmem_size());
+	/* POLAR end */
 	size = add_size(size, SUBTRANSShmemSize());
 	size = add_size(size, TwoPhaseShmemSize());
 	size = add_size(size, BackgroundWorkerShmemSize());
@@ -403,6 +408,9 @@ CreateSharedMemoryAndSemaphores(void)
 	ShmemBackendArrayAllocation();
 #endif
 
+	/* POLAR csn */
+	polar_csn_mvcc_var_cache_shmem_init();
+
 	/* Initialize dynamic shared memory facilities. */
 	dsm_postmaster_startup(shim);
 
@@ -454,6 +462,9 @@ CreateOrAttachShmemStructs(void)
 	XLogRecoveryShmemInit();
 	CLOGShmemInit();
 	CommitTsShmemInit();
+	/* POLAR csn */
+	polar_csnlog_shmem_init();
+	/* POLAR end */
 	SUBTRANSShmemInit();
 	MultiXactShmemInit();
 	InitBufferPool();

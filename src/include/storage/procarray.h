@@ -44,7 +44,7 @@ extern void ProcArrayRemove(PGPROC *proc, TransactionId latestXid);
 extern void ProcArrayEndTransaction(PGPROC *proc, TransactionId latestXid);
 extern void ProcArrayClearTransaction(PGPROC *proc);
 
-extern void ProcArrayInitRecovery(TransactionId initializedUptoXID);
+extern void ProcArrayInitRecovery(TransactionId initializedUptoXID, TransactionId polar_oldest_active_xid);
 extern void ProcArrayApplyRecoveryInfo(RunningTransactions running);
 extern void ProcArrayApplyXidAssignment(TransactionId topxid,
 										int nsubxids, TransactionId *subxids);
@@ -122,6 +122,14 @@ extern void polar_get_all_backendid_memstatm(PolarProcStatm *allprocs, Size *pro
 extern PGPROC *polar_search_proc(pid_t pid);
 extern XLogRecPtr polar_get_backend_min_replay_lsn(void);
 extern XLogRecPtr polar_get_read_min_lsn(XLogRecPtr primary_consist_ptr);
+
+/* POLAR end */
+
+/* POLAR csn */
+extern void ProcArrayResetXminCSN(PGPROC *proc, TransactionId new_xmin);
+extern void AdvanceOldestActiveXidCSNWrapper(TransactionId myXid);
+extern void polar_set_latestObservedXid(TransactionId latest_observed_xid);
+extern TransactionId polar_get_latestObservedXid(void);
 
 /* POLAR end */
 

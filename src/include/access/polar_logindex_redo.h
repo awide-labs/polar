@@ -30,6 +30,7 @@
 #include "access/polar_queue_manager.h"
 #include "access/polar_rel_size_cache.h"
 #include "access/xlogreader.h"
+#include "c.h"
 #include "catalog/pg_control.h"
 #include "storage/buf_internals.h"
 #include "storage/polar_procpool.h"
@@ -384,7 +385,7 @@ extern polar_logindex_bg_redo_ctl_t *polar_create_bg_redo_ctl(polar_logindex_red
 extern void polar_release_bg_redo_ctl(polar_logindex_bg_redo_ctl_t *ctl);
 extern void polar_promote_reset_bg_replayed_lsn(polar_logindex_redo_ctl_t instance, XLogRecPtr oldest_redo_ptr);
 extern void polar_logindex_promote_xlog_queue(polar_logindex_redo_ctl_t instance);
-extern void polar_online_promote_data(polar_logindex_redo_ctl_t instance);
+extern void polar_online_promote_data(polar_logindex_redo_ctl_t instance, TransactionId oldest_active_xid);
 extern void polar_standby_promote_data(polar_logindex_redo_ctl_t instance);
 extern void polar_primary_promote_data(polar_logindex_redo_ctl_t instance);
 extern void polar_wait_logindex_worker_handle_promote(polar_logindex_redo_ctl_t instance);

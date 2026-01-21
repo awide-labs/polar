@@ -39,6 +39,11 @@
 #include "utils/memutils.h"
 #include "utils/snapmgr.h"
 #include "utils/xid8.h"
+#include "utils/guc.h"
+
+/* POLAR csn */
+#include "utils/snapshot.h"
+/* POLAR end */
 
 
 /*
@@ -64,6 +69,12 @@ typedef struct
 	FullTransactionId xmin;
 	FullTransactionId xmax;
 	/* in-progress fxids, xmin <= xip[i] < xmax: */
+
+	/*
+	 * POLAR csn To make txid_snapshot storage compatible, we should store csn
+	 * in xip and store an invalid xid in front of csn to differentiate csn
+	 * snapshot with xid snapshot
+	 */
 	FullTransactionId xip[FLEXIBLE_ARRAY_MEMBER];
 } pg_snapshot;
 
@@ -272,6 +283,9 @@ parse_snapshot(const char *str, Node *escontext)
 	char	   *endp;
 	StringInfo	buf;
 
+	/* POLAR csn */
+	bool		first_val = true;
+
 	xmin = FullTransactionIdFromU64(strtou64(str, &endp, 10));
 	if (*endp != ':')
 		goto bad_format;
@@ -298,6 +312,19 @@ parse_snapshot(const char *str, Node *escontext)
 		val = FullTransactionIdFromU64(strtou64(str, &endp, 10));
 		str = endp;
 
+		if (polar_csn_enable && first_val && !FullTransactionIdIsValid(val))
+		{
+			buf_add_txid(buf, val);
+			if (*str == ',')
+				str++;
+			else if (*str != '\0')
+				goto bad_format;
+			buf_add_txid(buf, FullTransactionIdFromU64(strtou64(str, &endp, 10)));
+			str = endp;
+			if (*str != '\0')
+				goto bad_format;
+		}
+
 		/* require the input to be in order */
 		if (FullTransactionIdPrecedes(val, xmin) ||
 			FullTransactionIdFollowsOrEquals(val, xmax) ||
@@ -308,6 +335,8 @@ parse_snapshot(const char *str, Node *escontext)
 		if (!FullTransactionIdEquals(val, last_val))
 			buf_add_txid(buf, val);
 		last_val = val;
+
+		first_val = false;
 
 		if (*str == ',')
 			str++;
@@ -380,7 +409,10 @@ pg_current_snapshot(PG_FUNCTION_ARGS)
 		elog(ERROR, "no active snapshot set");
 
 	/* allocate */
-	nxip = cur->xcnt;
+	if (polar_csn_enable)
+		nxip = 2;
+	else
+		nxip = cur->xcnt;
 	snap = palloc(PG_SNAPSHOT_SIZE(nxip));
 
 	/*
@@ -392,18 +424,27 @@ pg_current_snapshot(PG_FUNCTION_ARGS)
 	snap->xmin = FullTransactionIdFromAllowableAt(next_fxid, cur->xmin);
 	snap->xmax = FullTransactionIdFromAllowableAt(next_fxid, cur->xmax);
 	snap->nxip = nxip;
-	for (i = 0; i < nxip; i++)
-		snap->xip[i] =
-			FullTransactionIdFromAllowableAt(next_fxid, cur->xip[i]);
+	if (polar_csn_enable)
+	{
+		snap->xip[0] = InvalidFullTransactionId;
+		snap->xip[1] = FullTransactionIdFromEpochAndXid(0, cur->polar_snapshot_csn);
+	}
+	else
+	{
+		for (i = 0; i < nxip; i++)
+			snap->xip[i] =
+				FullTransactionIdFromAllowableAt(next_fxid, cur->xip[i]);
 
-	/*
-	 * We want them guaranteed to be in ascending order.  This also removes
-	 * any duplicate xids.  Normally, an XID can only be assigned to one
-	 * backend, but when preparing a transaction for two-phase commit, there
-	 * is a transient state when both the original backend and the dummy
-	 * PGPROC entry reserved for the prepared transaction hold the same XID.
-	 */
-	sort_snapshot(snap);
+		/*
+		 * We want them guaranteed to be in ascending order.  This also
+		 * removes any duplicate xids.  Normally, an XID can only be assigned
+		 * to one backend, but when preparing a transaction for two-phase
+		 * commit, there is a transient state when both the original backend
+		 * and the dummy PGPROC entry reserved for the prepared transaction
+		 * hold the same XID.
+		 */
+		sort_snapshot(snap);
+	}
 
 	/* set size after sorting, because it may have removed duplicate xips */
 	SET_VARSIZE(snap, PG_SNAPSHOT_SIZE(snap->nxip));
@@ -496,6 +537,13 @@ pg_snapshot_recv(PG_FUNCTION_ARGS)
 		FullTransactionId cur =
 			FullTransactionIdFromU64((uint64) pq_getmsgint64(buf));
 
+		if (polar_csn_enable && i == 0 && nxip == 2 && !FullTransactionIdIsValid(cur))
+		{
+			snap->xip[0] = cur;
+			snap->xip[1] = FullTransactionIdFromU64((uint64) pq_getmsgint64(buf));
+			break;
+		}
+
 		if (FullTransactionIdPrecedes(cur, last) ||
 			FullTransactionIdPrecedes(cur, xmin) ||
 			FullTransactionIdPrecedes(xmax, cur))
@@ -522,6 +570,58 @@ bad_format:
 			 errmsg("invalid external pg_snapshot data")));
 	PG_RETURN_POINTER(NULL);	/* keep compiler quiet */
 }
+
+/* POLAR csn */
+extern bool is_csn_snapshot(const pg_snapshot *snap);
+
+bool
+is_csn_snapshot(const pg_snapshot *snap)
+{
+	bool		ret;
+
+	Assert(PointerIsValid(snap));
+
+	if (snap->nxip == 2 && !FullTransactionIdIsValid(snap->xip[0]))
+		ret = true;
+	else
+		ret = false;
+
+	return ret;
+}
+
+extern CommitSeqNo txid_snapshot_get_csn(const pg_snapshot *snap);
+
+CommitSeqNo
+txid_snapshot_get_csn(const pg_snapshot *snap)
+{
+	Assert(is_csn_snapshot(snap));
+
+	return U64FromFullTransactionId(snap->xip[1]);
+}
+
+/*
+ * check txid visibility.
+ */
+static bool
+is_visible_fxid_csn(FullTransactionId value, const pg_snapshot *snap)
+{
+	if (U64FromFullTransactionId(value) < U64FromFullTransactionId(snap->xmin))
+		return true;
+	else if (U64FromFullTransactionId(value) >= U64FromFullTransactionId(snap->xmax))
+		return false;
+	else
+	{
+		SnapshotData snap_data;
+
+		snap_data.xmin = XidFromFullTransactionId(snap->xmin);
+		snap_data.xmax = XidFromFullTransactionId(snap->xmax);
+		snap_data.polar_snapshot_csn = txid_snapshot_get_csn(snap);
+
+		return XidInMVCCSnapshot(XidFromFullTransactionId(value), &snap_data);
+	}
+}
+
+/* POLAR end */
 
 /*
  * pg_snapshot_send(pg_snapshot) returns bytea
@@ -557,7 +657,10 @@ pg_visible_in_snapshot(PG_FUNCTION_ARGS)
 	FullTransactionId value = PG_GETARG_FULLTRANSACTIONID(0);
 	pg_snapshot *snap = (pg_snapshot *) PG_GETARG_VARLENA_P(1);
 
-	PG_RETURN_BOOL(is_visible_fxid(value, snap));
+	if (is_csn_snapshot(snap))
+		PG_RETURN_BOOL(is_visible_fxid_csn(value, snap));
+	else
+		PG_RETURN_BOOL(is_visible_fxid(value, snap));
 }
 
 /*

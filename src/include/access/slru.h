@@ -209,6 +209,12 @@ extern int	SimpleLruReadPage(SlruCtl ctl, int64 pageno, bool write_ok,
 							  TransactionId xid);
 extern int	SimpleLruReadPage_ReadOnly(SlruCtl ctl, int64 pageno,
 									   TransactionId xid);
+
+/* POLAR for csnlog */
+extern int	SimpleLruReadPage_ReadOnly_Locked(SlruCtl ctl, int64 pageno,
+											  TransactionId xid);
+
+/* POLAR end */
 extern void SimpleLruWritePage(SlruCtl ctl, int slotno);
 extern void SimpleLruWriteAll(SlruCtl ctl, bool allow_redirtied);
 #ifdef USE_ASSERT_CHECKING

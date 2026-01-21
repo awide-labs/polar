@@ -10,6 +10,7 @@ SUBDIRS =
 # sort extention by names, less git conflict
 SUBDIRS += pg_cron_preload
 SUBDIRS += pg_hint_plan
+SUBDIRS += polar_csn
 SUBDIRS += polar_feature_utils
 SUBDIRS += polar_io_stat
 SUBDIRS += polar_monitor

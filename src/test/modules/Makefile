@@ -52,6 +52,8 @@ SUBDIRS += test_logindex test_procpool
 SUBDIRS += test_polar_rsc
 SUBDIRS += test_polar_shm_limit
 SUBDIRS += test_wal_pipeline
+SUBDIRS += test_csn
+SUBDIRS += test_csn_xact
 # POLAR end
 
 ifeq ($(enable_injection_points),yes)

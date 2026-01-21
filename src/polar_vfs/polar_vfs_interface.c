@@ -803,7 +803,7 @@ vfs_unlink(const char *fname)
 	int			rc = -1;
 	int			kind = -1;
 	const char *vfs_path;
-	vfs_vfd		vfdP;
+	vfs_vfd		vfdP = {0};
 
 	if (fname == NULL)
 		return -1;
@@ -814,6 +814,7 @@ vfs_unlink(const char *fname)
 	vfs_path = polar_vfs_file_type_and_path(fname, &kind);
 
 	vfdP.kind = kind;
+	vfdP.file_name = unconstify(char *, fname);
 	if (polar_vfs_file_before_hook)
 		polar_vfs_file_before_hook(fname, &vfdP, VFS_UNLINK);
 
@@ -832,7 +833,7 @@ vfs_rename(const char *oldfile, const char *newfile)
 	int			kindnew = -1;
 	const char *vfs_old_path;
 	const char *vfs_new_path;
-	vfs_vfd		vfdP;
+	vfs_vfd		vfdP = {0};
 
 	if (oldfile == NULL || newfile == NULL)
 		return -1;
@@ -843,6 +844,7 @@ vfs_rename(const char *oldfile, const char *newfile)
 	vfs_new_path = polar_vfs_file_type_and_path(newfile, &kindnew);
 
 	vfdP.kind = kindold;
+	vfdP.file_name = unconstify(char *, oldfile);
 	if (polar_vfs_file_before_hook)
 	{
 		polar_vfs_file_before_hook(oldfile, &vfdP, VFS_RENAME);
@@ -962,7 +964,7 @@ vfs_truncate(const char *path, off_t len)
 	const char *vfs_path;
 	int			kind = -1;
 	int			rc = -1;
-	vfs_vfd		vfdP;
+	vfs_vfd		vfdP = {0};
 
 	if (path == NULL)
 		return -1;
@@ -974,6 +976,7 @@ vfs_truncate(const char *path, off_t len)
 	vfs_path = polar_vfs_file_type_and_path(path, &kind);
 
 	vfdP.kind = kind;
+	vfdP.file_name = unconstify(char *, path);
 	if (polar_vfs_file_before_hook)
 		polar_vfs_file_before_hook(path, &vfdP, VFS_TRUNCATE);
 
@@ -1093,7 +1096,7 @@ vfs_mkdir(const char *path, mode_t mode)
 	int			rc = -1;
 	int			kind = -1;
 	const char *vfs_path;
-	vfs_vfd		vfdP;
+	vfs_vfd		vfdP = {0};
 
 	if (path == NULL)
 		return -1;
@@ -1101,6 +1104,7 @@ vfs_mkdir(const char *path, mode_t mode)
 	vfs_path = polar_vfs_file_type_and_path(path, &kind);
 
 	vfdP.kind = kind;
+	vfdP.file_name = unconstify(char *, path);
 	if (polar_vfs_file_before_hook)
 		polar_vfs_file_before_hook(path, &vfdP, VFS_MKDIR);
 
@@ -1114,7 +1118,7 @@ vfs_rmdir(const char *path)
 	int			rc = -1;
 	int			kind = -1;
 	const char *vfs_path;
-	vfs_vfd		vfdP;
+	vfs_vfd		vfdP = {0};
 
 	if (path == NULL)
 		return -1;
@@ -1122,6 +1126,7 @@ vfs_rmdir(const char *path)
 	vfs_path = polar_vfs_file_type_and_path(path, &kind);
 
 	vfdP.kind = kind;
+	vfdP.file_name = unconstify(char *, path);
 	if (polar_vfs_file_before_hook)
 		polar_vfs_file_before_hook(path, &vfdP, VFS_RMDIR);
 

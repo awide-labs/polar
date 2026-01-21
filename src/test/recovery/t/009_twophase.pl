@@ -549,6 +549,14 @@ my $start_lsn =
 $cur_primary->safe_psql('postgres',
 	"CREATE TABLE test(); BEGIN; CREATE TABLE test1(); PREPARE TRANSACTION 'foo';"
 );
+
+# POLAR: with polar_csn_enable, pg_subtrans is unused (parents are tracked
+# in pg_csnlog, whose segments are pre-allocated in fixed-size batches), so
+# no directory contents change with this workload.  Still run the workload
+# and the stop/start sequence below to exercise the csnlog startup path with
+# a prepared transaction open, but skip the directory comparison.
+my $csn_enabled =
+  $cur_primary->safe_psql('postgres', "show polar_csn_enable") eq 'on';
 my $osubtrans = $cur_primary->safe_psql('postgres',
 	"select 'pg_subtrans/'||f, s.size from pg_ls_dir('pg_subtrans') f, pg_stat_file('pg_subtrans/'||f) s"
 );
@@ -570,6 +578,11 @@ $cur_primary->start;
 my $nsubtrans = $cur_primary->safe_psql('postgres',
 	"select 'pg_subtrans/'||f, s.size from pg_ls_dir('pg_subtrans') f, pg_stat_file('pg_subtrans/'||f) s"
 );
-isnt($osubtrans, $nsubtrans, "contents of pg_subtrans/ have changed");
+
+SKIP:
+{
+	skip "pg_subtrans is not used with polar_csn_enable", 1 if $csn_enabled;
+	isnt($osubtrans, $nsubtrans, "contents of pg_subtrans/ have changed");
+}
 
 done_testing();

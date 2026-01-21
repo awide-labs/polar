@@ -677,6 +677,69 @@ SimpleLruReadPage_ReadOnly(SlruCtl ctl, int64 pageno, TransactionId xid)
 	return SimpleLruReadPage(ctl, pageno, true, xid);
 }
 
+/* POLAR for csnlog */
+
+/*
+ * Same as SimpleLruReadPage_ReadOnly, but the shared lock must be held by the caller
+ * and will try best be held at exit.
+ */
+int
+SimpleLruReadPage_ReadOnly_Locked(SlruCtl ctl, int64 pageno, TransactionId xid)
+{
+	SlruShared	shared = ctl->shared;
+	LWLock	   *banklock = SimpleLruGetBankLock(ctl, pageno);
+	int			bankno = pageno % ctl->nbanks;
+	int			bankstart = bankno * SLRU_BANK_SIZE;
+	int			bankend = bankstart + SLRU_BANK_SIZE;
+	int			slotno;
+	int			share_lock_retry_times = 3;
+
+	Assert(LWLockHeldByMe(banklock));
+
+	for (;;)
+	{
+		/* See if page is already in a buffer */
+		for (slotno = bankstart; slotno < bankend; slotno++)
+		{
+			if (shared->page_status[slotno] != SLRU_PAGE_EMPTY &&
+				shared->page_number[slotno] == pageno &&
+				shared->page_status[slotno] != SLRU_PAGE_READ_IN_PROGRESS)
+			{
+				/* See comments for SlruRecentlyUsed() */
+				SlruRecentlyUsed(shared, slotno);
+
+				/* update the stats counter of pages found in the SLRU */
+				pgstat_count_slru_page_hit(shared->slru_stats_idx);
+
+				return slotno;
+			}
+		}
+
+		/* No luck, so switch to normal exclusive lock and do regular read */
+		LWLockRelease(banklock);
+		LWLockAcquire(banklock, LW_EXCLUSIVE);
+
+		slotno = SimpleLruReadPage(ctl, pageno, true, xid);
+		Assert(shared->page_status[slotno] == SLRU_PAGE_VALID);
+
+		/*
+		 * In worst case, we maybe fall in dead loop for trying to get share
+		 * lock. So we set a deadline retry time and return with exclusive
+		 * lock held. Performance maybe degrade because of this, so we log the
+		 * event for later diagnostics.
+		 */
+		if (share_lock_retry_times == 0)
+			return slotno;
+		else
+			share_lock_retry_times--;
+
+		LWLockRelease(banklock);
+		LWLockAcquire(banklock, LW_SHARED);
+	}
+}
+
+/* POLAR end */
+
 /*
  * Write a page from a shared buffer, if necessary.
  * Does nothing if the specified slot is not dirty.

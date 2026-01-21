@@ -28,6 +28,7 @@
 #include "access/commit_ts.h"
 #include "access/heapam_xlog.h"
 #include "access/multixact.h"
+#include "access/polar_csnlog.h"
 #include "access/polar_logindex_redo.h"
 #include "access/polar_logindex_internal.h"
 #include "access/rmgr.h"
@@ -3126,7 +3127,7 @@ polar_logindex_promote_fullpage_snapshot(log_index_snapshot logindex_snapshot, X
 }
 
 void
-polar_online_promote_data(polar_logindex_redo_ctl_t instance)
+polar_online_promote_data(polar_logindex_redo_ctl_t instance, TransactionId oldest_active_xid)
 {
 	XLogRecPtr	last_replayed_lsn = GetXLogReplayRecPtr(NULL);
 
@@ -3144,6 +3145,9 @@ polar_online_promote_data(polar_logindex_redo_ctl_t instance)
 
 	if (POLAR_RSC_REPLICA_ENABLED())
 		polar_rsc_promote();
+
+	if (polar_csn_enable)
+		polar_promote_csnlog(oldest_active_xid);
 
 	/* reload persisted slot from shared storage */
 	polar_reload_replication_slots_from_shared_storage();

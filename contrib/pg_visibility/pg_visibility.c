@@ -22,6 +22,7 @@
 #include "storage/proc.h"
 #include "storage/procarray.h"
 #include "storage/smgr.h"
+#include "utils/guc.h"
 #include "utils/rel.h"
 #include "utils/snapmgr.h"
 
@@ -582,6 +583,13 @@ GetStrictOldestNonRemovableTransactionId(Relation rel)
 		runningTransactions = GetRunningTransactionData();
 		LWLockRelease(ProcArrayLock);
 		LWLockRelease(XidGenLock);
+
+		/*
+		 * POLAR csn: GetRunningTransactionData() also acquired
+		 * CommitSeqNoLock
+		 */
+		if (polar_csn_enable)
+			LWLockRelease(CommitSeqNoLock);
 		return runningTransactions->oldestRunningXid;
 	}
 	else if (!RELATION_IS_LOCAL(rel))
@@ -593,6 +601,13 @@ GetStrictOldestNonRemovableTransactionId(Relation rel)
 		runningTransactions = GetRunningTransactionData();
 		LWLockRelease(ProcArrayLock);
 		LWLockRelease(XidGenLock);
+
+		/*
+		 * POLAR csn: GetRunningTransactionData() also acquired
+		 * CommitSeqNoLock
+		 */
+		if (polar_csn_enable)
+			LWLockRelease(CommitSeqNoLock);
 		return runningTransactions->oldestDatabaseRunningXid;
 	}
 	else

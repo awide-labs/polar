@@ -4,6 +4,7 @@ MODULE_big = polar_monitor
 OBJS = polar_monitor.o polar_monitor_buf.o $(WIN32RES)
 OBJS += polar_monitor_async_lock_replay.o
 OBJS += procstat.o polar_monitor_io.o polar_monitor_pfs.o
+OBJS += polar_monitor_csnlog.o
 OBJS += polar_monitor_logindex.o
 OBJS += polar_monitor_proxy.o
 OBJS += polar_monitor_rsc.o

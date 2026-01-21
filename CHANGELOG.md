@@ -29,6 +29,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Performance
 
+- Port CSN (Commit Sequence Number) feature from PolarDB 11 to improve MVCC
+  scalability (XCOM-195)
 - Increase the number of WAL insertion locks (NUM_XLOGINSERT_LOCKS) from 8 to 64
   to improve WAL insertion scalability (XCOM-195)
 - Port WAL pipeline feature from PolarDB 11 to improve write throughput

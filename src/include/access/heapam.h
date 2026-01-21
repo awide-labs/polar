@@ -485,5 +485,12 @@ extern bool ResolveCminCmaxDuringDecoding(struct HTAB *tuplecid_data,
 										  CommandId *cmin, CommandId *cmax);
 extern void HeapCheckForSerializableConflictOut(bool visible, Relation relation, HeapTuple tuple,
 												Buffer buffer, Snapshot snapshot);
+bool
+			XidInMVCCSnapshotCSN(TransactionId xid, Snapshot snapshot);
+bool		XidVisibleInSnapshotCSN(TransactionId xid, Snapshot snapshot,
+									XidCommitStatus *hintstatus);
+extern bool
+			HeapTupleSatisfiesMVCC(HeapTuple htup, Snapshot snapshot,
+								   Buffer buffer);
 
 #endif							/* HEAPAM_H */
