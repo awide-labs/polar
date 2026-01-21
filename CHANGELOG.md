@@ -8,7 +8,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
-- Fixed `pg_ctl logrotate` functionality by restoring the missing check for the `logrotate` file in the data directory upon receiving SIGUSR1 (XCOM-87)
+- Fixed deadlock when WAL exceeds xlog queue capacity by releasing WALInsertLock
+  when the queue is full, allowing walwriter to flush WAL so logindex saver can
+  consume the queue (XCOM-94)
+- Fixed `pg_ctl logrotate` functionality by restoring the missing check for the
+  `logrotate` file in the data directory upon receiving SIGUSR1 (XCOM-87)
 
 ### Removed
 
