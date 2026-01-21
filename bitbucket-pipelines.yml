@@ -4,12 +4,33 @@ image: atlassian/default-image:latest
 definitions:
   services:
     docker:
+      memory: 3072
+    docker-large:
+      type: docker
       memory: 6144  # Increased to 6GB to handle build memory requirements
+
+  steps:
+    # Lint steps (minimal resources, no docker service needed)
+    - step: &check-commit-format
+        name: Check Commit Format
+        image: atlassian/default-image:3
+        size: 1x
+        script:
+          - git fetch origin ${BITBUCKET_PR_DESTINATION_BRANCH}
+          - .ci/check_commit_format.sh origin/${BITBUCKET_PR_DESTINATION_BRANCH}
+
+    - step: &check-changelog
+        name: Check Changelog
+        image: atlassian/default-image:3
+        size: 1x
+        script:
+          - git fetch origin ${BITBUCKET_PR_DESTINATION_BRANCH}
+          - .ci/check_changelog.sh origin/${BITBUCKET_PR_DESTINATION_BRANCH}
 
   step-template: &base-step-template
     size: 2x  # Increased from default 1x to 2x (4 cores, 8192MB)
     services:
-      - docker
+      - docker-large
     caches:
       - docker
 
@@ -67,6 +88,9 @@ pipelines:
   # Pull request trigger
   pull-requests:
     '**':  # Run on all pull requests
+      - parallel:
+          - step: *check-commit-format
+          - step: *check-changelog
       - step:
           <<: *base-step-template
           name: Pull request trigger

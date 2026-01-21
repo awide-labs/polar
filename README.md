@@ -83,7 +83,9 @@ If you want to explore or develop documentation locally, see [Document Contribut
 
 ## Contributing
 
-You are welcome to make contributions to PolarDB for PostgreSQL. Here are the contributors:
+We welcome contributions! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines on how to contribute to this project.
+
+Here are the contributors:
 
 <a href="https://github.com/ApsaraDB/PolarDB-for-PostgreSQL/graphs/contributors">
   <img src="https://contrib.rocks/image?repo=ApsaraDB/PolarDB-for-PostgreSQL" />
