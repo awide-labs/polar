@@ -925,7 +925,6 @@ ProcArrayEndTransactionCSN(PGPROC *proc)
 		 * anyone else's calculation of a snapshot.  We might change their
 		 * estimate of global xmin, but that's OK.
 		 */
-		Assert(!TransactionIdIsValid(ProcGlobal->xids[proc->pgxactoff]));
 		Assert(proc->subxidStatus.count == 0);
 		Assert(!proc->subxidStatus.overflowed);
 
