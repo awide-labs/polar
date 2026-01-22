@@ -227,6 +227,20 @@ xlog_desc(StringInfo buf, XLogReaderState *record)
 		}
 	}
 	/* POLAR end */
+	/* POLAR csnlog */
+	else if (info == XLOG_CSNLOG_ZEROPAGE)
+	{
+		int			pageno;
+		memcpy(&pageno, rec, sizeof(int));
+		appendStringInfo(buf, "zero page %d", pageno);
+	}
+	else if (info == XLOG_CSNLOG_TRUNCATE)
+	{
+		int			pageno;
+		memcpy(&pageno, rec, sizeof(int));
+		appendStringInfo(buf, "truncate page %d", pageno);
+	}
+	/* POLAR end */
 }
 
 const char *
@@ -280,6 +294,14 @@ xlog_identify(uint8 info)
 			id = "POLAR_WAL";
 			break;
 			/* POLAR end */
+		/* POLAR csn */
+		case XLOG_CSNLOG_ZEROPAGE:
+			id = "ZERO_CSN_PAGE";
+			break;
+		case XLOG_CSNLOG_TRUNCATE:
+			id = "TRUNCATE_CSN_PAGE";
+			break;
+		/* POLAR end */
 	}
 
 	return id;

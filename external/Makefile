@@ -22,6 +22,7 @@ SUBDIRS += polar_resource_manager
 SUBDIRS += polar_smgrperf
 SUBDIRS += polar_stat_env
 SUBDIRS += polar_worker
+SUBDIRS += polar_csn
 
 ifeq ($(enable_minimal),no)
 # will be ignored under minimal mode

@@ -210,6 +210,7 @@ if [ "$node_type" == "primary" ]; then
 	cp_dir ${local_data}/pg_xact ${polar_data} ${cluster_name}
 	cp_dir ${local_data}/pg_commit_ts ${polar_data} ${cluster_name}
 	cp_dir ${local_data}/pg_multixact ${polar_data} ${cluster_name}
+	cp_dir ${local_data}/pg_csnlog ${polar_data} ${cluster_name}
 
 	# do delete data
 	dir_list=`ls ${local_data}/base/ 2>/dev/null`
@@ -226,6 +227,7 @@ if [ "$node_type" == "primary" ]; then
 	rm_dir ${local_data}pg_xact
 	rm_dir ${local_data}pg_commit_ts
 	rm_dir ${local_data}pg_multixact
+	rm_dir ${local_data}pg_csnlog
 
 	if [ ! -d "${local_data}pg_tblspc" ]; then
 		echo "${polar_data}pg_tblspc not a folder"

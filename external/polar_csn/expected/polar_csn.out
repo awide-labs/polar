@@ -1,0 +1,22 @@
+--
+-- Test polar csn function
+--
+create extension polar_csn;
+create table test(a int);
+begin;
+insert into test values(1);
+select txid_csn(txid_current());
+ txid_csn 
+----------
+        0
+(1 row)
+
+commit;
+select txid_snapshot_csn(txid_current_snapshot()) > 0;
+ ?column? 
+----------
+ t
+(1 row)
+
+drop table test;
+drop extension polar_csn;

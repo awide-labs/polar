@@ -77,6 +77,7 @@
 #include "utils/builtins.h"
 #include "utils/varlena.h"
 #include "access/polar_logindex_redo.h"
+#include "access/polar_csnlog.h"
 /* POLAR end */
 
 /*
@@ -720,8 +721,14 @@ AssignTransactionId(TransactionState s)
 		XactTopFullTransactionId = s->fullTransactionId;
 
 	if (isSubXact)
+	{
+		if (polar_csn_enable)
+			polar_csnlog_set_parent(XidFromFullTransactionId(s->fullTransactionId),
+									XidFromFullTransactionId(s->parent->fullTransactionId));
+		else
 		SubTransSetParent(XidFromFullTransactionId(s->fullTransactionId),
 						  XidFromFullTransactionId(s->parent->fullTransactionId));
+	}
 
 	/*
 	 * If it's a top-level transaction, the predicate locking system needs to
@@ -1318,6 +1325,7 @@ RecordTransactionCommit(void)
 	SharedInvalidationMessage *invalMessages = NULL;
 	bool		RelcacheInitFileInval = false;
 	bool		wrote_xlog;
+	bool 	 	async_commit;
 
 	/*
 	 * Log pending invalidations for logical decoding of in-progress
@@ -1492,6 +1500,8 @@ RecordTransactionCommit(void)
 		 */
 		if (markXidCommitted)
 			TransactionIdCommitTree(xid, nchildren, children);
+
+		async_commit = false;
 	}
 	else
 	{
@@ -1515,6 +1525,8 @@ RecordTransactionCommit(void)
 		 */
 		if (markXidCommitted)
 			TransactionIdAsyncCommitTree(xid, nchildren, children, XactLastRecEnd);
+
+		async_commit = true;
 	}
 
 	/*
@@ -1541,6 +1553,19 @@ RecordTransactionCommit(void)
 	 */
 	if (wrote_xlog && markXidCommitted)
 		SyncRepWaitForLSN(XactLastRecEnd, true, false);
+
+	/*
+	 * POLAR: If polar csn enabled. Firstly, we should wait for synchronous replication
+	 * before update committed csn. Without this, the changes made by the transaction
+	 * may become visible before standby recieves the commit XLOG record.
+	 */
+	if (polar_csn_enable && markXidCommitted)
+	{
+		START_CRIT_SECTION();
+		polar_xact_commit_tree_csn(xid, nchildren, children,
+								   !async_commit ? InvalidXLogRecPtr : XactLastRecEnd);
+		END_CRIT_SECTION();
+	}
 
 	/* remember end of last commit record */
 	XactLastCommitEnd = XactLastRecEnd;
@@ -6109,6 +6134,13 @@ xact_redo_commit(xl_xact_parsed_commit *parsed,
 		 * recovered. It's unlikely but it's good to be safe.
 		 */
 		TransactionIdAsyncCommitTree(xid, parsed->nsubxacts, parsed->subxacts, lsn);
+
+		/* POLAR: mark csnlog before update the ProcArray. */
+		if (polar_csn_enable)
+		{
+			polar_xact_commit_tree_csn(
+									 xid, parsed->nsubxacts, parsed->subxacts, lsn);
+		}
 
 		/*
 		 * We must mark clog before we update the ProcArray.

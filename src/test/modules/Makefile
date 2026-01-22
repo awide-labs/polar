@@ -33,7 +33,9 @@ SUBDIRS = \
 		  unsafe_tests \
 		  worker_spi \
 		  test_polar_bulk_read \
-		  test_wal_pipeline
+		  test_wal_pipeline \
+		  test_csn \
+		  test_csn_xact
 
 # POLAR
 SUBDIRS += test_buffer

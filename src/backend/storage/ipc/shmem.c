@@ -75,6 +75,10 @@
 #include "storage/spin.h"
 #include "utils/builtins.h"
 
+/* POLAR csn */
+#include "access/polar_csn_mvcc_vars.h"
+/* POLAR end */
+
 static void *ShmemAllocRaw(Size size, Size *allocated_size);
 
 /* shared memory global variables */
@@ -148,6 +152,9 @@ InitShmemAllocation(void)
 	ShmemVariableCache = (VariableCache)
 		ShmemAlloc(sizeof(*ShmemVariableCache));
 	memset(ShmemVariableCache, 0, sizeof(*ShmemVariableCache));
+
+	/* POLAR csn */
+	polar_csn_mvcc_var_cache_shmem_init();
 }
 
 /*

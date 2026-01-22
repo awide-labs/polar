@@ -59,6 +59,7 @@
 
 /* POLAR */
 #include "access/clog.h"
+#include "access/polar_csnlog.h"
 #include "access/commit_ts.h"
 #include "access/multixact.h"
 #include "storage/polar_fd.h"
@@ -2020,6 +2021,7 @@ polar_remove_local_cache(void)
 	polar_remove_clog_local_cache_file();
 	polar_remove_commit_ts_local_cache_file();
 	polar_remove_multixcat_local_cache_file();
+	polar_remove_csnlog_local_cache_file();
 }
 
 /*
@@ -2105,6 +2107,7 @@ polar_copy_shared_trans_dirs(void)
 	/* copy trans status files */
 	elog(LOG, "copy shared trans dirs for replica, copy_all: %d", copy_all);
 	polar_init_local_clog(local_ctlfile.checkPointCopy.oldestXid, copy_all);
+	polar_init_local_csnlog(local_ctlfile.checkPointCopy.oldestXid, copy_all);
 	polar_init_local_commit_ts(local_ctlfile.checkPointCopy.oldestCommitTsXid, copy_all);
 	polar_init_local_multixact(local_ctlfile.checkPointCopy.oldestMulti, copy_all);
 

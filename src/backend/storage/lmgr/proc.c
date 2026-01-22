@@ -389,6 +389,7 @@ InitProcess(void)
 	MyProc->fpLocalTransactionId = InvalidLocalTransactionId;
 	MyProc->xid = InvalidTransactionId;
 	MyProc->xmin = InvalidTransactionId;
+	MyProc->polar_csn = InvalidCommitSeqNo;
 	/* POLAR: Initialize fields for read view min lsn before pid */
 	pg_atomic_init_u64(&MyProc->polar_read_min_lsn, InvalidXLogRecPtr);
 	pg_write_barrier();
@@ -598,6 +599,7 @@ InitAuxiliaryProcess(void)
 	MyProc->fpLocalTransactionId = InvalidLocalTransactionId;
 	MyProc->xid = InvalidTransactionId;
 	MyProc->xmin = InvalidTransactionId;
+	MyProc->polar_csn = InvalidCommitSeqNo;
 	MyProc->backendId = InvalidBackendId;
 	MyProc->databaseId = InvalidOid;
 	MyProc->roleId = InvalidOid;

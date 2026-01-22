@@ -463,6 +463,17 @@ extern int polar_wal_pipeline_notify_worker_timeout;
 #define POLAR_WAL_PIPELINE_NOTIFY_WORKER_NUM_MIN	1
 extern int polar_wal_pipeline_notify_worker_num;
 
+/* Polar wal pipeline should enable on instanch with cpu vcores >= 8 */
+#define POLAR_INSTANCE_SPEC_WAL_PIPELINE_IS_AVAILABLE()	(polar_instance_spec_cpu == 0 || polar_instance_spec_cpu >= 8)
+
+extern bool		polar_csn_enable;
+extern bool 	polar_csn_elog_panic_enable;
+extern bool		polar_csnlog_upperbound_enable;
+extern bool 	polar_csn_xid_snapshot;
+
+extern int		polar_csnlog_slot_size;
+extern int 		polar_csnlog_max_local_cache_segments;
+
 /* POLAR GUCs end */
 
 extern bool polar_enable_coredump_print;

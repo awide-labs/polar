@@ -295,7 +295,7 @@ extern polar_logindex_bg_redo_ctl_t *polar_create_bg_redo_ctl(polar_logindex_red
 extern void polar_release_bg_redo_ctl(polar_logindex_bg_redo_ctl_t *ctl);
 extern void polar_reset_bg_replayed_lsn(polar_logindex_redo_ctl_t instance, XLogRecPtr oldest_redo_ptr);
 extern void polar_logindex_promote_xlog_queue(polar_logindex_redo_ctl_t instance);
-extern void polar_online_promote_data(polar_logindex_redo_ctl_t instance);
+extern void polar_online_promote_data(polar_logindex_redo_ctl_t instance, TransactionId oldest_active_xid);
 extern void polar_standby_promote_data(polar_logindex_redo_ctl_t instance);
 extern void polar_wait_logindex_bg_stop_replay(polar_logindex_redo_ctl_t instance, Latch *latch);
 extern void polar_logindex_replay_db(polar_logindex_redo_ctl_t instance, Oid dbnode);

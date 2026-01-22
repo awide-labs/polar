@@ -1,0 +1,4 @@
+comment = 'polar_csn'
+default_version = '1.0'
+module_pathname = '$libdir/polar_csn'
+relocatable = true

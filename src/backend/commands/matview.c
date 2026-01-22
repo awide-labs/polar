@@ -46,6 +46,10 @@
 #include "utils/snapmgr.h"
 #include "utils/syscache.h"
 
+/* POLAR csn */
+#include "storage/procarray.h"
+/* POLAR end */
+
 
 typedef struct
 {
@@ -877,8 +881,12 @@ refresh_by_match_merge(Oid matviewOid, Oid tempOid, Oid relowner,
 static void
 refresh_by_heap_swap(Oid matviewOid, Oid OIDNewHeap, char relpersistence)
 {
-	finish_heap_swap(matviewOid, OIDNewHeap, false, false, true, true,
-					 RecentXmin, ReadNextMultiXactId(), relpersistence);
+	if (polar_csn_enable)
+		finish_heap_swap(matviewOid, OIDNewHeap, false, false, true, true,
+						GetOldestActiveTransactionId(), ReadNextMultiXactId(), relpersistence);
+	else
+		finish_heap_swap(matviewOid, OIDNewHeap, false, false, true, true,
+						 RecentXmin, ReadNextMultiXactId(), relpersistence);
 }
 
 /*

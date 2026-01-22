@@ -326,6 +326,15 @@ struct PGPROC
 	 * from deleting WAL or logindex.
 	 */
 	pg_atomic_uint64 polar_read_min_lsn;
+
+	/*
+	 * POLAR csn
+	 * When transaction committing, record commit csn in PGXACT with CommitSeqNoLock hold.
+	 * For now, only used in GetRunningTransactionData to iterate ProcArray and filter out
+	 * committed xacts in active xacts list.
+	 * If committed, value is csn, else InvalidTransactionId.
+	 */
+	CommitSeqNo polar_csn;
 };
 
 /* NOTE: "typedef struct PGPROC PGPROC" appears in storage/lock.h. */
