@@ -181,6 +181,21 @@ typedef struct SnapshotData
 	int32		subxcnt;		/* # of xact ids in subxip[] */
 	bool		suboverflowed;	/* has the subxip array overflowed? */
 
+	/* POLAR csn */
+
+	/*
+	 * This snapshot can see the effects of all transactions with CSN <
+	 * polar_snapshot_csn.
+	 */
+	CommitSeqNo	polar_snapshot_csn;
+
+	/*
+	 * Wether a xid snapshot generated from csn snapshot
+	 */
+	bool        polar_csn_xid_snapshot;
+
+	/* POLAR end */
+
 	bool		takenDuringRecovery;	/* recovery-shaped snapshot? */
 	bool		copied;			/* false if it's a static snapshot */
 

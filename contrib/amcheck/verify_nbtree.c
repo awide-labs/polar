@@ -42,6 +42,10 @@
 #include "utils/memutils.h"
 #include "utils/snapmgr.h"
 
+/* POLAR csn */
+#include "utils/guc.h"
+#include "storage/procarray.h"
+/* POLAR end */
 
 PG_MODULE_MAGIC;
 

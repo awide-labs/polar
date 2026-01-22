@@ -95,4 +95,9 @@ provider postgresql {
 	probe wal__switch();
 	probe wal__buffer__write__dirty__start();
 	probe wal__buffer__write__dirty__done();
+
+	/* POLAR csnlog */
+	probe csnlog__checkpoint__start(bool);
+	probe csnlog__checkpoint__done(bool);
+	/* POLAR end */
 };

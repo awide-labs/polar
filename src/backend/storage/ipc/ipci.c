@@ -56,6 +56,7 @@
 #include "postmaster/polar_async_lock_replay.h"
 #include "storage/polar_rsc.h"
 #include "storage/polar_xlogbuf.h"
+#include "access/polar_csnlog.h"
 /* POLAR end */
 
 /* GUCs */
@@ -145,6 +146,9 @@ CalculateShmemSize(int *num_semaphores)
 	size = add_size(size, XLogRecoveryShmemSize());
 	size = add_size(size, CLOGShmemSize());
 	size = add_size(size, CommitTsShmemSize());
+	/* POLAR csn */
+	size = add_size(size, polar_csnlog_shmem_size());
+	/* POLAR end */
 	size = add_size(size, SUBTRANSShmemSize());
 	size = add_size(size, TwoPhaseShmemSize());
 	size = add_size(size, BackgroundWorkerShmemSize());
@@ -392,6 +396,9 @@ CreateSharedMemoryAndSemaphores(void)
 	XLogRecoveryShmemInit();
 	CLOGShmemInit();
 	CommitTsShmemInit();
+	/* POLAR csn */
+	polar_csnlog_shmem_init();
+	/* POLAR end */
 	SUBTRANSShmemInit();
 	MultiXactShmemInit();
 	InitBufferPool();

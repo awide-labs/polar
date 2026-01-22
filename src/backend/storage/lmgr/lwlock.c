@@ -239,6 +239,10 @@ static const char *const BuiltinTrancheNames[] = {
 	"PolarRSCMapping",
 	/* LWTRANCHE_POLAR_ASYNC_LOCK_REPLAY: */
 	"async_lock_replay",
+	/* LWTRANCHE_CSNLOG_BUFFERS: */
+	"csnlog_puffers",
+	/* LWTRANCHE_POLAR_CSNLOG_LOCAL_CACHE: */
+	"csnlog_local_cache",
 	/* POLAR end */
 };
 

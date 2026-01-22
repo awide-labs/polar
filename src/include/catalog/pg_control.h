@@ -86,6 +86,15 @@ typedef struct CheckPoint
  */
 #define POLAR_WAL						0xF0
 
+/* POLAR csn
+ * add csnlog zero page and truncate wal log type,
+ * which are like clog, to XLOG rmgr for compatible
+ * with old version
+ */
+#define XLOG_CSNLOG_ZEROPAGE			0xE0
+#define XLOG_CSNLOG_TRUNCATE			0xC0
+/* POLAR end */
+
 /*
  * System status indicator.  Note this is stored in pg_control; if you change
  * it, you must bump PG_CONTROL_VERSION

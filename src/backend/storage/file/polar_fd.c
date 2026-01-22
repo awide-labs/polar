@@ -57,6 +57,7 @@
 #define		POLAR_STANDBY_MODE	0x02
 #define		POLAR_DATAMAX_MODE	0x04
 
+bool	polar_mount_pfs_readonly_mode = true;
 int			polar_vfs_switch = POLAR_VFS_SWITCH_LOCAL;
 bool		polar_vfs_is_dio_mode = false;
 
@@ -172,6 +173,12 @@ vfs_mgr		polar_vfs[] =
 		.vfs_type = NULL,
 	}
 };
+
+int
+polar_make_pg_directory(const char *directoryName)
+{
+	return polar_mkdir(directoryName, pg_dir_create_mode);
+}
 
 void
 polar_copydir(char *fromdir, char *todir, bool recurse, bool clean, bool skip_file_err)

@@ -28,6 +28,11 @@
 #include "storage/sinvaladt.h"
 #include "utils/inval.h"
 
+/* POLAR csn */
+#include "access/polar_csnlog.h"
+#include "utils/guc.h"
+/* POLAR end */
+
 
 /*
  * Per-backend counter for generating speculative insertion tokens.
@@ -721,7 +726,15 @@ XactLockTableWait(TransactionId xid, Relation rel, ItemPointer ctid,
 			pg_usleep(1000L);
 		}
 		first = false;
-		xid = SubTransGetTopmostTransaction(xid);
+
+		if (polar_csn_enable)
+		{
+			xid = polar_csnlog_get_top(xid);
+		}
+		else
+		{
+			xid = SubTransGetTopmostTransaction(xid);
+		}
 	}
 
 	if (oper != XLTW_None)
@@ -762,7 +775,15 @@ ConditionalXactLockTableWait(TransactionId xid)
 			pg_usleep(1000L);
 		}
 		first = false;
-		xid = SubTransGetTopmostTransaction(xid);
+
+		if (polar_csn_enable)
+		{
+			xid = polar_csnlog_get_top(xid);
+		}
+		else
+		{
+			xid = SubTransGetTopmostTransaction(xid);
+		}
 	}
 
 	return true;

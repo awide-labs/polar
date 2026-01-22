@@ -78,6 +78,12 @@
 #include "utils/snapmgr.h"
 
 
+/* POLAR csn */
+static bool IsMovedTupleVisibleCSN(HeapTuple htup, Snapshot snapshot,
+										Buffer buffer);
+static bool CommittedXidVisibleInSnapshotCSN(TransactionId xid, Snapshot snapshot);
+/* POLAR end */
+
 /*
  * SetHintBits()
  *
@@ -958,7 +964,7 @@ HeapTupleSatisfiesDirty(HeapTuple htup, Snapshot snapshot,
  * inserting/deleting transaction was still running --- which was more cycles
  * and more contention on ProcArrayLock.
  */
-static bool
+bool
 HeapTupleSatisfiesMVCC(HeapTuple htup, Snapshot snapshot,
 					   Buffer buffer)
 {
@@ -972,6 +978,14 @@ HeapTupleSatisfiesMVCC(HeapTuple htup, Snapshot snapshot,
 		if (HeapTupleHeaderXminInvalid(tuple))
 			return false;
 
+		/* Used by pre-9.0 binary upgrades */
+		if (polar_csn_enable && (tuple->t_infomask & HEAP_MOVED))
+		{
+			/*no cover begin*/
+			if (!IsMovedTupleVisibleCSN(htup, snapshot, buffer))
+				return false;
+			/*no cover end*/
+		}
 		/* Used by pre-9.0 binary upgrades */
 		if (tuple->t_infomask & HEAP_MOVED_OFF)
 		{
@@ -1053,6 +1067,28 @@ HeapTupleSatisfiesMVCC(HeapTuple htup, Snapshot snapshot,
 			else
 				return false;	/* deleted before scan started */
 		}
+		else if (polar_csn_enable)
+		{
+			XidCommitStatus xidstatus;
+			bool visible;
+
+			visible = XidVisibleInSnapshotCSN(HeapTupleHeaderGetRawXmin(tuple), snapshot, &xidstatus);
+
+			if (xidstatus == XID_COMMITTED)
+			{
+				SetHintBits(tuple, buffer, HEAP_XMIN_COMMITTED,
+						HeapTupleHeaderGetRawXmin(tuple));
+			}
+			else if (xidstatus == XID_ABORTED)
+			{
+				/* it must have aborted or crashed */
+				SetHintBits(tuple, buffer, HEAP_XMIN_INVALID,
+							InvalidTransactionId);
+			}
+
+			if (!visible)
+				return false;
+		}
 		else if (XidInMVCCSnapshot(HeapTupleHeaderGetRawXmin(tuple), snapshot))
 			return false;
 		else if (TransactionIdDidCommit(HeapTupleHeaderGetRawXmin(tuple)))
@@ -1069,9 +1105,19 @@ HeapTupleSatisfiesMVCC(HeapTuple htup, Snapshot snapshot,
 	else
 	{
 		/* xmin is committed, but maybe not according to our snapshot */
-		if (!HeapTupleHeaderXminFrozen(tuple) &&
-			XidInMVCCSnapshot(HeapTupleHeaderGetRawXmin(tuple), snapshot))
-			return false;		/* treat as still in progress */
+		if (!HeapTupleHeaderXminFrozen(tuple))
+		{
+			if (polar_csn_enable)
+			{
+				if (!CommittedXidVisibleInSnapshotCSN(HeapTupleHeaderGetRawXmin(tuple), snapshot))
+					return false;                /* treat as still in progress */
+			}
+			else
+			{
+				if (XidInMVCCSnapshot(HeapTupleHeaderGetRawXmin(tuple), snapshot))
+					return false;		/* treat as still in progress */
+			}
+		}
 	}
 
 	/* by here, the inserting transaction has committed */
@@ -1101,12 +1147,23 @@ HeapTupleSatisfiesMVCC(HeapTuple htup, Snapshot snapshot,
 			else
 				return false;	/* deleted before scan started */
 		}
-		if (XidInMVCCSnapshot(xmax, snapshot))
+		if (polar_csn_enable)
+		{
+			XidCommitStatus xidstatus;
+			if (!XidVisibleInSnapshotCSN(xmax, snapshot, &xidstatus))
+				return true; /* it must have aborted or crashed */
+			/* updating transaction committed */
+			return false;
+		}
+		else
+		{
+			if (XidInMVCCSnapshot(xmax, snapshot))
+				return true;
+			if (TransactionIdDidCommit(xmax))
+				return false;		/* updating transaction committed */
+			/* it must have aborted or crashed */
 			return true;
-		if (TransactionIdDidCommit(xmax))
-			return false;		/* updating transaction committed */
-		/* it must have aborted or crashed */
-		return true;
+		}
 	}
 
 	if (!(tuple->t_infomask & HEAP_XMAX_COMMITTED))
@@ -1119,26 +1176,59 @@ HeapTupleSatisfiesMVCC(HeapTuple htup, Snapshot snapshot,
 				return false;	/* deleted before scan started */
 		}
 
-		if (XidInMVCCSnapshot(HeapTupleHeaderGetRawXmax(tuple), snapshot))
-			return true;
-
-		if (!TransactionIdDidCommit(HeapTupleHeaderGetRawXmax(tuple)))
+		if (polar_csn_enable)
 		{
-			/* it must have aborted or crashed */
-			SetHintBits(tuple, buffer, HEAP_XMAX_INVALID,
-						InvalidTransactionId);
-			return true;
-		}
+			XidCommitStatus xidstatus;
+			bool visible;
 
-		/* xmax transaction committed */
-		SetHintBits(tuple, buffer, HEAP_XMAX_COMMITTED,
-					HeapTupleHeaderGetRawXmax(tuple));
+			visible = XidVisibleInSnapshotCSN(HeapTupleHeaderGetRawXmax(tuple), snapshot, &xidstatus);
+
+			if (xidstatus == XID_COMMITTED)
+			{
+				SetHintBits(tuple, buffer, HEAP_XMAX_COMMITTED,
+						HeapTupleHeaderGetRawXmax(tuple));
+			}
+			else if (xidstatus == XID_ABORTED)
+			{
+				/* it must have aborted or crashed */
+				SetHintBits(tuple, buffer, HEAP_XMAX_INVALID,
+							InvalidTransactionId);
+			}
+
+			if (!visible)
+				return true;
+		}
+		else
+		{
+			if (XidInMVCCSnapshot(HeapTupleHeaderGetRawXmax(tuple), snapshot))
+				return true;
+
+			if (!TransactionIdDidCommit(HeapTupleHeaderGetRawXmax(tuple)))
+			{
+				/* it must have aborted or crashed */
+				SetHintBits(tuple, buffer, HEAP_XMAX_INVALID,
+							InvalidTransactionId);
+				return true;
+			}
+
+			/* xmax transaction committed */
+			SetHintBits(tuple, buffer, HEAP_XMAX_COMMITTED,
+						HeapTupleHeaderGetRawXmax(tuple));
+		}
 	}
 	else
 	{
 		/* xmax is committed, but maybe not according to our snapshot */
-		if (XidInMVCCSnapshot(HeapTupleHeaderGetRawXmax(tuple), snapshot))
-			return true;		/* treat as still in progress */
+		if (polar_csn_enable)
+		{
+			if (!CommittedXidVisibleInSnapshotCSN(HeapTupleHeaderGetRawXmax(tuple), snapshot))
+				return true;                /* treat as still in progress */
+		}
+		else
+		{
+			if (XidInMVCCSnapshot(HeapTupleHeaderGetRawXmax(tuple), snapshot))
+				return true;		/* treat as still in progress */
+		}
 	}
 
 	/* xmax transaction committed */
@@ -1795,3 +1885,186 @@ HeapTupleSatisfiesVisibility(HeapTuple tup, Snapshot snapshot, Buffer buffer)
 
 	return false;				/* keep compiler quiet */
 }
+
+/* POLAR csn */
+
+/*no cover begin*/
+
+/*
+ * Check the visibility on a tuple with HEAP_MOVED flags set.
+ *
+ * Returns true if the tuple is visible, false otherwise. These flags are
+ * no longer used, any such tuples must've come from binary upgrade of a
+ * pre-9.0 system, so we can assume that the xid is long finished by now.
+ */
+static bool
+IsMovedTupleVisibleCSN(HeapTuple htup, Snapshot snapshot, Buffer buffer)
+{
+  HeapTupleHeader tuple = htup->t_data;
+  TransactionId xvac = HeapTupleHeaderGetXvac(tuple);
+  XidCommitStatus xidstatus;
+  bool visible;
+
+  /* Used by pre-9.0 binary upgrades */
+  if (tuple->t_infomask & HEAP_MOVED_OFF)
+  {
+	  if (TransactionIdIsCurrentTransactionId(xvac))
+		  return false;
+
+	  visible = XidVisibleInSnapshotCSN(xvac, snapshot, &xidstatus);
+	  if (xidstatus == XID_COMMITTED)
+	  {
+		  SetHintBits(tuple, buffer, HEAP_XMIN_INVALID,
+				  InvalidTransactionId);
+		  return !visible;
+	  }
+	  else
+	  {
+		  SetHintBits(tuple, buffer, HEAP_XMIN_COMMITTED,
+				  InvalidTransactionId);
+		  return true;
+	  }
+  }
+  /* Used by pre-9.0 binary upgrades */
+  else if (tuple->t_infomask & HEAP_MOVED_IN)
+  {
+	  if (!TransactionIdIsCurrentTransactionId(xvac))
+	  {
+		visible = XidVisibleInSnapshotCSN(xvac, snapshot, &xidstatus);
+		if (xidstatus == XID_COMMITTED)
+		{
+		  SetHintBits(tuple, buffer, HEAP_XMIN_COMMITTED,
+				InvalidTransactionId);
+		  return visible;
+		}
+		else
+		{
+		  SetHintBits(tuple, buffer, HEAP_XMIN_INVALID,
+				InvalidTransactionId);
+		  return false;
+		}
+	  }
+	  return true;
+  }
+  else
+  {
+	elog(ERROR, "IsMovedTupleVisibleCSN() called on a non-moved tuple");
+	return true; /* keep compiler quiet */
+  }
+}
+/*no cover end*/
+
+/*
+ * XidMVCCSnapshotCSN
+ *    Is the given XID visible according to the snapshot?
+ *
+ * On return, *hintstatus is set to indicate if the transaction had committed,
+ * or aborted, whether or not it's not visible to us.
+ */
+bool
+XidVisibleInSnapshotCSN(TransactionId xid, Snapshot snapshot,
+		   XidCommitStatus *hintstatus)
+{
+	CommitSeqNo csn;
+
+	*hintstatus = XID_IN_PROGRESS;
+
+	/* If overflowed, we do not use xid snapshot */
+	if (snapshot->polar_csn_xid_snapshot)
+	{
+		bool is_running;
+
+		is_running =  XidInMVCCSnapshotCSN(xid, snapshot);
+		if (!is_running)
+		{
+			if (TransactionIdDidCommit(xid))
+				*hintstatus = XID_COMMITTED;
+			else
+				*hintstatus = XID_ABORTED;
+		}
+		return (!is_running && (*hintstatus == XID_COMMITTED));
+	}
+
+	/*
+	 * Any xid >= xmax is in-progress (or aborted, but we don't distinguish
+	 * that here).
+	 *
+	 * We can't do anything useful with xmin, because the xmin only tells us
+	 * whether we see it as completed. We have to check the transaction log to
+	 * see if the transaction committed or aborted, in any case.
+	 */
+	if (TransactionIdFollowsOrEquals(xid, snapshot->xmax))
+		return false;
+
+	csn = polar_xact_get_csn(xid, snapshot->polar_snapshot_csn, false);
+
+	if (POLAR_CSN_IS_COMMITTED(csn))
+	{
+		*hintstatus = XID_COMMITTED;
+		if (csn < snapshot->polar_snapshot_csn)
+			return true;
+		else
+			return false;
+	}
+	else
+	{
+		if (csn == POLAR_CSN_ABORTED)
+			*hintstatus = XID_ABORTED;
+		return false;
+	}
+}
+
+/*
+ * CommittedXidVisibleInSnapshotCSN
+ *    Is the given XID visible according to the snapshot?
+ *
+ * This is the same as XidVisibleInSnapshot, but the caller knows that the
+ * given XID committed. The only question is whether it's visible to our
+ * snapshot or not.
+ */
+static bool
+CommittedXidVisibleInSnapshotCSN(TransactionId xid, Snapshot snapshot)
+{
+	CommitSeqNo csn;
+
+	/* If overflowed, we do not use xid snapshot */
+	if (snapshot->polar_csn_xid_snapshot)
+	{
+		return !XidInMVCCSnapshotCSN(xid, snapshot);
+	}
+
+	/*
+	 * Make a quick range check to eliminate most XIDs without looking at the
+	 * CSN log.
+	 */
+	if (TransactionIdPrecedes(xid, snapshot->xmin))
+		return true;
+
+	/*
+	 * Any xid >= xmax is in-progress (or aborted, but we don't distinguish
+	 * that here.
+	 */
+	if (TransactionIdFollowsOrEquals(xid, snapshot->xmax))
+		return false;
+
+	csn = polar_xact_get_csn(xid, snapshot->polar_snapshot_csn, true);
+
+	if (!POLAR_CSN_IS_COMMITTED(csn))
+	{
+		/*no cover begin*/
+		elog(WARNING, "transaction %u was hinted as committed, but was not marked as committed in the transaction log", xid);
+		/*
+		 * We have contradicting evidence on whether the transaction committed or
+		 * not. Let's assume that it did. That seems better than erroring out.
+		 */
+		return true;
+		/*no cover end*/
+	}
+
+	if (csn < snapshot->polar_snapshot_csn)
+		return true;
+	else
+		return false;
+}
+
+/* POLAR end */

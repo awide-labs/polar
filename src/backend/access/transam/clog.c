@@ -114,6 +114,14 @@ static void TransactionIdSetPageStatusInternal(TransactionId xid, int nsubxids,
 											   XLogRecPtr lsn, int pageno);
 
 
+/* POLAR csn */
+
+static void
+TransactionIdSetTreeStatusCSN(TransactionId xid, int nsubxids,
+							  TransactionId *subxids, XidStatus status, XLogRecPtr lsn);
+
+/* POLAR end */
+
 /*
  * TransactionIdSetTreeStatus
  *
@@ -174,6 +182,12 @@ TransactionIdSetTreeStatus(TransactionId xid, int nsubxids,
 
 	Assert(status == TRANSACTION_STATUS_COMMITTED ||
 		   status == TRANSACTION_STATUS_ABORTED);
+
+	/* POLAR csn */
+	if (polar_csn_enable)
+	{
+		return TransactionIdSetTreeStatusCSN(xid, nsubxids, subxids, status, lsn);
+	}
 
 	/*
 	 * See how many subxids, if any, are on the same page as the parent, if
@@ -376,15 +390,18 @@ TransactionIdSetPageStatusInternal(TransactionId xid, int nsubxids,
 	 */
 	if (TransactionIdIsValid(xid))
 	{
-		/* Subtransactions first, if needed ... */
-		if (status == TRANSACTION_STATUS_COMMITTED)
+		if (!polar_csn_enable)
 		{
-			for (i = 0; i < nsubxids; i++)
+			/* Subtransactions first, if needed ... */
+			if (status == TRANSACTION_STATUS_COMMITTED)
 			{
-				Assert(XactCtl->shared->page_number[slotno] == TransactionIdToPage(subxids[i]));
-				TransactionIdSetStatusBit(subxids[i],
-										  TRANSACTION_STATUS_SUB_COMMITTED,
-										  lsn, slotno);
+				for (i = 0; i < nsubxids; i++)
+				{
+					Assert(XactCtl->shared->page_number[slotno] == TransactionIdToPage(subxids[i]));
+					TransactionIdSetStatusBit(subxids[i],
+											  TRANSACTION_STATUS_SUB_COMMITTED,
+											  lsn, slotno);
+				}
 			}
 		}
 
@@ -1107,3 +1124,60 @@ polar_init_local_clog(TransactionId xid, bool copy_all)
 	if (res)
 		polar_handle_init_local_dir_err(XactCtl->Dir, res);
 }
+
+/* POLAR csn */
+
+/*
+ * The atomicity is limited by whether all the subxids are in the same CLOG
+ * page as xid.  If they all are, then the lock will be grabbed only once,
+ * and the status will be set to committed directly.  Otherwise there is
+ * a window that the parent will be seen as committed, while (some of) the
+ * children are still seen as in-progress. That's OK with polar csn,
+ * as visibility checking code will not rely on the CLOG for recent
+ * transactions (CSNLOG will be used instead).
+ */
+static void
+TransactionIdSetTreeStatusCSN(TransactionId xid, int nsubxids,
+							  TransactionId *subxids, XidStatus status, XLogRecPtr lsn)
+{
+	TransactionId topXid;
+	int			pageno;
+	int			i;
+	int			offset;
+
+	Assert(status == TRANSACTION_STATUS_COMMITTED ||
+		   status == TRANSACTION_STATUS_ABORTED);
+
+	/*
+	 * Update the clog page-by-page. On first iteration, we will set the
+	 * status of the top-XID, and any subtransactions on the same page.
+	 */
+	pageno = TransactionIdToPage(xid);	/* get page of parent */
+	topXid = xid;
+	offset = 0;
+	i = 0;
+	for (;;)
+	{
+		int			num_on_page = 0;
+
+		while (i < nsubxids && TransactionIdToPage(subxids[i]) == pageno)
+		{
+			num_on_page++;
+			i++;
+		}
+
+		TransactionIdSetPageStatus(topXid,
+								   num_on_page, subxids + offset,
+								   status, lsn, pageno,
+								   nsubxids == num_on_page);
+
+		if (i == nsubxids)
+			break;
+
+		offset = i;
+		pageno = TransactionIdToPage(subxids[offset]);
+		topXid = InvalidTransactionId;
+	}
+}
+
+/* POLAR end */

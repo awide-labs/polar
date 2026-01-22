@@ -26,6 +26,11 @@
 #include "storage/proc.h"
 #include "utils/syscache.h"
 
+/* POLAR csn */
+#include "utils/guc.h"
+#include "access/polar_csnlog.h"
+/* POLAR end */
+
 
 /* Number of OIDs to prefetch (preallocate) per XLOG write */
 #define VAR_OID_PREFETCH		8192
@@ -176,7 +181,10 @@ GetNewTransactionId(bool isSubXact)
 	 */
 	ExtendCLOG(xid);
 	ExtendCommitTs(xid);
-	ExtendSUBTRANS(xid);
+	if (polar_csn_enable)
+		polar_csnlog_extend(xid, true);
+	else
+		ExtendSUBTRANS(xid);
 
 	/*
 	 * Now advance the nextXid counter.  This must not happen until after we

@@ -4105,6 +4105,19 @@ XidIsConcurrent(TransactionId xid)
 	if (TransactionIdFollowsOrEquals(xid, snap->xmax))
 		return true;
 
+	if (polar_csn_enable)
+	{
+		CommitSeqNo csn = polar_xact_get_csn(xid, snap->polar_snapshot_csn, false);
+
+		if (POLAR_CSN_IS_INPROGRESS(csn))
+			return true;
+
+		if (POLAR_CSN_IS_COMMITTED(csn))
+			return csn >= snap->polar_snapshot_csn;
+
+		return false;
+	}
+
 	return pg_lfind32(xid, snap->xip, snap->xcnt);
 }
 

@@ -35,7 +35,9 @@ OBJS = \
 	xlogreader.o \
 	xlogrecovery.o \
 	xlogstats.o \
-	xlogutils.o
+	xlogutils.o \
+	polar_csnlog.o \
+	polar_csn_mvcc_vars.o \
 
 include $(top_srcdir)/src/backend/common.mk
 

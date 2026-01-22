@@ -51,6 +51,7 @@
 #include "access/xlog.h"
 #include "access/xloginsert.h"
 #include "access/xlogutils.h"
+#include "access/polar_csnlog.h"
 #include "catalog/catalog.h"
 #include "catalog/pg_database.h"
 #include "catalog/pg_database_d.h"
@@ -10586,7 +10587,7 @@ HeapCheckForSerializableConflictOut(bool visible, Relation relation,
 	 */
 	if (TransactionIdEquals(xid, GetTopTransactionIdIfAny()))
 		return;
-	xid = SubTransGetTopmostTransaction(xid);
+	xid = polar_csn_enable ? polar_csnlog_get_top(xid) : SubTransGetTopmostTransaction(xid);
 	if (TransactionIdPrecedes(xid, TransactionXmin))
 		return;
 

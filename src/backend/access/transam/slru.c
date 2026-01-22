@@ -68,7 +68,6 @@
 #include "utils/polar_log.h"
 
 
-#define	POLAR_SLRU_FILE_IN_SHARED_STORAGE()	(polar_enable_shared_storage_mode && ctl->shared->polar_file_in_shared_storage)
 #define VICTIM_WINDOW 128		/* POLAR: victim slot window */
 
 #define SlruFileName(a,b,c)			polar_slru_file_name_by_seg(a,b,c)
@@ -662,6 +661,86 @@ SimpleLruReadPage_ReadOnly(SlruCtl ctl, int pageno, TransactionId xid)
 
 	return SimpleLruReadPage(ctl, pageno, true, xid);
 }
+
+/* POLAR for csnlog */
+
+/*
+ * Same as SimpleLruReadPage_ReadOnly, but the shared lock must be held by the caller
+ * and will try best be held at exit.
+ */
+int
+SimpleLruReadPage_ReadOnly_Locked(SlruCtl ctl, int pageno, TransactionId xid)
+{
+	SlruShared	shared = ctl->shared;
+	int slotno;
+	/* POLAR: slru stat */
+	// polar_slru_stat *stat = &shared->stat;
+	/* POLAR slru hash search */
+	int share_lock_retry_times = 3;
+	/* POLAR end */
+
+	Assert(LWLockHeldByMe(shared->ControlLock));
+	/* POLAR: not accurate in SharedLock, but it doesn't matter */
+	// stat->n_slru_read_only_count++;
+
+	for (;;)
+	{
+		/* See if page is already in a buffer */
+		if (polar_enable_slru_hash_index)
+		{
+			polar_slru_hash_entry *entry;
+			entry = hash_search(shared->polar_hash_index, (void *) &pageno,
+					HASH_FIND, NULL);
+
+			if (entry != NULL &&
+				shared->page_status[entry->slotno] != SLRU_PAGE_EMPTY &&
+				shared->page_status[entry->slotno] != SLRU_PAGE_READ_IN_PROGRESS)
+			{
+				SlruRecentlyUsed(shared, entry->slotno);
+				return entry->slotno;
+			}
+		}
+		else
+		{
+			for (slotno = 0; slotno < shared->num_slots; slotno++)
+			{
+				if (shared->page_number[slotno] == pageno &&
+					shared->page_status[slotno] != SLRU_PAGE_EMPTY &&
+					shared->page_status[slotno] != SLRU_PAGE_READ_IN_PROGRESS)
+				{
+					/* See comments for SlruRecentlyUsed macro */
+					SlruRecentlyUsed(shared, slotno);
+					return slotno;
+				}
+			}
+		}
+
+		/* No luck, so switch to normal exclusive lock and do regular read */
+		LWLockRelease(shared->ControlLock);
+		LWLockAcquire(shared->ControlLock, LW_EXCLUSIVE);
+		// stat->n_slru_read_upgrade_count++;
+
+		slotno = SimpleLruReadPage(ctl, pageno, true, xid);
+		Assert(shared->page_status[slotno] == SLRU_PAGE_VALID);
+
+		/*
+		 * In worst case, we maybe fall in dead loop for trying to get share lock.
+		 * So we set a deadline retry time and return with exclusive lock held.
+		 * Performance maybe degrade because of this, so we log the event for
+		 * later diagnostics.
+		 */
+		if (share_lock_retry_times == 0)
+			return slotno;
+		else
+			share_lock_retry_times--;
+
+		LWLockRelease(shared->ControlLock);
+		LWLockAcquire(shared->ControlLock, LW_SHARED);
+		/* POLAR: not accurate in SharedLock, but it doesn't matter */
+		// stat->n_slru_read_only_count++;
+	}
+}
+/* POLAR end */
 
 /*
  * Write a page from a shared buffer, if necessary.
@@ -1946,6 +2025,19 @@ polar_slru_hash_init(SlruShared shared, int nslots, const char *name)
 											 nslots, nslots, &info,
 											 HASH_ELEM | HASH_BLOBS);
 	pfree(hash_name);
+}
+
+/*
+ * For primary, some slru files, such as pg_xact, pg_commit_ts and pg_multixact,
+ * are on the shared storage, for replica, all slru files are on the local storage.
+ */
+bool
+polar_slru_file_in_shared_storage(bool in_shared_storage)
+{
+	if (polar_is_replica() || !polar_enable_shared_storage_mode)
+		return false;
+	else
+		return in_shared_storage;
 }
 
 /*

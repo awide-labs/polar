@@ -111,6 +111,7 @@
 
 /* POLAR */
 #include "storage/polar_fd.h"
+#include "access/polar_csnlog.h"
 
 /*
  * Directory where Two-phase commit files reside within PGDATA
@@ -499,6 +500,9 @@ MarkAsPreparingGuts(GlobalTransaction gxact, TransactionId xid, const char *gid,
 	/* subxid data must be filled later by GXactLoadSubxactData */
 	proc->subxidStatus.overflowed = false;
 	proc->subxidStatus.count = 0;
+
+	/* POLAR csn */
+	proc->polar_csn = InvalidCommitSeqNo;
 
 	gxact->prepared_at = prepared_at;
 	gxact->xid = xid;
@@ -1501,7 +1505,7 @@ FinishPreparedTransaction(const char *gid, bool isCommit)
 	char	   *buf;
 	char	   *bufptr;
 	TwoPhaseFileHeader *hdr;
-	TransactionId latestXid;
+	TransactionId latestXid = InvalidTransactionId;
 	TransactionId *children;
 	RelFileNode *commitrels;
 	RelFileNode *abortrels;
@@ -1550,8 +1554,12 @@ FinishPreparedTransaction(const char *gid, bool isCommit)
 	invalmsgs = (SharedInvalidationMessage *) bufptr;
 	bufptr += MAXALIGN(hdr->ninvalmsgs * sizeof(SharedInvalidationMessage));
 
-	/* compute latestXid among all children */
-	latestXid = TransactionIdLatest(xid, hdr->nsubxacts, children);
+	/* POLAR csn snapshot latestCompletedXid is updated by TransactionIdCommitTree*/
+	if (!polar_csn_enable)
+	{
+		/* compute latestXid among all children */
+		latestXid = TransactionIdLatest(xid, hdr->nsubxacts, children);
+	}
 
 	/* Prevent cancel/die interrupt while cleaning up */
 	HOLD_INTERRUPTS();
@@ -2287,7 +2295,12 @@ ProcessTwoPhaseBuffer(TransactionId xid,
 			AdvanceNextFullTransactionIdPastXid(subxid);
 
 		if (setParent)
-			SubTransSetParent(subxid, xid);
+		{
+			if (polar_csn_enable)
+				polar_csnlog_set_parent(subxid, xid);
+			else
+				SubTransSetParent(subxid, xid);
+		}
 	}
 
 	return buf;
@@ -2392,6 +2405,14 @@ RecordTransactionCommitPrepared(TransactionId xid,
 	 * in the procarray and continue to hold locks.
 	 */
 	SyncRepWaitForLSN(recptr, true, false);
+
+	/* See notes in RecordTransactionCommit */
+	if (polar_csn_enable)
+	{
+		START_CRIT_SECTION();
+		polar_xact_commit_tree_csn(xid, nchildren, children, InvalidXLogRecPtr);
+		END_CRIT_SECTION();
+	}
 }
 
 /*

@@ -1,0 +1,133 @@
+CREATE EXTENSION test_csn;
+SELECT test_csn();
+INFO:  ------------------------------
+INFO:  test_AdvanceOldestActiveXidCSN
+INFO:  case 1
+INFO:  before advance
+INFO:  mvcc info -- polar_oldest_active_xid:0, polar_next_csn:18446744073709551615, polar_latest_completed_xid:0
+INFO:  pgxact info -- xid:4, xmin:0, polar_csn:18446744073709551615, statusFlags:0, overflowed:0, delayChkptFlags:1, nxids:0
+INFO:  after advance
+INFO:  mvcc info -- polar_oldest_active_xid:0, polar_next_csn:18446744073709551615, polar_latest_completed_xid:0
+INFO:  case 2
+INFO:  before advance
+INFO:  xid info -- nextXid:4
+INFO:  mvcc info -- polar_oldest_active_xid:3, polar_next_csn:18446744073709551615, polar_latest_completed_xid:0
+INFO:  pgxact info -- xid:3, xmin:0, polar_csn:18446744073709551615, statusFlags:0, overflowed:0, delayChkptFlags:1, nxids:0
+INFO:  after advance
+INFO:  mvcc info -- polar_oldest_active_xid:4, polar_next_csn:18446744073709551615, polar_latest_completed_xid:0
+INFO:  case 3
+INFO:  before advance
+INFO:  xid info -- nextXid:5
+INFO:  mvcc info -- polar_oldest_active_xid:3, polar_next_csn:18446744073709551615, polar_latest_completed_xid:0
+INFO:  pgxact info -- xid:3, xmin:0, polar_csn:18446744073709551615, statusFlags:0, overflowed:0, delayChkptFlags:1, nxids:0
+INFO:  after advance
+INFO:  mvcc info -- polar_oldest_active_xid:4, polar_next_csn:18446744073709551615, polar_latest_completed_xid:0
+INFO:  ------------------------------
+INFO:  test_ProcArrayInitRecovery
+INFO:  before init
+INFO:  mvcc info -- polar_oldest_active_xid:0, polar_next_csn:18446744073709551615, polar_latest_completed_xid:0
+INFO:  latestObservedXid:0
+INFO:  after init
+INFO:  mvcc info -- polar_oldest_active_xid:3, polar_next_csn:18446744073709551615, polar_latest_completed_xid:0
+INFO:  latestObservedXid:3
+INFO:  ------------------------------
+INFO:  test_ProcArrayClearTransaction
+INFO:  before clear
+INFO:  xmin info -- RecentXmin:3, TransactionXmin:3, replication_slot_xmin:3, replication_slot_catalog_xmin:3
+INFO:  pgxact info -- xid:3, xmin:3, polar_csn:4, statusFlags:0, overflowed:0, delayChkptFlags:0, nxids:0
+INFO:  after clear
+INFO:  xmin info -- RecentXmin:3, TransactionXmin:3, replication_slot_xmin:3, replication_slot_catalog_xmin:3
+INFO:  pgxact info -- xid:0, xmin:0, polar_csn:18446744073709551615, statusFlags:0, overflowed:0, delayChkptFlags:0, nxids:0
+INFO:  ------------------------------
+INFO:  test_ProcArrayEndTransaction
+INFO:  before xact end var info
+INFO:  xid info -- nextXid:4
+INFO:  mvcc info -- polar_oldest_active_xid:3, polar_next_csn:18446744073709551615, polar_latest_completed_xid:0
+INFO:  xmin info -- RecentXmin:3, TransactionXmin:3, replication_slot_xmin:3, replication_slot_catalog_xmin:3
+INFO:  pgxact info -- xid:3, xmin:0, polar_csn:18446744073709551615, statusFlags:0, overflowed:0, delayChkptFlags:1, nxids:0
+INFO:  after xact end var info
+INFO:  xid info -- nextXid:4
+INFO:  mvcc info -- polar_oldest_active_xid:4, polar_next_csn:18446744073709551615, polar_latest_completed_xid:0
+INFO:  xmin info -- RecentXmin:3, TransactionXmin:3, replication_slot_xmin:3, replication_slot_catalog_xmin:3
+INFO:  pgxact info -- xid:0, xmin:0, polar_csn:18446744073709551615, statusFlags:0, overflowed:0, delayChkptFlags:0, nxids:0
+INFO:  ------------------------------
+INFO:  test_GetSnapshotData
+INFO:  case 1
+INFO:  before get
+INFO:  mvcc info -- polar_oldest_active_xid:3, polar_next_csn:4, polar_latest_completed_xid:5
+INFO:  xmin info -- RecentXmin:0, TransactionXmin:0, replication_slot_xmin:0, replication_slot_catalog_xmin:0
+INFO:  pgxact info -- xid:0, xmin:0, polar_csn:18446744073709551615, statusFlags:0, overflowed:0, delayChkptFlags:1, nxids:0
+INFO:  snapshot info -- xmin:0, xmax:0, xcnt:0, subxcnt:0, suboverflowed:0
+INFO:  xids:
+INFO:  subxids:
+INFO:  after get
+INFO:  mvcc info -- polar_oldest_active_xid:3, polar_next_csn:4, polar_latest_completed_xid:5
+INFO:  xmin info -- RecentXmin:3, TransactionXmin:3, replication_slot_xmin:0, replication_slot_catalog_xmin:0
+INFO:  pgxact info -- xid:0, xmin:3, polar_csn:18446744073709551615, statusFlags:0, overflowed:0, delayChkptFlags:1, nxids:0
+INFO:  snapshot info -- xmin:3, polar_snapshot_csn:4, xmax:6
+INFO:  case 2
+INFO:  before get
+INFO:  mvcc info -- polar_oldest_active_xid:3, polar_next_csn:4, polar_latest_completed_xid:5
+INFO:  xmin info -- RecentXmin:0, TransactionXmin:0, replication_slot_xmin:0, replication_slot_catalog_xmin:0
+INFO:  pgxact info -- xid:0, xmin:0, polar_csn:18446744073709551615, statusFlags:0, overflowed:0, delayChkptFlags:1, nxids:0
+INFO:  snapshot info -- xmin:0, xmax:0, xcnt:0, subxcnt:0, suboverflowed:0
+INFO:  xids:
+INFO:  subxids:
+INFO:  after get
+INFO:  mvcc info -- polar_oldest_active_xid:3, polar_next_csn:4, polar_latest_completed_xid:5
+INFO:  xmin info -- RecentXmin:3, TransactionXmin:3, replication_slot_xmin:0, replication_slot_catalog_xmin:0
+INFO:  pgxact info -- xid:0, xmin:3, polar_csn:18446744073709551615, statusFlags:0, overflowed:0, delayChkptFlags:1, nxids:0
+INFO:  snapshot info -- xmin:3, polar_snapshot_csn:4, xmax:6, subxcnt:2, suboverflowed:0
+INFO:  subxids:
+INFO:  4
+INFO:  5
+INFO:  case 3
+INFO:  before get
+INFO:  snapshot info -- xmin:0, xmax:0, xcnt:0, subxcnt:0, suboverflowed:0
+INFO:  xids:
+INFO:  subxids:
+INFO:  snapshot extra info -- whenTaken:0, lsn:0
+INFO:  after get
+INFO:  snapshot info -- xmin:3, polar_snapshot_csn:4, xmax:6
+INFO:  snapshot extra info -- whenTaken:1, lsn:1
+INFO:  ------------------------------
+INFO:  test_polar_csnlog_get_set_csn
+INFO:  case 1
+INFO:  xid2:1023, csn2:10000
+INFO:  xid3:1024, csn3:10000
+INFO:  xid4:1025, csn4:10000
+INFO:  case 2
+INFO:  xid:0, csn:1
+INFO:  case 3
+INFO:  xid:2, csn:3
+INFO:  case 4
+INFO:  xid:1, csn:3
+INFO:  case 5
+INFO:  xid:1025, csn:2
+INFO:  ------------------------------
+INFO:  test_polar_csnlog_get_set_parent
+INFO:  child:4, parent:3
+INFO:  ------------------------------
+INFO:  test_polar_csnlog_get_next_active_xid
+INFO:  xid info -- nextXid:6
+INFO:  next active xid:5
+INFO:  ------------------------------
+INFO:  test_polar_csnlog_get_running_xids
+INFO:  nxids:3, overflowed:0
+INFO:  xid:3
+INFO:  xid:4
+INFO:  xid:5
+INFO:  ------------------------------
+INFO:  test_polar_csnlog_get_top
+INFO:  child:5, top:3
+INFO:  ------------------------------
+INFO:  test_polar_csnlog_extend_truncate
+INFO:  xid:131072, csn:0
+INFO:  ------------------------------
+INFO:  test_polar_csnlog_zero_page_redo
+INFO:  xid:1025, csn:0
+ test_csn 
+----------
+ 
+(1 row)
+

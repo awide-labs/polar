@@ -1287,11 +1287,25 @@ LogStandbySnapshot(void)
 	if (wal_level < WAL_LEVEL_LOGICAL)
 		LWLockRelease(ProcArrayLock);
 
+	/*
+	 * POLAR csn
+	 * For the same reason with ProcArrayLock
+	 */
+	if (polar_csn_enable && wal_level < WAL_LEVEL_LOGICAL)
+		LWLockRelease(CommitSeqNoLock);
+
 	recptr = LogCurrentRunningXacts(running);
 
 	/* Release lock if we kept it longer ... */
 	if (wal_level >= WAL_LEVEL_LOGICAL)
 		LWLockRelease(ProcArrayLock);
+
+	/*
+	 * POLAR csn
+	 * For the same reason with ProcArrayLock
+	 */
+	if (polar_csn_enable && wal_level >= WAL_LEVEL_LOGICAL)
+		LWLockRelease(CommitSeqNoLock);
 
 	/* GetRunningTransactionData() acquired XidGenLock, we must release it */
 	LWLockRelease(XidGenLock);

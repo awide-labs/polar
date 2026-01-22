@@ -117,6 +117,8 @@
 #include "storage/polar_flush.h"
 #include "utils/faultinjector.h"
 #include "utils/polar_local_cache.h"
+#include "access/polar_csn_mvcc_vars.h"
+#include "access/polar_csnlog.h"
 /* POLAR end */
 
 extern uint32 bootstrap_data_checksum_version;
@@ -5820,6 +5822,8 @@ BootStrapXLOG(void)
 	uint64		sysidentifier;
 	struct timeval tv;
 	pg_crc32c	crc;
+	/* POLAR csn */
+	FullTransactionId latestCompletedFullXid;
 
 	/* allow ordinary WAL segment creation, like StartupXLOG() would */
 	LWLockAcquire(ControlFileLock, LW_EXCLUSIVE);
@@ -5876,6 +5880,17 @@ BootStrapXLOG(void)
 	ShmemVariableCache->nextXid = checkPoint.nextXid;
 	ShmemVariableCache->nextOid = checkPoint.nextOid;
 	ShmemVariableCache->oidCount = 0;
+
+	/* POLAR csn */
+	pg_atomic_write_u64(&polar_shmem_csn_mvcc_var_cache->polar_next_csn, POLAR_CSN_FIRST_NORMAL);
+	latestCompletedFullXid = checkPoint.nextXid;
+	if (FullTransactionIdFollows(latestCompletedFullXid, FirstNormalFullTransactionId))
+		FullTransactionIdRetreat(&latestCompletedFullXid);
+	Assert(FullTransactionIdIsNormal(latestCompletedFullXid));
+	pg_atomic_write_u64(&polar_shmem_csn_mvcc_var_cache->polar_latest_completed_xid, U64FromFullTransactionId(latestCompletedFullXid));
+	pg_atomic_write_u32(&polar_shmem_csn_mvcc_var_cache->polar_oldest_active_xid, XidFromFullTransactionId(checkPoint.nextXid));
+	/* POLAR end */
+
 	MultiXactSetNextMXact(checkPoint.nextMulti, checkPoint.nextMultiOffset);
 	AdvanceOldestClogXid(checkPoint.oldestXid);
 	SetTransactionIdLimit(checkPoint.oldestXid, checkPoint.oldestXidDB);
@@ -6216,6 +6231,8 @@ StartupXLOG(void)
 	XLogRecPtr	missingContrecPtr;
 	TransactionId oldestActiveXID;
 	bool		promoted = false;
+	/* POLAR csn */
+	FullTransactionId latestCompletedFullXid;
 
 	/*
 	 * We should have an aux process resource owner to use, and we should not
@@ -6298,6 +6315,10 @@ StartupXLOG(void)
 	 */
 	ValidateXLOGDirectoryStructure();
 
+	polar_csnlog_validate_dir();
+	if (!polar_csn_enable)
+		polar_csnlog_remove_all();
+
 	/* Set up timeout handler needed to report startup progress. */
 	if (!IsBootstrapProcessingMode())
 		RegisterTimeout(STARTUP_PROGRESS_TIMEOUT,
@@ -6354,6 +6375,16 @@ StartupXLOG(void)
 	/* POLAR */
 	XLogCtl->oldest_apply_lsn = InvalidXLogRecPtr;
 	XLogCtl->oldest_lock_lsn = InvalidXLogRecPtr;
+
+	/* POLAR csn */
+	pg_atomic_write_u64(&polar_shmem_csn_mvcc_var_cache->polar_next_csn, POLAR_CSN_FIRST_NORMAL);
+	latestCompletedFullXid = checkPoint.nextXid;
+	if (FullTransactionIdFollows(latestCompletedFullXid, FirstNormalFullTransactionId))
+		FullTransactionIdRetreat(&latestCompletedFullXid);
+	Assert(FullTransactionIdIsNormal(latestCompletedFullXid));
+	pg_atomic_write_u64(&polar_shmem_csn_mvcc_var_cache->polar_latest_completed_xid, U64FromFullTransactionId(latestCompletedFullXid));
+	pg_atomic_write_u32(&polar_shmem_csn_mvcc_var_cache->polar_oldest_active_xid, XidFromFullTransactionId(checkPoint.nextXid));
+	/* POLAR end */
 
 	/*
 	 * Clear out any old relcache cache files.  This is *necessary* if we do
@@ -6574,14 +6605,21 @@ StartupXLOG(void)
 			Assert(TransactionIdIsValid(oldestActiveXID));
 
 			/* Tell procarray about the range of xids it has to deal with */
-			ProcArrayInitRecovery(XidFromFullTransactionId(ShmemVariableCache->nextXid));
+			ProcArrayInitRecovery(XidFromFullTransactionId(ShmemVariableCache->nextXid), oldestActiveXID);
 
 			/*
 			 * Startup subtrans only.  CLOG, MultiXact and commit timestamp
 			 * have already been started up and other SLRUs are not maintained
 			 * during recovery and need not be started yet.
 			 */
-			StartupSUBTRANS(oldestActiveXID);
+			if (polar_csn_enable)
+			{
+				polar_csnlog_startup(oldestActiveXID);
+			}
+			else
+			{
+				StartupSUBTRANS(oldestActiveXID);
+			}
 
 			/*
 			 * If we're beginning at a shutdown checkpoint, we know that
@@ -6904,17 +6942,39 @@ StartupXLOG(void)
 	XLogCtl->lastSegSwitchLSN = EndOfLog;
 
 	/* also initialize latestCompletedXid, to nextXid - 1 */
-	LWLockAcquire(ProcArrayLock, LW_EXCLUSIVE);
-	ShmemVariableCache->latestCompletedXid = ShmemVariableCache->nextXid;
-	FullTransactionIdRetreat(&ShmemVariableCache->latestCompletedXid);
-	LWLockRelease(ProcArrayLock);
+	if (polar_csn_enable)
+	{
+		latestCompletedFullXid = ShmemVariableCache->nextXid;
+		if (FullTransactionIdFollows(latestCompletedFullXid, FirstNormalFullTransactionId))
+			FullTransactionIdRetreat(&latestCompletedFullXid);
+		pg_atomic_write_u64(&polar_shmem_csn_mvcc_var_cache->polar_latest_completed_xid,
+							U64FromFullTransactionId(latestCompletedFullXid));
+		pg_atomic_write_u32(&polar_shmem_csn_mvcc_var_cache->polar_oldest_active_xid,
+							oldestActiveXID);
+	}
+	else
+	{
+		LWLockAcquire(ProcArrayLock, LW_EXCLUSIVE);
+		ShmemVariableCache->latestCompletedXid = ShmemVariableCache->nextXid;
+		FullTransactionIdRetreat(&ShmemVariableCache->latestCompletedXid);
+		LWLockRelease(ProcArrayLock);
+	}
 
 	/*
 	 * Start up subtrans, if not already done for hot standby.  (commit
 	 * timestamps are started below, if necessary.)
 	 */
 	if (standbyState == STANDBY_DISABLED)
-		StartupSUBTRANS(oldestActiveXID);
+	{
+		if (polar_csn_enable)
+		{
+			polar_csnlog_startup(oldestActiveXID);
+		}
+		else
+		{
+			StartupSUBTRANS(oldestActiveXID);
+		}
+	}
 
 	/*
 	 * Perform end of recovery actions for any SLRUs that need it.
@@ -6933,7 +6993,7 @@ StartupXLOG(void)
 	ShutdownWalRecovery();
 
 	if (endOfRecoveryInfo->polar_logindex_promote_ro)
-		polar_online_promote_data(polar_logindex_redo_instance);
+		polar_online_promote_data(polar_logindex_redo_instance, oldestActiveXID);
 	else if (endOfRecoveryInfo->polar_logindex_promote_standby)
 		polar_standby_promote_data(polar_logindex_redo_instance);
 	/* POLAR: clean up xlog queue used by old standby node. */
@@ -7794,6 +7854,8 @@ CreateCheckPoint(int flags)
 	XLogRecPtr	polar_last_lsn;
 	bool		polar_is_inc;
 	XLogRecPtr	polar_inc_redo = InvalidXLogRecPtr;
+	/* POLAR csn */
+	TransactionId oldest_active_xid = InvalidTransactionId;
 
 	/*
 	 * POLAR: Don't do checkpoint during online promote when background
@@ -7871,6 +7933,14 @@ CreateCheckPoint(int flags)
 		checkPoint.oldestActiveXid = GetOldestActiveTransactionId();
 	else
 		checkPoint.oldestActiveXid = InvalidTransactionId;
+
+	/*
+	 * POLAR csn
+	 * Record polar_oldest_active_xid before checkpoint redo point,
+	 * we should make sure truncate csnlog with xid before redo point.
+	 */
+	if (polar_csn_enable)
+		oldest_active_xid = pg_atomic_read_u32(&polar_shmem_csn_mvcc_var_cache->polar_oldest_active_xid);
 
 	/*
 	 * Get location of last important record before acquiring insert locks (as
@@ -8280,9 +8350,36 @@ CreateCheckPoint(int flags)
 	 * attempt to reference any pg_subtrans entry older than that (see Asserts
 	 * in subtrans.c).  During recovery, though, we mustn't do this because
 	 * StartupSUBTRANS hasn't been called yet.
+	 *
+	 * POLAR csn
+	 * CSNLog is larger than Clog in disk size, we want to truncate csnlog
+	 * as soon as possible.
+	 * Clog truncate in vacuum frozen time, but we want CSNLog truncate in
+	 * checkpoint time
 	 */
 	if (!RecoveryInProgress())
-		TruncateSUBTRANS(GetOldestTransactionIdConsideredRunning());
+	{
+		if (polar_csn_enable)
+		{
+			/*
+			 * We try to truncate csnlog to reduce csnlog space, but
+			 * when it's shutdown checkpoint, we can't truncate csnlog,
+			 * because csnlog truncate need write wal
+			 */
+			if (!shutdown)
+			{
+				TransactionId truncate_xid = GetOldestNonRemovableTransactionId(NULL);
+
+				/* Make sure truncate csnlog with xid less than polar_oldest_active_xid at redo point */
+				if (TransactionIdPrecedes(oldest_active_xid, truncate_xid))
+					truncate_xid = oldest_active_xid;
+
+				polar_csnlog_truncate(truncate_xid);
+			}
+		}
+		else
+			TruncateSUBTRANS(GetOldestTransactionIdConsideredRunning());
+	}
 
 	/* Real work is done; log and update stats. */
 	LogCheckpointEnd(false);
@@ -8458,7 +8555,10 @@ CheckPointGuts(XLogRecPtr checkPointRedo, int flags)
 	CheckpointStats.ckpt_write_t = GetCurrentTimestamp();
 	CheckPointCLOG();
 	CheckPointCommitTs();
-	CheckPointSUBTRANS();
+	if (polar_csn_enable)
+		polar_csnlog_checkpoint();
+	else
+		CheckPointSUBTRANS();
 	CheckPointMultiXact();
 	CheckPointPredicate();
 	CheckPointBuffers(flags);
@@ -8787,7 +8887,10 @@ CreateRestartPoint(int flags)
 	 * this because StartupSUBTRANS hasn't been called yet.
 	 */
 	if (EnableHotStandby)
-		TruncateSUBTRANS(GetOldestTransactionIdConsideredRunning());
+	{
+		if (!polar_csn_enable)
+			TruncateSUBTRANS(GetOldestTransactionIdConsideredRunning());
+	}
 
 	/* Real work is done; log and update stats. */
 	LogCheckpointEnd(true);
@@ -9540,6 +9643,19 @@ xlog_redo(XLogReaderState *record)
 
 		/* Keep track of full_page_writes */
 		lastFullPageWrites = fpw;
+	}
+	/* POLAR csnlog */
+	else if (polar_csn_enable && info == XLOG_CSNLOG_ZEROPAGE)
+	{
+		int			pageno;
+		memcpy(&pageno, XLogRecGetData(record), sizeof(int));
+		polar_csnlog_zero_page_redo(pageno);
+	}
+	else if (polar_csn_enable && info == XLOG_CSNLOG_TRUNCATE)
+	{
+		int			pageno;
+		memcpy(&pageno, XLogRecGetData(record), sizeof(int));
+		polar_csnlog_truncate_redo(pageno);
 	}
 	/* POLAR: for POLAR_WAL */
 	else if (info == POLAR_WAL)

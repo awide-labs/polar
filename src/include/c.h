@@ -643,6 +643,16 @@ typedef uint32 CommandId;
 #define FirstCommandId	((CommandId) 0)
 #define InvalidCommandId	(~(CommandId)0)
 
+/*
+ * POLAR
+ * 64 bit commit sequence number
+ */
+typedef uint64 CommitSeqNo;
+
+#define InvalidCommitSeqNo		((CommitSeqNo) -1)
+
+/* POLAR end */
+
 
 /* ----------------
  *		Variable-length datatypes all share the 'struct varlena' header.

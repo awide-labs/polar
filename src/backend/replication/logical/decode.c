@@ -163,6 +163,8 @@ xlog_decode(LogicalDecodingContext *ctx, XLogRecordBuffer *buf)
 		case XLOG_FPI:
 		case XLOG_OVERWRITE_CONTRECORD:
 		case POLAR_WAL:
+		case XLOG_CSNLOG_ZEROPAGE:
+		case XLOG_CSNLOG_TRUNCATE:
 			break;
 		default:
 			elog(ERROR, "unexpected RM_XLOG_ID record type: %u", info);
