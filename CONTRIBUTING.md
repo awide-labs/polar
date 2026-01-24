@@ -203,6 +203,10 @@ Skip-changelog: true
   - Do not use `//` for comments
   - Both, macros with arguments and static inline functions, may be used. The latter is preferred only if the former simplifies coding.
   - Follow BSD C programming conventions
+  - C code must be formatted using `pgindent` before committing. The CI pipeline automatically checks code style compliance on all pull requests. Requirements:
+    - `pg_bsd_indent` version 2.1.2 must be installed
+    - Run `src/tools/pgindent/pgindent` to format your code
+    - Ensure all C files pass the pgindent check before pushing
 
 - Programs in shell can follow [Google code conventions](https://google.github.io/styleguide/shellguide.html)
 - Program in Perl can follow official [Perl style](https://perldoc.perl.org/perlstyle)
