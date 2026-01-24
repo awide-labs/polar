@@ -468,7 +468,8 @@ polar_ringbuf_update_keep_data(polar_ringbuf_t rbuf)
 bool
 polar_ringbuf_try_free_up(polar_ringbuf_t rbuf, size_t len)
 {
-	bool	progress, is_free;
+	bool		progress,
+				is_free;
 
 	LWLockAcquire(&rbuf->lock, LW_EXCLUSIVE);
 	is_free = (polar_ringbuf_free_size(rbuf) > len);

@@ -1287,10 +1287,10 @@ LogStandbySnapshot(void)
 	if (wal_level < WAL_LEVEL_LOGICAL)
 		LWLockRelease(ProcArrayLock);
 
-	/*
+	/*---
 	 * POLAR csn
 	 * For the same reason with ProcArrayLock
-	 */
+	 ---*/
 	if (polar_csn_enable && wal_level < WAL_LEVEL_LOGICAL)
 		LWLockRelease(CommitSeqNoLock);
 
@@ -1300,10 +1300,10 @@ LogStandbySnapshot(void)
 	if (wal_level >= WAL_LEVEL_LOGICAL)
 		LWLockRelease(ProcArrayLock);
 
-	/*
+	/*---
 	 * POLAR csn
 	 * For the same reason with ProcArrayLock
-	 */
+	 ---*/
 	if (polar_csn_enable && wal_level >= WAL_LEVEL_LOGICAL)
 		LWLockRelease(CommitSeqNoLock);
 

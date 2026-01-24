@@ -274,21 +274,21 @@ polar_get_slot_node_type(PG_FUNCTION_ARGS)
 	}
 }
 
-extern polar_wal_pipeline_stats_t* polar_wal_pipeline_get_stats();
-extern polar_wait_object_t* polar_wal_pipeline_get_worker_wait_obj(int thread_no);
+extern polar_wal_pipeline_stats_t *polar_wal_pipeline_get_stats();
+extern polar_wait_object_t * polar_wal_pipeline_get_worker_wait_obj(int thread_no);
 extern void polar_wal_pipeline_stats_reset(void);
 
 PG_FUNCTION_INFO_V1(polar_wal_pipeline_info);
 Datum
 polar_wal_pipeline_info(PG_FUNCTION_ARGS)
 {
-	TupleDesc   tupdesc;
-	Datum       values[10];
-	bool        nulls[10];
+	TupleDesc	tupdesc;
+	Datum		values[10];
+	bool		nulls[10];
 	HeapTuple	tuple;
 	Datum		result;
-	int         i = 0;
-	int 		j;
+	int			i = 0;
+	int			j;
 
 	/* Build a tuple descriptor for our result type */
 	if (get_call_result_type(fcinfo, NULL, &tupdesc) != TYPEFUNC_COMPOSITE)
@@ -315,12 +315,12 @@ PG_FUNCTION_INFO_V1(polar_wal_pipeline_stats);
 Datum
 polar_wal_pipeline_stats(PG_FUNCTION_ARGS)
 {
-	TupleDesc   tupdesc;
-	Datum       values[31];
-	bool        nulls[31];
+	TupleDesc	tupdesc;
+	Datum		values[31];
+	bool		nulls[31];
 	HeapTuple	tuple;
 	Datum		result;
-	int         i = 0;
+	int			i = 0;
 	int			j;
 	polar_wal_pipeline_stats_t *stats = polar_wal_pipeline_get_stats();
 	uint64		user_stats[6];

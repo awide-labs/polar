@@ -391,7 +391,7 @@ polar_compute_tv_delay(struct timespec *tv, long us)
 }
 
 void
-polar_init_spin_delay_mt(polar_spin_delay_status_t *status, polar_wait_object_t *wait_obj, 
+polar_init_spin_delay_mt(polar_spin_delay_status_t * status, polar_wait_object_t * wait_obj,
 						 int spins_per_delay, int timeout_us)
 {
 	status->wait_obj = wait_obj;
@@ -402,7 +402,7 @@ polar_init_spin_delay_mt(polar_spin_delay_status_t *status, polar_wait_object_t 
 }
 
 polar_wait_result_t
-polar_perform_spin_delay_mt(polar_spin_delay_status_t *status, bool need_lock, bool need_wait)
+polar_perform_spin_delay_mt(polar_spin_delay_status_t * status, bool need_lock, bool need_wait)
 {
 	polar_wait_result_t wait_res = POLAR_WAIT_RES_SPIN;
 
@@ -412,7 +412,7 @@ polar_perform_spin_delay_mt(polar_spin_delay_status_t *status, bool need_lock, b
 	/* Block the process every spins_per_delay tries */
 	if (++(status->spins) >= status->spins_per_delay)
 	{
-		int res;
+		int			res;
 		struct timespec tv = {0, 0};
 
 		if (!need_wait)
@@ -462,9 +462,10 @@ polar_perform_spin_delay_mt(polar_spin_delay_status_t *status, bool need_lock, b
 }
 
 void
-polar_reset_spin_delay_mt(polar_spin_delay_status_t *status)
+polar_reset_spin_delay_mt(polar_spin_delay_status_t * status)
 {
 	status->spins = -1;
 	status->cur_delay = -1;
 }
+
 /* POLAR wal pipeline end */

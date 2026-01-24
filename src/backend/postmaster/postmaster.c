@@ -1547,8 +1547,8 @@ PostmasterMain(int argc, char *argv[])
 	AddToDataDirLockFile(LOCK_FILE_LINE_PM_STATUS, PM_STATUS_STARTING);
 
 	/*
-	 * Must startup pipeliner before checkpointer,
-	 * because only wal pipeliner can write wal log.
+	 * Must startup pipeliner before checkpointer, because only wal pipeliner
+	 * can write wal log.
 	 */
 	if (POLAR_WAL_PIPELINER_ENABLE() && PolarWalPipelinerPID == 0 && !polar_is_replica())
 	{
@@ -3416,8 +3416,8 @@ reaper(SIGNAL_ARGS)
 			connsAllowed = true;
 
 			/*
-			 * Must startup pipeliner before checkpointer,
-			 * because only wal pipeliner can write wal log.
+			 * Must startup pipeliner before checkpointer, because only wal
+			 * pipeliner can write wal log.
 			 */
 			if (POLAR_WAL_PIPELINER_ENABLE() && PolarWalPipelinerPID == 0 && !polar_is_replica())
 			{
@@ -3552,7 +3552,7 @@ reaper(SIGNAL_ARGS)
 		{
 			PolarWalPipelinerPID = 0;
 			HandleChildCrash(pid, exitstatus,
-			                 _("WAL pipeliner process"));
+							 _("WAL pipeliner process"));
 			continue;
 		}
 
@@ -5707,7 +5707,7 @@ sigusr1_handler(SIGNAL_ARGS)
 	else if (polar_enable_multi_syslogger)
 	{
 		/* POLAR */
-		bool rotation_via_signal_file = CheckLogrotateSignal();
+		bool		rotation_via_signal_file = CheckLogrotateSignal();
 
 		if ((rotation_via_signal_file || CheckPostmasterSignal(PMSIGNAL_ROTATE_LOGFILE)) &&
 			polar_syslogger_num > 0)

@@ -99,6 +99,7 @@ static void
 polar_flushlist_swap_nodes(FlushListMinHeap *h, int i, int j)
 {
 	FLushListHeapNode tmp = h->heap[i];
+
 	h->heap[i] = h->heap[j];
 	h->heap[j] = tmp;
 	h->pos[h->heap[i].id] = i;
@@ -110,7 +111,8 @@ polar_flushlist_sift_up(FlushListMinHeap *h, int idx)
 {
 	while (idx > 0)
 	{
-		int parent = (idx - 1) / 2;
+		int			parent = (idx - 1) / 2;
+
 		if (polar_flushlist_lsn_compare(h->heap[parent].lsn, h->heap[idx].lsn) <= 0)
 			break;
 		polar_flushlist_swap_nodes(h, idx, parent);
@@ -123,9 +125,9 @@ polar_flushlist_sift_down(FlushListMinHeap *h, int idx)
 {
 	for (;;)
 	{
-		int left = idx * 2 + 1;
-		int right = left + 1;
-		int smallest = idx;
+		int			left = idx * 2 + 1;
+		int			right = left + 1;
+		int			smallest = idx;
 
 		if (left < h->size &&
 			polar_flushlist_lsn_compare(h->heap[left].lsn, h->heap[smallest].lsn) < 0)
@@ -146,7 +148,7 @@ polar_flushlist_sift_down(FlushListMinHeap *h, int idx)
 static bool
 polar_flushlist_minheap_insert(FlushListMinHeap *h, int id, XLogRecPtr lsn)
 {
-	int idx;
+	int			idx;
 
 	if (h->size >= POLAR_FLUSHLIST_PARTITIONS || h->pos[id] != -1)
 	{
@@ -170,6 +172,7 @@ polar_flushlist_minheap_pop(FlushListMinHeap *h)
 	if (h->size == 0)
 	{
 		FLushListHeapNode dummy;
+
 		dummy.id = -1;
 		dummy.lsn = InvalidXLogRecPtr;
 		return dummy;
@@ -193,14 +196,14 @@ polar_flushlist_minheap_pop(FlushListMinHeap *h)
 static void
 polar_flushlist_minheap_update(FlushListMinHeap *h, int id, XLogRecPtr new_lsn)
 {
-	int idx;
-	XLogRecPtr old;
+	int			idx;
+	XLogRecPtr	old;
 
 	idx = h->pos[id];
 
 	if (idx == -1)
 	{
-		return;  /* not present */
+		return;					/* not present */
 	}
 
 	old = h->heap[idx].lsn;
@@ -214,15 +217,15 @@ polar_flushlist_minheap_update(FlushListMinHeap *h, int id, XLogRecPtr new_lsn)
 static bool
 polar_flushlist_minheap_remove(FlushListMinHeap *h, int id)
 {
-	int idx;
+	int			idx;
 
 	idx = h->pos[id];
 	if (idx == -1)
 	{
-		return false;  /* not present */
+		return false;			/* not present */
 	}
 
-	h->pos[id] = -1;  /* mark as gone */
+	h->pos[id] = -1;			/* mark as gone */
 
 	if (idx == h->size - 1)
 	{
@@ -252,7 +255,7 @@ FlushList *
 polar_flush_list_flush_begin()
 {
 	FLushListHeapNode heap_node;
-	FlushList *list;
+	FlushList  *list;
 
 	SpinLockAcquire(&polar_flush_ctl->lock);
 	heap_node = polar_flushlist_minheap_pop(&polar_flush_ctl->heap);
@@ -283,7 +286,7 @@ polar_flush_list_flush_end(FlushList *list)
 		polar_flushlist_minheap_insert(&polar_flush_ctl->heap, list->index, list->min_lsn);
 	SpinLockRelease(&polar_flush_ctl->lock);
 }
- 
+
 
 /*
  * polar_flush_list_ctl_shmem_size
@@ -329,7 +332,7 @@ polar_init_flush_list_ctl(bool init)
 
 		for (i = 0; i < POLAR_FLUSHLIST_PARTITIONS; i++)
 		{
-			FlushList *list = &polar_flush_ctl->lists[i];
+			FlushList  *list = &polar_flush_ctl->lists[i];
 
 			pg_atomic_init_u32(&list->count, 0);
 
@@ -439,7 +442,7 @@ polar_get_batch_buffer(int *batch_buf, int bgwriter_flush_batch_size, FlushList 
 void
 polar_remove_buffer_from_flush_list(BufferDesc *buf)
 {
-	FlushList *list;
+	FlushList  *list;
 
 	if (!polar_flush_list_enabled())
 		return;
@@ -469,8 +472,8 @@ void
 polar_put_buffer_to_flush_list(BufferDesc *buf,
 							   XLogRecPtr lsn)
 {
-	int idx = polar_buffer_get_flushlist_partition(buf);
-	FlushList *list = &polar_flush_ctl->lists[idx];
+	int			idx = polar_buffer_get_flushlist_partition(buf);
+	FlushList  *list = &polar_flush_ctl->lists[idx];
 
 	SpinLockAcquire(&list->flushlist_lock);
 
@@ -502,8 +505,8 @@ polar_put_buffer_to_flush_list(BufferDesc *buf,
 void
 polar_adjust_position_in_flush_list(BufferDesc *buf)
 {
-	FlushList *list = &polar_flush_ctl->lists[polar_buffer_get_flushlist_partition(buf)];
-	XLogRecPtr lsn;
+	FlushList  *list = &polar_flush_ctl->lists[polar_buffer_get_flushlist_partition(buf)];
+	XLogRecPtr	lsn;
 
 	SpinLockAcquire(&list->flushlist_lock);
 
@@ -563,7 +566,8 @@ remove_one_buffer(FlushList *list, BufferDesc *buf)
 		list->min_lsn = InvalidXLogRecPtr;
 		if (!list->flushing)
 		{
-			bool succ = polar_flushlist_minheap_remove(&polar_flush_ctl->heap, list->index);
+			bool		succ = polar_flushlist_minheap_remove(&polar_flush_ctl->heap, list->index);
+
 			Assert(succ);
 			(void) succ;
 		}

@@ -125,7 +125,7 @@ typedef struct pfsd_mount_arg_t
 	} while (0)
 
 extern PolarNodeType polar_local_node_type;
-extern bool 	polar_mount_pfs_readonly_mode;
+extern bool polar_mount_pfs_readonly_mode;
 extern uint32 polar_local_vfs_state;
 extern int	polar_vfs_switch;
 extern char *polar_datadir;
@@ -184,7 +184,7 @@ polar_bufferio_vfs_type(int fd)
 }
 
 extern ssize_t polar_read_line(int fd, void *buffer, size_t len);
-extern int polar_make_pg_directory(const char *directoryName);
+extern int	polar_make_pg_directory(const char *directoryName);
 extern int	polar_copy_file(char *fromfile, char *tofile, bool skiperr);
 extern void polar_copydir(char *fromdir, char *todir, bool recurse, bool clean, bool skip_file_err);
 extern struct dirent *polar_read_dir_ext(DIR *dir, const char *dirname, int elevel, int *err);

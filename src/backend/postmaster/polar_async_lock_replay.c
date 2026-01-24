@@ -47,7 +47,7 @@
 static HTAB *xact_tbl;
 static HTAB *lock_tbl;
 
-bool lock_tbl_empty = true;
+bool		lock_tbl_empty = true;
 
 /* For debugging, record last add and replay infomation */
 static polar_alr_lock last_add_lock;

@@ -80,8 +80,9 @@
 
 /* POLAR csn */
 static bool IsMovedTupleVisibleCSN(HeapTuple htup, Snapshot snapshot,
-										Buffer buffer);
+								   Buffer buffer);
 static bool CommittedXidVisibleInSnapshotCSN(TransactionId xid, Snapshot snapshot);
+
 /* POLAR end */
 
 /*
@@ -981,10 +982,10 @@ HeapTupleSatisfiesMVCC(HeapTuple htup, Snapshot snapshot,
 		/* Used by pre-9.0 binary upgrades */
 		if (polar_csn_enable && (tuple->t_infomask & HEAP_MOVED))
 		{
-			/*no cover begin*/
+			/* no cover begin */
 			if (!IsMovedTupleVisibleCSN(htup, snapshot, buffer))
 				return false;
-			/*no cover end*/
+			/* no cover end */
 		}
 		/* Used by pre-9.0 binary upgrades */
 		if (tuple->t_infomask & HEAP_MOVED_OFF)
@@ -1070,14 +1071,14 @@ HeapTupleSatisfiesMVCC(HeapTuple htup, Snapshot snapshot,
 		else if (polar_csn_enable)
 		{
 			XidCommitStatus xidstatus;
-			bool visible;
+			bool		visible;
 
 			visible = XidVisibleInSnapshotCSN(HeapTupleHeaderGetRawXmin(tuple), snapshot, &xidstatus);
 
 			if (xidstatus == XID_COMMITTED)
 			{
 				SetHintBits(tuple, buffer, HEAP_XMIN_COMMITTED,
-						HeapTupleHeaderGetRawXmin(tuple));
+							HeapTupleHeaderGetRawXmin(tuple));
 			}
 			else if (xidstatus == XID_ABORTED)
 			{
@@ -1110,12 +1111,12 @@ HeapTupleSatisfiesMVCC(HeapTuple htup, Snapshot snapshot,
 			if (polar_csn_enable)
 			{
 				if (!CommittedXidVisibleInSnapshotCSN(HeapTupleHeaderGetRawXmin(tuple), snapshot))
-					return false;                /* treat as still in progress */
+					return false;	/* treat as still in progress */
 			}
 			else
 			{
 				if (XidInMVCCSnapshot(HeapTupleHeaderGetRawXmin(tuple), snapshot))
-					return false;		/* treat as still in progress */
+					return false;	/* treat as still in progress */
 			}
 		}
 	}
@@ -1150,8 +1151,9 @@ HeapTupleSatisfiesMVCC(HeapTuple htup, Snapshot snapshot,
 		if (polar_csn_enable)
 		{
 			XidCommitStatus xidstatus;
+
 			if (!XidVisibleInSnapshotCSN(xmax, snapshot, &xidstatus))
-				return true; /* it must have aborted or crashed */
+				return true;	/* it must have aborted or crashed */
 			/* updating transaction committed */
 			return false;
 		}
@@ -1160,7 +1162,7 @@ HeapTupleSatisfiesMVCC(HeapTuple htup, Snapshot snapshot,
 			if (XidInMVCCSnapshot(xmax, snapshot))
 				return true;
 			if (TransactionIdDidCommit(xmax))
-				return false;		/* updating transaction committed */
+				return false;	/* updating transaction committed */
 			/* it must have aborted or crashed */
 			return true;
 		}
@@ -1179,14 +1181,14 @@ HeapTupleSatisfiesMVCC(HeapTuple htup, Snapshot snapshot,
 		if (polar_csn_enable)
 		{
 			XidCommitStatus xidstatus;
-			bool visible;
+			bool		visible;
 
 			visible = XidVisibleInSnapshotCSN(HeapTupleHeaderGetRawXmax(tuple), snapshot, &xidstatus);
 
 			if (xidstatus == XID_COMMITTED)
 			{
 				SetHintBits(tuple, buffer, HEAP_XMAX_COMMITTED,
-						HeapTupleHeaderGetRawXmax(tuple));
+							HeapTupleHeaderGetRawXmax(tuple));
 			}
 			else if (xidstatus == XID_ABORTED)
 			{
@@ -1222,12 +1224,12 @@ HeapTupleSatisfiesMVCC(HeapTuple htup, Snapshot snapshot,
 		if (polar_csn_enable)
 		{
 			if (!CommittedXidVisibleInSnapshotCSN(HeapTupleHeaderGetRawXmax(tuple), snapshot))
-				return true;                /* treat as still in progress */
+				return true;	/* treat as still in progress */
 		}
 		else
 		{
 			if (XidInMVCCSnapshot(HeapTupleHeaderGetRawXmax(tuple), snapshot))
-				return true;		/* treat as still in progress */
+				return true;	/* treat as still in progress */
 		}
 	}
 
@@ -1900,58 +1902,59 @@ HeapTupleSatisfiesVisibility(HeapTuple tup, Snapshot snapshot, Buffer buffer)
 static bool
 IsMovedTupleVisibleCSN(HeapTuple htup, Snapshot snapshot, Buffer buffer)
 {
-  HeapTupleHeader tuple = htup->t_data;
-  TransactionId xvac = HeapTupleHeaderGetXvac(tuple);
-  XidCommitStatus xidstatus;
-  bool visible;
+	HeapTupleHeader tuple = htup->t_data;
+	TransactionId xvac = HeapTupleHeaderGetXvac(tuple);
+	XidCommitStatus xidstatus;
+	bool		visible;
 
-  /* Used by pre-9.0 binary upgrades */
-  if (tuple->t_infomask & HEAP_MOVED_OFF)
-  {
-	  if (TransactionIdIsCurrentTransactionId(xvac))
-		  return false;
+	/* Used by pre-9.0 binary upgrades */
+	if (tuple->t_infomask & HEAP_MOVED_OFF)
+	{
+		if (TransactionIdIsCurrentTransactionId(xvac))
+			return false;
 
-	  visible = XidVisibleInSnapshotCSN(xvac, snapshot, &xidstatus);
-	  if (xidstatus == XID_COMMITTED)
-	  {
-		  SetHintBits(tuple, buffer, HEAP_XMIN_INVALID,
-				  InvalidTransactionId);
-		  return !visible;
-	  }
-	  else
-	  {
-		  SetHintBits(tuple, buffer, HEAP_XMIN_COMMITTED,
-				  InvalidTransactionId);
-		  return true;
-	  }
-  }
-  /* Used by pre-9.0 binary upgrades */
-  else if (tuple->t_infomask & HEAP_MOVED_IN)
-  {
-	  if (!TransactionIdIsCurrentTransactionId(xvac))
-	  {
 		visible = XidVisibleInSnapshotCSN(xvac, snapshot, &xidstatus);
 		if (xidstatus == XID_COMMITTED)
 		{
-		  SetHintBits(tuple, buffer, HEAP_XMIN_COMMITTED,
-				InvalidTransactionId);
-		  return visible;
+			SetHintBits(tuple, buffer, HEAP_XMIN_INVALID,
+						InvalidTransactionId);
+			return !visible;
 		}
 		else
 		{
-		  SetHintBits(tuple, buffer, HEAP_XMIN_INVALID,
-				InvalidTransactionId);
-		  return false;
+			SetHintBits(tuple, buffer, HEAP_XMIN_COMMITTED,
+						InvalidTransactionId);
+			return true;
 		}
-	  }
-	  return true;
-  }
-  else
-  {
-	elog(ERROR, "IsMovedTupleVisibleCSN() called on a non-moved tuple");
-	return true; /* keep compiler quiet */
-  }
+	}
+	/* Used by pre-9.0 binary upgrades */
+	else if (tuple->t_infomask & HEAP_MOVED_IN)
+	{
+		if (!TransactionIdIsCurrentTransactionId(xvac))
+		{
+			visible = XidVisibleInSnapshotCSN(xvac, snapshot, &xidstatus);
+			if (xidstatus == XID_COMMITTED)
+			{
+				SetHintBits(tuple, buffer, HEAP_XMIN_COMMITTED,
+							InvalidTransactionId);
+				return visible;
+			}
+			else
+			{
+				SetHintBits(tuple, buffer, HEAP_XMIN_INVALID,
+							InvalidTransactionId);
+				return false;
+			}
+		}
+		return true;
+	}
+	else
+	{
+		elog(ERROR, "IsMovedTupleVisibleCSN() called on a non-moved tuple");
+		return true;			/* keep compiler quiet */
+	}
 }
+
 /*no cover end*/
 
 /*
@@ -1963,7 +1966,7 @@ IsMovedTupleVisibleCSN(HeapTuple htup, Snapshot snapshot, Buffer buffer)
  */
 bool
 XidVisibleInSnapshotCSN(TransactionId xid, Snapshot snapshot,
-		   XidCommitStatus *hintstatus)
+						XidCommitStatus *hintstatus)
 {
 	CommitSeqNo csn;
 
@@ -1972,9 +1975,9 @@ XidVisibleInSnapshotCSN(TransactionId xid, Snapshot snapshot,
 	/* If overflowed, we do not use xid snapshot */
 	if (snapshot->polar_csn_xid_snapshot)
 	{
-		bool is_running;
+		bool		is_running;
 
-		is_running =  XidInMVCCSnapshotCSN(xid, snapshot);
+		is_running = XidInMVCCSnapshotCSN(xid, snapshot);
 		if (!is_running)
 		{
 			if (TransactionIdDidCommit(xid))
@@ -2051,14 +2054,16 @@ CommittedXidVisibleInSnapshotCSN(TransactionId xid, Snapshot snapshot)
 
 	if (!POLAR_CSN_IS_COMMITTED(csn))
 	{
-		/*no cover begin*/
+		/* no cover begin */
 		elog(WARNING, "transaction %u was hinted as committed, but was not marked as committed in the transaction log", xid);
+
 		/*
-		 * We have contradicting evidence on whether the transaction committed or
-		 * not. Let's assume that it did. That seems better than erroring out.
+		 * We have contradicting evidence on whether the transaction committed
+		 * or not. Let's assume that it did. That seems better than erroring
+		 * out.
 		 */
 		return true;
-		/*no cover end*/
+		/* no cover end */
 	}
 
 	if (csn < snapshot->polar_snapshot_csn)

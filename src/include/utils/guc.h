@@ -437,42 +437,42 @@ extern bool polar_enable_async_lock_replay_debug;
 #define POLAR_MAX_WAIT_TIMEOUT_USEC		100000
 
 extern bool polar_wal_pipeline_enable;
-extern int  polar_wal_pipeline_mode;
+extern int	polar_wal_pipeline_mode;
 extern int	polar_wal_pipeline_wait_timeout;
 extern int	polar_wal_pipeline_flush_event_array_size;
 extern int	polar_wal_pipeline_flush_event_slot_size;
-extern int  polar_wal_pipeline_unflushed_xlog_array_size;
-extern int  polar_wal_pipeline_recent_written_array_size;
+extern int	polar_wal_pipeline_unflushed_xlog_array_size;
+extern int	polar_wal_pipeline_recent_written_array_size;
 
-extern int polar_wal_pipeline_commit_wait_spin_delay;
-extern int polar_wal_pipeline_commit_wait_timeout;
+extern int	polar_wal_pipeline_commit_wait_spin_delay;
+extern int	polar_wal_pipeline_commit_wait_timeout;
 
-extern int polar_wal_pipeline_advance_worker_spin_delay;
-extern int polar_wal_pipeline_advance_worker_timeout;
-extern int polar_wal_pipeline_advance_worker_write_max_size;
+extern int	polar_wal_pipeline_advance_worker_spin_delay;
+extern int	polar_wal_pipeline_advance_worker_timeout;
+extern int	polar_wal_pipeline_advance_worker_write_max_size;
 
-extern int polar_wal_pipeline_write_worker_spin_delay;
-extern int polar_wal_pipeline_write_worker_timeout;
+extern int	polar_wal_pipeline_write_worker_spin_delay;
+extern int	polar_wal_pipeline_write_worker_timeout;
 
-extern int polar_wal_pipeline_flush_worker_spin_delay;
-extern int polar_wal_pipeline_flush_worker_timeout;
+extern int	polar_wal_pipeline_flush_worker_spin_delay;
+extern int	polar_wal_pipeline_flush_worker_timeout;
 
-extern int polar_wal_pipeline_notify_worker_spin_delay;
-extern int polar_wal_pipeline_notify_worker_timeout;
+extern int	polar_wal_pipeline_notify_worker_spin_delay;
+extern int	polar_wal_pipeline_notify_worker_timeout;
 #define POLAR_WAL_PIPELINE_NOTIFY_WORKER_NUM_MAX	4
 #define POLAR_WAL_PIPELINE_NOTIFY_WORKER_NUM_MIN	1
-extern int polar_wal_pipeline_notify_worker_num;
+extern int	polar_wal_pipeline_notify_worker_num;
 
 /* Polar wal pipeline should enable on instanch with cpu vcores >= 8 */
 #define POLAR_INSTANCE_SPEC_WAL_PIPELINE_IS_AVAILABLE()	(polar_instance_spec_cpu == 0 || polar_instance_spec_cpu >= 8)
 
-extern bool		polar_csn_enable;
-extern bool 	polar_csn_elog_panic_enable;
-extern bool		polar_csnlog_upperbound_enable;
-extern bool 	polar_csn_xid_snapshot;
+extern bool polar_csn_enable;
+extern bool polar_csn_elog_panic_enable;
+extern bool polar_csnlog_upperbound_enable;
+extern bool polar_csn_xid_snapshot;
 
-extern int		polar_csnlog_slot_size;
-extern int 		polar_csnlog_max_local_cache_segments;
+extern int	polar_csnlog_slot_size;
+extern int	polar_csnlog_max_local_cache_segments;
 
 /* POLAR GUCs end */
 

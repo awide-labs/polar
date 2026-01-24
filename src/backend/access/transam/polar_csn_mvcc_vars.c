@@ -22,7 +22,8 @@
 
 polar_csn_mvcc_var_cache *polar_shmem_csn_mvcc_var_cache = NULL;
 
-void polar_csn_mvcc_var_cache_shmem_init(void)
+void
+polar_csn_mvcc_var_cache_shmem_init(void)
 {
 	/* TODO: should align? by guangang.gg */
 	polar_shmem_csn_mvcc_var_cache = (polar_csn_mvcc_var_cache *)
@@ -35,7 +36,8 @@ void polar_csn_mvcc_var_cache_shmem_init(void)
 }
 
 /* Only used for test */
-void polar_csn_mvcc_var_cache_set(TransactionId oldest_active_xid, CommitSeqNo next_csn, FullTransactionId latest_completed_xid)
+void
+polar_csn_mvcc_var_cache_set(TransactionId oldest_active_xid, CommitSeqNo next_csn, FullTransactionId latest_completed_xid)
 {
 	pg_atomic_write_u32(&polar_shmem_csn_mvcc_var_cache->polar_oldest_active_xid, oldest_active_xid);
 	pg_atomic_write_u64(&polar_shmem_csn_mvcc_var_cache->polar_next_csn, next_csn);

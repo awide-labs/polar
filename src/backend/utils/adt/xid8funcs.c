@@ -44,7 +44,7 @@
 #include "utils/guc.h"
 
 /* POLAR csn */
-// #include "utils/tqual.h"
+/*  #include "utils/tqual.h" */
 #include "utils/snapshot.h"
 /* POLAR end */
 
@@ -72,12 +72,13 @@ typedef struct
 	FullTransactionId xmin;
 	FullTransactionId xmax;
 	/* in-progress fxids, xmin <= xip[i] < xmax: */
-	/*
+
+	/*---
 	 * POLAR csn
 	 * To make txid_snapshot storage compatible, we should store csn in xip
 	 * and store an invalid xid in front of csn to differentiate csn snapshot
 	 * with xid snapshot
-	 */
+	 ---*/
 	FullTransactionId xip[FLEXIBLE_ARRAY_MEMBER];
 } pg_snapshot;
 
@@ -314,8 +315,9 @@ parse_snapshot(const char *str)
 	const char *str_start = str;
 	char	   *endp;
 	StringInfo	buf;
+
 	/* POLAR csn */
-	bool first_val = true;
+	bool		first_val = true;
 
 	xmin = FullTransactionIdFromU64(strtou64(str, &endp, 10));
 	if (*endp != ':')
@@ -391,7 +393,7 @@ extern bool is_csn_snapshot(const pg_snapshot *snap);
 bool
 is_csn_snapshot(const pg_snapshot *snap)
 {
-	bool ret;
+	bool		ret;
 
 	Assert(PointerIsValid(snap));
 
@@ -434,6 +436,7 @@ is_visible_fxid_csn(FullTransactionId value, const pg_snapshot *snap)
 		return XidInMVCCSnapshot(XidFromFullTransactionId(value), &snap_data);
 	}
 }
+
 /* POLAR end */
 
 /*
@@ -520,11 +523,12 @@ pg_current_snapshot(PG_FUNCTION_ARGS)
 			snap->xip[i] = widen_snapshot_xid(cur->xip[i], next_fxid);
 
 		/*
-		 * We want them guaranteed to be in ascending order.  This also removes
-		 * any duplicate xids.  Normally, an XID can only be assigned to one
-		 * backend, but when preparing a transaction for two-phase commit, there
-		 * is a transient state when both the original backend and the dummy
-		 * PGPROC entry reserved for the prepared transaction hold the same XID.
+		 * We want them guaranteed to be in ascending order.  This also
+		 * removes any duplicate xids.  Normally, an XID can only be assigned
+		 * to one backend, but when preparing a transaction for two-phase
+		 * commit, there is a transient state when both the original backend
+		 * and the dummy PGPROC entry reserved for the prepared transaction
+		 * hold the same XID.
 		 */
 		sort_snapshot(snap);
 	}

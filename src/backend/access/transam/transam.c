@@ -446,7 +446,7 @@ TransactionIdGetCommitLSN(TransactionId xid)
  */
 CommitSeqNo
 polar_xact_get_csn(TransactionId transactionId, CommitSeqNo snapCSN,
-									 bool committed)
+				   bool committed)
 {
 	CommitSeqNo csn;
 	XLogRecPtr	lsn;
@@ -467,7 +467,7 @@ polar_xact_get_csn(TransactionId transactionId, CommitSeqNo snapCSN,
 			return POLAR_CSN_FROZEN;
 		if (TransactionIdEquals(transactionId, FrozenTransactionId))
 			return POLAR_CSN_FROZEN;
-		/*no cover line*/
+		/* no cover line */
 		return POLAR_CSN_ABORTED;
 	}
 
@@ -476,6 +476,7 @@ polar_xact_get_csn(TransactionId transactionId, CommitSeqNo snapCSN,
 		if (committed)
 		{
 			CommitSeqNo upperBoundCSN = polar_csnlog_get_upperbound_csn(transactionId);
+
 			if (upperBoundCSN < snapCSN)
 			{
 				polar_csnlog_count_upperbound_fetch(1, 1, 1);
@@ -517,13 +518,13 @@ polar_xact_get_csn(TransactionId transactionId, CommitSeqNo snapCSN,
 			 * cheaper, as it wouldn't need to acquire CommitSeqNoLock (even
 			 * in shared mode).
 			 */
-			/*no cover begin*/
+			/* no cover begin */
 			LWLockAcquire(CommitSeqNoLock, LW_EXCLUSIVE);
 			LWLockRelease(CommitSeqNoLock);
 
 			csn = polar_csnlog_get_csn(transactionId);
 			Assert(csn != POLAR_CSN_COMMITTING);
-			/*no cover end*/
+			/* no cover end */
 		}
 
 		/*
@@ -604,7 +605,7 @@ polar_xact_get_status(TransactionId xid)
 static void
 polar_update_latest_completed(TransactionId latestXid)
 {
-	uint64 currentLatestCompleted;
+	uint64		currentLatestCompleted;
 	TransactionId currentLatestCompletedXid;
 	FullTransactionId currentLatestCompletedFullXid;
 	FullTransactionId latestXidFull;
@@ -615,8 +616,12 @@ polar_update_latest_completed(TransactionId latestXid)
 	currentLatestCompletedXid = XidFromFullTransactionId(currentLatestCompletedFullXid);
 	while (TransactionIdFollows(latestXid, currentLatestCompletedXid))
 	{
-		uint32 epoch = EpochFromFullTransactionId(currentLatestCompletedFullXid);
-		/* Since latestXid follows currentLatestCompletedXid is the same or greater */
+		uint32		epoch = EpochFromFullTransactionId(currentLatestCompletedFullXid);
+
+		/*
+		 * Since latestXid follows currentLatestCompletedXid is the same or
+		 * greater
+		 */
 		if (latestXid < currentLatestCompletedXid)
 			epoch++;
 		latestXidFull = FullTransactionIdFromEpochAndXid(epoch, latestXid);
@@ -636,7 +641,7 @@ polar_update_latest_completed(TransactionId latestXid)
  */
 void
 polar_xact_commit_tree_csn(TransactionId xid, int nxids, TransactionId *xids,
-							 XLogRecPtr lsn)
+						   XLogRecPtr lsn)
 {
 	CommitSeqNo csn;
 	TransactionId latestXid;
@@ -648,8 +653,8 @@ polar_xact_commit_tree_csn(TransactionId xid, int nxids, TransactionId *xids,
 	 * a way for a concurrent transaction to wait for us to complete (see
 	 * polar_xact_get_csn()).
 	 *
-	 * GetRunningTransactionData use this lock to block transaction commit when
-	 * get running xacts from ProcArray
+	 * GetRunningTransactionData use this lock to block transaction commit
+	 * when get running xacts from ProcArray
 	 */
 	LWLockAcquire(CommitSeqNoLock, LW_SHARED);
 
@@ -673,8 +678,8 @@ polar_xact_commit_tree_csn(TransactionId xid, int nxids, TransactionId *xids,
 	polar_csnlog_set_csn(xid, nxids, xids, csn, lsn);
 
 	/*
-	 * We set MyPgXact when hold CommitSeqNoLock in share mode,
-	 * see GetRunningTransactionData comment for detail reason.
+	 * We set MyPgXact when hold CommitSeqNoLock in share mode, see
+	 * GetRunningTransactionData comment for detail reason.
 	 *
 	 * Need volatile access MyPgXact?
 	 */

@@ -117,8 +117,8 @@ static void TransactionIdSetPageStatusInternal(TransactionId xid, int nsubxids,
 /* POLAR csn */
 
 static void
-TransactionIdSetTreeStatusCSN(TransactionId xid, int nsubxids,
-							  TransactionId *subxids, XidStatus status, XLogRecPtr lsn);
+			TransactionIdSetTreeStatusCSN(TransactionId xid, int nsubxids,
+										  TransactionId *subxids, XidStatus status, XLogRecPtr lsn);
 
 /* POLAR end */
 

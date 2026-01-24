@@ -128,6 +128,7 @@ extern void ProcArrayResetXminCSN(PGPROC *proc, TransactionId new_xmin);
 extern void AdvanceOldestActiveXidCSNWrapper(TransactionId myXid);
 extern void polar_set_latestObservedXid(TransactionId latest_observed_xid);
 extern TransactionId polar_get_latestObservedXid(void);
+
 /* POLAR end */
 
 #endif							/* PROCARRAY_H */

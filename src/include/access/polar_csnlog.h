@@ -44,7 +44,7 @@ extern CommitSeqNo polar_csnlog_get_csn(TransactionId xid);
 extern CommitSeqNo polar_csnlog_get_upperbound_csn(TransactionId xid);
 extern void polar_csnlog_count_upperbound_fetch(int t_all_fetches,
 												int t_ub_fetches, int t_ub_hits);
-extern polar_csnlog_ub_stat* polar_csnlog_get_upperbound_stat_ptr(void);
+extern polar_csnlog_ub_stat *polar_csnlog_get_upperbound_stat_ptr(void);
 
 extern void polar_csnlog_set_parent(TransactionId xid, TransactionId parent);
 extern TransactionId polar_csnlog_get_parent(TransactionId xid);
@@ -53,7 +53,7 @@ extern TransactionId polar_csnlog_get_parent(TransactionId xid);
 extern TransactionId polar_csnlog_get_next_active_xid(TransactionId start,
 													  TransactionId end);
 extern void polar_csnlog_get_running_xids(TransactionId start, TransactionId end, CommitSeqNo snapshot_csn,
-								   int max_xids, int *nxids, TransactionId *xids, bool *overflowed);
+										  int max_xids, int *nxids, TransactionId *xids, bool *overflowed);
 
 extern TransactionId polar_csnlog_get_top(TransactionId xid);
 

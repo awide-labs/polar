@@ -162,7 +162,8 @@ polar_cal_cur_consistent_lsn(void)
 
 	for (i = 0; i < POLAR_FLUSHLIST_PARTITIONS; i++)
 	{
-		FlushList *list = &polar_flush_ctl->lists[i];
+		FlushList  *list = &polar_flush_ctl->lists[i];
+
 		SpinLockAcquire(&list->flushlist_lock);
 		if (!polar_flush_list_is_empty(list))
 		{
@@ -587,7 +588,7 @@ polar_buffer_sync(WritebackContext *wb_context,
 	{
 		int			num;
 		int			i = 0;
-		FlushList	*list;
+		FlushList  *list;
 
 		/* Pick partition with minimum LSN */
 		list = polar_flush_list_flush_begin();

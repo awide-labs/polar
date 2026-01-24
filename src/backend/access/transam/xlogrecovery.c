@@ -343,21 +343,21 @@ typedef struct XLogRecoveryCtlData
 	/*
 	 * Last record successfully replayed.
 	 */
-	char				lastReplayedRecPad[PG_CACHE_LINE_SIZE];
-	pg_seqlock			lastReplayedRecSeq;
-	pg_atomic_uint64	lastReplayedReadRecPtr; /* start position */
-	pg_atomic_uint64	lastReplayedEndRecPtr; /* end+1 position */
-	pg_atomic_uint32	lastReplayedTLI;	/* timeline */
+	char		lastReplayedRecPad[PG_CACHE_LINE_SIZE];
+	pg_seqlock	lastReplayedRecSeq;
+	pg_atomic_uint64 lastReplayedReadRecPtr;	/* start position */
+	pg_atomic_uint64 lastReplayedEndRecPtr; /* end+1 position */
+	pg_atomic_uint32 lastReplayedTLI;	/* timeline */
 
 	/*
 	 * When we're currently replaying a record, ie. in a redo function,
 	 * replayEndRecPtr points to the end+1 of the record being replayed,
 	 * otherwise it's equal to lastReplayedEndRecPtr.
 	 */
-	char				replayEndRecPad[PG_CACHE_LINE_SIZE];
-	pg_seqlock			replayEndRecSeq;
-	pg_atomic_uint64	replayEndRecPtr;
-	pg_atomic_uint32	replayEndTLI;
+	char		replayEndRecPad[PG_CACHE_LINE_SIZE];
+	pg_seqlock	replayEndRecSeq;
+	pg_atomic_uint64 replayEndRecPtr;
+	pg_atomic_uint32 replayEndTLI;
 	/* timestamp of last COMMIT/ABORT record replayed (or being replayed) */
 	TimestampTz recoveryLastXTime;
 
@@ -1538,7 +1538,8 @@ FinishWalRecovery(void)
 	{
 		for (;;)
 		{
-			uint64 seq = pg_seqlock_read_begin(&XLogRecoveryCtl->lastReplayedRecSeq);
+			uint64		seq = pg_seqlock_read_begin(&XLogRecoveryCtl->lastReplayedRecSeq);
+
 			lastRec = (XLogRecPtr) pg_atomic_read_u64(&XLogRecoveryCtl->lastReplayedReadRecPtr);
 			lastRecTLI = (TimeLineID) pg_atomic_read_u32(&XLogRecoveryCtl->lastReplayedTLI);
 			if (likely(!pg_seqlock_read_retry(&XLogRecoveryCtl->lastReplayedRecSeq, seq)))
@@ -2382,7 +2383,8 @@ CheckRecoveryConsistency(void)
 	 */
 	for (;;)
 	{
-		uint64 seq = pg_seqlock_read_begin(&XLogRecoveryCtl->lastReplayedRecSeq);
+		uint64		seq = pg_seqlock_read_begin(&XLogRecoveryCtl->lastReplayedRecSeq);
+
 		lastReplayedReadRecPtr = pg_atomic_read_u64(&XLogRecoveryCtl->lastReplayedReadRecPtr);
 		lastReplayedEndRecPtr = pg_atomic_read_u64(&XLogRecoveryCtl->lastReplayedEndRecPtr);
 		lastReplayedTLI = pg_atomic_read_u32(&XLogRecoveryCtl->lastReplayedTLI);
@@ -4916,7 +4918,8 @@ GetXLogReplayRecPtr(TimeLineID *replayTLI)
 
 	for (;;)
 	{
-		uint64 seq = pg_seqlock_read_begin(&XLogRecoveryCtl->lastReplayedRecSeq);
+		uint64		seq = pg_seqlock_read_begin(&XLogRecoveryCtl->lastReplayedRecSeq);
+
 		recptr = pg_atomic_read_u64(&XLogRecoveryCtl->lastReplayedEndRecPtr);
 		tli = pg_atomic_read_u32(&XLogRecoveryCtl->lastReplayedTLI);
 		if (likely(!pg_seqlock_read_retry(&XLogRecoveryCtl->lastReplayedRecSeq, seq)))
@@ -4956,7 +4959,8 @@ GetCurrentReplayRecPtr(TimeLineID *replayEndTLI)
 
 	for (;;)
 	{
-		uint64 seq = pg_seqlock_read_begin(&XLogRecoveryCtl->replayEndRecSeq);
+		uint64		seq = pg_seqlock_read_begin(&XLogRecoveryCtl->replayEndRecSeq);
+
 		recptr = pg_atomic_read_u64(&XLogRecoveryCtl->replayEndRecPtr);
 		tli = pg_atomic_read_u32(&XLogRecoveryCtl->replayEndTLI);
 		if (likely(!pg_seqlock_read_retry(&XLogRecoveryCtl->replayEndRecSeq, seq)))

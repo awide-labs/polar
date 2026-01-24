@@ -853,8 +853,8 @@ pgstat_get_wait_io(WaitEventIO w)
 			event_name = "PolarCacheSharedStat";
 			break;
 		case WAIT_EVENT_WAL_PIPELINE_COMMIT_WAIT:
-		 	event_name = "PolarWALPipelineCommitWait";
-		    break;
+			event_name = "PolarWALPipelineCommitWait";
+			break;
 			/* POLAR end */
 			/* no default case, so that compiler will warn */
 	}

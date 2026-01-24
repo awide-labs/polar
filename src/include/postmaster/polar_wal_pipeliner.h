@@ -51,58 +51,58 @@
 
 #define POLAR_WAL_PIPELINE_STAT_PARTITIONS 256
 
-typedef struct polar_wal_pipeline_user_stats_t {
+typedef struct polar_wal_pipeline_user_stats_t
+{
 	/* satisfied by other user */
-	pg_atomic_uint64	total_user_group_commits;
+	pg_atomic_uint64 total_user_group_commits;
 	/* satisfied by spin */
-	pg_atomic_uint64	total_user_spin_commits;
+	pg_atomic_uint64 total_user_spin_commits;
 	/* satisfied by timeout */
-	pg_atomic_uint64	total_user_timeout_commits;
+	pg_atomic_uint64 total_user_timeout_commits;
 	/* satisfied by wakeup */
-	pg_atomic_uint64	total_user_wakeup_commits;
+	pg_atomic_uint64 total_user_wakeup_commits;
 	/* not satisfied by wakeup */
-	pg_atomic_uint64	total_user_miss_timeouts;
+	pg_atomic_uint64 total_user_miss_timeouts;
 	/* not satisfied by wakeup */
-	pg_atomic_uint64	total_user_miss_wakeups;
+	pg_atomic_uint64 total_user_miss_wakeups;
 } polar_wal_pipeline_user_stats_t;
 
 typedef struct polar_wal_pipeline_stats_t
 {
 	/*
-	 * commit stats for waiting user process
-	 * user_commits = group_commits + spin_commits +
-	 * 				  timeout_commits + wakeup_commits
+	 * commit stats for waiting user process user_commits = group_commits +
+	 * spin_commits + timeout_commits + wakeup_commits
 	 */
 
 	/* satisfied by other user */
 	polar_wal_pipeline_user_stats_t user_stats[POLAR_WAL_PIPELINE_STAT_PARTITIONS];
 
-	char pad0[PG_CACHE_LINE_SIZE];
+	char		pad0[PG_CACHE_LINE_SIZE];
 
 	/* stats for advance worker */
-	pg_atomic_uint64	total_advance_callups;
-	pg_atomic_uint64	total_advances;
+	pg_atomic_uint64 total_advance_callups;
+	pg_atomic_uint64 total_advances;
 
-	char pad1[PG_CACHE_LINE_SIZE];
+	char		pad1[PG_CACHE_LINE_SIZE];
 
 	/* stats for write worker */
-	pg_atomic_uint64	total_write_callups;
-	pg_atomic_uint64	total_writes;
-	pg_atomic_uint64	unflushed_xlog_slot_waits;
+	pg_atomic_uint64 total_write_callups;
+	pg_atomic_uint64 total_writes;
+	pg_atomic_uint64 unflushed_xlog_slot_waits;
 
-	char pad2[PG_CACHE_LINE_SIZE];
+	char		pad2[PG_CACHE_LINE_SIZE];
 
 	/* stats for flush worker */
-	pg_atomic_uint64	total_flush_callups;
-	pg_atomic_uint64	total_flushes;
-	pg_atomic_uint64	total_flush_merges;
+	pg_atomic_uint64 total_flush_callups;
+	pg_atomic_uint64 total_flushes;
+	pg_atomic_uint64 total_flush_merges;
 
-	char pad3[PG_CACHE_LINE_SIZE];
+	char		pad3[PG_CACHE_LINE_SIZE];
 
 	/* stats for notify worker */
-	pg_atomic_uint64	total_notify_callups;
-	pg_atomic_uint64	total_notifies;
-	pg_atomic_uint64	total_notified_users;
+	pg_atomic_uint64 total_notify_callups;
+	pg_atomic_uint64 total_notifies;
+	pg_atomic_uint64 total_notified_users;
 } polar_wal_pipeline_stats_t;
 
 extern void polar_wal_pipeliner_main(void);

@@ -267,9 +267,9 @@ polar_ringbuf_pkt_reserve(polar_ringbuf_t rbuf, size_t len)
 static inline ssize_t
 polar_ringbuf_pkt_check_size_and_reserve(polar_ringbuf_t rbuf, size_t len)
 {
-	ssize_t pread = pg_atomic_read_u64(&rbuf->pread);
-	ssize_t pwrite = pg_atomic_read_u64(&rbuf->pwrite);
-	ssize_t free_bytes = pread - pwrite;
+	ssize_t		pread = pg_atomic_read_u64(&rbuf->pread);
+	ssize_t		pwrite = pg_atomic_read_u64(&rbuf->pwrite);
+	ssize_t		free_bytes = pread - pwrite;
 
 	if (free_bytes < 0)
 		free_bytes += rbuf->size;

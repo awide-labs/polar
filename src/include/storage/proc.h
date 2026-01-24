@@ -327,13 +327,13 @@ struct PGPROC
 	 */
 	pg_atomic_uint64 polar_read_min_lsn;
 
-	/*
+	/*---
 	 * POLAR csn
 	 * When transaction committing, record commit csn in PGXACT with CommitSeqNoLock hold.
 	 * For now, only used in GetRunningTransactionData to iterate ProcArray and filter out
 	 * committed xacts in active xacts list.
 	 * If committed, value is csn, else InvalidTransactionId.
-	 */
+	 ---*/
 	CommitSeqNo polar_csn;
 };
 
@@ -440,7 +440,7 @@ typedef struct PROC_HDR
 	int			startupBufferPinWaitBufId;
 
 	/* POLAR wal_pipeliner process's latch */
-	Latch	   	* volatile polar_wal_pipeliner_latch;
+	Latch	   *volatile polar_wal_pipeliner_latch;
 } PROC_HDR;
 
 extern PGDLLIMPORT PROC_HDR *ProcGlobal;

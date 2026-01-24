@@ -419,9 +419,9 @@ typedef enum XidCommitStatus
 } XidCommitStatus;
 
 extern void polar_xact_commit_tree_csn(TransactionId xid, int nxids,
-																			 TransactionId *xids, XLogRecPtr lsn);
+									   TransactionId *xids, XLogRecPtr lsn);
 extern CommitSeqNo polar_xact_get_csn(TransactionId transactionId,
-																			 CommitSeqNo snapCSN, bool committed);
+									  CommitSeqNo snapCSN, bool committed);
 extern XidCommitStatus polar_xact_get_status(TransactionId xid);
 
 #endif							/* FRONTEND */

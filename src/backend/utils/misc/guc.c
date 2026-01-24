@@ -250,15 +250,17 @@ int			polar_instance_spec_mem = 0;
 
 /* POLAR */
 bool		polar_csn_enable;
-bool 		polar_csn_elog_panic_enable;
+bool		polar_csn_elog_panic_enable;
 bool		polar_csnlog_upperbound_enable;
 bool		polar_csn_xid_snapshot;
+
 /* POLAR end */
 
 /* POLAR wal pipeline */
 
 /* general params */
-bool polar_wal_pipeline_enable = false;
+bool		polar_wal_pipeline_enable = false;
+
 /*
  * mode 1	advance+write+flush+notify 	1 thread
  * mode 2	advance+write+flush notify	2 threads
@@ -266,32 +268,37 @@ bool polar_wal_pipeline_enable = false;
  * mode 4	advance+write flush notify  3 threads
  * mode 5	advance write flush notify  4 threads
  */
-int polar_wal_pipeline_mode = 2;
-int	polar_wal_pipeline_wait_timeout = 10;				/* unit us */
-int polar_wal_pipeline_commit_wait_spin_delay = 0;	/* 1000 spin corresponds to 4us */
-int polar_wal_pipeline_commit_wait_timeout = 10000;		/* unit us */
-int	polar_wal_pipeline_flush_event_array_size = 128;	/* should be multiple of 2 */
-int	polar_wal_pipeline_flush_event_slot_size = 1024;		/* should be multiple of 2 */
-int polar_wal_pipeline_unflushed_xlog_array_size = 1024;	/* should be multiple of 2 */
+int			polar_wal_pipeline_mode = 2;
+int			polar_wal_pipeline_wait_timeout = 10;	/* unit us */
+int			polar_wal_pipeline_commit_wait_spin_delay = 0;	/* 1000 spin corresponds
+															 * to 4us */
+int			polar_wal_pipeline_commit_wait_timeout = 10000; /* unit us */
+int			polar_wal_pipeline_flush_event_array_size = 128;	/* should be multiple of
+																 * 2 */
+int			polar_wal_pipeline_flush_event_slot_size = 1024;	/* should be multiple of
+																 * 2 */
+int			polar_wal_pipeline_unflushed_xlog_array_size = 1024;	/* should be multiple of
+																	 * 2 */
 
 /* params for advance worker */
-int polar_wal_pipeline_advance_worker_spin_delay = 0;
-int polar_wal_pipeline_advance_worker_timeout = 10;
-int polar_wal_pipeline_advance_worker_write_max_size = 0; /* 0 indicate no limit */
-int polar_wal_pipeline_recent_written_array_size = 1024;	/* should be multiple of 2 */
+int			polar_wal_pipeline_advance_worker_spin_delay = 0;
+int			polar_wal_pipeline_advance_worker_timeout = 10;
+int			polar_wal_pipeline_advance_worker_write_max_size = 0;	/* 0 indicate no limit */
+int			polar_wal_pipeline_recent_written_array_size = 1024;	/* should be multiple of
+																	 * 2 */
 
 /* params for write worker */
-int polar_wal_pipeline_write_worker_spin_delay = 0;
-int polar_wal_pipeline_write_worker_timeout = 10000;
+int			polar_wal_pipeline_write_worker_spin_delay = 0;
+int			polar_wal_pipeline_write_worker_timeout = 10000;
 
 /* params for flush worker */
-int polar_wal_pipeline_flush_worker_spin_delay = 0;
-int polar_wal_pipeline_flush_worker_timeout = 10000;
+int			polar_wal_pipeline_flush_worker_spin_delay = 0;
+int			polar_wal_pipeline_flush_worker_timeout = 10000;
 
 /* params for notify worker */
-int polar_wal_pipeline_notify_worker_spin_delay = 0;
-int polar_wal_pipeline_notify_worker_timeout = 10;
-int	polar_wal_pipeline_notify_worker_num = 1;
+int			polar_wal_pipeline_notify_worker_spin_delay = 0;
+int			polar_wal_pipeline_notify_worker_timeout = 10;
+int			polar_wal_pipeline_notify_worker_num = 1;
 
 /* POLAR GUCs end */
 
@@ -912,7 +919,8 @@ bool		polar_enable_track_network_stat;
 bool		polar_enable_track_network_timing;
 bool		polar_enable_alloc_checkinterrupts;
 
-int 		polar_csnlog_slot_size = 0;
+int			polar_csnlog_slot_size = 0;
+
 /* POLAR end */
 
 bool		polar_disable_escape_inside_gbk_character;
@@ -3919,7 +3927,7 @@ static struct config_int ConfigureNamesInt[] =
 			POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_CHANGABLE
 		},
 		&polar_wal_pipeline_recent_written_array_size,
-		1024*1024, 1, INT_MAX,
+		1024 * 1024, 1, INT_MAX,
 		polar_check_wal_pipeline_recent_written_array_size, NULL, NULL
 	},
 

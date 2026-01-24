@@ -173,9 +173,11 @@ extern int	SimpleLruReadPage(SlruCtl ctl, int pageno, bool write_ok,
 							  TransactionId xid);
 extern int	SimpleLruReadPage_ReadOnly(SlruCtl ctl, int pageno,
 									   TransactionId xid);
+
 /* POLAR for csnlog */
-extern int SimpleLruReadPage_ReadOnly_Locked(SlruCtl ctl, int pageno,
-						   TransactionId xid);
+extern int	SimpleLruReadPage_ReadOnly_Locked(SlruCtl ctl, int pageno,
+											  TransactionId xid);
+
 /* POLAR end */
 extern void SimpleLruWritePage(SlruCtl ctl, int slotno);
 extern void SimpleLruWriteAll(SlruCtl ctl, bool allow_redirtied);
@@ -219,7 +221,7 @@ typedef enum polar_io_errcause
 #define	POLAR_SLRU_FILE_IN_SHARED_STORAGE()	(polar_enable_shared_storage_mode && ctl->shared->polar_file_in_shared_storage)
 
 extern bool polar_enable_slru_hash_index;
-bool polar_slru_file_in_shared_storage(bool in_shared_storage);
+bool		polar_slru_file_in_shared_storage(bool in_shared_storage);
 extern void polar_slru_invalid_page(SlruCtl ctl, int pageno);
 extern void polar_slru_append_page(SlruCtl ctl, int slotno, bool update);
 extern void polar_slru_promote(SlruCtl ctl);

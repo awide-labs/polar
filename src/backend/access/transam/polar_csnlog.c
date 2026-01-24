@@ -117,8 +117,8 @@ static void polar_csnlog_set_csn_by_page(TransactionId xid, int nsubxids,
 										 TransactionId *subxids, CommitSeqNo csn,
 										 XLogRecPtr lsn, int pageno);
 static void polar_csnlog_set_csn_by_itemno(TransactionId xid, int slotno,
-											int offset, CommitSeqNo csn,
-											XLogRecPtr lsn);
+										   int offset, CommitSeqNo csn,
+										   XLogRecPtr lsn);
 static CommitSeqNo polar_csnlog_get_csn_by_itemno(TransactionId xid, int slotno, int itemno);
 
 static CommitSeqNo polar_csnlog_get_csn_internal(TransactionId xid);
@@ -167,10 +167,10 @@ polar_csnlog_set_csn(TransactionId xid, int sub_xid_num,
 		csn = POLAR_CSN_FROZEN;
 	else
 	{
-		/*no cover begin*/
+		/* no cover begin */
 		if (csn == InvalidCommitSeqNo)
 			elog(ERROR, "cannot mark transaction committed without CSN");
-		/*no cover end*/
+		/* no cover end */
 	}
 
 	/*
@@ -314,7 +314,7 @@ polar_csnlog_set_parent(TransactionId xid, TransactionId parent)
 	 */
 	slotno = SimpleLruReadPage_ReadOnly(csnlog_ctl, pageno, xid);
 
-	/*
+	/*---
 	 * It's possible we'll try to set the parent xid multiple times.
 	 * And in 2pc or standby, we may be changing the xid from direct xid to
 	 * top xid
@@ -334,6 +334,7 @@ polar_csnlog_set_parent(TransactionId xid, TransactionId parent)
 	 * in progress -> aborted -> subtrans
 	 * We should not permit aborted/committed/committing status transfer to subtrans.
 	 * When this happens, just ignore
+	 * ---
 	 */
 	old_csn = polar_csnlog_get_csn_by_itemno(xid, slotno, itemno);
 	if (POLAR_CSN_IS_INPROGRESS(old_csn) ||
@@ -401,11 +402,11 @@ polar_csnlog_get_top(TransactionId xid)
 		 * precede the child xid. Anything else points to a corrupted data
 		 * structure that could lead to an infinite loop, so exit.
 		 */
-		/*no cover begin*/
+		/* no cover begin */
 		if (!TransactionIdPrecedes(parentXid, previousXid))
 			elog(ERROR, "pg_csnlog contains invalid entry: xid %u points to parent xid %u",
 				 previousXid, parentXid);
-		/*no cover end*/
+		/* no cover end */
 	}
 
 	Assert(TransactionIdIsValid(previousXid));
@@ -452,7 +453,7 @@ polar_csnlog_set_csn_by_itemno(TransactionId xid, int slotno, int itemno,
 
 #if !defined(PG_HAVE_ATOMIC_U64_SIMULATION)
 		pg_atomic_uint64 *lsn_ptr = (pg_atomic_uint64 *)
-		&csnlog_ctl->shared->group_lsn[lsnindex];
+			&csnlog_ctl->shared->group_lsn[lsnindex];
 		XLogRecPtr	old_lsn = pg_atomic_read_u64(lsn_ptr);
 
 		while (old_lsn < lsn)
@@ -555,12 +556,12 @@ polar_csnlog_get_csn_recursive(TransactionId xid)
 				csn = POLAR_CSN_COMMITTING;
 			else
 			{
-				/*no cover begin*/
+				/* no cover begin */
 				if (polar_csn_elog_panic_enable)
-					elog(PANIC, "Wrong csn state, xid: %u, parent_xid: %u, csn: "UINT64_FORMAT, xid, parent_xid, parent_csn);
+					elog(PANIC, "Wrong csn state, xid: %u, parent_xid: %u, csn: " UINT64_FORMAT, xid, parent_xid, parent_csn);
 				else
-					elog(LOG, "Wrong csn state, xid: %u, parent_xid: %u, csn: "UINT64_FORMAT, xid, parent_xid, parent_csn);
-				/*no cover end*/
+					elog(LOG, "Wrong csn state, xid: %u, parent_xid: %u, csn: " UINT64_FORMAT, xid, parent_xid, parent_csn);
+				/* no cover end */
 			}
 		}
 	}
@@ -666,26 +667,27 @@ polar_csnlog_upperbound_csn_shmem_size(void)
 	return sizeof(CommitSeqNo) * CSNLOG_UB_GROUPS + sizeof(polar_csnlog_ub_stat);
 }
 
-static inline CommitSeqNo*
+static inline CommitSeqNo *
 polar_csnlog_get_upperbound_csn_ptr(int slotno)
 {
-	return (CommitSeqNo *)(polar_upperbound_csn_ptr + sizeof(CommitSeqNo) * slotno);
+	return (CommitSeqNo *) (polar_upperbound_csn_ptr + sizeof(CommitSeqNo) * slotno);
 }
 
-polar_csnlog_ub_stat*
+polar_csnlog_ub_stat *
 polar_csnlog_get_upperbound_stat_ptr(void)
 {
-	return (polar_csnlog_ub_stat*)(polar_upperbound_csn_ptr +
-										sizeof(CommitSeqNo) * CSNLOG_UB_GROUPS);
+	return (polar_csnlog_ub_stat *) (polar_upperbound_csn_ptr +
+									 sizeof(CommitSeqNo) * CSNLOG_UB_GROUPS);
 }
 
 static inline void
 polar_csnlog_upperbound_csn_init(void)
 {
-	int	slotno;
-	CommitSeqNo	*csn_ptr;
+	int			slotno;
+	CommitSeqNo *csn_ptr;
 	polar_csnlog_ub_stat *ub_stat;
-	for(slotno = 0; slotno < CSNLOG_UB_GROUPS; slotno++)
+
+	for (slotno = 0; slotno < CSNLOG_UB_GROUPS; slotno++)
 	{
 		csn_ptr = polar_csnlog_get_upperbound_csn_ptr(slotno);
 		*csn_ptr = POLAR_CSN_FROZEN;
@@ -700,10 +702,11 @@ polar_csnlog_set_upperbound_csn(TransactionId xid, CommitSeqNo csn)
 #if !defined(PG_HAVE_ATOMIC_U64_SIMULATION)
 	if (polar_csnlog_upperbound_enable && POLAR_CSN_IS_COMMITTED(csn))
 	{
-		int slotno =TransactionIdToUBSlotNo(xid);
+		int			slotno = TransactionIdToUBSlotNo(xid);
 		pg_atomic_uint64 *csn_ptr = (pg_atomic_uint64 *)
-							polar_csnlog_get_upperbound_csn_ptr(slotno);
+			polar_csnlog_get_upperbound_csn_ptr(slotno);
 		CommitSeqNo old_csn = pg_atomic_read_u64(csn_ptr);
+
 		while (old_csn < csn)
 		{
 			if (pg_atomic_compare_exchange_u64(csn_ptr, &old_csn, csn))
@@ -718,9 +721,10 @@ CommitSeqNo
 polar_csnlog_get_upperbound_csn(TransactionId xid)
 {
 #if !defined(PG_HAVE_ATOMIC_U64_SIMULATION)
-	int slotno =TransactionIdToUBSlotNo(xid);
+	int			slotno = TransactionIdToUBSlotNo(xid);
 	pg_atomic_uint64 *csn_ptr = (pg_atomic_uint64 *)
-							polar_csnlog_get_upperbound_csn_ptr(slotno);
+		polar_csnlog_get_upperbound_csn_ptr(slotno);
+
 	return pg_atomic_read_u64(csn_ptr);
 #endif
 	return POLAR_CSN_MAX_NORMAL;
@@ -737,6 +741,7 @@ polar_csnlog_count_upperbound_fetch(int t_all_fetches, int t_ub_fetches, int t_u
 	if (t_ub_hits > 0)
 		pg_atomic_fetch_add_u64(&ub_stat->t_ub_hits, t_ub_hits);
 }
+
 /*no cover end*/
 
 /*
@@ -744,8 +749,9 @@ polar_csnlog_count_upperbound_fetch(int t_all_fetches, int t_ub_fetches, int t_u
  *	add running xids(in_progress or committing or committed csn >= csn arg)
  *  to xid array. If array overflowed, set overflow flag
  */
-void polar_csnlog_get_running_xids(TransactionId start, TransactionId end, CommitSeqNo snapshot_csn,
-								   int max_xids, int *nxids, TransactionId *xids, bool *overflowed)
+void
+polar_csnlog_get_running_xids(TransactionId start, TransactionId end, CommitSeqNo snapshot_csn,
+							  int max_xids, int *nxids, TransactionId *xids, bool *overflowed)
 {
 	SlruCtl		csnlog_ctl = polar_csnlog_get_ctl();
 
@@ -780,8 +786,8 @@ void polar_csnlog_get_running_xids(TransactionId start, TransactionId end, Commi
 #endif
 
 			/*
-			 * In in_progress and committing status, csn must >= ours,
-			 * see these as running also.
+			 * In in_progress and committing status, csn must >= ours, see
+			 * these as running also.
 			 */
 			if (POLAR_CSN_IS_INPROGRESS(csn) ||
 				POLAR_CSN_IS_COMMITTING(csn) ||
@@ -837,7 +843,7 @@ polar_csnlog_shmem_buffers(void)
 Size
 polar_csnlog_shmem_size(void)
 {
-	Size size;
+	Size		size;
 
 	size = SimpleLruShmemSize(polar_csnlog_shmem_buffers(), CSNLOG_LSNS_PER_PAGE);
 
@@ -854,12 +860,12 @@ polar_csnlog_shmem_size(void)
 void
 polar_csnlog_shmem_init(void)
 {
-	SlruCtl	csnlog_ctl = polar_csnlog_get_ctl();
+	SlruCtl		csnlog_ctl = polar_csnlog_get_ctl();
 
 	if (polar_csnlog_upperbound_enable)
 	{
-		bool	found;
-		Size	size = polar_csnlog_upperbound_csn_shmem_size();
+		bool		found;
+		Size		size = polar_csnlog_upperbound_csn_shmem_size();
 
 		polar_upperbound_csn_ptr = ShmemInitStruct("CSN upperbound shared", size, &found);
 
@@ -875,15 +881,15 @@ polar_csnlog_shmem_init(void)
 	/* Create local segment file cache manager */
 	if (POLAR_ENABLE_CSNLOG_LOCAL_CACHE())
 	{
-		uint32 io_permission = POLAR_CACHE_LOCAL_FILE_READ | POLAR_CACHE_LOCAL_FILE_WRITE;
+		uint32		io_permission = POLAR_CACHE_LOCAL_FILE_READ | POLAR_CACHE_LOCAL_FILE_WRITE;
 		polar_local_cache cache;
 
 		if (!polar_is_replica())
 			io_permission |= (POLAR_CACHE_SHARED_FILE_READ | POLAR_CACHE_SHARED_FILE_WRITE);
 
 		cache = polar_create_local_cache("csnlog", "pg_csnlog",
-			polar_csnlog_max_local_cache_segments, (SLRU_PAGES_PER_SEGMENT * BLCKSZ), LWTRANCHE_POLAR_CSNLOG_LOCAL_CACHE,
-			io_permission, NULL);
+										 polar_csnlog_max_local_cache_segments, (SLRU_PAGES_PER_SEGMENT * BLCKSZ), LWTRANCHE_POLAR_CSNLOG_LOCAL_CACHE,
+										 io_permission, NULL);
 
 		polar_slru_reg_local_cache(polar_csnlog_get_ctl(), cache);
 	}
@@ -899,22 +905,22 @@ polar_csnlog_validate_dir(void)
 	char		path[MAXPGPATH];
 
 	snprintf((path), MAXPGPATH, "%s/%s", polar_enable_shared_storage_mode ?
-																polar_datadir : DataDir, CSNLOG_DIR);
+			 polar_datadir : DataDir, CSNLOG_DIR);
 
 	if (polar_enable_shared_storage_mode && polar_mount_pfs_readonly_mode)
-		return ;
+		return;
 
 	if (polar_stat(path, &stat_buf) == 0)
 	{
-		/*no cover begin*/
+		/* no cover begin */
 		if (!S_ISDIR(stat_buf.st_mode))
 			ereport(FATAL,
 					(errmsg("required csnlog directory \"%s\" is not a directory", path)));
-		/*no cover end*/
+		/* no cover end */
 	}
 	else
 	{
-		/*no cover begin*/
+		/* no cover begin */
 		ereport(LOG,
 				(errmsg("creating missing csnlog directory \"%s\"",
 						path)));
@@ -923,7 +929,7 @@ polar_csnlog_validate_dir(void)
 			ereport(FATAL,
 					(errmsg("could not create csnlog directory \"%s\": %m",
 							path)));
-		/*no cover end*/
+		/* no cover end */
 	}
 }
 
@@ -934,17 +940,17 @@ void
 polar_csnlog_remove_all(void)
 {
 	char		path[MAXPGPATH];
-	DIR		  *csnlog_dir;
+	DIR		   *csnlog_dir;
 	struct dirent *csnlog_de;
 
 	snprintf((path), MAXPGPATH, "%s/%s", polar_enable_shared_storage_mode ?
-																polar_datadir : DataDir, CSNLOG_DIR);
+			 polar_datadir : DataDir, CSNLOG_DIR);
 	csnlog_dir = AllocateDir(path);
 
-	/*no cover begin*/
+	/* no cover begin */
 	if (csnlog_dir == NULL)
 		return;
-	/*no cover end*/
+	/* no cover end */
 
 	while ((csnlog_de = ReadDir(csnlog_dir, path)) != NULL)
 	{
@@ -1048,13 +1054,16 @@ void
 polar_csnlog_startup(TransactionId oldestActiveXID)
 {
 	XidStatus	xid_status;
-	XLogRecPtr 	xid_lsn;
+	XLogRecPtr	xid_lsn;
 	TransactionId xid = oldestActiveXID;
 	TransactionId end_xid = XidFromFullTransactionId(ShmemVariableCache->nextXid);
-	int boundary_pageno = TransactionIdToPageNo(xid) - TransactionIdToPageNo(xid) % BATCH_SIZE;
+	int			boundary_pageno = TransactionIdToPageNo(xid) - TransactionIdToPageNo(xid) % BATCH_SIZE;
 	TransactionId extend_xid = boundary_pageno * CSNLOG_XACTS_PER_PAGE;
 
-	/* We should give first xid in csnlog boundary page to make csnlog extend work */
+	/*
+	 * We should give first xid in csnlog boundary page to make csnlog extend
+	 * work
+	 */
 	polar_csnlog_extend(extend_xid, false);
 
 	SimpleLruWriteAll(polar_csnlog_get_ctl(), false);
@@ -1064,8 +1073,8 @@ polar_csnlog_startup(TransactionId oldestActiveXID)
 
 	/*
 	 * Since we don't expect next_csn to be valid across crashes, new
-	 * committed xact's csn will start from POLAR_CSN_FIRST_NORMAL. so we
-	 * set the committed xact on the currently-active page(s) to POLAR_CSN_FROZEN
+	 * committed xact's csn will start from POLAR_CSN_FIRST_NORMAL. so we set
+	 * the committed xact on the currently-active page(s) to POLAR_CSN_FROZEN
 	 * during startup. Whenever we advance into a new page,
 	 * polar_csnlog_extend will likewise zero the new page without regard to
 	 * whatever was previously on disk.
@@ -1169,9 +1178,10 @@ polar_csnlog_extend(TransactionId newestXact, bool write_wal)
 	LWLockRelease(CSNLogControlLock);
 }
 
-void polar_csnlog_truncate_redo(int pageno)
+void
+polar_csnlog_truncate_redo(int pageno)
 {
-	SlruCtl	csnlog_ctl = polar_csnlog_get_ctl();
+	SlruCtl		csnlog_ctl = polar_csnlog_get_ctl();
 
 	/*
 	 * During XLOG replay, latest_page_number isn't set up yet; insert a
@@ -1269,7 +1279,10 @@ polar_csnlog_page_precedes(int page1, int page2)
 void
 polar_promote_csnlog(TransactionId oldest_active_xid)
 {
-	/* POLAR: During ro promoting, start up the csnlog base on oldest active xid to make sure csn data is consistent with clog */
+	/*
+	 * POLAR: During ro promoting, start up the csnlog base on oldest active
+	 * xid to make sure csn data is consistent with clog
+	 */
 	polar_csnlog_startup(oldest_active_xid);
 	polar_slru_promote(polar_csnlog_get_ctl());
 }
