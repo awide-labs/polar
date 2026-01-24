@@ -27,6 +27,13 @@ definitions:
           - git fetch origin ${BITBUCKET_PR_DESTINATION_BRANCH}
           - .ci/check_changelog.sh origin/${BITBUCKET_PR_DESTINATION_BRANCH}
 
+    - step: &check-pgindent
+        name: C Code Style (pgindent)
+        image: polardb/polardb_pg_devel:rocky9
+        size: 1x
+        script:
+          - .ci/check_pgindent.sh
+
   step-template: &base-step-template
     size: 2x  # Increased from default 1x to 2x (4 cores, 8192MB)
     services:
@@ -91,6 +98,7 @@ pipelines:
       - parallel:
           - step: *check-commit-format
           - step: *check-changelog
+          - step: *check-pgindent
       - step:
           <<: *base-step-template
           name: Pull request trigger

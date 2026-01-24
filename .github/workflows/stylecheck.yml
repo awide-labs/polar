@@ -3,11 +3,27 @@ name: stylecheck
 on:
   pull_request:
     branches: [ POLARDB_15_STABLE ]
+  push:
+    branches: [ POLARDB_15_STABLE ]
   # trigger testing manually
   workflow_dispatch:
 
 jobs:
+  pgindent:
+    name: C Code Style (pgindent)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    container:
+      image: polardb/polardb_pg_devel:rocky9
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Check C code style with pgindent
+        run: .ci/check_pgindent.sh
+
   stylecheck:
+    name: Full Style Check
     runs-on: ubuntu-latest
     strategy:
       matrix:
