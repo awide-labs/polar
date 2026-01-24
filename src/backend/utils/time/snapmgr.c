@@ -187,8 +187,8 @@ typedef struct SerializedSnapshotData
 {
 	TransactionId xmin;
 	TransactionId xmax;
-	CommitSeqNo	polar_snapshot_csn;		/* POLAR csn */
-	bool        polar_csn_xid_snapshot;	/* POLAR csn */
+	CommitSeqNo polar_snapshot_csn; /* POLAR csn */
+	bool		polar_csn_xid_snapshot; /* POLAR csn */
 	uint32		xcnt;
 	int32		subxcnt;
 	bool		suboverflowed;
@@ -1266,10 +1266,10 @@ ExportSnapshot(Snapshot snapshot)
 	if (polar_csn_enable)
 	{
 		appendStringInfo(&buf, "polar_snapshot_csn:%X/%X\n",
-						(uint32) (snapshot->polar_snapshot_csn >> 32),
-						(uint32) snapshot->polar_snapshot_csn);
+						 (uint32) (snapshot->polar_snapshot_csn >> 32),
+						 (uint32) snapshot->polar_snapshot_csn);
 		appendStringInfo(&buf, "polar_csn_xid_snapshot:%d\n",
-						 snapshot->polar_csn_xid_snapshot?1:0);
+						 snapshot->polar_csn_xid_snapshot ? 1 : 0);
 	}
 
 	/*
@@ -1432,8 +1432,9 @@ parseCSNFromText(const char *prefix, char **s, const char *filename)
 				(errcode(ERRCODE_INVALID_TEXT_REPRESENTATION),
 				 errmsg("invalid snapshot data in file \"%s\"", filename)));
 	*s = ptr + 1;
-	return ((CommitSeqNo)high_part) << 32 | low_part;
+	return ((CommitSeqNo) high_part) << 32 | low_part;
 }
+
 /* POLAR end */
 
 /*
@@ -2217,7 +2218,7 @@ SerializeSnapshot(Snapshot snapshot, char *start_address)
 	serialized_snapshot.curcid = snapshot->curcid;
 	serialized_snapshot.whenTaken = snapshot->whenTaken;
 	serialized_snapshot.lsn = snapshot->lsn;
-	if(polar_csn_enable)
+	if (polar_csn_enable)
 	{
 		serialized_snapshot.polar_snapshot_csn = snapshot->polar_snapshot_csn;
 		serialized_snapshot.polar_csn_xid_snapshot = snapshot->polar_csn_xid_snapshot;
@@ -2356,7 +2357,8 @@ XidInMVCCSnapshot(TransactionId xid, Snapshot snapshot)
 	if (polar_csn_enable)
 	{
 		XidCommitStatus xidstatus;
-		/*no cover line*/
+
+		/* no cover line */
 		return !XidVisibleInSnapshotCSN(xid, snapshot, &xidstatus);
 	}
 

@@ -67,11 +67,11 @@ pthread_t	worker_handles[POLAR_WAL_PIPELINE_MAX_THREAD_NUM];
 
 typedef struct worker_args
 {
-	int thread_no;
-	int ident;
-	bool (*fp)(int);
-	int spin_delay;
-	int timeout;
+	int			thread_no;
+	int			ident;
+	bool		(*fp) (int);
+	int			spin_delay;
+	int			timeout;
 	polar_wait_object_t *wait_obj;
 } worker_args;
 
@@ -82,15 +82,15 @@ worker_args args[POLAR_WAL_PIPELINE_MAX_THREAD_NUM];
  * and wal pipeline is multi thread,
  * need special process
  */
-bool multi_thread_elog = false;
+bool		multi_thread_elog = false;
 
 /*
  * polar vfs is not thread safe,
  * and wal pipeline is multi thread,
  * need special process
  */
-bool multi_thread_vfs;
-slock_t polar_wal_pipeline_vfs_lck;
+bool		multi_thread_vfs;
+slock_t		polar_wal_pipeline_vfs_lck;
 
 static void polar_wal_pipeliner_create_advance_worker(void);
 static void polar_wal_pipeliner_create_flush_worker(void);
@@ -112,7 +112,7 @@ static void polar_wal_pipeliner_init_mode_5(void);
 static void *polar_wal_pipeliner_worker(void *arg);
 static void polar_wal_pipeliner_init(void);
 
-extern polar_wait_object_t* polar_wal_pipeline_get_worker_wait_obj(int thread_no);
+extern polar_wait_object_t * polar_wal_pipeline_get_worker_wait_obj(int thread_no);
 
 /*
  * Main entry point for wal pipeline process
@@ -166,7 +166,7 @@ polar_wal_pipeliner_main(void)
 	 */
 	ProcGlobal->polar_wal_pipeliner_latch = &MyProc->procLatch;
 
-	polar_init_spin_delay_mt(&status, polar_wal_pipeline_get_worker_wait_obj(WRITE_WORKER_THREAD_NO), 
+	polar_init_spin_delay_mt(&status, polar_wal_pipeline_get_worker_wait_obj(WRITE_WORKER_THREAD_NO),
 							 polar_wal_pipeline_write_worker_spin_delay, polar_wal_pipeline_write_worker_timeout);
 
 	/*
@@ -174,7 +174,7 @@ polar_wal_pipeliner_main(void)
 	 */
 	for (;;)
 	{
-		int res;
+		int			res;
 
 		if (ProcSignalBarrierPending)
 			ProcessProcSignalBarrier();
@@ -184,7 +184,7 @@ polar_wal_pipeliner_main(void)
 		 */
 		if (ShutdownRequestPending || !PostmasterIsAlive())
 		{
-			int i;
+			int			i;
 
 			for (i = 0; i < POLAR_WAL_PIPELINE_MAX_THREAD_NUM; i++)
 				if (worker_handles[i] != INVALID_THREAD)
@@ -193,9 +193,9 @@ polar_wal_pipeliner_main(void)
 			pgstat_report_wal(true);
 
 			/*
-			 * Only when all wal pipeline thread have exited, we
-			 * can set polar_wal_pipeliner_latch to tell others that wal
-			 * pipeliner has exited.
+			 * Only when all wal pipeline thread have exited, we can set
+			 * polar_wal_pipeliner_latch to tell others that wal pipeliner has
+			 * exited.
 			 */
 			ProcGlobal->polar_wal_pipeliner_latch = NULL;
 
@@ -236,10 +236,11 @@ polar_wal_pipeliner_main(void)
 	}
 }
 
-static void polar_wal_pipeliner_create_advance_worker(void)
+static void
+polar_wal_pipeliner_create_advance_worker(void)
 {
-	int err;
-	int thread_no = ADVANCE_WORKER_THREAD_NO;
+	int			err;
+	int			thread_no = ADVANCE_WORKER_THREAD_NO;
 
 	args[thread_no].thread_no = thread_no;
 	args[thread_no].ident = 0;
@@ -252,10 +253,11 @@ static void polar_wal_pipeliner_create_advance_worker(void)
 		elog(PANIC, "create wal pipeline advance worker failed");
 }
 
-static void polar_wal_pipeliner_create_flush_worker(void)
+static void
+polar_wal_pipeliner_create_flush_worker(void)
 {
-	int err;
-	int thread_no = FLUSH_WORKER_THREAD_NO;
+	int			err;
+	int			thread_no = FLUSH_WORKER_THREAD_NO;
 
 	args[thread_no].thread_no = thread_no;
 	args[thread_no].ident = 0;
@@ -268,11 +270,12 @@ static void polar_wal_pipeliner_create_flush_worker(void)
 		elog(PANIC, "create wal pipeline flush worker failed");
 }
 
-static void polar_wal_pipeliner_create_notify_worker(void)
+static void
+polar_wal_pipeliner_create_notify_worker(void)
 {
-	int i;
-	int err;
-	int thread_no = NOTIFY_WORKER_THREAD_NO;
+	int			i;
+	int			err;
+	int			thread_no = NOTIFY_WORKER_THREAD_NO;
 
 	for (i = 0; i < polar_wal_pipeline_notify_worker_num; i++)
 	{
@@ -295,9 +298,9 @@ static void polar_wal_pipeliner_create_notify_worker(void)
 static bool
 polar_wal_pipeliner_main_mode_1(int ident)
 {
-	bool res1;
-	bool res2;
-	bool res3;
+	bool		res1;
+	bool		res2;
+	bool		res3;
 
 	res1 = polar_wal_pipeline_advance(ident);
 
@@ -307,7 +310,7 @@ polar_wal_pipeliner_main_mode_1(int ident)
 
 	res3 = polar_wal_pipeline_notify(ident);
 
-	return res1 || res2 || res3; 
+	return res1 || res2 || res3;
 }
 
 static void
@@ -319,8 +322,8 @@ polar_wal_pipeliner_init_mode_1(void)
 static bool
 polar_wal_pipeliner_main_mode_2(int ident)
 {
-	bool res1;
-	bool res2;
+	bool		res1;
+	bool		res2;
 
 	res1 = polar_wal_pipeline_advance(ident);
 
@@ -356,8 +359,8 @@ polar_wal_pipeliner_init_mode_3(void)
 static bool
 polar_wal_pipeliner_main_mode_4(int ident)
 {
-	bool res1;
-	bool res2;
+	bool		res1;
+	bool		res2;
 
 	res1 = polar_wal_pipeline_advance(ident);
 	res2 = polar_wal_pipeline_write(ident);
@@ -389,7 +392,7 @@ polar_wal_pipeliner_init_mode_5(void)
 static void
 polar_wal_pipeliner_init(void)
 {
-	int i;
+	int			i;
 
 	for (i = 0; i < POLAR_WAL_PIPELINE_MAX_THREAD_NUM; i++)
 		worker_handles[i] = INVALID_THREAD;
@@ -397,9 +400,9 @@ polar_wal_pipeliner_init(void)
 	if (polar_wal_pipeline_mode > 3)
 	{
 		/*
-		* Should disable wait stat, wait stat in polar vfs is not thread-safe;
-		* Or else maybe crash
-		*/
+		 * Should disable wait stat, wait stat in polar vfs is not
+		 * thread-safe; Or else maybe crash
+		 */
 		polar_enable_stat_wait_info = false;
 
 		/* ELOG is not thread safe */
@@ -441,7 +444,7 @@ polar_wal_pipeliner_init(void)
 static void *
 polar_wal_pipeliner_worker(void *arg)
 {
-	worker_args *args = (worker_args *)arg;
+	worker_args *args = (worker_args *) arg;
 	polar_spin_delay_status_t status;
 
 	polar_init_spin_delay_mt(&status, args->wait_obj, args->spin_delay, args->timeout);
@@ -487,15 +490,18 @@ polar_wal_pipeliner_wakeup(void)
 void
 polar_wal_pipeline_wakeup_notifier(void)
 {
-	int i;
+	int			i;
 
 	if (polar_wal_pipeline_mode <= 1)
 	{
-		/* There are no dedicated notifier threads in this mode, notficateions are done
-		unconditionally by the same thread that does write/flush operations */
+		/*
+		 * There are no dedicated notifier threads in this mode, notficateions
+		 * are done unconditionally by the same thread that does write/flush
+		 * operations
+		 */
 	}
 
-	for (i=0; i<polar_wal_pipeline_notify_worker_num; i++)
+	for (i = 0; i < polar_wal_pipeline_notify_worker_num; i++)
 	{
 		polar_wait_object_t *notify_worker_wait_obj = polar_wal_pipeline_get_worker_wait_obj(NOTIFY_WORKER_THREAD_NO + i);
 

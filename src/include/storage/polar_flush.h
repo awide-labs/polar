@@ -95,20 +95,23 @@ typedef struct FlushList
 	pg_atomic_uint64 vm_remove;
 } FlushList;
 
-typedef struct FLushListHeapNode {
+typedef struct FLushListHeapNode
+{
 	int			id;
 	XLogRecPtr	lsn;
 } FLushListHeapNode;
- 
+
 #define POLAR_FLUSHLIST_PARTITIONS (64)
 
-typedef struct FlushListMinHeap {
+typedef struct FlushListMinHeap
+{
 	int			size;
 	int			pos[POLAR_FLUSHLIST_PARTITIONS];
 	FLushListHeapNode heap[POLAR_FLUSHLIST_PARTITIONS];
 } FlushListMinHeap;
 
-typedef struct FlushControl {
+typedef struct FlushControl
+{
 	polar_sync_buffer_io flush_buffer_io;
 	FlushList	lists[POLAR_FLUSHLIST_PARTITIONS];
 	FlushListMinHeap heap;
@@ -141,7 +144,7 @@ extern void polar_adjust_position_in_flush_list(BufferDesc *buf);
 extern Size polar_flush_list_ctl_shmem_size(void);
 extern void polar_init_flush_list_ctl(bool init);
 
-extern FlushList   *polar_flush_list_flush_begin(void);
-extern void         polar_flush_list_flush_end(FlushList *list);
+extern FlushList *polar_flush_list_flush_begin(void);
+extern void polar_flush_list_flush_end(FlushList *list);
 
 #endif							/* POLAR_FLUSH_H */

@@ -883,7 +883,7 @@ refresh_by_heap_swap(Oid matviewOid, Oid OIDNewHeap, char relpersistence)
 {
 	if (polar_csn_enable)
 		finish_heap_swap(matviewOid, OIDNewHeap, false, false, true, true,
-						GetOldestActiveTransactionId(), ReadNextMultiXactId(), relpersistence);
+						 GetOldestActiveTransactionId(), ReadNextMultiXactId(), relpersistence);
 	else
 		finish_heap_swap(matviewOid, OIDNewHeap, false, false, true, true,
 						 RecentXmin, ReadNextMultiXactId(), relpersistence);

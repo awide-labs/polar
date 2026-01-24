@@ -25,13 +25,15 @@ PG_FUNCTION_INFO_V1(test_csn_xact_multixact);
 Datum
 test_csn_xact_xmin(PG_FUNCTION_ARGS)
 {
-	bool commit = PG_GETARG_BOOL(0);
+	bool		commit = PG_GETARG_BOOL(0);
 	RangeVar   *rv;
 	Relation	rel;
 	Datum		values[2];
 	bool		isnull[2];
-	HeapTuple	tup, tup2;
-	TransactionId xid1, xid2;
+	HeapTuple	tup,
+				tup2;
+	TransactionId xid1,
+				xid2;
 	int			ret;
 	Buffer		buffer;
 	Buffer		vmbuffer = InvalidBuffer;
@@ -74,7 +76,7 @@ test_csn_xact_xmin(PG_FUNCTION_ARGS)
 	tup->t_data->t_infomask |= HEAP_XMAX_INVALID;
 	HeapTupleHeaderSetXmin(tup->t_data, xid1);
 	HeapTupleHeaderSetCmin(tup->t_data, 1);
-	HeapTupleHeaderSetXmax(tup->t_data, 0);		/* for cleanliness */
+	HeapTupleHeaderSetXmax(tup->t_data, 0); /* for cleanliness */
 	tup->t_tableOid = RelationGetRelid(rel);
 
 	tup2->t_data->t_infomask &= ~(HEAP_XACT_MASK);
@@ -82,7 +84,7 @@ test_csn_xact_xmin(PG_FUNCTION_ARGS)
 	tup2->t_data->t_infomask |= HEAP_XMAX_INVALID;
 	HeapTupleHeaderSetXmin(tup2->t_data, xid2);
 	HeapTupleHeaderSetCmin(tup2->t_data, 1);
-	HeapTupleHeaderSetXmax(tup2->t_data, 0);		/* for cleanliness */
+	HeapTupleHeaderSetXmax(tup2->t_data, 0);	/* for cleanliness */
 	tup2->t_tableOid = RelationGetRelid(rel);
 
 	/*
@@ -90,9 +92,9 @@ test_csn_xact_xmin(PG_FUNCTION_ARGS)
 	 * this will also pin the requisite visibility map page.
 	 */
 	buffer = RelationGetBufferForTuple(rel, tup->t_len + tup2->t_len,
-			InvalidBuffer,
-			0, NULL,
-			&vmbuffer, NULL);
+									   InvalidBuffer,
+									   0, NULL,
+									   &vmbuffer, NULL);
 	RelationPutHeapTuple(rel, buffer, tup, false);
 	RelationPutHeapTuple(rel, buffer, tup2, false);
 
@@ -102,7 +104,7 @@ test_csn_xact_xmin(PG_FUNCTION_ARGS)
 	{
 		PageClearAllVisible(BufferGetPage(buffer));
 		visibilitymap_clear(rel, ItemPointerGetBlockNumber(&(tup->t_self)),
-												vmbuffer, VISIBILITYMAP_VALID_BITS, NULL);
+							vmbuffer, VISIBILITYMAP_VALID_BITS, NULL);
 	}
 
 	MarkBufferDirty(buffer);
@@ -291,13 +293,15 @@ test_csn_xact_xmin(PG_FUNCTION_ARGS)
 Datum
 test_csn_xact_xmax(PG_FUNCTION_ARGS)
 {
-	bool commit = PG_GETARG_BOOL(0);
+	bool		commit = PG_GETARG_BOOL(0);
 	RangeVar   *rv;
 	Relation	rel;
 	Datum		values[2];
 	bool		isnull[2];
-	HeapTuple	tup, tup2;
-	TransactionId xid1, xid2;
+	HeapTuple	tup,
+				tup2;
+	TransactionId xid1,
+				xid2;
 	int			ret;
 	Buffer		buffer;
 	Buffer		vmbuffer = InvalidBuffer;
@@ -356,9 +360,9 @@ test_csn_xact_xmax(PG_FUNCTION_ARGS)
 	 * this will also pin the requisite visibility map page.
 	 */
 	buffer = RelationGetBufferForTuple(rel, tup->t_len + tup2->t_len,
-			InvalidBuffer,
-			0, NULL,
-			&vmbuffer, NULL);
+									   InvalidBuffer,
+									   0, NULL,
+									   &vmbuffer, NULL);
 	RelationPutHeapTuple(rel, buffer, tup, false);
 	RelationPutHeapTuple(rel, buffer, tup2, false);
 
@@ -371,7 +375,7 @@ test_csn_xact_xmax(PG_FUNCTION_ARGS)
 	{
 		PageClearAllVisible(BufferGetPage(buffer));
 		visibilitymap_clear(rel, ItemPointerGetBlockNumber(&(tup->t_self)),
-												vmbuffer, VISIBILITYMAP_VALID_BITS, NULL);
+							vmbuffer, VISIBILITYMAP_VALID_BITS, NULL);
 	}
 
 	MarkBufferDirty(buffer);
@@ -563,7 +567,7 @@ test_csn_xact_xmax(PG_FUNCTION_ARGS)
 Datum
 test_csn_xact_multixact(PG_FUNCTION_ARGS)
 {
-	bool commit = PG_GETARG_BOOL(0);
+	bool		commit = PG_GETARG_BOOL(0);
 	RangeVar   *rv;
 	Relation	rel;
 	Datum		values[1];
@@ -577,7 +581,8 @@ test_csn_xact_multixact(PG_FUNCTION_ARGS)
 	SnapshotData snapshot1 = {};
 	SnapshotData snapshot2 = {};
 	SnapshotData snapshot3 = {};
-	MultiXactStatus status1, status2;
+	MultiXactStatus status1,
+				status2;
 
 	if (!polar_csn_enable)
 		elog(ERROR, "test_csn_xact: polar_csn_enable must be on");
@@ -607,7 +612,7 @@ test_csn_xact_multixact(PG_FUNCTION_ARGS)
 	status1 = MultiXactStatusNoKeyUpdate;
 	status2 = MultiXactStatusForKeyShare,
 
-	MultiXactIdSetOldestMember();
+		MultiXactIdSetOldestMember();
 	new_xmax = MultiXactIdCreate(xid1, status1, FrozenTransactionId, status2);
 
 	/* Fill the header fields, like heap_prepare_insert does */
@@ -626,9 +631,9 @@ test_csn_xact_multixact(PG_FUNCTION_ARGS)
 	 * this will also pin the requisite visibility map page.
 	 */
 	buffer = RelationGetBufferForTuple(rel, tup->t_len,
-			InvalidBuffer,
-			0, NULL,
-			&vmbuffer, NULL);
+									   InvalidBuffer,
+									   0, NULL,
+									   &vmbuffer, NULL);
 	RelationPutHeapTuple(rel, buffer, tup, false);
 
 	tup->t_data->t_ctid = tup->t_self;
@@ -639,7 +644,7 @@ test_csn_xact_multixact(PG_FUNCTION_ARGS)
 	{
 		PageClearAllVisible(BufferGetPage(buffer));
 		visibilitymap_clear(rel, ItemPointerGetBlockNumber(&(tup->t_self)),
-												vmbuffer, VISIBILITYMAP_VALID_BITS, NULL);
+							vmbuffer, VISIBILITYMAP_VALID_BITS, NULL);
 	}
 
 	MarkBufferDirty(buffer);

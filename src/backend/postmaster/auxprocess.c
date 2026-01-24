@@ -172,7 +172,7 @@ AuxiliaryProcessMain(AuxProcType auxtype)
 			proc_exit(1);
 
 		case PolarWalPipelinerProcess:
-			polar_wal_pipeliner_main();        /* should never return*/
+			polar_wal_pipeliner_main(); /* should never return */
 			proc_exit(1);
 
 		case LogIndexBgWriterProcess:

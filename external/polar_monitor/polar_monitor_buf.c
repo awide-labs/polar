@@ -488,13 +488,15 @@ polar_flushlist(PG_FUNCTION_ARGS)
 		values_u64[5] += pg_atomic_read_u64(&polar_flush_ctl->lists[i].cbuf);
 		values_u64[6] += pg_atomic_read_u64(&polar_flush_ctl->lists[i].vm_insert);
 		values_u64[7] += pg_atomic_read_u64(&polar_flush_ctl->lists[i].vm_remove);
+
 		/*
 		 * fake_lsn has been deleted, for compatibility with older versions,
 		 * we reserve this column and set it to 0.
 		 */
 	}
 
-	for (i = 0; i < FLUSH_LIST_COLUMN_SIZE; i++) {
+	for (i = 0; i < FLUSH_LIST_COLUMN_SIZE; i++)
+	{
 		values[i] = UInt64GetDatum(values_u64[i]);
 	}
 

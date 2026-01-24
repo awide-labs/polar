@@ -187,12 +187,12 @@ typedef struct SnapshotData
 	 * This snapshot can see the effects of all transactions with CSN <
 	 * polar_snapshot_csn.
 	 */
-	CommitSeqNo	polar_snapshot_csn;
+	CommitSeqNo polar_snapshot_csn;
 
 	/*
 	 * Wether a xid snapshot generated from csn snapshot
 	 */
-	bool        polar_csn_xid_snapshot;
+	bool		polar_csn_xid_snapshot;
 
 	/* POLAR end */
 

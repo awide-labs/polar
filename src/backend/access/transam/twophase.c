@@ -1554,7 +1554,10 @@ FinishPreparedTransaction(const char *gid, bool isCommit)
 	invalmsgs = (SharedInvalidationMessage *) bufptr;
 	bufptr += MAXALIGN(hdr->ninvalmsgs * sizeof(SharedInvalidationMessage));
 
-	/* POLAR csn snapshot latestCompletedXid is updated by TransactionIdCommitTree*/
+	/*
+	 * POLAR csn snapshot latestCompletedXid is updated by
+	 * TransactionIdCommitTree
+	 */
 	if (!polar_csn_enable)
 	{
 		/* compute latestXid among all children */

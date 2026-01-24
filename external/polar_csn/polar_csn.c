@@ -53,8 +53,10 @@ typedef struct
 	txid		xmin;
 	txid		xmax;
 	/* in-progress txids, xmin <= xip[i] < xmax: */
+
 	/*
 	 * POLAR csn
+	 *
 	 * To make txid_snapshot storage compatible, we should store csn in xip
 	 * and store an invalid xid in front of csn to differentiate csn snapshot
 	 * with xid snapshot
