@@ -15,7 +15,7 @@ set -euo pipefail
 
 # Source common functions
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=.ci/common.sh
+# shellcheck source=../.ci/common.sh
 source "${SCRIPT_DIR}/common.sh"
 
 # Regex pattern for valid changelog entry ending
@@ -166,7 +166,6 @@ main() {
     exit 0
   fi
 
-  # Build set of commits to exclude (merge commits and their brought commits)
   local excluded_commits=()
   local excluded_sha
   while IFS= read -r excluded_sha; do
@@ -192,14 +191,8 @@ main() {
     commit_sha=$(echo "${line}" | cut -d' ' -f1)
     commit_msg=$(echo "${line}" | cut -d' ' -f2-)
 
-    # Skip excluded commits (merge commits and their brought commits)
-    if is_commit_excluded "${commit_sha}" "excluded_commits"; then
-      if is_merge_commit "${commit_sha}"; then
-        log_success "  ✓ ${commit_sha:0:8} - ${commit_msg} (merge commit)"
-      else
-        log_success "  ✓ ${commit_sha:0:8} - ${commit_msg} " \
-                    "(brought by merge)"
-      fi
+    if is_commit_excluded "$commit_sha" "excluded_commits"; then
+      log_success "  ✓ ${commit_sha:0:8} - $commit_msg (brought by merge)"
       continue
     fi
 
@@ -210,6 +203,7 @@ main() {
     # Check if commit explicitly skips changelog update
     # Uses Conventional Commits footer format: skip-changelog: true
     if echo "${full_msg}" | grep -qiE "^skip-changelog:\s*true"; then
+      log_warning "Commit ${commit_sha:0:8} skips changelog: ${commit_msg}"
       log_success "  ✓ ${commit_sha:0:8} - ${commit_msg} " \
                   "(skip-changelog)"
       continue

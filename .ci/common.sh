@@ -1,68 +1,65 @@
 #!/bin/bash
-# Common functions and constants for CI scripts
+# Common functions for CI check scripts
 #
-# This file provides shared functionality for commit format checking and
-# changelog validation scripts.
+# This file contains shared utility functions used by multiple CI check
+# scripts. Source this file in your script to use these functions.
 
-# Enable strict mode for sourcing
-set -euo pipefail
+_COMMON_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ -f "${_COMMON_SCRIPT_DIR}/../.bitbucket/pr-comments.sh" ]; then
+  # shellcheck source=../.bitbucket/pr-comments.sh
+  source "${_COMMON_SCRIPT_DIR}/../.bitbucket/pr-comments.sh"
+fi
+unset _COMMON_SCRIPT_DIR
 
-# ============================================================================
-# CONSTANTS
-# ============================================================================
+# Conventional Commits regex patterns
+readonly CC_OPTIONAL_SCOPE="(\\([^)]+\\))?"
+readonly CC_HEADER_BASE="^[a-z]+${CC_OPTIONAL_SCOPE}(!)?:"
+readonly CC_HEADER_WITH_DESC="${CC_HEADER_BASE}[[:space:]]+.+"
+readonly CC_HEADER_BREAKING="^[a-z]+${CC_OPTIONAL_SCOPE}!:"
 
-# Conventional Commits types (from specification)
-# https://www.conventionalcommits.org/en/v1.0.0/
-CC_TYPES="feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert"
+readonly CC_SED_HEADER="^([a-z]+)${CC_OPTIONAL_SCOPE}(!)?:"
+readonly CC_SED_TYPE_EXTRACT="${CC_SED_HEADER}.*"
+readonly CC_SED_DESC_EXTRACT="${CC_SED_HEADER}[[:space:]]+"
 
-# Regex patterns for Conventional Commits
-# Header format: <type>[optional scope][optional !]: <description>
-CC_HEADER_PATTERN="^(${CC_TYPES})(\([a-zA-Z0-9_/-]+\))?(!)?: .+"
-CC_HEADER_BREAKING="^(${CC_TYPES})(\([a-zA-Z0-9_/-]+\))?!: "
-
-# Maximum line length for commit messages
-CC_MAX_LINE_LENGTH=72
-
-# ============================================================================
-# LOGGING FUNCTIONS
-# ============================================================================
-
-# Print a message in red (error)
 log_error() {
   echo -e "\033[0;31m$*\033[0m"
 }
 
-# Print a message in green (success)
 log_success() {
   echo -e "\033[0;32m$*\033[0m"
 }
 
-# Print a message in yellow (warning)
 log_warning() {
-  echo -e "\033[0;33m$*\033[0m"
-}
+  local warning_msg="$*"
 
-# ============================================================================
-# GIT HELPER FUNCTIONS
-# ============================================================================
+  # Always print to console with colored output
+  echo -e "\033[1;33m${warning_msg}\033[0m"
+
+  # Call optional hook for CI-specific warning handlers if available
+  # This allows CI-specific integrations (e.g., posting to MRs/PRs)
+  # without coupling this CI-agnostic code to any specific platform
+  if type on_warning_hook &>/dev/null; then
+    on_warning_hook "${warning_msg}"
+  fi
+}
 
 # Get list of commits in a range
 # Usage: get_commits_in_range BASE_REF CURRENT_REF [FORMAT]
-# Returns: newline-separated list via stdout
+#   FORMAT: git log format string (default: "%H %s" for SHA and subject)
+# Returns: commit list via stdout, empty if no commits
 get_commits_in_range() {
-  local base_ref="${1:-}"
-  local current_ref="${2:-HEAD}"
+  local base="${1:-}"
+  local current="${2:-HEAD}"
   local format="${3:-%H %s}"
 
-  if [ -z "${base_ref}" ]; then
+  if [ -z "${base}" ]; then
     return 1
   fi
 
-  git log --format="${format}" --reverse "${base_ref}..${current_ref}" \
-    2>/dev/null || true
+  git log --format="${format}" "${base}..${current}" 2>/dev/null || true
 }
 
-# Get the full commit message body (including subject)
+# Get full commit message body
 # Usage: get_commit_body COMMIT_SHA
 # Returns: full commit message via stdout
 get_commit_body() {
@@ -70,19 +67,21 @@ get_commit_body() {
   if [ -z "${commit_sha}" ]; then
     return 1
   fi
-  git log -1 --format="%B" "${commit_sha}" 2>/dev/null || true
+  git log -1 --format="%B" "${commit_sha}" 2>/dev/null
 }
 
-# Extract commit type from Conventional Commits header
-# Usage: extract_commit_type COMMIT_MSG
-# Returns: type string via stdout (empty if not matching)
+# Extract commit type from Conventional Commits format
+# Usage: extract_commit_type COMMIT_MESSAGE
+# Returns: commit type via stdout (empty if not found)
 extract_commit_type() {
   local commit_msg="${1:-}"
   if [ -z "${commit_msg}" ]; then
     return 1
   fi
-  # Extract type from: type(scope): description or type: description
-  echo "${commit_msg}" | sed -nE "s/^(${CC_TYPES})(\([^)]+\))?(!)?: .+/\1/p"
+
+  if echo "${commit_msg}" | grep -qE "${CC_HEADER_BASE}"; then
+    echo "${commit_msg}" | sed -E "s/${CC_SED_TYPE_EXTRACT}/\\1/"
+  fi
 }
 
 # Check if a commit is a merge commit
@@ -133,7 +132,9 @@ get_merge_commits() {
     2>/dev/null || true
 }
 
-# Get list of commits to exclude (merge commits and their brought commits)
+# Get list of commits to exclude (commits brought by top-level merges)
+# Top-level merges are validated, but their brought commits (including nested
+# merges) are excluded.
 # Usage: get_excluded_commits BASE_REF CURRENT_REF
 # Returns: newline-separated list of commit SHAs via stdout
 get_excluded_commits() {
@@ -152,28 +153,53 @@ get_excluded_commits() {
     return 0
   fi
 
-  # Build list of excluded commits
-  local commit_sha
-  while IFS= read -r commit_sha; do
-    if [ -z "${commit_sha}" ]; then
+  # Step 1: Collect all commits brought by any merge in the range
+  local -a all_brought_commits=()
+  local sha
+  while IFS= read -r sha; do
+    if [ -z "$sha" ]; then
       continue
     fi
-    # Check if it's a merge commit
-    if is_merge_commit "${commit_sha}"; then
-      # Add the merge commit itself
-      echo "${commit_sha}"
-      # Get all commits brought in by this merge
-      local merge_commits
-      merge_commits=$(get_merge_commits "${commit_sha}")
-      if [ -n "${merge_commits}" ]; then
-        while IFS= read -r merge_commit; do
-          if [ -n "${merge_commit}" ]; then
-            echo "${merge_commit}"
+    if is_merge_commit "$sha"; then
+      local brought
+      brought=$(get_merge_commits "$sha")
+      if [ -n "$brought" ]; then
+        local brought_sha
+        while IFS= read -r brought_sha; do
+          if [ -n "$brought_sha" ]; then
+            all_brought_commits+=("$brought_sha")
           fi
-        done <<< "${merge_commits}"
+        done <<< "$brought"
       fi
     fi
   done <<< "${commits}"
+
+  # Step 2: Identify top-level merges (merges not brought by another merge)
+  # and output commits to skip (brought by top-level merges + nested merges)
+  while IFS= read -r sha; do
+    if [ -z "$sha" ]; then
+      continue
+    fi
+    if is_merge_commit "$sha"; then
+      # Check if this merge is brought by another merge (nested merge)
+      if is_commit_excluded "$sha" "all_brought_commits"; then
+        # This is a nested merge - skip it, don't process its brought commits
+        echo "$sha"
+        continue
+      fi
+      # This is a top-level merge - output its brought commits to skip
+      local brought
+      brought=$(get_merge_commits "$sha")
+      if [ -n "$brought" ]; then
+        local brought_sha
+        while IFS= read -r brought_sha; do
+          if [ -n "$brought_sha" ]; then
+            echo "$brought_sha"
+          fi
+        done <<< "$brought"
+      fi
+    fi
+  done <<< "$commits"
 }
 
 # Check if a commit is in the excluded list

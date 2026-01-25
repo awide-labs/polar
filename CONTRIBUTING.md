@@ -56,6 +56,39 @@ Refs: <reference>[, <reference>...]
 | `chore` | Other changes that don't modify src or test files |
 | `revert` | Reverts a previous commit |
 
+### Scope Requirement
+
+For `feat`, `fix`, and `perf` commits, we strongly recommend including a scope
+to maintain traceable commit history and enable automation. The scope identifies
+which component or feature the commit relates to.
+
+**Why scopes matter:**
+
+- Makes commit history easier to navigate and search
+- Enables automated changelog generation per component
+- Helps reviewers quickly understand the affected area
+- Ensures related changes can be easily tracked together
+
+**Guidelines:**
+
+1. When introducing a new feature, choose a short, descriptive scope name
+2. For subsequent commits related to the same feature, use the same scope
+   consistently
+3. Check existing scopes before creating a new one to avoid duplicates or typos
+
+**Example:** If a feature was introduced with `feat(wal pipelining): add WAL
+pipelining support`, related fixes should use `fix(wal pipelining): ...`
+
+To find existing scopes in the repository, run:
+
+```bash
+git log --format="%s" | grep -oE '^(feat|fix|perf)\([^)]+\)' | \
+  sed 's/[a-z]*(\(.*\))/\1/' | sort -u
+```
+
+CI will warn (but not fail) if a `feat`/`fix`/`perf` commit is missing a scope
+or introduces a scope not previously used in the repository.
+
 ### Optional Footers
 
 In addition to the mandatory `Refs:` footer, you may include other optional
