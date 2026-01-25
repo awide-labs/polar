@@ -674,21 +674,17 @@ SimpleLruReadPage_ReadOnly_Locked(SlruCtl ctl, int pageno, TransactionId xid)
 	SlruShared	shared = ctl->shared;
 	int			slotno;
 
-	/* POLAR: slru stat */
-	/* polar_slru_stat *stat = &shared->stat; */
 	/* POLAR slru hash search */
 	int			share_lock_retry_times = 3;
 
 	/* POLAR end */
 
 	Assert(LWLockHeldByMe(shared->ControlLock));
-	/* POLAR: not accurate in SharedLock, but it doesn't matter */
-	/* stat->n_slru_read_only_count++; */
 
 	for (;;)
 	{
 		/* See if page is already in a buffer */
-		if (polar_enable_slru_hash_index)
+		if (shared->polar_hash_index)
 		{
 			polar_slru_hash_entry *entry;
 
@@ -700,6 +696,8 @@ SimpleLruReadPage_ReadOnly_Locked(SlruCtl ctl, int pageno, TransactionId xid)
 				shared->page_status[entry->slotno] != SLRU_PAGE_READ_IN_PROGRESS)
 			{
 				SlruRecentlyUsed(shared, entry->slotno);
+				/* update the stats counter of pages found in the SLRU */
+				pgstat_count_slru_page_hit(shared->slru_stats_idx);
 				return entry->slotno;
 			}
 		}
@@ -713,6 +711,10 @@ SimpleLruReadPage_ReadOnly_Locked(SlruCtl ctl, int pageno, TransactionId xid)
 				{
 					/* See comments for SlruRecentlyUsed macro */
 					SlruRecentlyUsed(shared, slotno);
+
+					/* update the stats counter of pages found in the SLRU */
+					pgstat_count_slru_page_hit(shared->slru_stats_idx);
+
 					return slotno;
 				}
 			}
@@ -721,7 +723,6 @@ SimpleLruReadPage_ReadOnly_Locked(SlruCtl ctl, int pageno, TransactionId xid)
 		/* No luck, so switch to normal exclusive lock and do regular read */
 		LWLockRelease(shared->ControlLock);
 		LWLockAcquire(shared->ControlLock, LW_EXCLUSIVE);
-		/* stat->n_slru_read_upgrade_count++; */
 
 		slotno = SimpleLruReadPage(ctl, pageno, true, xid);
 		Assert(shared->page_status[slotno] == SLRU_PAGE_VALID);
@@ -739,8 +740,6 @@ SimpleLruReadPage_ReadOnly_Locked(SlruCtl ctl, int pageno, TransactionId xid)
 
 		LWLockRelease(shared->ControlLock);
 		LWLockAcquire(shared->ControlLock, LW_SHARED);
-		/* POLAR: not accurate in SharedLock, but it doesn't matter */
-		/* stat->n_slru_read_only_count++; */
 	}
 }
 
