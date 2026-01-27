@@ -22,6 +22,19 @@ jobs:
       - name: Check C code style with pgindent
         run: .ci/check_pgindent.sh
 
+  check-extensions-order:
+    name: Check Extensions Order
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    container:
+      image: polardb/polardb_pg_devel:rocky9
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Check extensions order
+        run: .ci/check_extensions_order.sh
+
   stylecheck:
     name: Full Style Check
     runs-on: ubuntu-latest
