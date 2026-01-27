@@ -37,6 +37,10 @@ $node_primary->safe_psql('postgres', 'CREATE EXTENSION polar_smgrperf');
 my $stderr;
 
 # Run smgrperf tests
+
+# Each test may get ERROR (clean cancel) or FATAL (if cancel-to-terminate conversion
+# happens during client I/O due to polar_process_client_readwrite_cancel_interrupt)
+# Summary may not appear if FATAL interrupted it, check for periodic stats instead
 $node_primary->psql(
 	'postgres',
 	qq[
@@ -46,9 +50,9 @@ $node_primary->psql(
 	stderr => \$stderr);
 like(
 	$stderr,
-	qr/ERROR:  canceling statement due to statement timeout/,
-	'polar_smgrperf_extend canceled by statement timeout');
-like($stderr, qr/INFO:  Summary:/, 'polar_smgrperf_extend (none) ok');
+	qr/ERROR:  canceling statement due to statement timeout|FATAL:  terminating connection due to administrator command/,
+	'polar_smgrperf_extend (none) terminated');
+like($stderr, qr/INFO:  (Summary:|iops=)/, 'polar_smgrperf_extend (none) produced stats');
 
 $node_primary->psql(
 	'postgres',
@@ -59,9 +63,9 @@ $node_primary->psql(
 	stderr => \$stderr);
 like(
 	$stderr,
-	qr/ERROR:  canceling statement due to statement timeout/,
-	'polar_smgrperf_extend canceled by statement timeout');
-like($stderr, qr/INFO:  Summary:/, 'polar_smgrperf_extend (bulkwrite) ok');
+	qr/ERROR:  canceling statement due to statement timeout|FATAL:  terminating connection due to administrator command/,
+	'polar_smgrperf_extend (bulkwrite) terminated');
+like($stderr, qr/INFO:  (Summary:|iops=)/, 'polar_smgrperf_extend (bulkwrite) produced stats');
 
 $node_primary->psql(
 	'postgres',
@@ -72,9 +76,9 @@ $node_primary->psql(
 	stderr => \$stderr);
 like(
 	$stderr,
-	qr/ERROR:  canceling statement due to statement timeout/,
-	'polar_smgrperf_extend canceled by statement timeout');
-like($stderr, qr/INFO:  Summary:/, 'polar_smgrperf_extend (fallocate) ok');
+	qr/ERROR:  canceling statement due to statement timeout|FATAL:  terminating connection due to administrator command/,
+	'polar_smgrperf_extend (fallocate) terminated');
+like($stderr, qr/INFO:  (Summary:|iops=)/, 'polar_smgrperf_extend (fallocate) produced stats');
 
 $node_primary->safe_psql('postgres',
 	'set statement_timeout=0; select polar_smgrperf_prepare()');
@@ -85,9 +89,9 @@ $node_primary->psql(
 	stderr => \$stderr);
 like(
 	$stderr,
-	qr/ERROR:  canceling statement due to statement timeout/,
-	'polar_smgrperf_read canceled by statement timeout');
-like($stderr, qr/INFO:  Summary:/, 'polar_smgrperf_read ok');
+	qr/ERROR:  canceling statement due to statement timeout|FATAL:  terminating connection due to administrator command/,
+	'polar_smgrperf_read terminated');
+like($stderr, qr/INFO:  (Summary:|iops=)/, 'polar_smgrperf_read produced stats');
 
 $node_primary->psql(
 	'postgres',
@@ -95,9 +99,9 @@ $node_primary->psql(
 	stderr => \$stderr);
 like(
 	$stderr,
-	qr/ERROR:  canceling statement due to statement timeout/,
-	'polar_smgrperf_write canceled by statement timeout');
-like($stderr, qr/INFO:  Summary:/, 'polar_smgrperf_write ok');
+	qr/ERROR:  canceling statement due to statement timeout|FATAL:  terminating connection due to administrator command/,
+	'polar_smgrperf_write terminated');
+like($stderr, qr/INFO:  (Summary:|iops=)/, 'polar_smgrperf_write produced stats');
 
 $node_primary->psql(
 	'postgres',
@@ -105,9 +109,9 @@ $node_primary->psql(
 	stderr => \$stderr);
 like(
 	$stderr,
-	qr/ERROR:  canceling statement due to statement timeout/,
-	'polar_smgrperf_nblocks canceled by statement timeout');
-like($stderr, qr/INFO:  Summary:/, 'polar_smgrperf_nblocks ok');
+	qr/ERROR:  canceling statement due to statement timeout|FATAL:  terminating connection due to administrator command/,
+	'polar_smgrperf_nblocks terminated');
+like($stderr, qr/INFO:  (Summary:|iops=)/, 'polar_smgrperf_nblocks produced stats');
 
 $node_primary->safe_psql('postgres', 'select polar_smgrperf_cleanup()');
 
