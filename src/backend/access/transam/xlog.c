@@ -3748,14 +3748,6 @@ XLogFlush(XLogRecPtr record)
 
 	START_CRIT_SECTION();
 
-	/*
-	 * Since fsync is usually a horribly expensive operation, we try to
-	 * piggyback as much data as we can on each fsync: if we see any more data
-	 * entered into the xlog buffer, we'll write and fsync that too, so that
-	 * the final value of LogwrtResult.Flush is as large as possible. This
-	 * gives us some chance of avoiding another fsync immediately after.
-	 */
-
 	/* initialize to given target; may increase below */
 	WriteRqstPtr = record;
 
@@ -3765,23 +3757,32 @@ XLogFlush(XLogRecPtr record)
 	 */
 	for (;;)
 	{
-		XLogRecPtr	insertpos;
-
-		/* read LogwrtResult and update local state */
-		SpinLockAcquire(&XLogCtl->info_lck);
-		if (WriteRqstPtr < XLogCtl->LogwrtRqst.Write)
-			WriteRqstPtr = XLogCtl->LogwrtRqst.Write;
-		LogwrtResult = XLogCtl->LogwrtResult;
-		SpinLockRelease(&XLogCtl->info_lck);
-
-		/* done already? */
-		if (record <= LogwrtResult.Flush)
-			break;
-
 		if (POLAR_WAL_PIPELINER_READY())
 			polar_wal_pipeline_commit_wait(WriteRqstPtr);
 		else
 		{
+			XLogRecPtr	insertpos;
+
+			/*
+			 * Since fsync is usually a horribly expensive operation, we try
+			 * to piggyback as much data as we can on each fsync: if we see
+			 * any more data entered into the xlog buffer, we'll write and
+			 * fsync that too, so that the final value of LogwrtResult.Flush
+			 * is as large as possible. This gives us some chance of avoiding
+			 * another fsync immediately after.
+			 */
+
+			/* read LogwrtResult and update local state */
+			SpinLockAcquire(&XLogCtl->info_lck);
+			if (WriteRqstPtr < XLogCtl->LogwrtRqst.Write)
+				WriteRqstPtr = XLogCtl->LogwrtRqst.Write;
+			LogwrtResult = XLogCtl->LogwrtResult;
+			SpinLockRelease(&XLogCtl->info_lck);
+
+			/* done already? */
+			if (record <= LogwrtResult.Flush)
+				break;
+
 			/*
 			 * Before actually performing the write, wait for all in-flight
 			 * insertions to the pages we're about to write to finish.
