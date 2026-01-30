@@ -1881,7 +1881,7 @@ static struct config_bool ConfigureNamesBool[] =
 	},
 	{
 		{"polar_csn_elog_panic_enable", PGC_POSTMASTER, UNGROUPED,
-			gettext_noop("enable polar csn "),
+			gettext_noop("PANIC if subtransaction CSN state is inconsistent with parent"),
 			NULL,
 			GUC_NO_RESET_ALL | GUC_NO_SHOW_ALL | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_CHANGABLE
 		},
