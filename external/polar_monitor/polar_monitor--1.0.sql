@@ -750,3 +750,10 @@ REVOKE ALL ON FUNCTION polar_wal_pipeline_info FROM PUBLIC;
 REVOKE ALL ON FUNCTION polar_wal_pipeline_stats FROM PUBLIC;
 REVOKE ALL ON polar_wal_pipeline_info FROM PUBLIC;
 REVOKE ALL ON polar_wal_pipeline_stats FROM PUBLIC;
+
+CREATE FUNCTION polar_csnlog(OUT all_fetches int8,
+						 OUT ub_fetches int8,
+						 OUT ub_hits int8)
+RETURNS record
+AS 'MODULE_PATHNAME', 'polar_csnlog'
+LANGUAGE C PARALLEL SAFE;
