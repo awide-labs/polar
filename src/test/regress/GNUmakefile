@@ -137,9 +137,19 @@ installcheck-parallel: all
 installcheck-tests: all
 	$(pg_regress_installcheck) $(REGRESS_OPTS) $(TESTS) $(EXTRA_TESTS)
 
+# When make -s is used, recipe echoing is suppressed. Echo commands for this target
+# so they are still visible (MAKEFLAGS contains 's' when -s/--silent was passed).
 prepare-dccheck: all | temp-install
-	$(pg_regress_check) --polar-prepare-sql $(REGRESS_OPTS) --schedule=$(srcdir)/parallel_schedule $(MAXCONNOPT) $(EXTRA_TESTS)
-	$(pg_regress_check) --polar-prepare-sql $(POLAR_REGRESS_OPTS) --schedule=$(srcdir)/polar_check_schedule $(MAXCONNOPT)
+	$(if $(findstring s,$(MAKEFLAGS)),@echo \
+	  "$(pg_regress_check) --polar-prepare-sql $(REGRESS_OPTS) \
+	  --schedule=$(srcdir)/parallel_schedule $(MAXCONNOPT) $(EXTRA_TESTS)" ;) \
+	$(pg_regress_check) --polar-prepare-sql $(REGRESS_OPTS) \
+		--schedule=$(srcdir)/parallel_schedule $(MAXCONNOPT) $(EXTRA_TESTS)
+	$(if $(findstring s,$(MAKEFLAGS)),@echo \
+	  "$(pg_regress_check) --polar-prepare-sql $(POLAR_REGRESS_OPTS) \
+	  --schedule=$(srcdir)/polar_check_schedule $(MAXCONNOPT)" ;) \
+	$(pg_regress_check) --polar-prepare-sql $(POLAR_REGRESS_OPTS) \
+		--schedule=$(srcdir)/polar_check_schedule $(MAXCONNOPT)
 
 prepare-ora-dccheck: all | temp-install
 	$(pg_regress_check) --polar-prepare-sql $(REGRESS_OPTS) --schedule=$(srcdir)/parallel_schedule $(MAXCONNOPT) $(EXTRA_TESTS)
