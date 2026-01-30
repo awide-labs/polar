@@ -12,6 +12,18 @@ use PostgreSQL::Test::Cluster;
 use Test::More;
 use Time::HiRes qw(usleep);
 
+# Unfortunately Cluster::init() puts PG_TEST_INITDB_EXTRA_OPTS after the
+# options specified by ->extra, if somebody puts --wal-segsize=X in
+# PG_TEST_INITDB_EXTRA_OPTS it may break this test with something like:
+#   FATAL:  "min_wal_size" must be at least twice "wal_segment_size"
+# Fix that up if we detect it.
+local $ENV{PG_TEST_INITDB_EXTRA_OPTS} = $ENV{PG_TEST_INITDB_EXTRA_OPTS};
+if (defined $ENV{PG_TEST_INITDB_EXTRA_OPTS}
+	&& $ENV{PG_TEST_INITDB_EXTRA_OPTS} =~ m/wal-segsize=/)
+{
+	$ENV{PG_TEST_INITDB_EXTRA_OPTS} .= " --wal-segsize=1";
+}
+
 # Initialize primary node, setting wal-segsize to 1MB
 my $node_primary = PostgreSQL::Test::Cluster->new('primary');
 $node_primary->init(allows_streaming => 1, extra => ['--wal-segsize=1']);
