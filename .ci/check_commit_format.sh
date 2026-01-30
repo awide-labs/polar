@@ -44,7 +44,7 @@ is_scope_known() {
     return 1
   fi
 
-  # Search all branches for feat/fix/perf commits with this scope
+  # Search for feat/fix/perf commits with this scope
   # Check both regular (scope): and breaking change (scope)!: syntax
   local found_sha
   while IFS= read -r found_sha; do
@@ -63,7 +63,7 @@ is_scope_known() {
       return 0
     fi
   done < <(
-    git log --all --format="%H" -E \
+    git log --format="%H" -E \
       --grep="^(feat|fix|perf)\(${scope}\)!?:" 2>/dev/null
   )
 
@@ -250,9 +250,19 @@ main() {
       commit_scope=$(extract_commit_scope "${commit_msg}")
       if [ -z "${commit_scope}" ]; then
         scopeless_commits+=("${commit_sha:0:8}: ${commit_msg}")
-      elif ! is_scope_known "${commit_scope}" "${all_checked_shas[@]}"; then
-        # Check if this scope is new (not seen in git history)
-        new_scope_commits+=("${commit_sha:0:8}: ${commit_msg}")
+      elif ! is_scope_known "${commit_scope}" "${commit_sha}"; then
+        # Unshallow the repository if it's a shallow clone to ensure we have
+        # enough history to check for scope usage. CI systems by default uses
+        # depth=20, which can cause false warnings when checking scopes.
+        if [ -f "$(git rev-parse --git-dir)/shallow" ]; then
+          echo "Repository is shallow, fetching full history for scope validation..."
+          git fetch --unshallow --no-tags 2>/dev/null || \
+            git fetch --depth=1000000 --no-tags 2>/dev/null || true
+        fi
+        # Now repeat the search with a full clone
+        if ! is_scope_known "${commit_scope}" "${commit_sha}"; then
+          new_scope_commits+=("${commit_sha:0:8}: ${commit_msg}")
+        fi
       fi
     fi
 
