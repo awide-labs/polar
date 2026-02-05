@@ -25,9 +25,6 @@ use PostgreSQL::Test::Utils;
 use Test::More;
 use PolarDB::DCRegression;
 
-# Temporarily disabled due to instability
-plan skip_all => 'Test temporarily disabled due to instability';
-
 # primary node
 my $node_primary = PostgreSQL::Test::Cluster->new('primary');
 $node_primary->polar_init_primary;
@@ -131,6 +128,9 @@ print "test_index relfile path: $index_file\n";
 # kill rw backend
 print "ready to kill rw backend:$backend\n";
 @res = `kill -s 9 $backend`;
+
+# crash primary
+$node_primary->stop('immediate');
 
 # truncate index file
 my $index_filepath = $node_primary->polar_get_datadir;

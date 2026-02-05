@@ -25,6 +25,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Fixed replica promotion failure (FATAL: "WAL segment has already been removed")
+  when primary crashed while creating a new WAL segment file (XCOM-195)
 - Fixed non-working log rotation via pg_ctl logrotate (XCOM-195)
 
 ### Performance
