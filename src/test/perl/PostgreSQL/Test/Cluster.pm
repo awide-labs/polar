@@ -2438,19 +2438,20 @@ sub connect_fails
 
 =pod
 
-=item $node->poll_query_until($dbname, $query [, $expected ])
+=item $node->poll_query_until($dbname, $query [, $expected [, $timeout ]])
 
 Run B<$query> repeatedly, until it returns the B<$expected> result
 ('t', or SQL boolean true, by default).
 Continues polling if B<psql> returns an error result.
-Times out after $PostgreSQL::Test::Utils::timeout_default seconds.
+Times out after $timeout seconds, or $PostgreSQL::Test::Utils::timeout_default
+seconds if not specified.
 Returns 1 if successful, 0 if timed out.
 
 =cut
 
 sub poll_query_until
 {
-	my ($self, $dbname, $query, $expected) = @_;
+	my ($self, $dbname, $query, $expected, $timeout) = @_;
 
 	local %ENV = $self->_get_env();
 
@@ -2461,7 +2462,9 @@ sub poll_query_until
 		'-d', $self->connstr($dbname)
 	];
 	my ($stdout, $stderr);
-	my $max_attempts = 10 * $PostgreSQL::Test::Utils::timeout_default;
+	$timeout = $PostgreSQL::Test::Utils::timeout_default
+	  unless defined($timeout);
+	my $max_attempts = 10 * $timeout;
 	my $attempts = 0;
 
 	while ($attempts < $max_attempts)
@@ -2914,7 +2917,7 @@ sub advance_wal_to_record_splitting_zone
 
 =pod
 
-=item $node->wait_for_catchup(standby_name, mode, target_lsn)
+=item $node->wait_for_catchup(standby_name, mode, target_lsn [, timeout])
 
 Wait for the replication connection with application_name standby_name until
 its 'mode' replication column in pg_stat_replication equals or passes the
@@ -2932,8 +2935,11 @@ If you pass an explicit value of target_lsn, it should almost always be
 the primary's write LSN; so this parameter is seldom needed except when
 querying some intermediate replication node rather than the primary.
 
+timeout specifies the maximum time to wait in seconds. If not specified,
+defaults to $PostgreSQL::Test::Utils::timeout_default (180 seconds).
+
 If there is no active replication connection from this peer, waits until
-poll_query_until timeout.
+timeout.
 
 Requires that the 'postgres' db exists and is accessible.
 
@@ -2943,7 +2949,7 @@ This is not a test. It die()s on failure.
 
 sub wait_for_catchup
 {
-	my ($self, $standby_name, $mode, $target_lsn) = @_;
+	my ($self, $standby_name, $mode, $target_lsn, $timeout) = @_;
 	$mode = defined($mode) ? $mode : 'replay';
 	my %valid_modes =
 	  ('sent' => 1, 'write' => 1, 'flush' => 1, 'replay' => 1);
@@ -2972,7 +2978,7 @@ sub wait_for_catchup
 	my $query = qq[SELECT '$target_lsn' <= ${mode}_lsn AND state = 'streaming'
          FROM pg_catalog.pg_stat_replication
          WHERE application_name IN ('$standby_name', 'walreceiver')];
-	if (!$self->poll_query_until('postgres', $query))
+	if (!$self->poll_query_until('postgres', $query, 't', $timeout))
 	{
 		if (PostgreSQL::Test::Utils::has_wal_read_bug)
 		{

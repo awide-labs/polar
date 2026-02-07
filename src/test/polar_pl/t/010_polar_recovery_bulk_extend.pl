@@ -95,10 +95,8 @@ is( $node_primary->safe_psql(
 
 # Check replica/standby
 my $lsn = $node_primary->lsn('write');
-$node_primary->wait_for_catchup($node_standby->name, 'replay', $lsn, 't',
-	't', 300);
-$node_primary->wait_for_catchup($node_replica->name, 'replay', $lsn, 't',
-	't', 300);
+$node_primary->wait_for_catchup($node_standby->name, 'replay', $lsn, 300);
+$node_primary->wait_for_catchup($node_replica->name, 'replay', $lsn, 300);
 is( $node_replica->safe_psql(
 		'postgres',
 		q[Select count(*) = 1000001 from recovery_bulk_extend_tbl;]),
