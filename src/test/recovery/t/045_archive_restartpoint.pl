@@ -12,6 +12,18 @@ use Test::More;
 my $archive_max_mb = 320;
 my $wal_segsize = 1;
 
+# Unfortunately Cluster::init() puts PG_TEST_INITDB_EXTRA_OPTS after the
+# options specified by ->extra, if somebody puts --wal-segsize=X in
+# PG_TEST_INITDB_EXTRA_OPTS it may break this test with something like:
+#   FATAL:  "max_wal_size" must be at least twice "wal_segment_size"
+# Fix that up if we detect it.
+local $ENV{PG_TEST_INITDB_EXTRA_OPTS} = $ENV{PG_TEST_INITDB_EXTRA_OPTS};
+if (defined $ENV{PG_TEST_INITDB_EXTRA_OPTS}
+	&& $ENV{PG_TEST_INITDB_EXTRA_OPTS} =~ m/wal-segsize=/)
+{
+	$ENV{PG_TEST_INITDB_EXTRA_OPTS} .= " --wal-segsize=$wal_segsize";
+}
+
 # Initialize primary node
 my $node_primary = PostgreSQL::Test::Cluster->new('primary');
 $node_primary->init(
