@@ -21,9 +21,6 @@ CLEANUP="${4:-false}"
 echo "Running with container_image=$CONTAINER_IMAGE, debug_mode=$DEBUG_MODE"
 echo "Executing rules: $RULES"
 
-# Limit WAL size
-grep -n "DEFAULT_XLOG_SEG_SIZE" src/include/pg_config_manual.h | cut -d: -f1 | xargs -I {} sed -i '{}s/.*/#define DEFAULT_XLOG_SEG_SIZE (16*1024*1024)/' src/include/pg_config_manual.h
-
 # Create and start the container
 docker create                                                  \
   -t                                                           \
@@ -57,6 +54,7 @@ docker exec polardb_${CONTAINER_IMAGE} bash -c \
    eatmydata ./build.sh --noinstall --debug=${DEBUG_MODE} --ec='--enable-tap-tests' && \
    for rule in ${RULES}; do \
      echo \"=== Running \$rule ===\" && \
+     export PG_TEST_INITDB_EXTRA_OPTS=--wal-segsize=16 &&
      eatmydata make \$rule -j\$JOBS || (echo \"=== \$rule FAILED ===\" && exit 1); \
    done"
 
