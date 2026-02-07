@@ -104,8 +104,7 @@ print "ready to stop client pid: $client\n";
 # delete data and do vacuum in primary node
 $node_primary->safe_psql("postgres", "delete from test_table");
 my $lsn = $node_primary->lsn('write');
-$node_primary->wait_for_catchup($node_standby->name, 'replay', $lsn, 't',
-	't', 300);
+$node_primary->wait_for_catchup($node_standby->name, 'replay', $lsn, 300);
 $node_primary->safe_psql("postgres", "vacuum test_table");
 $node_primary->wait_for_catchup($node_standby->name, 'flush');
 
