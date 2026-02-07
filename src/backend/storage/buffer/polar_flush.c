@@ -150,6 +150,11 @@ polar_flushlist_minheap_insert(FlushListMinHeap *h, int id, XLogRecPtr lsn)
 {
 	int			idx;
 
+	if (XLogRecPtrIsInvalid(lsn))
+	{
+		return false;
+	}
+
 	if (h->size >= POLAR_FLUSHLIST_PARTITIONS || h->pos[id] != -1)
 	{
 		return false;
@@ -282,8 +287,7 @@ polar_flush_list_flush_end(FlushList *list)
 	SpinLockAcquire(&polar_flush_ctl->lock);
 	Assert(list->flushing);
 	list->flushing = false;
-	if (!polar_flush_list_is_empty(list))
-		polar_flushlist_minheap_insert(&polar_flush_ctl->heap, list->index, list->min_lsn);
+	polar_flushlist_minheap_insert(&polar_flush_ctl->heap, list->index, list->min_lsn);
 	SpinLockRelease(&polar_flush_ctl->lock);
 }
 
