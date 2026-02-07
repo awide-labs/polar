@@ -13,6 +13,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   consume the queue (XCOM-94)
 - Fixed `pg_ctl logrotate` functionality by restoring the missing check for the
   `logrotate` file in the data directory upon receiving SIGUSR1 (XCOM-87)
+- Fixed replica promotion failure (FATAL: "WAL segment has already been removed")
+  when primary crashed while creating a new WAL segment file (XCOM-114)
 
 ### Removed
 

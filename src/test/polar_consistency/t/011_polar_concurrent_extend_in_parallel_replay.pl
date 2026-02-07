@@ -124,6 +124,9 @@ print "test_index relfile path: $index_file\n";
 print "ready to kill rw backend:$backend\n";
 @res = `kill -s 9 $backend`;
 
+# crash primary
+$node_primary->stop('immediate');
+
 # truncate index file
 my $index_filepath = $node_primary->polar_get_datadir;
 $index_filepath .= $index_file;

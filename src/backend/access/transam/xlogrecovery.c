@@ -5278,16 +5278,35 @@ polar_simple_read_xlog_page(XLogReaderState *state, XLogRecPtr targetPagePtr,
 	int			count = XLOG_BLCKSZ;
 	WALReadError errinfo;
 	MemoryContext old_context = MemoryContextSwitchTo(TopMemoryContext);
+	bool		read_ok = false;
 
-	if (!WALRead(state, cur_page, targetPagePtr, XLOG_BLCKSZ, state->currTLI, &errinfo))
+	PG_TRY();
 	{
-		errcontext("%s failed to read xlog page %X/%X, reqLen %d for record %X/%X on timeline %d: %m",
-				   __func__, LSN_FORMAT_ARGS(targetPagePtr), reqLen, LSN_FORMAT_ARGS(targetRecPtr), state->currTLI);
-		/* force to output ERROR message and clear ERROR state */
-		EmitErrorReport();
-		FlushErrorState();
-		count = -1;
+		if (WALRead(state, cur_page, targetPagePtr, XLOG_BLCKSZ, state->currTLI, &errinfo))
+			read_ok = true;
+		else
+		{
+			/* WALRead returned false - log the error details */
+			errcontext("%s failed to read xlog page %X/%X for record %X/%X on timeline %d",
+					   __func__, LSN_FORMAT_ARGS(targetPagePtr),
+					   LSN_FORMAT_ARGS(targetRecPtr), state->currTLI);
+			EmitErrorReport();
+			FlushErrorState();
+		}
 	}
+	PG_CATCH();
+	{
+		/*
+		 * Catch ERROR from wal_segment_open (e.g., ENOENT - missing segment).
+		 * The error was already logged by ereport(), just clear state.
+		 */
+		FlushErrorState();
+		read_ok = false;
+	}
+	PG_END_TRY();
+
+	if (!read_ok)
+		count = -1;
 
 	MemoryContextSwitchTo(old_context);
 	return count;
