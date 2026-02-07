@@ -2327,6 +2327,7 @@ regression_main(int argc, char *argv[],
 		const char *env_wait;
 		int			wait_seconds;
 		const char *initdb_template_dir;
+		const char *initdb_extra_opts_env;
 
 		/*
 		 * Prepare the temp instance
@@ -2353,6 +2354,8 @@ regression_main(int argc, char *argv[],
 		if (!directory_exists(buf))
 			make_directory(buf);
 
+		initdb_extra_opts_env = getenv("PG_TEST_INITDB_EXTRA_OPTS");
+
 		/*
 		 * Create data directory.
 		 *
@@ -2361,17 +2364,19 @@ regression_main(int argc, char *argv[],
 		 */
 		initdb_template_dir = getenv("INITDB_TEMPLATE");
 
-		if (initdb_template_dir == NULL || nolocale || debug)
+		if (initdb_template_dir == NULL || nolocale || debug || initdb_extra_opts_env)
 		{
 			header("initializing database system by running initdb");
 
 			snprintf(buf, sizeof(buf),
-					 "\"%s%sinitdb\" -D \"%s/data\" --no-clean --no-sync%s%s > \"%s/log/initdb.log\" 2>&1",
+					 "\"%s%sinitdb\" -D \"%s/data\" --no-clean --no-sync%s%s%s%s > \"%s/log/initdb.log\" 2>&1",
 					 bindir ? bindir : "",
 					 bindir ? "/" : "",
 					 temp_instance,
 					 debug ? " --debug" : "",
 					 nolocale ? " --no-locale" : "",
+					 initdb_extra_opts_env ? " " : "",
+					 initdb_extra_opts_env ? initdb_extra_opts_env : "",
 					 outputdir);
 			if (system(buf))
 			{
