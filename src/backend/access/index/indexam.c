@@ -63,6 +63,10 @@
 #include "utils/snapmgr.h"
 #include "utils/syscache.h"
 
+/* POLAR px */
+#include "px/px_gang.h"
+/* POLAR end */
+
 
 /* ----------------------------------------------------------------
  *					macros used in index_ routines
@@ -320,6 +324,10 @@ index_beginscan_internal(Relation indexRelation,
 	scan->parallel_scan = pscan;
 	scan->xs_temp_snap = temp_snap;
 
+	/* POLAR px */
+	scan->px_scan = NULL;
+	/* POLAR end */
+
 	return scan;
 }
 
@@ -566,6 +574,8 @@ index_getnext_tid(IndexScanDesc scan, ScanDirection direction)
 	/* XXX: we should assert that a snapshot is pushed or registered */
 	Assert(TransactionIdIsValid(RecentXmin));
 
+rescan:
+
 	/*
 	 * The AM's amgettuple proc finds the next index entry matching the scan
 	 * keys, and puts the TID into scan->xs_heaptid.  It should also set
@@ -587,6 +597,24 @@ index_getnext_tid(IndexScanDesc scan, ScanDirection direction)
 
 		return NULL;
 	}
+
+	/* POLAR px */
+
+	/*
+	 * PX only gets tuple belonging to this worker by page id. if this page id
+	 * belongs to other worker, rescan next one.
+	 */
+	if (scan->px_scan != NULL)
+	{
+		BlockNumber unitno =
+			PXSCAN_BlockNum2UnitNum(ItemPointerGetBlockNumber(&scan->xs_heaptid));
+
+		if ((unitno % scan->px_scan->pxs_total_workers) !=
+			scan->px_scan->pxs_worker_id)
+			goto rescan;
+	}
+	/* POLAR end */
+
 	Assert(ItemPointerIsValid(&scan->xs_heaptid));
 
 	pgstat_count_index_tuples(scan->indexRelation, 1);
@@ -1024,3 +1052,18 @@ index_opclass_options(Relation indrel, AttrNumber attnum, Datum attoptions,
 
 	return build_local_reloptions(&relopts, attoptions, validate);
 }
+
+/* POLAR px */
+/*
+ * index_initscan_px - init index scan for px
+ * init total workers and worker_id
+ * they are used for indexscan granule
+ */
+void
+index_initscan_px(IndexScanDesc scan)
+{
+	Assert(scan->parallel_scan == NULL);
+	scan->px_scan = CreatePXScanDesc();
+}
+
+/* POLAR end */

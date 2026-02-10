@@ -118,6 +118,10 @@
 #include "executor/nodeWorktablescan.h"
 #include "miscadmin.h"
 #include "nodes/nodeFuncs.h"
+/* POLAR px */
+#include "executor/nodeAssertOp_px.h"
+#include "executor/nodeMotion_px.h"
+/* POLAR end */
 
 static TupleTableSlot *ExecProcNodeFirst(PlanState *node);
 static TupleTableSlot *ExecProcNodeInstr(PlanState *node);
@@ -381,6 +385,18 @@ ExecInitNode(Plan *node, EState *estate, int eflags)
 			result = (PlanState *) ExecInitLimit((Limit *) node,
 												 estate, eflags);
 			break;
+
+			/* POLAR px */
+		case T_Motion:
+			result = (PlanState *) ExecInitMotion((Motion *) node,
+												  estate, eflags);
+			break;
+
+		case T_AssertOp:
+			result = (PlanState *) ExecInitAssertOp((AssertOp *) node,
+													estate, eflags);
+			break;
+			/* POLAR end */
 
 		default:
 			elog(ERROR, "unrecognized node type: %d", (int) nodeTag(node));
@@ -756,6 +772,15 @@ ExecEndNode(PlanState *node)
 		case T_LimitState:
 			ExecEndLimit((LimitState *) node);
 			break;
+
+			/* POLAR px */
+		case T_MotionState:
+			ExecEndMotion((MotionState *) node);
+			break;
+		case T_AssertOpState:
+			ExecEndAssertOp((AssertOpState *) node);
+			break;
+			/* POLAR end */
 
 		default:
 			elog(ERROR, "unrecognized node type: %d", (int) nodeTag(node));

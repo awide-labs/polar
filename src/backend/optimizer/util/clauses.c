@@ -55,6 +55,10 @@
 #include "utils/syscache.h"
 #include "utils/typcache.h"
 
+/* POLAR px */
+#include "px/px_vars.h"
+/* POLAR end */
+
 typedef struct
 {
 	ParamListInfo boundParams;
@@ -3587,6 +3591,37 @@ eval_const_expressions_mutator(Node *node,
 			break;
 	}
 
+	/* POLAR px */
+	if (px_is_planning)
+	{
+		/* prevent recursion into sublinks */
+		if (IsA(node, SubLink))
+		{
+			SubLink    *sublink = (SubLink *) node;
+			SubLink    *newnode = copyObject(sublink);
+
+			/*
+			 * Also invoke the mutator on the sublink's Query node, so it can
+			 * recurse into the sub-query if it wants to.
+			 */
+			newnode->subselect = (Node *) query_tree_mutator((Query *) sublink->subselect, eval_const_expressions_mutator, (void *) context, 0);
+			return (Node *) newnode;
+		}
+
+		/* recurse into query structure */
+		if (IsA(node, Query))
+		{
+			return (Node *)
+				query_tree_mutator
+				(
+				 (Query *) node,
+				 eval_const_expressions_mutator,
+				 (void *) context,
+				 0);
+		}
+	}
+	/* POLAR end */
+
 	/*
 	 * For any node type not handled above, copy the node unchanged but
 	 * const-simplify its subexpressions.  This is the correct thing for node
@@ -5328,3 +5363,7 @@ pull_paramids_walker(Node *node, Bitmapset **context)
 	return expression_tree_walker(node, pull_paramids_walker,
 								  (void *) context);
 }
+
+/* POLAR px */
+#include "clauses_px.c"
+/* POLAR end */

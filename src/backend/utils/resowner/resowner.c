@@ -1547,3 +1547,24 @@ PrintHMACLeakWarning(Datum handle)
 	elog(WARNING, "HMAC context reference leak: context %p still referenced",
 		 DatumGetPointer(handle));
 }
+
+/* POLAR px */
+/*
+ * Walk through a resource owner and it's childrens
+ */
+void
+PxResourceOwnerWalker(ResourceOwner owner, ResourceWalkerCallback callback)
+{
+	ResourceOwner child;
+
+	if (!owner)
+		return;
+
+	(*callback) (owner);
+
+	/* Recurse to handle descendants */
+	for (child = owner->firstchild; child != NULL; child = child->nextchild)
+		PxResourceOwnerWalker(child, callback);
+}
+
+/* POLAR end */

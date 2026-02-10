@@ -977,6 +977,7 @@ char	   *polardb_version;
 /* polar_release_date, format:YYYYMMDD */
 char	   *polar_release_date;
 
+char	   *polar_instance_name;
 
 #define POLAR_MAX_PDB_HOSTID			512
 int			polar_hostid = 0;
@@ -1050,6 +1051,8 @@ char	   *polar_ignore_coredump_functions;
 char	   *polar_ignore_coredump_function_list;
 int			polar_ignore_coredump_level;
 bool		polar_ignore_coredump_fuzzy_match;
+bool		polar_enable_send_node_info = true;
+bool		polar_enable_send_cluster_info = true;
 
 /* should be static, but commands/variable.c needs to get at this */
 char	   *role_string;
@@ -1205,6 +1208,10 @@ const char *const config_group_names[] =
 	gettext_noop("PolarDB Commit Sequence Number (CSN)"),
 	/* POLAR_SHARED_SERVER */
 	gettext_noop("POLAR Shared Server"),
+	/* PX PX_WORKER_IDENTITY */
+	gettext_noop(PACKAGE_NAME " / Worker Process Identity"),
+	/* PX PX_ARRAY_TUNING */
+	gettext_noop(PACKAGE_NAME " / Array Tuning"),
 	/* POLAR end */
 
 	/* DEVELOPER_OPTIONS */
@@ -3408,6 +3415,28 @@ static struct config_bool ConfigureNamesBool[] =
 		},
 		&polar_enable_shm_aset,
 		false,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"polar_enable_send_node_info", PGC_SIGHUP, UNGROUPED,
+			gettext_noop("Whether send node info"),
+			NULL,
+			GUC_NO_SHOW_ALL | GUC_SUPERUSER_ONLY | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_CHANGABLE
+		},
+		&polar_enable_send_node_info,
+		true,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"polar_enable_send_cluster_info", PGC_SIGHUP, UNGROUPED,
+			gettext_noop("Whether send cluster info"),
+			NULL,
+			GUC_NO_SHOW_ALL | GUC_SUPERUSER_ONLY | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_CHANGABLE
+		},
+		&polar_enable_send_cluster_info,
+		true,
 		NULL, NULL, NULL
 	},
 
@@ -6050,7 +6079,7 @@ static struct config_int ConfigureNamesInt[] =
 		 * MIN should not be 0, MAX should better not larger than a half of
 		 * LOG_CHANNEL_WRITE_BUFFER_SIZE
 		 */
-		POLAR_DEFAULT_MAX_AUDIT_LOG_LEN, 512, 48 * 1024,
+		POLAR_DEFAULT_MAX_AUDIT_LOG_LEN, 512, POLAR_MAX_AUDIT_LOG_LEN,
 		NULL, NULL, NULL
 	},
 
@@ -7494,6 +7523,17 @@ static struct config_string ConfigureNamesString[] =
 		polar_check_dedicated_names, polar_assign_dedicated_dbuser_names, NULL
 	},
 
+	{
+		{"polar_instance_name", PGC_POSTMASTER, UNGROUPED,
+			gettext_noop("PolarDB instance name, the max length is 63."),
+			NULL,
+			GUC_NO_RESET_ALL | GUC_NOT_IN_SAMPLE | GUC_SUPERUSER_ONLY | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_CHANGABLE
+		},
+		&polar_instance_name,
+		"",
+		NULL, NULL, NULL
+	},
+
 	/* End-of-list marker */
 	{
 		{NULL, 0, 0, NULL, NULL}, NULL, NULL, NULL, NULL, NULL
@@ -8068,7 +8108,6 @@ static int	GUCNestLevel = 0;	/* 1 when in main transaction */
 
 
 static int	guc_var_compare(const void *a, const void *b);
-static int	guc_name_compare(const char *namea, const char *nameb);
 static void InitializeGUCOptionsFromEnvironment(void);
 static void InitializeOneGUCOption(struct config_generic *gconf);
 static void push_old_value(struct config_generic *gconf, GucAction action);
@@ -8389,6 +8428,69 @@ build_guc_variables(void)
 			ELOG_PSS(DEBUG1, "conf with assign_hook is shared '%s'", conf->gen.name);
 	}
 
+	/* POLAR px */
+	for (i = 0; ConfigureNamesBool_px[i].gen.name; i++)
+	{
+		struct config_bool *conf = &ConfigureNamesBool_px[i];
+
+		conf->gen.vartype = PGC_BOOL;
+		conf->gen.polar_array_type = CAT_BOOL_PX;
+		conf->gen.polar_array_index = i;
+		num_vars++;
+
+		if (conf->assign_hook != NULL && !is_session_dedicated_guc(&conf->gen))
+			ELOG_PSS(DEBUG1, "conf with assign_hook is shared '%s'", conf->gen.name);
+	}
+	for (i = 0; ConfigureNamesInt_px[i].gen.name; i++)
+	{
+		struct config_int *conf = &ConfigureNamesInt_px[i];
+
+		conf->gen.vartype = PGC_INT;
+		conf->gen.polar_array_type = CAT_INT_PX;
+		conf->gen.polar_array_index = i;
+		num_vars++;
+
+		if (conf->assign_hook != NULL && !is_session_dedicated_guc(&conf->gen))
+			ELOG_PSS(DEBUG1, "conf with assign_hook is shared '%s'", conf->gen.name);
+	}
+	for (i = 0; ConfigureNamesReal_px[i].gen.name; i++)
+	{
+		struct config_real *conf = &ConfigureNamesReal_px[i];
+
+		conf->gen.vartype = PGC_REAL;
+		conf->gen.polar_array_type = CAT_REAL_PX;
+		conf->gen.polar_array_index = i;
+		num_vars++;
+
+		if (conf->assign_hook != NULL && !is_session_dedicated_guc(&conf->gen))
+			ELOG_PSS(DEBUG1, "conf with assign_hook is shared '%s'", conf->gen.name);
+	}
+	for (i = 0; ConfigureNamesString_px[i].gen.name; i++)
+	{
+		struct config_string *conf = &ConfigureNamesString_px[i];
+
+		conf->gen.vartype = PGC_STRING;
+		conf->gen.polar_array_type = CAT_STRING_PX;
+		conf->gen.polar_array_index = i;
+		num_vars++;
+
+		if (conf->assign_hook != NULL && !is_session_dedicated_guc(&conf->gen))
+			ELOG_PSS(DEBUG1, "conf with assign_hook is shared '%s'", conf->gen.name);
+	}
+	for (i = 0; ConfigureNamesEnum_px[i].gen.name; i++)
+	{
+		struct config_enum *conf = &ConfigureNamesEnum_px[i];
+
+		conf->gen.vartype = PGC_ENUM;
+		conf->gen.polar_array_type = CAT_ENUM_PX;
+		conf->gen.polar_array_index = i;
+		num_vars++;
+
+		if (conf->assign_hook != NULL && !is_session_dedicated_guc(&conf->gen))
+			ELOG_PSS(DEBUG1, "conf with assign_hook is shared '%s'", conf->gen.name);
+	}
+	/* POLAR end */
+
 	/*
 	 * Create table with 20% slack
 	 */
@@ -8414,11 +8516,28 @@ build_guc_variables(void)
 	for (i = 0; ConfigureNamesEnum[i].gen.name; i++)
 		guc_vars[num_vars++] = &ConfigureNamesEnum[i].gen;
 
+	/* POLAR px */
+	for (i = 0; ConfigureNamesBool_px[i].gen.name; i++)
+		guc_vars[num_vars++] = &ConfigureNamesBool_px[i].gen;
+	for (i = 0; ConfigureNamesInt_px[i].gen.name; i++)
+		guc_vars[num_vars++] = &ConfigureNamesInt_px[i].gen;
+	for (i = 0; ConfigureNamesReal_px[i].gen.name; i++)
+		guc_vars[num_vars++] = &ConfigureNamesReal_px[i].gen;
+	for (i = 0; ConfigureNamesString_px[i].gen.name; i++)
+		guc_vars[num_vars++] = &ConfigureNamesString_px[i].gen;
+	for (i = 0; ConfigureNamesEnum_px[i].gen.name; i++)
+		guc_vars[num_vars++] = &ConfigureNamesEnum_px[i].gen;
+	/* POLAR end */
+
 	if (guc_variables)
 		free(guc_variables);
 	guc_variables = guc_vars;
 	num_guc_variables = num_vars;
 	size_guc_variables = size_vars;
+
+	/* POLAR px */
+	px_assign_sync_flag(guc_variables, num_guc_variables, true /* predefine */);
+	/* POLAR end */
 
 	/* POLAR: parameter manage check flag */
 	polar_parameter_manage_check_flag(guc_variables, num_guc_variables);
@@ -8694,7 +8813,7 @@ guc_var_compare(const void *a, const void *b)
 /*
  * the bare comparison function for GUC names
  */
-static int
+int
 guc_name_compare(const char *namea, const char *nameb)
 {
 	/*
@@ -16990,6 +17109,31 @@ get_config_from_array(const enum config_array_type polar_array_type, const int p
 				ret = &ConfigureNamesEnum[polar_array_index].gen;
 				break;
 			}
+		case CAT_BOOL_PX:
+			{
+				ret = &ConfigureNamesBool_px[polar_array_index].gen;
+				break;
+			}
+		case CAT_INT_PX:
+			{
+				ret = &ConfigureNamesInt_px[polar_array_index].gen;
+				break;
+			}
+		case CAT_REAL_PX:
+			{
+				ret = &ConfigureNamesReal_px[polar_array_index].gen;
+				break;
+			}
+		case CAT_STRING_PX:
+			{
+				ret = &ConfigureNamesString_px[polar_array_index].gen;
+				break;
+			}
+		case CAT_ENUM_PX:
+			{
+				ret = &ConfigureNamesEnum_px[polar_array_index].gen;
+				break;
+			}
 		case CAT_BOOL_EXTERNAL:
 			{
 				ret = &ConfigureNamesBool_external[polar_array_index]->gen;
@@ -17373,3 +17517,11 @@ polar_session_guc_release(PolarSessionContext *session)
 	}
 	polar_session_info()->saved_guc_count = 0;
 }
+
+/* POLAR px */
+int
+px_get_num_guc_variables(void)
+{
+	return num_guc_variables;
+}
+/* POLAR end */

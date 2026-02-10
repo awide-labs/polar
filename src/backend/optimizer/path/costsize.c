@@ -153,6 +153,10 @@ bool		enable_parallel_hash = true;
 bool		enable_partition_pruning = true;
 bool		enable_async_append = true;
 
+/* POLAR px */
+bool		enable_groupagg = true;
+/* POLAR end */
+
 typedef struct
 {
 	PlannerInfo *root;

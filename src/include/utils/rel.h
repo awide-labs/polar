@@ -248,6 +248,10 @@ typedef struct RelationData
 	bool		pgstat_enabled; /* should relation stats be counted */
 	/* use "struct" here to avoid needing to include pgstat.h: */
 	struct PgStat_TableStatus *pgstat_info; /* statistics collection area */
+
+	/* POLAR px */
+	struct PxPolicy *rd_pxpolicy;	/* Partitioning info if distributed rel */
+	/* POLAR end */
 } RelationData;
 
 

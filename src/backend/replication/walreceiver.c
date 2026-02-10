@@ -88,6 +88,7 @@
 /* POLAR */
 #include "access/polar_logindex_redo.h"
 #include "postmaster/polar_async_lock_replay.h"
+#include "replication/polar_cluster_info.h"
 #include "storage/polar_fd.h"
 
 
@@ -307,6 +308,7 @@ WalReceiverMain(void)
 
 	/* POLAR:notify startup to read wal file instead of logindex queue */
 	before_shmem_exit(polar_notify_read_wal_file, 0);
+	before_shmem_exit(polar_cluster_info_offline, 0);
 
 	/* Arrange to clean up at walreceiver exit */
 	on_shmem_exit(WalRcvDie, PointerGetDatum(&startpointTLI));
@@ -367,6 +369,8 @@ WalReceiverMain(void)
 
 	walrcv->sender_port = sender_port;
 	walrcv->ready_to_display = true;
+	/* POLAR: we'd like to update first */
+	walrcv->polar_hot_standby_state = -1;
 	SpinLockRelease(&walrcv->mutex);
 
 	if (tmp_conninfo)
@@ -554,6 +558,7 @@ WalReceiverMain(void)
 				bool		endofwal = false;
 				pgsocket	wait_fd = PGINVALID_SOCKET;
 				int			rc;
+				int			hot_standby_state;
 
 				/*
 				 * Exit walreceiver if we're not in recovery. This should not
@@ -629,6 +634,14 @@ WalReceiverMain(void)
 					 * them.
 					 */
 					XLogWalRcvFlush(false, startpointTLI);
+				}
+
+				hot_standby_state = polar_get_hot_standby_state() + polar_get_available_state() * 10;
+				if (walrcv->polar_hot_standby_state != hot_standby_state)
+				{
+					walrcv->polar_hot_standby_state = hot_standby_state;
+					polar_send_node_info(&reply_message);
+					walrcv_send(wrconn, reply_message.data, reply_message.len);
 				}
 
 				/* Check if we need to exit the streaming loop. */
@@ -1284,6 +1297,15 @@ XLogWalRcvProcessMsg(unsigned char type, char *buf, Size len, TimeLineID tli)
 				elog(LOG, "received reply from walsender, is_promote_allowed:%d, end_lsn:%X/%X",
 					 is_promote_allowed, LSN_FORMAT_ARGS(end_lsn));
 				polar_process_walsender_reply(is_promote_allowed, end_lsn);
+				break;
+			}
+
+			/* POLAR: 'M' means cluster info */
+		case 'M':
+			{
+				/* copy message to StringInfo */
+				appendBinaryStringInfo(&incoming_message, buf, len);
+				polar_process_cluster_info(&incoming_message);
 				break;
 			}
 			/* POLAR end */

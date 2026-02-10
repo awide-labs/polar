@@ -155,6 +155,11 @@
 #include "storage/polar_fd.h"
 /* POLAR end */
 
+/* POLAR px */
+#include "px/px_gang.h"
+#include "px/px_vars.h"
+/* POLAR end */
+
 
 /*
  * Possible types of a backend. Beyond being the possible bkend_type values in
@@ -1199,6 +1204,10 @@ PostmasterMain(int argc, char *argv[])
 		(void) secure_initialize(true);
 		LoadedSSL = true;
 	}
+
+	/* POLAR px */
+	px_tls_auth_init(true);
+	/* POLAR end */
 #endif
 
 	/*
@@ -2501,6 +2510,7 @@ polar_parse_startup_packet(Port *port, MemoryContext memctx, char *buf, int len,
 	char	   *polar_next_buf = NULL;	/* packet read during SSL/GSS
 										 * renegotiation */
 	int32		polar_next_len = 0;
+	char	   *pxid = NULL;	/* POLAR px */
 
 retry:
 	am_walsender = false;
@@ -2759,6 +2769,15 @@ retry1:
 				port->user_name = pstrdup(valptr);
 			else if (strcmp(nameptr, "options") == 0)
 				port->cmdline_options = pstrdup(valptr);
+			/* POLAR px */
+			else if (strcmp(nameptr, "pxid") == 0)
+			{
+				pxid = pstrdup(valptr);
+				am_px_worker = true;
+			}
+			else if (strcmp(nameptr, "px_auth_cert") == 0)
+				px_auth_cert = pstrdup(valptr);
+			/* POLAR end */
 			else if (strcmp(nameptr, "replication") == 0)
 			{
 				/*
@@ -3048,6 +3067,15 @@ retry1:
 	 */
 	if (am_walsender && !am_db_walsender)
 		port->database_name[0] = '\0';
+
+	/* POLAR px */
+
+	/*
+	 * Process "pxid" parameter string for qExec startup.
+	 */
+	if (pxid)
+		pxgang_parse_pxid_params(port, pxid);
+	/* POLAR end */
 
 	/*
 	 * Done putting stuff in TopMemoryContext.
@@ -3582,6 +3610,10 @@ SIGHUP_handler(SIGNAL_ARGS)
 			secure_destroy();
 			LoadedSSL = false;
 		}
+
+		/* POLAR px */
+		px_tls_auth_init(false);
+		/* POLAR end */
 #endif
 
 #ifdef EXEC_BACKEND

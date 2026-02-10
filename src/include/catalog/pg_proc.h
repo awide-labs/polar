@@ -22,6 +22,9 @@
 #include "catalog/pg_proc_d.h"
 #include "nodes/pg_list.h"
 
+/* POLAR px */
+/* POLAR end */
+
 /* ----------------
  *		pg_proc definition.  cpp turns this into
  *		typedef struct FormData_pg_proc
@@ -181,6 +184,17 @@ DECLARE_UNIQUE_INDEX(pg_proc_proname_args_nsp_index, 2691, ProcedureNameArgsNspI
 #define PROARGMODE_INOUT	'b'
 #define PROARGMODE_VARIADIC 'v'
 #define PROARGMODE_TABLE	't'
+
+/* POLAR px */
+#define COUNT_ANY_OID 2147		/* must referenced to pg_proc.dat */
+
+/*
+ * Symbolic values for prodataaccess column: these provide a hint regarding
+ * what kind of statements are included in the function.
+ */
+#define PRODATAACCESS_NONE		'n'
+#define PRODATAACCESS_ANY		'a'
+/* POLAR end */
 
 #endif							/* EXPOSE_TO_CLIENT_CODE */
 

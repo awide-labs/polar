@@ -17,6 +17,7 @@
 #include "executor/execdebug.h"
 #include "executor/nodeAgg.h"
 #include "executor/nodeAppend.h"
+#include "executor/nodeAssertOp_px.h"
 #include "executor/nodeBitmapAnd.h"
 #include "executor/nodeBitmapHeapscan.h"
 #include "executor/nodeBitmapIndexscan.h"
@@ -64,6 +65,10 @@
 #include "utils/rel.h"
 #include "utils/syscache.h"
 
+/* POLAR px */
+#include "executor/nodeMotion_px.h"
+/* POLAR end */
+
 static bool IndexSupportsBackwardScan(Oid indexid);
 
 
@@ -80,6 +85,11 @@ ExecReScan(PlanState *node)
 	/* If collecting timing stats, update them */
 	if (node->instrument)
 		InstrEndLoop(node->instrument);
+
+	/* POLAR px */
+	/* no longer squelched */
+	node->squelched = false;
+	/* POLAR end */
 
 	/*
 	 * If we have changed parameters, propagate that info.
@@ -298,6 +308,28 @@ ExecReScan(PlanState *node)
 		case T_LimitState:
 			ExecReScanLimit((LimitState *) node);
 			break;
+
+			/* POLAR px */
+		case T_MotionState:
+			ExecReScanMotion((MotionState *) node);
+			break;
+
+		case T_AssertOpState:
+			ExecReScanAssertOp((AssertOpState *) node);
+			break;
+
+#if 0
+		case T_SequenceState:
+			ExecReScanSequence((SequenceState *) node);
+			break;
+		case T_ShareInputScanState:
+			ExecReScanShareInputScan((ShareInputScanState *) node);
+			break;
+		case T_PartitionSelectorState:
+			ExecReScanPartitionSelector((PartitionSelectorState *) node);
+			break;
+#endif
+			/* POLAR end */
 
 		default:
 			elog(ERROR, "unrecognized node type: %d", (int) nodeTag(node));

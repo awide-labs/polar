@@ -1,0 +1,243 @@
+-- For target queries optionally specify EXPLAIN (COSTS OFF, VERBOSE) option from outside
+\getenv explain_only EXPLAIN_ONLY
+\if :explain_only
+    \set opt_explain 'EXPLAIN (COSTS OFF, VERBOSE)'
+    \set order_by_all ;
+\else
+    \set opt_explain ''
+    -- Sort output and exclude header
+    \t on
+    \set order_by_all '\\g | LC_ALL=C sort -h'
+\endif
+create schema result_hash_filter;
+-- start_ignore
+SET search_path to result_hash_filter;
+-- end_ignore
+CREATE TABLE select_hash1_tb_part_1 (
+    pk numeric(5,0) DEFAULT NULL::numeric NOT NULL,
+    varchar2_test character varying(100) DEFAULT NULL::character varying,
+    nvarchar2_test character varying(100) DEFAULT NULL::character varying,
+    number_test numeric(10,2) DEFAULT NULL::numeric,
+    smallint_test numeric(5,0) DEFAULT NULL::numeric,
+    integer_test integer,
+    decimal_test numeric(10,2) DEFAULT NULL::numeric,
+    float_test numeric(10,2) DEFAULT NULL::numeric,
+    double_test double precision,
+    timestamp_test timestamp(6) without time zone DEFAULT NULL::timestamp without time zone,
+    char_size_test character(100) DEFAULT NULL::bpchar,
+    nchar_test character(10) DEFAULT NULL::bpchar
+);
+--
+-- Data for Name: select_hash1_tb_part_1; Type: TABLE DATA; Schema: public; Owner: zx_test
+--
+COPY select_hash1_tb_part_1 (pk, varchar2_test, nvarchar2_test, number_test, smallint_test, integer_test, decimal_test, float_test, double_test, timestamp_test, char_size_test, nchar_test) FROM stdin;
+ANALYZE select_hash1_tb_part_1;
+ALTER TABLE ONLY select_hash1_tb_part_1
+    ADD CONSTRAINT select_hash1_tb_part_1_pkey PRIMARY KEY (pk);
+set polar_enable_px = on;
+set polar_px_dop_per_node = 1;
+---
+--- For all these tests Result + HashFilter node is used for the second Window
+--- function in execution pipeline
+---
+:opt_explain
+SELECT sum(smallint_test) OVER (PARTITION BY integer_test ) AS sum1,
+       sum(integer_test) OVER (PARTITION BY char_size_test ) AS sum2
+FROM select_hash1_tb_part_1
+WHERE 'David!' LIKE 'David_'
+OR 'David_' NOT LIKE 'abc'
+:order_by_all
+                                           QUERY PLAN                                           
+------------------------------------------------------------------------------------------------
+ PX Coordinator 2:1  (slice1; segments: 2)
+   Output: (sum(smallint_test) OVER (?)), (sum(integer_test) OVER (?))
+   ->  WindowAgg
+         Output: (sum(smallint_test) OVER (?)), sum(integer_test) OVER (?)
+         ->  Sort
+               Output: integer_test, char_size_test, (sum(smallint_test) OVER (?))
+               Sort Key: select_hash1_tb_part_1.char_size_test
+               ->  Result
+                     Output: integer_test, char_size_test, (sum(smallint_test) OVER (?))
+                     HashFilter: workers=2, nattrs=1
+                     ->  WindowAgg
+                           Output: integer_test, char_size_test, sum(smallint_test) OVER (?)
+                           ->  Sort
+                                 Output: smallint_test, integer_test, char_size_test
+                                 Sort Key: select_hash1_tb_part_1.integer_test
+                                 ->  Full Seq Scan on result_hash_filter.select_hash1_tb_part_1
+                                       Output: smallint_test, integer_test, char_size_test
+ Optimizer: PolarDB PX Optimizer
+(18 rows)
+
+:opt_explain
+SELECT sum(smallint_test) OVER (PARTITION BY integer_test ) AS sum1,
+       sum(integer_test) OVER (PARTITION BY char_size_test ) AS sum2,
+       sum(decimal_test) OVER (PARTITION BY smallint_test ) AS sum3
+FROM select_hash1_tb_part_1
+WHERE 'David!' LIKE 'David_'
+OR 'David_' NOT LIKE 'abc'
+:order_by_all
+                                                                 QUERY PLAN                                                                 
+--------------------------------------------------------------------------------------------------------------------------------------------
+ PX Coordinator 2:1  (slice1; segments: 2)
+   Output: (sum(smallint_test) OVER (?)), (sum(integer_test) OVER (?)), (sum(decimal_test) OVER (?))
+   ->  WindowAgg
+         Output: (sum(smallint_test) OVER (?)), (sum(integer_test) OVER (?)), sum(decimal_test) OVER (?)
+         ->  Sort
+               Output: smallint_test, decimal_test, (sum(smallint_test) OVER (?)), (sum(integer_test) OVER (?))
+               Sort Key: select_hash1_tb_part_1.smallint_test
+               ->  PX Hash 2:2  (slice2; segments: 2)
+                     Output: smallint_test, decimal_test, (sum(smallint_test) OVER (?)), (sum(integer_test) OVER (?))
+                     Hash Key: smallint_test
+                     ->  WindowAgg
+                           Output: smallint_test, decimal_test, (sum(smallint_test) OVER (?)), sum(integer_test) OVER (?)
+                           ->  Sort
+                                 Output: smallint_test, integer_test, decimal_test, char_size_test, (sum(smallint_test) OVER (?))
+                                 Sort Key: select_hash1_tb_part_1.char_size_test
+                                 ->  Result
+                                       Output: smallint_test, integer_test, decimal_test, char_size_test, (sum(smallint_test) OVER (?))
+                                       HashFilter: workers=2, nattrs=1
+                                       ->  WindowAgg
+                                             Output: smallint_test, integer_test, decimal_test, char_size_test, sum(smallint_test) OVER (?)
+                                             ->  Sort
+                                                   Output: smallint_test, integer_test, decimal_test, char_size_test
+                                                   Sort Key: select_hash1_tb_part_1.integer_test
+                                                   ->  Full Seq Scan on result_hash_filter.select_hash1_tb_part_1
+                                                         Output: smallint_test, integer_test, decimal_test, char_size_test
+ Optimizer: PolarDB PX Optimizer
+(26 rows)
+
+:opt_explain
+SELECT sum(smallint_test) OVER (PARTITION BY integer_test ) AS sum1,
+       sum(integer_test) OVER (PARTITION BY char_size_test, number_test ) AS sum2
+FROM select_hash1_tb_part_1
+WHERE 'David!' LIKE 'David_'
+OR 'David_' NOT LIKE 'abc'
+:order_by_all
+                                                QUERY PLAN                                                
+----------------------------------------------------------------------------------------------------------
+ PX Coordinator 2:1  (slice1; segments: 2)
+   Output: (sum(smallint_test) OVER (?)), (sum(integer_test) OVER (?))
+   ->  WindowAgg
+         Output: (sum(smallint_test) OVER (?)), sum(integer_test) OVER (?)
+         ->  Sort
+               Output: number_test, integer_test, char_size_test, (sum(smallint_test) OVER (?))
+               Sort Key: select_hash1_tb_part_1.char_size_test, select_hash1_tb_part_1.number_test
+               ->  Result
+                     Output: number_test, integer_test, char_size_test, (sum(smallint_test) OVER (?))
+                     HashFilter: workers=2, nattrs=2
+                     ->  WindowAgg
+                           Output: number_test, integer_test, char_size_test, sum(smallint_test) OVER (?)
+                           ->  Sort
+                                 Output: number_test, smallint_test, integer_test, char_size_test
+                                 Sort Key: select_hash1_tb_part_1.integer_test
+                                 ->  Full Seq Scan on result_hash_filter.select_hash1_tb_part_1
+                                       Output: number_test, smallint_test, integer_test, char_size_test
+ Optimizer: PolarDB PX Optimizer
+(18 rows)
+
+--
+-- These tests are the same except we do not allow hash filter to be enabled
+--
+set polar_px_enable_result_hash_filter = 0;
+:opt_explain
+SELECT sum(smallint_test) OVER (PARTITION BY integer_test ) AS sum1,
+       sum(integer_test) OVER (PARTITION BY char_size_test ) AS sum2
+FROM select_hash1_tb_part_1
+WHERE 'David!' LIKE 'David_'
+OR 'David_' NOT LIKE 'abc'
+:order_by_all
+                                           QUERY PLAN                                           
+------------------------------------------------------------------------------------------------
+ PX Coordinator 2:1  (slice1; segments: 2)
+   Output: (sum(smallint_test) OVER (?)), (sum(integer_test) OVER (?))
+   ->  WindowAgg
+         Output: (sum(smallint_test) OVER (?)), sum(integer_test) OVER (?)
+         ->  Sort
+               Output: integer_test, char_size_test, (sum(smallint_test) OVER (?))
+               Sort Key: select_hash1_tb_part_1.char_size_test
+               ->  PX Hash 1:2  (slice2; segments: 1)
+                     Output: integer_test, char_size_test, (sum(smallint_test) OVER (?))
+                     Hash Key: char_size_test
+                     ->  WindowAgg
+                           Output: integer_test, char_size_test, sum(smallint_test) OVER (?)
+                           ->  Sort
+                                 Output: smallint_test, integer_test, char_size_test
+                                 Sort Key: select_hash1_tb_part_1.integer_test
+                                 ->  Full Seq Scan on result_hash_filter.select_hash1_tb_part_1
+                                       Output: smallint_test, integer_test, char_size_test
+ Optimizer: PolarDB PX Optimizer
+(18 rows)
+
+:opt_explain
+SELECT sum(smallint_test) OVER (PARTITION BY integer_test ) AS sum1,
+       sum(integer_test) OVER (PARTITION BY char_size_test ) AS sum2,
+       sum(decimal_test) OVER (PARTITION BY smallint_test ) AS sum3
+FROM select_hash1_tb_part_1
+WHERE 'David!' LIKE 'David_'
+OR 'David_' NOT LIKE 'abc'
+:order_by_all
+                                                                 QUERY PLAN                                                                 
+--------------------------------------------------------------------------------------------------------------------------------------------
+ PX Coordinator 2:1  (slice1; segments: 2)
+   Output: (sum(smallint_test) OVER (?)), (sum(integer_test) OVER (?)), (sum(decimal_test) OVER (?))
+   ->  WindowAgg
+         Output: (sum(smallint_test) OVER (?)), (sum(integer_test) OVER (?)), sum(decimal_test) OVER (?)
+         ->  Sort
+               Output: smallint_test, decimal_test, (sum(smallint_test) OVER (?)), (sum(integer_test) OVER (?))
+               Sort Key: select_hash1_tb_part_1.smallint_test
+               ->  PX Hash 2:2  (slice2; segments: 2)
+                     Output: smallint_test, decimal_test, (sum(smallint_test) OVER (?)), (sum(integer_test) OVER (?))
+                     Hash Key: smallint_test
+                     ->  WindowAgg
+                           Output: smallint_test, decimal_test, (sum(smallint_test) OVER (?)), sum(integer_test) OVER (?)
+                           ->  Sort
+                                 Output: smallint_test, integer_test, decimal_test, char_size_test, (sum(smallint_test) OVER (?))
+                                 Sort Key: select_hash1_tb_part_1.char_size_test
+                                 ->  PX Hash 1:2  (slice3; segments: 1)
+                                       Output: smallint_test, integer_test, decimal_test, char_size_test, (sum(smallint_test) OVER (?))
+                                       Hash Key: char_size_test
+                                       ->  WindowAgg
+                                             Output: smallint_test, integer_test, decimal_test, char_size_test, sum(smallint_test) OVER (?)
+                                             ->  Sort
+                                                   Output: smallint_test, integer_test, decimal_test, char_size_test
+                                                   Sort Key: select_hash1_tb_part_1.integer_test
+                                                   ->  Full Seq Scan on result_hash_filter.select_hash1_tb_part_1
+                                                         Output: smallint_test, integer_test, decimal_test, char_size_test
+ Optimizer: PolarDB PX Optimizer
+(26 rows)
+
+:opt_explain
+SELECT sum(smallint_test) OVER (PARTITION BY integer_test ) AS sum1,
+       sum(integer_test) OVER (PARTITION BY char_size_test, number_test ) AS sum2
+FROM select_hash1_tb_part_1
+WHERE 'David!' LIKE 'David_'
+OR 'David_' NOT LIKE 'abc'
+:order_by_all
+                                                QUERY PLAN                                                
+----------------------------------------------------------------------------------------------------------
+ PX Coordinator 2:1  (slice1; segments: 2)
+   Output: (sum(smallint_test) OVER (?)), (sum(integer_test) OVER (?))
+   ->  WindowAgg
+         Output: (sum(smallint_test) OVER (?)), sum(integer_test) OVER (?)
+         ->  Sort
+               Output: number_test, integer_test, char_size_test, (sum(smallint_test) OVER (?))
+               Sort Key: select_hash1_tb_part_1.char_size_test, select_hash1_tb_part_1.number_test
+               ->  PX Hash 1:2  (slice2; segments: 1)
+                     Output: number_test, integer_test, char_size_test, (sum(smallint_test) OVER (?))
+                     Hash Key: char_size_test, number_test
+                     ->  WindowAgg
+                           Output: number_test, integer_test, char_size_test, sum(smallint_test) OVER (?)
+                           ->  Sort
+                                 Output: number_test, smallint_test, integer_test, char_size_test
+                                 Sort Key: select_hash1_tb_part_1.integer_test
+                                 ->  Full Seq Scan on result_hash_filter.select_hash1_tb_part_1
+                                       Output: number_test, smallint_test, integer_test, char_size_test
+ Optimizer: PolarDB PX Optimizer
+(18 rows)
+
+-- start_ignore
+reset all;
+DROP SCHEMA result_hash_filter CASCADE;
+NOTICE:  drop cascades to table result_hash_filter.select_hash1_tb_part_1
+-- end_ignore

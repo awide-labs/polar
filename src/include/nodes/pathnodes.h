@@ -18,8 +18,12 @@
 #include "lib/stringinfo.h"
 #include "nodes/params.h"
 #include "nodes/parsenodes.h"
+#include "nodes/plannodes.h"
 #include "storage/block.h"
 
+/* POLAR px */
+#include "nodes/px_plannerconfig.h"
+/* POLAR end */
 
 /*
  * Relids
@@ -78,6 +82,47 @@ typedef enum UpperRelationKind
 	/* NB: UPPERREL_FINAL must be last enum entry; it's used to size arrays */
 } UpperRelationKind;
 
+/* POLAR px */
+/*
+ * ApplyShareInputContext is used in different stages of ShareInputScan
+ * processing. This is mostly used as working area during the stages, but
+ * some information is also carried through multiple stages.
+ */
+typedef struct ApplyShareInputContextPerShare
+{
+	int			producer_slice_id;
+	Bitmapset  *participant_slices;
+} ApplyShareInputContextPerShare;
+
+typedef struct ApplyShareInputContext
+{
+	/* curr_rtable is used by all stages when traversing into subqueries */
+	List	   *curr_rtable;
+
+	/*
+	 * Populated in dag_to_tree() (or collect_shareinput_producers() for ORCA),
+	 * used in replace_shareinput_targetlists()
+	 */
+	Plan	  **shared_plans;
+	int			shared_input_count;
+
+	/*
+	 * State for replace_shareinput_targetlists()
+	 */
+	int		   *share_refcounts;
+	int			share_refcounts_sz;		/* allocated sized of 'share_refcounts' */
+
+	/*
+	 * State for apply_sharinput_xslice() walkers.
+	 */
+	PlanSlice  *slices;			/* root->glob->slices */
+	List	   *motStack;		/* stack of motionIds leading to current node */
+	ApplyShareInputContextPerShare *shared_inputs; /* one for each share */
+	Bitmapset  *qdShares;		/* share_ids that are referenced from QD slices */
+
+} ApplyShareInputContext;
+/* POLAR end */
+
 /*----------
  * PlannerGlobal
  *		Global information for planning/optimization
@@ -130,6 +175,16 @@ typedef struct PlannerGlobal
 	char		maxParallelHazard;	/* worst PROPARALLEL hazard level */
 
 	PartitionDirectory partition_directory; /* partition descriptors */
+
+	/* POLAR px */
+	int		   *subplan_sliceIds; /* Slice IDs for initplans */
+	int			nParamExec;		/* number of PARAM_EXEC Params used */
+	ApplyShareInputContext share;	/* workspace for GPDB plan sharing */
+
+	/* Slice table, hold the final PlannedStmt */
+	int			numSlices;
+	struct PlanSlice *slices;
+	/* POLAR end */
 } PlannerGlobal;
 
 /* macro for fetching the Plan associated with a SubPlan node */
@@ -378,6 +433,13 @@ struct PlannerInfo
 
 	/* Does this query modify any partition key columns? */
 	bool		partColsUpdated;
+
+	/* POLAR px */
+	List       *list_cteplaninfo; /* list of CtePlannerInfo, one for each CTE */
+	int			numMotions;
+
+	PlannerConfig *config;		/* Planner configuration */
+	/* POLAR end */
 };
 
 

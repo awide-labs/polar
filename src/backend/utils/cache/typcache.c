@@ -2882,3 +2882,41 @@ shared_record_typmod_registry_detach(dsm_segment *segment, Datum datum)
 	}
 	CurrentSession->shared_typmod_registry = NULL;
 }
+
+/* POLAR px */
+/*
+ * build_tuple_node_list
+ *
+ * Wrap TupleDesc with TupleDescNode. Return all record type in record cache.
+ */
+List *
+build_tuple_node_list(int start)
+{
+	List	   *transientTypeList = NIL;
+	int			i = start;
+
+	if (NextRecordTypmod == 0)
+		return transientTypeList;
+
+	for (; i < NextRecordTypmod; i++)
+	{
+		TupleDesc	tmp = RecordCacheArray[i].tupdesc;
+
+		TupleDescNode *node = palloc0(sizeof(TupleDescNode));
+
+		node->type = T_TupleDescNode;
+		node->natts = tmp->natts;
+		node->tuple = CreateTupleDescCopy(tmp);
+		transientTypeList = lappend(transientTypeList, node);
+	}
+
+	return transientTypeList;
+}
+
+int32
+getNextRecordTypmod()
+{
+	return NextRecordTypmod;
+}
+
+/* POLAR end */

@@ -18,6 +18,7 @@
 #include "access/hash.h"
 #include "access/htup_details.h"
 #include "access/nbtree.h"
+#include "access/table.h"
 #include "bootstrap/bootstrap.h"
 #include "catalog/namespace.h"
 #include "catalog/pg_am.h"
@@ -34,7 +35,9 @@
 #include "catalog/pg_range.h"
 #include "catalog/pg_statistic.h"
 #include "catalog/pg_transform.h"
+#include "catalog/pg_trigger.h"
 #include "catalog/pg_type.h"
+#include "commands/trigger.h"
 #include "miscadmin.h"
 #include "nodes/makefuncs.h"
 #include "utils/array.h"
@@ -2109,6 +2112,80 @@ get_rel_persistence(Oid relid)
 
 	return result;
 }
+
+/* POLAR px */
+static inline bool
+px_trigger_enabled(char tgenabled)
+{
+	bool		result;
+
+	switch (tgenabled)
+	{
+		case TRIGGER_FIRES_ON_ORIGIN:
+			/* fallthrough */
+			/*
+			 * FIXME: we should probably return false when
+			 * SessionReplicationRole isn't SESSION_REPLICATION_ROLE_ORIGIN,
+			 * but does that means we'll also have to flush ORCA's metadata
+			 * cache on every assignment of session_replication_role?
+			 */
+		case TRIGGER_FIRES_ALWAYS:
+			result = true;
+			break;
+		case TRIGGER_FIRES_ON_REPLICA:
+		case TRIGGER_DISABLED:
+			result = false;
+			break;
+		default:
+			elog(ERROR, "Unknown trigger type: %c", tgenabled);
+	}
+
+	return result;
+}
+
+/*
+ * Does table have update triggers?
+ */
+bool
+px_has_update_triggers(Oid relid)
+{
+	Relation	relation;
+	bool		result = false;
+
+	/* Assume the caller already holds a suitable lock. */
+	relation = table_open(relid, NoLock);
+
+	if (relation->rd_rel->relhastriggers)
+	{
+		bool	found = false;
+
+		if (relation->trigdesc == NULL)
+			RelationBuildTriggers(relation);
+
+		if (relation->trigdesc)
+		{
+			int i = 0;
+			for (i = 0; i < relation->trigdesc->numtriggers && !found; i++)
+			{
+				Trigger *trigger = &relation->trigdesc->triggers[i];
+				found = px_trigger_enabled(trigger->tgenabled) &&
+					(trigger->tgtype & TRIGGER_TYPE_UPDATE);
+			}
+		}
+
+		/*
+		 * GPDB_96_MERGE_FIXME: Check child rels for partitioned table.
+		 * Why is this not allowed?
+		 */
+		if (found)
+			result = true;
+	}
+
+	table_close(relation, NoLock);
+
+	return result;
+}
+/* POLAR end */
 
 
 /*				---------- TRANSFORM CACHE ----------						 */

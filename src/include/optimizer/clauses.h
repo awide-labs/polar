@@ -16,6 +16,17 @@
 
 #include "nodes/pathnodes.h"
 
+/* POLAR px */
+
+/*
+ * Max size of a folded constant when optimizing queries in Orca.
+ * Note: this is to prevent OOM issues when trying to serialize very large
+ * constants.
+ * Current limit: 100KB
+ */
+#define PXOPT_MAX_FOLDED_CONSTANT_SIZE (100*1024)
+/* POLAR end */
+
 typedef struct
 {
 	int			numWindowFuncs; /* total number of WindowFuncs found */
@@ -54,5 +65,13 @@ extern Query *inline_set_returning_function(PlannerInfo *root,
 											RangeTblEntry *rte);
 
 extern Bitmapset *pull_paramids(Expr *expr);
+
+/* POLAR px */
+extern Query *fold_constants(PlannerInfo *root, Query *q,
+							 ParamListInfo boundParams, Size max_size);
+extern Expr *transform_array_Const_to_ArrayExpr(Const *c);
+extern Query *flatten_join_alias_var_optimizer(Query *query, int queryLevel);
+
+/* POLAR end */
 
 #endif							/* CLAUSES_H */

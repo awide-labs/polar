@@ -64,6 +64,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Expose 69 PolarDB-specific GUCs in `pg_settings` and
   `postgres --describe-config` so that Patroni can enumerate,
   validate, and track `pending_restart` for them (XCOM-124)
+- Add PX (parallel execution) infrastructure including cluster coordination
+  protocol, execution engine, and ORCA-based optimizer (XCOM-229)
+- Introduce system attributes `_px_worker_id` and `_root_ctid` for parallel
+  tuple processing (XCOM-229)
 
 ### Changed
 

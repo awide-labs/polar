@@ -44,8 +44,8 @@ pg_GSS_error_int(PQExpBuffer str, OM_uint32 stat, int type)
  * GSSAPI errors contain two parts; put both into conn->errorMessage.
  */
 void
-pg_GSS_error(const char *mprefix, PGconn *conn,
-			 OM_uint32 maj_stat, OM_uint32 min_stat)
+pg_GSS_error_fe(const char *mprefix, PGconn *conn,
+				OM_uint32 maj_stat, OM_uint32 min_stat)
 {
 	appendPQExpBuffer(&conn->errorMessage, "%s:", mprefix);
 	pg_GSS_error_int(&conn->errorMessage, maj_stat, GSS_C_GSS_CODE);

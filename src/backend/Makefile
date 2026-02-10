@@ -24,6 +24,12 @@ SUBDIRS = access backup bootstrap catalog parser commands executor \
 	statistics storage tcop tsearch utils $(top_builddir)/src/timezone \
 	jit
 
+SUBDIRS += px
+
+ifeq ($(enable_polar_px),yes)
+SUBDIRS += px_optimizer_util px_optimizer
+endif
+
 include $(srcdir)/common.mk
 
 # As of 1/2010:
@@ -63,8 +69,39 @@ ifneq ($(PORTNAME), cygwin)
 ifneq ($(PORTNAME), win32)
 ifneq ($(PORTNAME), aix)
 
-postgres: $(OBJS)
-	$(CC) $(CFLAGS) $(call expand_subsys,$^) $(LDFLAGS) $(LDFLAGS_EX) $(export_dynamic) $(LIBS) -o $@
+# Hiding libpq symbol was adapted from https://github.com/apache/cloudberry/commit/32cde27a
+# Due to Greenplum's MPP architecture, the postgres process needs to connect to
+# databases, some symbols from frontend are compiled to the postgres binary.
+# Some extensions requires frontend symbols and are dynamically linked to libpq.so.
+# However, some symbols are not safe to be exported both in the postgres binary
+# and libpq.so. E.g., some of the functions are using palloc()/pfree() to allocate
+# and free memory in backend codes while using malloc()/free() to allocate and free
+# memory in frontend codes. We use linker version script to make these symbols exported
+# in libpq.so and private in the postgres binary.
+# FIXME: Can we teach the postgres binary to dynamically link against libpq.so? So that
+# we don't need this hack.
+SAFELY_EXPORTED_SYMBOLS_PATTERN = "(pqsignal|pg_*)"
+SYMBOL_MAPPING_FLAGS =
+ifeq ($(PORTNAME), darwin)
+SYMBOL_MAP_FILE = hide_symbols.list
+$(SYMBOL_MAP_FILE): $(top_builddir)/src/interfaces/libpq/exports.txt
+	$(AWK) '/^[^#]/ {printf "_%s\n",$$1}' $< | grep -v -E $(SAFELY_EXPORTED_SYMBOLS_PATTERN) >$@
+SYMBOL_MAPPING_FLAGS = -unexported_symbols_list $(SYMBOL_MAP_FILE)
+endif
+
+ifeq ($(PORTNAME), linux)
+SYMBOL_MAP_FILE = postgres_symbols.map
+$(SYMBOL_MAP_FILE): $(top_builddir)/src/interfaces/libpq/exports.txt
+	( echo '{ global: *; '; echo ' local:'; $(AWK) '/^[^#]/ {printf "%s;\n",$$1}' $< | grep -v -E $(SAFELY_EXPORTED_SYMBOLS_PATTERN); echo '};' ) >$@
+SYMBOL_MAPPING_FLAGS = -Wl,--version-script=$(SYMBOL_MAP_FILE)
+endif
+
+postgres: $(OBJS) $(SYMBOL_MAP_FILE)
+ifeq ($(enable_polar_px),yes)
+	$(CXX) $(CXXFLAGS) $(LDFLAGS) $(LDFLAGS_EX) $(export_dynamic) $(call expand_subsys,$(OBJS)) $(LIBS) $(SYMBOL_MAPPING_FLAGS) -o $@
+else
+	$(CC) $(CFLAGS) $(call expand_subsys,$(OBJS)) $(LDFLAGS) $(LDFLAGS_EX) $(export_dynamic) $(LIBS) $(SYMBOL_MAPPING_FLAGS) -o $@
+endif
 
 endif
 endif
@@ -73,7 +110,11 @@ endif
 ifeq ($(PORTNAME), cygwin)
 
 postgres: $(OBJS)
+ifeq ($(enable_polar_px),yes)
+	$(CXX) $(CXXFLAGS) $(LDFLAGS) $(LDFLAGS_EX) $(export_dynamic) -Wl,--stack,$(WIN32_STACK_RLIMIT) -Wl,--export-all-symbols -Wl,--out-implib=libpostgres.a $(call expand_subsys,$^) $(LIBS) -o $@
+else
 	$(CC) $(CFLAGS) $(call expand_subsys,$^) $(LDFLAGS) $(LDFLAGS_EX) $(export_dynamic) -Wl,--stack,$(WIN32_STACK_RLIMIT) -Wl,--export-all-symbols -Wl,--out-implib=libpostgres.a $(LIBS) -o $@
+endif
 
 # libpostgres.a is actually built in the preceding rule, but we need this to
 # ensure it's newer than postgres; see notes in src/backend/parser/Makefile
@@ -86,7 +127,11 @@ ifeq ($(PORTNAME), win32)
 LIBS += -lsecur32
 
 postgres: $(OBJS) $(WIN32RES)
+ifeq ($(enable_polar_px),yes)
+	$(CXX) $(CXXFLAGS) $(LDFLAGS) $(LDFLAGS_EX) -Wl,--stack=$(WIN32_STACK_RLIMIT) -Wl,--export-all-symbols -Wl,--out-implib=libpostgres.a $(call expand_subsys,$(OBJS)) $(WIN32RES) $(LIBS) -o $@$(X)
+else
 	$(CC) $(CFLAGS) $(call expand_subsys,$(OBJS)) $(WIN32RES) $(LDFLAGS) $(LDFLAGS_EX) -Wl,--stack=$(WIN32_STACK_RLIMIT) -Wl,--export-all-symbols -Wl,--out-implib=libpostgres.a $(LIBS) -o $@$(X)
+endif
 
 # libpostgres.a is actually built in the preceding rule, but we need this to
 # ensure it's newer than postgres; see notes in src/backend/parser/Makefile
@@ -98,7 +143,11 @@ endif # win32
 ifeq ($(PORTNAME), aix)
 
 postgres: $(POSTGRES_IMP)
+ifeq ($(enable_polar_px),yes)
+	$(CXX) $(CXXFLAGS) $(LDFLAGS) $(LDFLAGS_EX) $(call expand_subsys,$(OBJS)) -Wl,-bE:$(top_builddir)/src/backend/$(POSTGRES_IMP) $(LIBS) -Wl,-brtllib -o $@
+else
 	$(CC) $(CFLAGS) $(call expand_subsys,$(OBJS)) $(LDFLAGS) $(LDFLAGS_EX) -Wl,-bE:$(top_builddir)/src/backend/$(POSTGRES_IMP) $(LIBS) -Wl,-brtllib -o $@
+endif
 
 $(POSTGRES_IMP): $(OBJS)
 	$(LD) $(LDREL) $(LDOUT) SUBSYS.o $(call expand_subsys,$^)
@@ -121,7 +170,11 @@ $(top_builddir)/src/port/libpgport_srv.a: | submake-libpgport
 # The postgres.o target is needed by the rule in Makefile.global that
 # creates the exports file when MAKE_EXPORTS = true.
 postgres.o: $(OBJS)
+ifeq ($(enable_polar_px),yes)
+	$(CXX) $(LDREL) $(LDFLAGS) $(LDFLAGS_EX) $(call expand_subsys,$^) $(LIBS) -o $@
+else
 	$(CC) $(LDREL) $(call expand_subsys,$^) $(LDFLAGS) $(LDFLAGS_EX) $(LIBS) -o $@
+endif
 
 
 # The following targets are specified in make commands that appear in
@@ -214,11 +267,21 @@ endif
 	$(INSTALL_DATA) $(srcdir)/utils/misc/postgresql.conf.sample '$(DESTDIR)$(datadir)/postgresql.conf.sample'
 	$(INSTALL_DATA) $(srcdir)/utils/misc/polardb.conf.sample '$(DESTDIR)$(datadir)/polardb.conf.sample'
 
+ifeq ($(enable_polar_px), yes)
+	$(MAKE) -C px_optimizer_util $@ INSTLOC=$(DESTDIR)$(libdir)
+	$(MAKE) -C px_optimizer $@ INSTLOC=$(DESTDIR)$(libdir)
+endif
+
 ifeq ($(with_llvm), yes)
 install-bin: install-postgres-bitcode
 
 install-postgres-bitcode: $(OBJS) all
+ifeq ($(enable_polar_px),yes)
+	$(call install_llvm_module,postgres,$(call expand_subsys, $(filter-out $(top_builddir)/src/timezone/objfiles.txt px_optimizer_util/objfiles.txt px_optimizer/objfiles.txt, $(SUBDIROBJS))))
+else
 	$(call install_llvm_module,postgres,$(call expand_subsys, $(filter-out $(top_builddir)/src/timezone/objfiles.txt, $(SUBDIROBJS))))
+endif
+
 endif
 
 install-bin: postgres $(POSTGRES_IMP) installdirs
@@ -293,6 +356,10 @@ ifeq ($(PORTNAME), cygwin)
 endif
 ifeq ($(PORTNAME), win32)
 	rm -f postgres.dll libpostgres.a $(WIN32RES)
+endif
+ifeq (,$(filter cygwin win32 aix,$(PORTNAME)))
+	rm -f postgres_symbols.map
+	rm -f hide_symbols.list
 endif
 
 distclean: clean

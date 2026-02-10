@@ -23,7 +23,14 @@
  *-------------------------------------------------------------------------
  */
 
-#include "postgres_fe.h"
+/*
+ * This file is compiled with both frontend and backend codes, symlinked by
+ * src/backend/Makefile, and use macro FRONTEND to switch.
+ *
+ * Include "c.h" to adopt pg C types. Don't include "postgres_fe.h",
+ * which only defines FRONTEND besides including "c.h"
+ */
+#include "c.h"
 
 #include <limits.h>
 
@@ -39,8 +46,6 @@ static const char oom_buffer[1] = "";
 
 /* Need a char * for unconstify() compatibility */
 static const char *oom_buffer_ptr = oom_buffer;
-
-static bool appendPQExpBufferVA(PQExpBuffer str, const char *fmt, va_list args) pg_attribute_printf(2, 0);
 
 
 /*
@@ -292,7 +297,7 @@ appendPQExpBuffer(PQExpBuffer str, const char *fmt,...)
  * Caution: callers must be sure to preserve their entry-time errno
  * when looping, in case the fmt contains "%m".
  */
-static bool
+bool
 appendPQExpBufferVA(PQExpBuffer str, const char *fmt, va_list args)
 {
 	size_t		avail;

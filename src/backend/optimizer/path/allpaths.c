@@ -753,6 +753,21 @@ set_rel_consider_parallel(PlannerInfo *root, RelOptInfo *rel,
 		case RTE_RESULT:
 			/* RESULT RTEs, in themselves, are no problem. */
 			break;
+
+			/* POLAR px */
+		case RTE_TABLEFUNCTION:
+			/* Check for parallel-restricted functions. */
+			if (!is_parallel_safe(root, (Node *) rte->functions))
+				return;
+			break;
+		case RTE_VOID:
+
+			/*
+			 * Not sure if parallelizing a "no-op" void RTE makes sense, but
+			 * it's no reason to disable parallelization.
+			 */
+			break;
+			/* POLAR end */
 	}
 
 	/*

@@ -857,10 +857,34 @@ SELECT name FROM tab_settings_flags
 SELECT name FROM tab_settings_flags
   WHERE category ~ '^Query Tuning' AND NOT explain
   ORDER BY 1;
-           name            
----------------------------
+                      name                       
+-------------------------------------------------
  default_statistics_target
-(1 row)
+ polar_enable_px
+ polar_px_dop_per_node
+ polar_px_enable_adps
+ polar_px_enable_adps_explain_analyze
+ polar_px_enable_cte
+ polar_px_enable_dispatch_async
+ polar_px_enable_executor
+ polar_px_enable_join
+ polar_px_enable_print
+ polar_px_enable_relsize_collection
+ polar_px_enable_subquery
+ polar_px_enable_window_function
+ polar_px_motion_cost_per_row
+ polar_px_optimizer_enable_bitmapscan
+ polar_px_optimizer_enable_brinscan
+ polar_px_optimizer_enable_dynamicshareindexscan
+ polar_px_optimizer_enable_indexonlyscan
+ polar_px_optimizer_enable_indexscan
+ polar_px_optimizer_enable_relsize_collection
+ polar_px_optimizer_enable_seqscan
+ polar_px_optimizer_enable_seqsharescan
+ polar_px_optimizer_enable_shareindexscan
+ polar_px_optimizer_use_px_allocators
+ polar_px_udpic_enable_ipv6
+(25 rows)
 
 -- Runtime-computed GUCs should be part of the preset category.
 SELECT name FROM tab_settings_flags

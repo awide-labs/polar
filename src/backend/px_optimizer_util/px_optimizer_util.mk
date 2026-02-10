@@ -1,0 +1,6 @@
+override CPPFLAGS := -I$(top_srcdir)/src/backend/px_optimizer/libgpos/include $(CPPFLAGS)
+override CPPFLAGS := -I$(top_srcdir)/src/backend/px_optimizer/libgpopt/include $(CPPFLAGS)
+override CPPFLAGS := -I$(top_srcdir)/src/backend/px_optimizer/libnaucrates/include $(CPPFLAGS)
+override CPPFLAGS := -I$(top_srcdir)/src/backend/px_optimizer/libgpdbcost/include $(CPPFLAGS)
+override CPPFLAGS := -std=c++11 -fno-omit-frame-pointer -Wno-deprecated-register $(CPPFLAGS)
+override CXXFLAGS := -std=c++11 -fno-omit-frame-pointer -Wno-deprecated-register $(CXXFLAGS)

@@ -100,6 +100,10 @@ typedef struct TuplesortInstrumentation
 	TuplesortMethod sortMethod; /* sort algorithm used */
 	TuplesortSpaceType spaceType;	/* type of space spaceUsed represents */
 	int64		spaceUsed;		/* space consumption, in kB */
+
+	/* POLAR px */
+	size_t		workmemused;
+	/* POLAR end */
 } TuplesortInstrumentation;
 
 

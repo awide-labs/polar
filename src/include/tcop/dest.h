@@ -146,4 +146,9 @@ extern void EndReplicationCommand(const char *commandTag);
 extern void NullCommand(CommandDest dest);
 extern void ReadyForQuery(CommandDest dest);
 
+/* POLAR px */
+extern void sendPXDetails(void);
+
+/* POLAR end */
+
 #endif							/* DEST_H */

@@ -68,6 +68,21 @@
 #include "utils/ruleutils.h"
 #include "utils/snapmgr.h"
 
+/* POLAR px */
+#include "commands/tablespace.h"
+#include "executor/execUtils_px.h"
+#include "optimizer/planner.h"
+#include "storage/ipc.h"
+#include "px/ml_ipc.h"
+#include "px/px_disp_query.h"
+#include "px/px_llize.h"
+#include "px/px_motion.h"
+#include "px/px_timeout.h"
+#include "px/px_util.h"
+#include "px/px_vars.h"
+#include "px/px_explain.h"
+/* POLAR end */
+
 
 /* Hooks for plugins to get control in ExecutorStart/Run/Finish/End */
 ExecutorStart_hook_type ExecutorStart_hook = NULL;
@@ -99,6 +114,17 @@ static char *ExecBuildSlotValueDescription(Oid reloid,
 										   Bitmapset *modifiedCols,
 										   int maxfieldlen);
 static void EvalPlanQualStart(EPQState *epqstate, Plan *planTree);
+
+/* POLAR px */
+static void standard_ExecutorStart_PX(QueryDesc *queryDesc, int eflags);
+static void standard_ExecutorStart_NonPX(QueryDesc *queryDesc, int eflags);
+static void standard_ExecutorRun_PX(QueryDesc *queryDesc,
+									ScanDirection direction, uint64 count);
+static void standard_ExecutorRun_NonPX(QueryDesc *queryDesc,
+									   ScanDirection direction, uint64 count, bool execute_once);
+static void standard_ExecutorEnd_PX(QueryDesc *queryDesc);
+
+/* POLAR end */
 
 /* end of local decls */
 
@@ -146,6 +172,27 @@ ExecutorStart(QueryDesc *queryDesc, int eflags)
 
 void
 standard_ExecutorStart(QueryDesc *queryDesc, int eflags)
+{
+	bool		old_px_is_executing = px_is_executing;
+
+	if (px_role != PX_ROLE_PX)
+		sql_trace_id.seq = (uint16) pg_atomic_add_fetch_u32(&ProcGlobal->sqlRequestCounter, 1);
+
+	SET_PX_EXECUTION_STATUS(should_px_executor(queryDesc));
+	if (px_is_executing)
+	{
+#ifdef FAULT_INJECTOR
+		INJECT_PX_HANG_FOR_SECOND("px_wait_lock_timeout", "", "test_table", 10);
+#endif
+		standard_ExecutorStart_PX(queryDesc, eflags);
+	}
+	else
+		standard_ExecutorStart_NonPX(queryDesc, eflags);
+	SET_PX_EXECUTION_STATUS(old_px_is_executing);
+}
+
+static void
+standard_ExecutorStart_NonPX(QueryDesc *queryDesc, int eflags)
 {
 	EState	   *estate;
 	MemoryContext oldcontext;
@@ -314,6 +361,25 @@ void
 standard_ExecutorRun(QueryDesc *queryDesc,
 					 ScanDirection direction, uint64 count, bool execute_once)
 {
+	bool		old_px_is_executing = px_is_executing;
+
+	SET_PX_EXECUTION_STATUS(should_px_executor(queryDesc));
+	if (px_is_executing)
+	{
+#ifdef FAULT_INJECTOR
+		INJECT_PX_HANG_FOR_SECOND("px_wait_lock_timeout", "", "test_table", 10);
+#endif
+		standard_ExecutorRun_PX(queryDesc, direction, count);
+	}
+	else
+		standard_ExecutorRun_NonPX(queryDesc, direction, count, execute_once);
+	SET_PX_EXECUTION_STATUS(old_px_is_executing);
+}
+
+static void
+standard_ExecutorRun_NonPX(QueryDesc *queryDesc,
+						   ScanDirection direction, uint64 count, bool execute_once)
+{
 	EState	   *estate;
 	CmdType		operation;
 	DestReceiver *dest;
@@ -481,6 +547,21 @@ standard_ExecutorEnd(QueryDesc *queryDesc)
 	Assert(estate->es_finished ||
 		   (estate->es_top_eflags & EXEC_FLAG_EXPLAIN_ONLY));
 
+	/* POLAR px */
+	{
+		bool		old_px_is_executing = px_is_executing;
+
+		SET_PX_EXECUTION_STATUS(should_px_executor(queryDesc));
+		if (px_is_executing)
+		{
+			standard_ExecutorEnd_PX(queryDesc);
+			SET_PX_EXECUTION_STATUS(old_px_is_executing);
+			return;
+		}
+		SET_PX_EXECUTION_STATUS(old_px_is_executing);
+	}
+	/* POLAR end */
+
 	/*
 	 * Switch into per-query memory context to run ExecEndPlan
 	 */
@@ -496,6 +577,10 @@ standard_ExecutorEnd(QueryDesc *queryDesc)
 	 * Must switch out of context before destroying it
 	 */
 	MemoryContextSwitchTo(oldcontext);
+
+	/* POLAR px */
+	queryDesc->es_processed = estate->es_processed;
+	/* POLAR end */
 
 	/*
 	 * Release EState and per-query memory context.  This should release
@@ -906,6 +991,11 @@ InitPlan(QueryDesc *queryDesc, int eflags)
 		PlanState  *subplanstate;
 		int			sp_eflags;
 
+		/* POLAR px */
+		int			save_currentSliceId = estate->currentSliceId;
+
+		/* POLAR end */
+
 		/*
 		 * A subplan will never need to do BACKWARD scan nor MARK/RESTORE. If
 		 * it is a parameterless subplan (not initplan), we suggest that it be
@@ -916,7 +1006,17 @@ InitPlan(QueryDesc *queryDesc, int eflags)
 		if (bms_is_member(i, plannedstmt->rewindPlanIDs))
 			sp_eflags |= EXEC_FLAG_REWIND;
 
+		/* POLAR px */
+		if (px_is_executing)
+			estate->currentSliceId =
+				estate->es_plannedstmt->subplan_sliceIds[i - 1];
+		/* POLAR end */
+
 		subplanstate = ExecInitNode(subplan, estate, sp_eflags);
+
+		/* POLAR px */
+		estate->currentSliceId = save_currentSliceId;
+		/* POLAR end */
 
 		estate->es_subplanstates = lappend(estate->es_subplanstates,
 										   subplanstate);
@@ -3090,3 +3190,12 @@ EvalPlanQualEnd(EPQState *epqstate)
 	epqstate->relsubs_done = NULL;
 	epqstate->epqExtra->relsubs_blocked = NULL;
 }
+
+/* POLAR px */
+/*
+ * 1. standard_ExecutorStart_PX
+ * 2. standard_ExecutorRun_PX
+ * 3. standard_ExecutorEnd_PX
+ */
+#include "execMain_px.c"
+/* POLAR end */

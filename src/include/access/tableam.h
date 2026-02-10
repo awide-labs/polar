@@ -311,6 +311,7 @@ typedef struct TableAmRoutine
 								 Snapshot snapshot,
 								 int nkeys, struct ScanKeyData *key,
 								 ParallelTableScanDesc pscan,
+								 PXScanDesc px_scan,	/* POLAR px */
 								 uint32 flags);
 
 	/*
@@ -894,7 +895,8 @@ table_beginscan(Relation rel, Snapshot snapshot,
 	uint32		flags = SO_TYPE_SEQSCAN |
 		SO_ALLOW_STRAT | SO_ALLOW_SYNC | SO_ALLOW_PAGEMODE;
 
-	return rel->rd_tableam->scan_begin(rel, snapshot, nkeys, key, NULL, flags);
+	return rel->rd_tableam->scan_begin(rel, snapshot, nkeys, key, NULL, NULL,
+									   flags);
 }
 
 /*
@@ -923,7 +925,8 @@ table_beginscan_strat(Relation rel, Snapshot snapshot,
 	if (allow_sync)
 		flags |= SO_ALLOW_SYNC;
 
-	return rel->rd_tableam->scan_begin(rel, snapshot, nkeys, key, NULL, flags);
+	return rel->rd_tableam->scan_begin(rel, snapshot, nkeys, key, NULL, NULL,
+									   flags);
 }
 
 /*
@@ -938,7 +941,8 @@ table_beginscan_bm(Relation rel, Snapshot snapshot,
 {
 	uint32		flags = SO_TYPE_BITMAPSCAN | SO_ALLOW_PAGEMODE;
 
-	return rel->rd_tableam->scan_begin(rel, snapshot, nkeys, key, NULL, flags);
+	return rel->rd_tableam->scan_begin(rel, snapshot, nkeys, key, NULL, NULL,
+									   flags);
 }
 
 /*
@@ -963,7 +967,8 @@ table_beginscan_sampling(Relation rel, Snapshot snapshot,
 	if (allow_pagemode)
 		flags |= SO_ALLOW_PAGEMODE;
 
-	return rel->rd_tableam->scan_begin(rel, snapshot, nkeys, key, NULL, flags);
+	return rel->rd_tableam->scan_begin(rel, snapshot, nkeys, key, NULL, NULL,
+									   flags);
 }
 
 /*
@@ -976,7 +981,8 @@ table_beginscan_tid(Relation rel, Snapshot snapshot)
 {
 	uint32		flags = SO_TYPE_TIDSCAN;
 
-	return rel->rd_tableam->scan_begin(rel, snapshot, 0, NULL, NULL, flags);
+	return rel->rd_tableam->scan_begin(rel, snapshot, 0, NULL, NULL, NULL,
+									   flags);
 }
 
 /*
@@ -989,7 +995,7 @@ table_beginscan_analyze(Relation rel)
 {
 	uint32		flags = SO_TYPE_ANALYZE;
 
-	return rel->rd_tableam->scan_begin(rel, NULL, 0, NULL, NULL, flags);
+	return rel->rd_tableam->scan_begin(rel, NULL, 0, NULL, NULL, NULL, flags);
 }
 
 /*
@@ -1052,6 +1058,14 @@ table_scan_getnextslot(TableScanDesc sscan, ScanDirection direction, TupleTableS
 	return sscan->rs_rd->rd_tableam->scan_getnextslot(sscan, direction, slot);
 }
 
+/* POLAR px */
+extern TableScanDesc table_beginscan_px(Relation rel, Snapshot snapshot,
+										int nkeys, struct ScanKeyData *key);
+extern TableScanDesc table_beginscan_bm_px(Relation rel, Snapshot snapshot,
+										   int nkeys, struct ScanKeyData *key);
+
+/* POLAR end */
+
 /* ----------------------------------------------------------------------------
  * TID Range scanning related functions.
  * ----------------------------------------------------------------------------
@@ -1069,7 +1083,8 @@ table_beginscan_tidrange(Relation rel, Snapshot snapshot,
 	TableScanDesc sscan;
 	uint32		flags = SO_TYPE_TIDRANGESCAN | SO_ALLOW_PAGEMODE;
 
-	sscan = rel->rd_tableam->scan_begin(rel, snapshot, 0, NULL, NULL, flags);
+	sscan = rel->rd_tableam->scan_begin(rel, snapshot, 0, NULL, NULL, NULL,
+										flags);
 
 	/* Set the range of TIDs to scan */
 	sscan->rs_rd->rd_tableam->scan_set_tidrange(sscan, mintid, maxtid);

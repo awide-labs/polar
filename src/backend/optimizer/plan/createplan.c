@@ -7200,6 +7200,13 @@ is_projection_capable_path(Path *path)
 		case T_ModifyTable:
 		case T_MergeAppend:
 		case T_RecursiveUnion:
+
+		/* POLAR px */
+		case T_Motion:
+		case T_ShareInputScan:
+		case T_PartitionSelector:
+		/* POLAR end */
+
 			return false;
 		case T_CustomScan:
 			if (castNode(CustomPath, path)->flags & CUSTOMPATH_SUPPORT_PROJECTION)
@@ -7250,6 +7257,14 @@ is_projection_capable_plan(Plan *plan)
 		case T_Append:
 		case T_MergeAppend:
 		case T_RecursiveUnion:
+
+		/* POLAR px */
+		case T_Motion:
+		case T_ShareInputScan:
+		case T_Sequence:
+		case T_PartitionSelector:
+		/* POLAR end */
+
 			return false;
 		case T_CustomScan:
 			if (((CustomScan *) plan)->flags & CUSTOMPATH_SUPPORT_PROJECTION)

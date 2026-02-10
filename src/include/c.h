@@ -648,6 +648,14 @@ typedef TransactionId MultiXactId;
 
 typedef uint32 MultiXactOffset;
 
+/* POLAR px */
+typedef int32 PxWorkerId;		/* PX: type of _px_worker_id system col */
+typedef uint32 DistributedTransactionId;
+#define InvalidDistributedTransactionId	((DistributedTransactionId) 0)
+#define FirstDistributedTransactionId	((DistributedTransactionId) 1)
+#define LastDistributedTransactionId	((DistributedTransactionId) 0xffffffff)
+/* POLAR end */
+
 typedef uint32 CommandId;
 
 #define FirstCommandId	((CommandId) 0)
@@ -887,6 +895,10 @@ extern int	polar_release_assert_level;
 #define Trap(condition, errorType)	((void)true)
 #define TrapMacro(condition, errorType) (true)
 
+/* POLAR px */
+#define AssertImply(condition1, condition2)	((void)true)
+/* POLAR end */
+
 #define PolarReleaseAssert(condition)										\
 	do {																	\
 		if (polar_release_assert_level != POLAR_RELEASE_ASSERT_L_NONE &&	\
@@ -1001,6 +1013,11 @@ extern int	polar_release_assert_level;
 #define AssertPointerAlignment(ptr, bndr) \
 	Trap(TYPEALIGN(bndr, (uintptr_t)(ptr)) != (uintptr_t)(ptr), \
 		 "UnalignedPointer")
+
+/* POLAR px */
+#define AssertImply(cond1, cond2) \
+	Trap(!(!(cond1) || (cond2)), "AssertImply failed")
+/* POLAR end */
 
 #define PolarReleaseAssert(condition) Assert(condition)
 #define PolarReleaseAssertMacro(condition) AssertMacro(condition)

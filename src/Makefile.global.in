@@ -19,7 +19,7 @@
 #
 # Meta configuration
 
-standard_targets = all install installdirs uninstall distprep clean distclean maintainer-clean coverage check checkprep installcheck init-po update-po
+standard_targets = all install installdirs uninstall distprep clean distclean maintainer-clean coverage check checkprep installcheck init-po update-po polar-px-check
 # these targets should recurse even into subdirectories not being built:
 standard_always_targets = distprep clean distclean maintainer-clean
 
@@ -202,6 +202,8 @@ with_submodule	= @with_submodule@
 enable_rpath	= @enable_rpath@
 enable_nls	= @enable_nls@
 enable_debug	= @enable_debug@
+enable_polar_px    = @enable_polar_px@
+enable_gpos_debug  = @enable_gpos_debug@
 enable_dtrace	= @enable_dtrace@
 enable_coverage	= @enable_coverage@
 enable_tap_tests	= @enable_tap_tests@
@@ -497,6 +499,41 @@ prove_installcheck = @echo "TAP tests not enabled. Try configuring with --enable
 prove_check = $(prove_installcheck)
 endif
 
+temp_install_bindir = "$(abs_top_builddir)/tmp_install$(bindir)"
+temp_sock_dir := $(shell mktemp -u -t pg_regress-XXXXXX)
+
+polar-px-check: temp-install
+
+define extra_temp_cluster_gucs
+log_autovacuum_min_duration = 0, \
+log_checkpoints = on, \
+log_lock_waits = on, \
+log_temp_files = 128kB, \
+log_line_prefix = '%m %b[%p] %q%a ', \
+unix_socket_directories='$(temp_sock_dir)', \
+polar_px_enable_auth_on_qe = false
+endef
+
+.PHONY: run-temp-cluster
+run-temp-cluster: temp-install
+	$(MKDIR_P) '$(CURDIR)'/tmp_cluster
+	$(MKDIR_P) $(temp_sock_dir)
+	$(with_temp_install) BASE_DIR="$(abs_top_builddir)/tmp_install$(prefix)" '$(abs_top_builddir)'/build.sh \
+		--prefix='$(CURDIR)'/tmp_cluster \
+		--port=$(if $(PGPORT),$(PGPORT),'5$(DEF_PGPORT)') \
+		--eg="$(extra_temp_cluster_gucs)" \
+		--ldp="$(CURDIR)/cluster_log" \
+		--wr=2 --nc
+
+.PHONY: cleanup-temp-cluster
+cleanup-temp-cluster: | submake-generated-headers
+	rm -rf $(top_srcdir)/src/Makefile.precheck # to prevent caching of PGPORT values
+	$(with_temp_install) BASE_DIR="$(abs_top_builddir)/tmp_install$(prefix)" '$(abs_top_builddir)'/build.sh \
+		--prefix='$(CURDIR)'/tmp_cluster \
+		--stop
+	rm -rf '$(CURDIR)'/tmp_cluster
+	rm -rf $(temp_sock_dir)
+
 # Installation.
 
 install_bin = @install_bin@
@@ -713,7 +750,7 @@ TEMP_CONF += --temp-config=$(TEMP_CONFIG)
 endif
 
 pg_regress_locale_flags = $(if $(ENCODING),--encoding=$(ENCODING)) $(NOLOCALE)
-pg_regress_clean_files = results/ regression.diffs regression.out tmp_check/ tmp_check_iso/ log/ output_iso/
+pg_regress_clean_files = results/ regression.diffs regression.out tmp_check/ tmp_check_iso/ log/ output_iso/ tmp_cluster/
 
 pg_regress_check = \
     echo "+++ regress check in $(subdir) +++" && \
@@ -952,7 +989,7 @@ endif
 define _create_recursive_target
 .PHONY: $(1)-$(2)-recurse
 $(1): $(1)-$(2)-recurse
-$(1)-$(2)-recurse: $(if $(filter all install check installcheck, $(3)), submake-generated-headers) $(if $(filter check, $(3)), temp-install)
+$(1)-$(2)-recurse: $(if $(filter all install check installcheck, $(3)), submake-generated-headers) $(if $(filter check polar-px-check, $(3)), temp-install)
 	$$(MAKE) -C $(2) $(3)
 endef
 # Note that the use of $$ on the last line above is important; we want

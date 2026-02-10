@@ -966,8 +966,25 @@ pqSendSome(PGconn *conn, int len)
 
 	/* shift the remaining contents of the buffer */
 	if (remaining > 0)
-		memmove(conn->outBuffer, ptr, remaining);
+	{
+		/* POLAR px */
+		if (conn->outBuffer_shared)
+			conn->outBuffer = ptr;
+		else
+			/* POLAR end */
+			memmove(conn->outBuffer, ptr, remaining);
+	}
+
 	conn->outCount = remaining;
+
+	/* POLAR px */
+	/* Once we finish with the external buffer, switch back to the original */
+	if (remaining == 0 && conn->outBuffer_shared)
+	{
+		conn->outBuffer_shared = false;
+		conn->outBuffer = conn->outBufferSaved;
+	}
+	/* POLAR end */
 
 	return result;
 }
@@ -1316,3 +1333,28 @@ libpq_ngettext(const char *msgid, const char *msgid_plural, unsigned long n)
 }
 
 #endif							/* ENABLE_NLS */
+
+/* POLAR px */
+/*
+ * pqFlushNonBlocking:
+ *
+ * wrapper for pqFlush, used by the dispatcher.
+ * conn will be temporarily set to non-blocking mode,
+ * so that if not all data could be sent on 1st attempt,
+ * pqFlushNonBlocking will return 1 instead of waiting/retrying.
+ *
+ * Return 0 on success, -1 on failure and 1 when not all data could be sent
+ */
+int
+pqFlushNonBlocking(PGconn *conn)
+{
+	int			ret;
+	bool		old = conn->nonblocking;
+
+	conn->nonblocking = true;
+	ret = pqFlush(conn);
+	conn->nonblocking = old;
+	return ret;
+}
+
+/* POLAR end */

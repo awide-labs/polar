@@ -163,6 +163,11 @@ MultiExecPrivateHash(HashState *node)
 	 */
 	for (;;)
 	{
+		/* POLAR px */
+		bool		hashkeys_null = false;
+
+		/* POLAR end */
+
 		slot = ExecProcNode(outerNode);
 		if (TupIsNull(slot))
 			break;
@@ -170,7 +175,8 @@ MultiExecPrivateHash(HashState *node)
 		econtext->ecxt_outertuple = slot;
 		if (ExecHashGetHashValue(hashtable, econtext, hashkeys,
 								 false, hashtable->keepNulls,
-								 &hashvalue))
+								 &hashvalue,
+								 &hashkeys_null /* POLAR px */ ))
 		{
 			int			bucketNumber;
 
@@ -189,6 +195,18 @@ MultiExecPrivateHash(HashState *node)
 			}
 			hashtable->totalTuples += 1;
 		}
+
+		/* POLAR px */
+		if (hashkeys_null)
+		{
+			node->hs_hashkeys_null = true;
+			if (node->hs_quit_if_hashkeys_null)
+			{
+				ExecSquelchNode(outerNode);
+				return;
+			}
+		}
+		/* POLAR end */
 	}
 
 	/* resize the hash table if needed (NTUP_PER_BUCKET exceeded) */
@@ -286,7 +304,8 @@ MultiExecParallelHash(HashState *node)
 				econtext->ecxt_outertuple = slot;
 				if (ExecHashGetHashValue(hashtable, econtext, hashkeys,
 										 false, hashtable->keepNulls,
-										 &hashvalue))
+										 &hashvalue,
+										 NULL /* POLAR px */ ))
 					ExecParallelHashTableInsert(hashtable, slot, hashvalue);
 				hashtable->partialTuples++;
 			}
@@ -1839,13 +1858,19 @@ ExecHashGetHashValue(HashJoinTable hashtable,
 					 List *hashkeys,
 					 bool outer_tuple,
 					 bool keep_nulls,
-					 uint32 *hashvalue)
+					 uint32 *hashvalue,
+					 bool *hashkeys_null /* POLAR px */ )
 {
 	uint32		hashkey = 0;
 	FmgrInfo   *hashfunctions;
 	ListCell   *hk;
 	int			i = 0;
 	MemoryContext oldContext;
+
+	/* POLAR px */
+	if (hashkeys_null)
+		(*hashkeys_null) = true;
+	/* POLAR end */
 
 	/*
 	 * We reset the eval context each time to reclaim any memory leaked in the
@@ -1903,6 +1928,11 @@ ExecHashGetHashValue(HashJoinTable hashtable,
 
 			hkey = DatumGetUInt32(FunctionCall1Coll(&hashfunctions[i], hashtable->collations[i], keyval));
 			hashkey ^= hkey;
+
+			/* POLAR px */
+			if (hashkeys_null)
+				*hashkeys_null = false;
+			/* POLAR end */
 		}
 
 		i++;

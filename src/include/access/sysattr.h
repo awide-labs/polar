@@ -24,6 +24,12 @@
 #define MaxTransactionIdAttributeNumber			(-4)
 #define MaxCommandIdAttributeNumber				(-5)
 #define TableOidAttributeNumber					(-6)
-#define FirstLowInvalidHeapAttributeNumber		(-7)
+
+/* POLAR px */
+#define PxWorkerIdAttributeNumber			    (-7)
+#define RootSelfItemPointerAttributeNumber      (-8)
+/* POLAR end */
+
+#define FirstLowInvalidHeapAttributeNumber		(-9)
 
 #endif							/* SYSATTR_H */

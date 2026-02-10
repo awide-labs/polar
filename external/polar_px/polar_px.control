@@ -1,0 +1,5 @@
+# polar_px extension
+comment = 'Parallel Execution extension'
+default_version = '1.0'
+module_pathname = '$libdir/polar_px'
+schema = 'public'

@@ -1,0 +1,18 @@
+function (list_filter_by_patterns SOURCE_LIST FILTER_PATTERNS OUT_LIST)
+    set(NEW_LIST "")
+
+    foreach(STR IN LISTS SOURCE_LIST)
+        unset(IGNORABLE)
+        foreach(PATTERN IN LISTS FILTER_PATTERNS)
+            if (${STR} MATCHES ${PATTERN})
+                set(IGNORABLE 1)
+                break()
+            endif()
+        endforeach()
+        if (NOT DEFINED IGNORABLE)
+            list(APPEND NEW_LIST ${STR})
+        endif()
+    endforeach()
+
+    set(${OUT_LIST} "${NEW_LIST}" PARENT_SCOPE)
+endfunction()

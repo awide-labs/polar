@@ -330,6 +330,17 @@ typedef void (*openssl_tls_init_hook_typ) (SSL_CTX *context, bool isServerStart)
 extern PGDLLIMPORT openssl_tls_init_hook_typ openssl_tls_init_hook;
 #endif
 
+/* POLAR px */
+extern void OSSL_init(void);
+extern void px_tls_auth_init(bool isServerStart);
+extern bool px_tls_auth_enabled_on_qc(void);
+extern bool px_tls_auth_ready_on_qc(void);
+extern const char *px_get_serial_tls_cert(void);
+extern void px_auth_qc_tls(Port *port);
+extern EVP_PKEY *px_get_tls_private_key(void);
+
+/* POLAR end */
+
 #endif							/* USE_SSL */
 
 #ifdef ENABLE_GSS

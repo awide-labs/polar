@@ -50,6 +50,16 @@
 #include "utils/guc.h"
 /* POLAR end */
 
+/* POLAR px */
+#include "px/px_gang.h"
+#include "px/px_snapshot.h"
+#include "px/px_vars.h"
+#include "utils/builtins.h"
+
+extern void px_check_qc_connection_alive(void);
+#define SPIN_SLEEP_MSEC		10	/* 10ms */
+/* POLAR end */
+
 static void polar_send_proxy_info(StringInfo buf);
 
 /* ----------------
@@ -486,3 +496,91 @@ polar_send_proxy_info(StringInfo buf)
 		polar_stat_update_xact_split_info();
 	polar_stat_need_update_proxy_info = false;
 }
+
+/* POLAR px */
+/*
+ * Send a px libpq message.
+ *
+ * This sends a message identical to that used when sending values of
+ * GUC_REPORT gucs to the client (see ReportGUCOption()). The motion
+ * listener port is sent as if there was a GUC called "px_listener_port".
+ */
+void
+sendPXDetails(void)
+{
+	StringInfoData msgbuf;
+	char		port_str[11];
+	Snapshot	xact_snap;
+	Snapshot	snap;
+	char	   *serialized_snap;
+	int			serialized_snap_size;
+	char	   *encoded_snap;
+	int			retry_count = 0;
+
+	/* POLAR */
+	XLogRecPtr	max_valid_lsn;
+
+	snprintf(port_str, sizeof(port_str), "%u", px_listener_port);
+
+	/*
+	 * POLAR: if px_enable_replay_wait is on, all the mpp queries in PXs
+	 * should wait for the wal replayed the QC query begin.
+	 */
+	if (XLogRecPtrIsInvalid(px_sql_wal_lsn) && polar_is_replica())
+		elog(ERROR, "polardb px enabled, but current sql wal lsn is invalid");
+
+	while (cached_px_enable_replay_wait && !polar_is_primary())
+	{
+		max_valid_lsn = GetXLogReplayRecPtr(NULL);
+		if (max_valid_lsn >= px_sql_wal_lsn)
+		{
+			elog((retry_count > 10000 ? LOG : DEBUG1), "before exec px query on node: px sessid %d, max valid lsn %lX, current sql wal lsn %lX, use time %dus",
+				 px_session_id, max_valid_lsn,
+				 px_sql_wal_lsn, retry_count * 100);
+			break;
+		}
+
+		pg_usleep(SPIN_SLEEP_MSEC * 10);
+		retry_count++;
+		px_check_qc_connection_alive();
+
+		CHECK_FOR_INTERRUPTS();
+
+		/* large then 1s, print trace log every 1s */
+		if (retry_count > 10000 && retry_count % 10000 == 1)
+			elog(LOG, "before exec px query on node: px sessid %d, max valid lsn %lX, current sql wal lsn %lX, try time %dus",
+				 px_session_id, max_valid_lsn, px_sql_wal_lsn, retry_count * 100);
+	}
+
+	xact_snap = GetTransactionSnapshot();
+	Assert(xact_snap);
+
+	snap = palloc(sizeof(SnapshotData));
+	memcpy(snap, xact_snap, sizeof(SnapshotData));
+	pxsn_set_snapshot(snap);
+	serialized_snap = pxsn_get_serialized_snapshot();
+	serialized_snap_size = pxsn_get_serialized_snapshot_size();
+
+	encoded_snap = (char *) palloc(serialized_snap_size * 2 + 1);
+	hex_encode(serialized_snap, serialized_snap_size, encoded_snap);
+	encoded_snap[serialized_snap_size * 2] = '\0';
+
+	if (px_info_debug)
+		elog(LOG, "px_snapshot_encode: %d sendPXDetails: encoded_snap: %s",
+			 PxIdentity.dbid, encoded_snap);
+
+	pq_beginmessage(&msgbuf, 'S');
+	pq_sendstring(&msgbuf, "px_listener_port");
+	pq_sendstring(&msgbuf, port_str);
+	pq_endmessage(&msgbuf);
+
+	pq_beginmessage(&msgbuf, 'S');
+	pq_sendstring(&msgbuf, "snapshot");
+	pq_sendstring(&msgbuf, encoded_snap);
+	pq_endmessage(&msgbuf);
+
+	pxsn_set_snapshot(InvalidSnapshot);
+	pfree(encoded_snap);
+}
+
+/* POLAR end */

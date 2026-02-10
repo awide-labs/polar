@@ -37,6 +37,14 @@
 #include "utils/datum.h"
 #include "utils/rel.h"
 
+/* POLAR px */
+#include "px/px_gang.h"
+
+/* write flag for plangen from PXOPT */
+static bool is_px_out_plangen = false;
+
+/* POLAR end */
+
 static void outChar(StringInfo str, char c);
 
 
@@ -54,6 +62,12 @@ static void outChar(StringInfo str, char c);
 /* Write an integer field (anything written as ":fldname %d") */
 #define WRITE_INT_FIELD(fldname) \
 	appendStringInfo(str, " :" CppAsString(fldname) " %d", node->fldname)
+
+/* POLAR px */
+/* Write an integer field */
+#define WRITE_INT16_FIELD(fldname) \
+	appendStringInfo(str, " :" CppAsString(fldname) " %hd", node->fldname)
+/* POLAR end */
 
 /* Write an unsigned integer field (anything written as ":fldname %u") */
 #define WRITE_UINT_FIELD(fldname) \
@@ -311,6 +325,23 @@ _outPlannedStmt(StringInfo str, const PlannedStmt *node)
 {
 	WRITE_NODE_TYPE("PLANNEDSTMT");
 
+	/* POLAR px */
+
+	/*
+	 * Write PLANGEN_PX at the beginning of _outPlannedStmt. So
+	 * is_px_read_plangen will be set to true at the beginning of
+	 * _readPlannedStmt. Other nodes will be read depend on
+	 * is_px_read_plangen.
+	 */
+	if (node->planGen == PLANGEN_PX)
+	{
+		is_px_out_plangen = true;
+		WRITE_ENUM_FIELD(planGen, PlanGenerator);
+	}
+	else
+		is_px_out_plangen = false;
+	/* POLAR end */
+
 	WRITE_ENUM_FIELD(commandType, CmdType);
 	WRITE_UINT64_FIELD(queryId);
 	WRITE_BOOL_FIELD(hasReturning);
@@ -333,6 +364,48 @@ _outPlannedStmt(StringInfo str, const PlannedStmt *node)
 	WRITE_NODE_FIELD(utilityStmt);
 	WRITE_LOCATION_FIELD(stmt_location);
 	WRITE_INT_FIELD(stmt_len);
+
+	/* POLAR px */
+	if (is_px_out_plangen)
+	{
+		int			i;
+
+		/*
+		 * write slices filed if there is any.
+		 */
+		WRITE_INT_FIELD(numSlices);
+
+		if (node->numSlices > 0)
+		{
+			appendStringInfoString(str, " :subplan_sliceIds");
+			for (i = 0; i < list_length(node->subplans); i++)
+				appendStringInfo(str, " %u", node->subplan_sliceIds[i]);
+		}
+
+		for (i = 0; i < node->numSlices; i++)
+		{
+			const PlanSlice *slice = &node->slices[i];
+
+			/* printed as a nested block */
+			appendStringInfo(str,
+							 " :slices[%d].sliceIndex %d"
+							 " :slices[%d].parentIndex %d"
+							 " :slices[%d].gangType %d"
+							 " :slices[%d].numsegments %d"
+							 " :slices[%d].worker_idx %d"
+							 " :slices[%d].directDispatch.isDirectDispatch %s",
+							 i, slice->sliceIndex,
+							 i, slice->parentIndex,
+							 i, slice->gangType,
+							 i, slice->numsegments,
+							 i, slice->worker_idx,
+							 i, booltostr(slice->directDispatch.isDirectDispatch));
+			appendStringInfo(str, " :slices[%d].directDispatch.contentIds ", i);
+			outNode(str, slice->directDispatch.contentIds);
+		}
+		WRITE_INT_FIELD(nParamExec);
+	}
+	/* POLAR end */
 }
 
 /*
@@ -356,6 +429,14 @@ _outPlanInfo(StringInfo str, const Plan *node)
 	WRITE_NODE_FIELD(initPlan);
 	WRITE_BITMAPSET_FIELD(extParam);
 	WRITE_BITMAPSET_FIELD(allParam);
+
+	/* POLAR px */
+	if (is_px_out_plangen)
+	{
+		WRITE_NODE_FIELD(flow);
+		WRITE_BOOL_FIELD(px_scan_partial);
+	}
+	/* POLAR end */
 }
 
 /*
@@ -380,6 +461,13 @@ _outJoinPlanInfo(StringInfo str, const Join *node)
 	WRITE_ENUM_FIELD(jointype, JoinType);
 	WRITE_BOOL_FIELD(inner_unique);
 	WRITE_NODE_FIELD(joinqual);
+
+	/* POLAR px */
+	if (is_px_out_plangen)
+	{
+		WRITE_BOOL_FIELD(prefetch_inner);
+	}
+	/* POLAR end */
 }
 
 
@@ -399,6 +487,21 @@ _outResult(StringInfo str, const Result *node)
 	_outPlanInfo(str, (const Plan *) node);
 
 	WRITE_NODE_FIELD(resconstantqual);
+
+	/* POLAR px */
+	if (is_px_out_plangen)
+	{
+		int			i;
+
+		WRITE_INT_FIELD(numHashFilterCols);
+		appendStringInfoString(str, " :hashFilterColIdx");
+		for (i = 0; i < node->numHashFilterCols; i++)
+			appendStringInfo(str, " %d", node->hashFilterColIdx[i]);
+		appendStringInfoString(str, " :hashFilterFuncs");
+		for (i = 0; i < node->numHashFilterCols; i++)
+			appendStringInfo(str, " %u", node->hashFilterFuncs[i]);
+	}
+	/* POLAR end */
 }
 
 static void
@@ -451,6 +554,10 @@ _outAppend(StringInfo str, const Append *node)
 	WRITE_INT_FIELD(nasyncplans);
 	WRITE_INT_FIELD(first_partial_plan);
 	WRITE_NODE_FIELD(part_prune_info);
+
+	/* POLAR px */
+	WRITE_NODE_FIELD(join_prune_paramids);
+	/* POLAR end */
 }
 
 static void
@@ -815,6 +922,13 @@ _outAgg(StringInfo str, const Agg *node)
 	WRITE_BITMAPSET_FIELD(aggParams);
 	WRITE_NODE_FIELD(groupingSets);
 	WRITE_NODE_FIELD(chain);
+
+	/* POLAR px */
+	if (is_px_out_plangen)
+	{
+		WRITE_BOOL_FIELD(streaming);
+	}
+	/* POLAR end */
 }
 
 static void
@@ -865,6 +979,11 @@ _outMaterial(StringInfo str, const Material *node)
 	WRITE_NODE_TYPE("MATERIAL");
 
 	_outPlanInfo(str, (const Plan *) node);
+
+	/* POLAR px */
+	WRITE_BOOL_FIELD(px_strict);
+	WRITE_BOOL_FIELD(px_shield_child_from_rescans);
+	/* POLAR end */
 }
 
 static void
@@ -902,6 +1021,13 @@ _outSort(StringInfo str, const Sort *node)
 	WRITE_NODE_TYPE("SORT");
 
 	_outSortInfo(str, node);
+
+	/* POLAR px */
+	if (is_px_out_plangen)
+	{
+		WRITE_BOOL_FIELD(noduplicates);
+	}
+	/* POLAR end */
 }
 
 static void
@@ -1267,6 +1393,10 @@ _outFuncExpr(StringInfo str, const FuncExpr *node)
 	WRITE_OID_FIELD(inputcollid);
 	WRITE_NODE_FIELD(args);
 	WRITE_LOCATION_FIELD(location);
+
+	/* POLAR px */
+	WRITE_BOOL_FIELD(isGlobalFunc);
+	/* POLAR end */
 }
 
 static void
@@ -2303,6 +2433,10 @@ _outPlannerGlobal(StringInfo str, const PlannerGlobal *node)
 	WRITE_BOOL_FIELD(parallelModeOK);
 	WRITE_BOOL_FIELD(parallelModeNeeded);
 	WRITE_CHAR_FIELD(maxParallelHazard);
+
+	/* POLAR px */
+	WRITE_INT_FIELD(nParamExec);
+	/* POLAR end */
 }
 
 static void
@@ -3880,6 +4014,213 @@ _outPartitionRangeDatum(StringInfo str, const PartitionRangeDatum *node)
 	WRITE_LOCATION_FIELD(location);
 }
 
+/* POLAR px */
+static void
+_outMotion(StringInfo str, const Motion *node)
+{
+	int			i;
+
+	WRITE_NODE_TYPE("MOTION");
+
+	WRITE_INT_FIELD(motionID);
+	WRITE_ENUM_FIELD(motionType, MotionType);
+	WRITE_BOOL_FIELD(sendSorted);
+
+	WRITE_NODE_FIELD(hashExprs);
+
+	appendStringInfoString(str, " :hashFuncs");
+	for (i = 0; i < list_length(node->hashExprs); i++)
+		appendStringInfo(str, " %u", node->hashFuncs[i]);
+
+	WRITE_INT_FIELD(numSortCols);
+
+	appendStringInfoString(str, " :sortColIdx");
+	for (i = 0; i < node->numSortCols; i++)
+		appendStringInfo(str, " %d", node->sortColIdx[i]);
+
+	appendStringInfoString(str, " :sortOperators");
+	for (i = 0; i < node->numSortCols; i++)
+		appendStringInfo(str, " %u", node->sortOperators[i]);
+
+	appendStringInfoString(str, " :collations");
+	for (i = 0; i < node->numSortCols; i++)
+		appendStringInfo(str, " %u", node->collations[i]);
+
+	appendStringInfoString(str, " :nullsFirst");
+	for (i = 0; i < node->numSortCols; i++)
+		appendStringInfo(str, " %s", booltostr(node->nullsFirst[i]));
+
+	WRITE_INT_FIELD(segidColIdx);
+
+	_outPlanInfo(str, (Plan *) node);
+}
+
+static void
+_outShareInputScan(StringInfo str, const ShareInputScan *node)
+{
+	WRITE_NODE_TYPE("SHAREINPUTSCAN");
+
+	WRITE_BOOL_FIELD(cross_slice);
+	WRITE_INT_FIELD(share_id);
+	WRITE_INT_FIELD(producer_slice_id);
+	WRITE_INT_FIELD(this_slice_id);
+	WRITE_INT_FIELD(nconsumers);
+
+	_outScanInfo(str, (const Scan *) node);
+}
+
+/*
+ * _outSplitUpdate
+ */
+static void
+_outSplitUpdate(StringInfo str, const SplitUpdate *node)
+{
+	WRITE_NODE_TYPE("SPLITUPDATE");
+
+	WRITE_INT_FIELD(actionColIdx);
+	WRITE_INT_FIELD(tupleoidColIdx);
+	WRITE_NODE_FIELD(insertColIdx);
+	WRITE_NODE_FIELD(deleteColIdx);
+
+	_outPlanInfo(str, (Plan *) node);
+}
+
+/*
+ * _outPartitionSelector
+ */
+static void
+_outPartitionSelector(StringInfo str, const PartitionSelector *node)
+{
+	WRITE_NODE_TYPE("PARTITIONSELECTOR");
+
+	WRITE_INT_FIELD(paramid);
+	WRITE_NODE_FIELD(part_prune_info);
+
+	_outPlanInfo(str, (Plan *) node);
+}
+
+/*
+ * _outSequence
+ */
+static void
+_outSequence(StringInfo str, const Sequence *node)
+{
+	WRITE_NODE_TYPE("SEQUENCE");
+	_outPlanInfo(str, (const Plan *) node);
+	WRITE_NODE_FIELD(subplans);
+}
+
+/*
+ * _outAssertOp
+ */
+static void
+_outAssertOp(StringInfo str, const AssertOp *node)
+{
+	WRITE_NODE_TYPE("ASSERTOP");
+
+	WRITE_NODE_FIELD(errmessage);
+	WRITE_INT_FIELD(errcode);
+
+	_outPlanInfo(str, (Plan *) node);
+}
+
+/*
+ * _outDMLActionExpr
+ */
+static void
+_outDMLActionExpr(StringInfo str, const DMLActionExpr *node)
+{
+	WRITE_NODE_TYPE("DMLACTIONEXPR");
+}
+
+/*
+ * _outFlow
+ */
+static void
+_outFlow(StringInfo str, const Flow *node)
+{
+	WRITE_NODE_TYPE("FLOW");
+
+	WRITE_ENUM_FIELD(flotype, FlowType);
+	WRITE_INT_FIELD(worker_idx);
+	WRITE_INT_FIELD(numsegments);
+}
+
+static void
+_outSliceTable(StringInfo str, const SliceTable *node)
+{
+	int			i;
+
+	WRITE_NODE_TYPE("SLICETABLE");
+
+	WRITE_INT_FIELD(localSlice);
+	WRITE_INT_FIELD(numSlices);
+	for (i = 0; i < node->numSlices; i++)
+	{
+		WRITE_INT_FIELD(slices[i].sliceIndex);
+		WRITE_INT_FIELD(slices[i].rootIndex);
+		WRITE_INT_FIELD(slices[i].parentIndex);
+		WRITE_INT_FIELD(slices[i].planNumSegments);
+		WRITE_NODE_FIELD(slices[i].children);	/* List of int index */
+		WRITE_ENUM_FIELD(slices[i].gangType, GangType);
+		WRITE_NODE_FIELD(slices[i].segments);	/* List of int */
+		WRITE_NODE_FIELD(slices[i].primaryProcesses);	/* List of (PXProcess *) */
+		WRITE_BITMAPSET_FIELD(slices[i].processesMap);
+	}
+	WRITE_BOOL_FIELD(hasMotions);
+	WRITE_INT_FIELD(instrument_options);
+	WRITE_INT_FIELD(ic_instance_id);
+}
+
+static void
+_outSerializedParamExternData(StringInfo str, const SerializedParamExternData *node)
+{
+	WRITE_NODE_TYPE("SERIALIZEDPARAMEXTERNDATA");
+
+	WRITE_BOOL_FIELD(isnull);
+	WRITE_INT16_FIELD(pflags);
+	WRITE_OID_FIELD(ptype);
+	WRITE_INT16_FIELD(plen);
+	WRITE_BOOL_FIELD(pbyval);
+
+	appendStringInfoString(str, " :paramvalue ");
+	if (node->isnull)
+		appendStringInfoString(str, "<>");
+	else
+		outDatum(str, node->value, node->plen, node->pbyval);
+}
+
+static void
+_outQueryDispatchDesc(StringInfo str, const QueryDispatchDesc *node)
+{
+	WRITE_NODE_TYPE("QUERYDISPATCHDESC");
+
+	WRITE_STRING_FIELD(intoTableSpaceName);
+	WRITE_NODE_FIELD(oidAssignments);
+	WRITE_NODE_FIELD(sliceTable);
+	WRITE_NODE_FIELD(cursorPositions);
+	WRITE_BOOL_FIELD(useChangedAOOpts);
+}
+
+static void
+_outPxProcess(StringInfo str, const PxProcess *node)
+{
+	WRITE_NODE_TYPE("PXPROCESS");
+	WRITE_STRING_FIELD(listenerAddr);
+	WRITE_INT_FIELD(listenerPort);
+	WRITE_INT_FIELD(pid);
+	WRITE_INT_FIELD(contentid);
+
+	/* POLAR px */
+	WRITE_INT_FIELD(contentCount);
+	WRITE_INT_FIELD(identifier);
+	WRITE_INT_FIELD(remotePort);
+	/* POLAR end */
+
+}
+
+/* POLAR end */
+
 /*
  * outNode -
  *	  converts a Node into ascii string and append it to 'str'
@@ -4589,6 +4930,45 @@ outNode(StringInfo str, const void *obj)
 				_outPartitionRangeDatum(str, obj);
 				break;
 
+				/* POLAR px */
+			case T_ShareInputScan:
+				_outShareInputScan(str, obj);
+				break;
+			case T_Sequence:
+				_outSequence(str, obj);
+				break;
+			case T_Motion:
+				_outMotion(str, obj);
+				break;
+			case T_PartitionSelector:
+				_outPartitionSelector(str, obj);
+				break;
+			case T_SplitUpdate:
+				_outSplitUpdate(str, obj);
+				break;
+			case T_AssertOp:
+				_outAssertOp(str, obj);
+				break;
+			case T_DMLActionExpr:
+				_outDMLActionExpr(str, obj);
+				break;
+			case T_Flow:
+				_outFlow(str, obj);
+				break;
+			case T_SliceTable:
+				_outSliceTable(str, obj);
+				break;
+			case T_SerializedParamExternData:
+				_outSerializedParamExternData(str, obj);
+				break;
+			case T_QueryDispatchDesc:
+				_outQueryDispatchDesc(str, obj);
+				break;
+			case T_PxProcess:
+				_outPxProcess(str, obj);
+				break;
+				/* POLAR end */
+
 			default:
 
 				/*
@@ -4632,3 +5012,26 @@ bmsToString(const Bitmapset *bms)
 	outBitmapset(&str, bms);
 	return str.data;
 }
+
+/* POLAR px */
+/*
+ * we don't use the fast binary function from GPDB, we use
+ * outNode with string function.
+ * nodeToBinaryStringFast -
+ *	   returns a binary representation of the Node as a palloc'd string
+ */
+char *
+nodeToBinaryStringFast(void *obj, int *length)
+{
+	StringInfoData str;
+
+	/* see stringinfo.h for an explanation of this maneuver */
+	initStringInfoOfSize(&str, 4096);
+
+	outNode(&str, obj);
+
+	*length = str.len;
+	return str.data;
+}
+
+/* POLAR end */

@@ -13,7 +13,14 @@
  *-------------------------------------------------------------------------
  */
 
-#include "postgres_fe.h"
+/*
+ * This file is compiled with both frontend and backend codes, symlinked by
+ * src/backend/Makefile, and use macro FRONTEND to switch.
+ *
+ * Include "c.h" to adopt pg C types. Don't include "postgres_fe.h",
+ * which only defines FRONTEND besides including "c.h"
+ */
+#include "c.h"
 
 #include <sys/stat.h>
 #include <fcntl.h>
@@ -344,6 +351,17 @@ static const internalPQconninfoOption PQconninfoOptions[] = {
 		DefaultTargetSessionAttrs, NULL,
 		"Target-Session-Attrs", "", 15, /* sizeof("prefer-standby") = 15 */
 	offsetof(struct pg_conn, target_session_attrs)},
+
+	/* POLAR px */
+	/* PX wants some info from QC before GUCs are processed */
+	{"pxid", NULL, "", NULL,
+		"px-debug-pxid", "D", 40,
+	offsetof(struct pg_conn, pxid)},
+
+	{"px_auth_cert", NULL, "", NULL,
+		"px-debug-px_auth_cert", "D", 40,
+	offsetof(struct pg_conn, px_auth_cert)},
+	/* POLAR end */
 
 	/* Terminating entry --- MUST BE LAST */
 	{NULL, NULL, NULL, NULL,
@@ -2089,6 +2107,8 @@ connectDBStart(PGconn *conn)
 	if (!conn->options_valid)
 		goto connect_errReturn;
 
+#ifdef FRONTEND
+
 	/*
 	 * Check for bad linking to backend-internal versions of src/common
 	 * functions (see comments in link-canary.c for the reason we need this).
@@ -2101,6 +2121,7 @@ connectDBStart(PGconn *conn)
 							 "libpq is incorrectly linked to backend functions\n");
 		goto connect_errReturn;
 	}
+#endif
 
 	/* Ensure our buffers are empty */
 	conn->inStart = conn->inCursor = conn->inEnd = 0;
@@ -4189,12 +4210,22 @@ freePGconn(PGconn *conn)
 		free(conn->write_err_msg);
 	if (conn->inBuffer)
 		free(conn->inBuffer);
-	if (conn->outBuffer)
+	/* POLAR px */
+	if (conn->outBuffer_shared)
+		free(conn->outBufferSaved);
+	/* POLAR end */
+	else if (conn->outBuffer)
 		free(conn->outBuffer);
 	if (conn->rowBuf)
 		free(conn->rowBuf);
 	if (conn->target_session_attrs)
 		free(conn->target_session_attrs);
+	/* POLAR px */
+	if (conn->pxid)
+		free(conn->pxid);
+	if (conn->px_auth_cert)
+		free(conn->px_auth_cert);
+	/* POLAR end */
 	termPQExpBuffer(&conn->errorMessage);
 	termPQExpBuffer(&conn->workBuffer);
 

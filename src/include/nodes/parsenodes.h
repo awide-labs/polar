@@ -104,6 +104,15 @@ typedef uint32 AclMode;			/* a bitmask of privilege bits */
  *	Query Tree
  *****************************************************************************/
 
+/* POLAR px */
+typedef uint8 ParentStmtType;
+
+#define PARENTSTMTTYPE_NONE	0
+#define PARENTSTMTTYPE_CTAS	1
+#define PARENTSTMTTYPE_COPY	2
+#define PARENTSTMTTYPE_REFRESH_MATVIEW	3
+/* POLAR end */
+
 /*
  * Query -
  *	  Parse analysis turns all statements into a Query tree
@@ -197,6 +206,13 @@ typedef struct Query
 	 */
 	int			stmt_location;	/* start location, or -1 if unknown */
 	int			stmt_len;		/* length in bytes; 0 means "rest of string" */
+
+	/*
+	 * POLAR px Used to indicate this query is part of CTAS or COPY so that
+	 * its plan would always be dispatched in parallel.
+	 */
+	ParentStmtType parentStmtType;
+	/* POLAR end */
 } Query;
 
 
@@ -997,9 +1013,14 @@ typedef enum RTEKind
 	RTE_VALUES,					/* VALUES (<exprlist>), (<exprlist>), ... */
 	RTE_CTE,					/* common table expr (WITH list element) */
 	RTE_NAMEDTUPLESTORE,		/* tuplestore, e.g. for AFTER triggers */
-	RTE_RESULT					/* RTE represents an empty FROM clause; such
+	RTE_RESULT,					/* RTE represents an empty FROM clause; such
 								 * RTEs are added by the planner, they're not
 								 * present during parsing or rewriting */
+
+	/* POLAR px */
+	RTE_VOID,					/* PX: deleted RTE */
+	RTE_TABLEFUNCTION,			/* PX: Functions over multiset input */
+	/* POLAR end */
 } RTEKind;
 
 typedef struct RangeTblEntry
@@ -1169,6 +1190,13 @@ typedef struct RangeTblEntry
 	Bitmapset  *updatedCols;	/* columns needing UPDATE permission */
 	Bitmapset  *extraUpdatedCols;	/* generated columns being updated */
 	List	   *securityQuals;	/* security barrier quals to apply, if any */
+
+	/* POLAR px */
+	List	   *values_collations;	/* OID list of column collation OIDs */
+	List	   *ctecoltypes;	/* OID list of column type OIDs */
+	List	   *ctecoltypmods;	/* integer list of column typmods */
+	List	   *ctecolcollations;	/* OID list of column collation OIDs */
+	/* POLAR end */
 } RangeTblEntry;
 
 /*

@@ -59,6 +59,12 @@ MemoryContext MessageContext = NULL;
 MemoryContext TopTransactionContext = NULL;
 MemoryContext CurTransactionContext = NULL;
 
+/* POLAR px */
+MemoryContext px_DispatcherContext = NULL;
+MemoryContext px_InterconnectContext = NULL;
+MemoryContext px_OptimizerMemoryContext = NULL;
+/* POLAR end */
+
 /* This is a transient link to the active portal's memory context: */
 MemoryContext PortalContext = NULL;
 
@@ -1669,3 +1675,27 @@ polar_malloc_usable_size(MemoryContext context, void *pointer)
 			 context->ident ? context->ident : "null");
 	}
 }
+
+/* POLAR px */
+void
+MemoryContextDeclareAccountingRoot(MemoryContext context)
+{
+	AssertArg(MemoryContextIsValid(context));
+
+	return (*context->methods->declare_accounting_root) (context);
+}
+
+/*
+ * MemoryContextGetPeakSpace
+ *		Return the peak number of bytes occupied by the memory context.
+ *
+ * This is the maximum value reached by MemoryContextGetCurrentSpace() since
+ * the context was created, or since reset by MemoryContextSetPeakSpace().
+ */
+Size
+MemoryContextGetPeakSpace(MemoryContext context)
+{
+	AssertArg(MemoryContextIsValid(context));
+	return (*context->methods->get_peak_usage) (context);
+}
+/* POLAR end */

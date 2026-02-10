@@ -4715,3 +4715,25 @@ ExecReScanModifyTable(ModifyTableState *node)
 	 */
 	elog(ERROR, "ExecReScanModifyTable is not implemented");
 }
+
+/* POLAR px */
+void
+ExecSquelchModifyTable(ModifyTableState *node)
+{
+	/*
+	 * ModifyTable nodes must run to completion when asked to Squelch so that
+	 * we don't risk losing modifications which should be performed regardless
+	 * of any LIMIT's or other forms for projections which could end up
+	 * causing a squelch to happen.
+	 */
+	for (;;)
+	{
+		TupleTableSlot *result;
+
+		result = ExecModifyTable(&node->ps);
+		if (!result)
+			break;
+	}
+}
+
+/* POLAR end */

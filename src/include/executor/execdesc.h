@@ -18,6 +18,10 @@
 #include "nodes/execnodes.h"
 #include "tcop/dest.h"
 
+/* POLAR px */
+#include "executor/execdesc_px.h"
+/* POLAR end */
+
 
 /* ----------------
  *		query descriptor:
@@ -53,6 +57,17 @@ typedef struct QueryDesc
 
 	/* This is always set NULL by the core system, but plugins can change it */
 	struct Instrumentation *totaltime;	/* total time spent in ExecutorRun */
+
+	/* POLAR px */
+	bool		extended_query; /* simple or extended query protocol? */
+	char	   *portal_name;	/* NULL for unnamed portal */
+	QueryDispatchDesc *ddesc;
+	struct PxExplain_ShowStatCtx *showstatctx;
+
+	/* This value is set by ExecutorEnd */
+	uint64		es_processed;	/* # of tuples processed for ProcessQuery(DML) */
+	/* POLAR end */
+
 } QueryDesc;
 
 /* in pquery.c */

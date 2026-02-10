@@ -229,7 +229,37 @@ static const FormData_pg_attribute a6 = {
 	.attislocal = true,
 };
 
-static const FormData_pg_attribute *SysAtt[] = {&a1, &a2, &a3, &a4, &a5, &a6};
+/* POLAR px */
+static FormData_pg_attribute a7 = {
+	.attname = {"_px_worker_id"},
+	.atttypid = INT4OID,
+	.attlen = sizeof(PxWorkerId),
+	.attnum = PxWorkerIdAttributeNumber,
+	.attcacheoff = -1,
+	.atttypmod = -1,
+	.attbyval = true,
+	.attalign = TYPALIGN_INT,
+	.attstorage = TYPSTORAGE_PLAIN,
+	.attnotnull = true,
+	.attislocal = true,
+};
+
+static FormData_pg_attribute a8 = {
+	.attname = {"_root_ctid"},
+	.atttypid = TIDOID,
+	.attlen = sizeof(ItemPointerData),
+	.attnum = RootSelfItemPointerAttributeNumber,
+	.attcacheoff = -1,
+	.atttypmod = -1,
+	.attalign = TYPALIGN_SHORT,
+	.attstorage = TYPSTORAGE_PLAIN,
+	.attnotnull = true,
+	.attislocal = true,
+};
+
+/* POLAR end */
+
+static const FormData_pg_attribute *SysAtt[] = {&a1, &a2, &a3, &a4, &a5, &a6, &a7, &a8};
 
 /*
  * This function returns a Form_pg_attribute pointer for a system attribute.
@@ -869,7 +899,8 @@ AddNewAttributeTuples(Oid new_rel_oid,
 	{
 		TupleDesc	td;
 
-		td = CreateTupleDesc(lengthof(SysAtt), (FormData_pg_attribute **) &SysAtt);
+		/* Exclude hidden _worker_id and _root_ctid system attributes */
+		td = CreateTupleDesc(lengthof(SysAtt) - 2, (FormData_pg_attribute **) &SysAtt);
 
 		InsertPgAttributeTuples(rel, td, new_rel_oid, NULL, indstate);
 		FreeTupleDesc(td);

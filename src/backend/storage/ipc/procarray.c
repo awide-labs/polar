@@ -1340,6 +1340,7 @@ ProcArrayApplyRecoveryInfo(RunningTransactions running)
 			 */
 			KnownAssignedXidsReset();
 			standbyState = STANDBY_INITIALIZED;
+			polar_set_hot_standby_state(STANDBY_INITIALIZED);
 		}
 		else
 		{
@@ -1347,6 +1348,7 @@ ProcArrayApplyRecoveryInfo(RunningTransactions running)
 									  running->oldestRunningXid))
 			{
 				standbyState = STANDBY_SNAPSHOT_READY;
+				polar_set_hot_standby_state(STANDBY_SNAPSHOT_READY);
 				elog(trace_recovery(DEBUG1),
 					 "recovery snapshots are now enabled");
 			}
@@ -1494,6 +1496,7 @@ ProcArrayApplyRecoveryInfo(RunningTransactions running)
 	if (running->subxid_status == SUBXIDS_MISSING)
 	{
 		standbyState = STANDBY_SNAPSHOT_PENDING;
+		polar_set_hot_standby_state(STANDBY_SNAPSHOT_PENDING);
 
 		standbySnapshotPendingXmin = latestObservedXid;
 		procArray->lastOverflowedXid = latestObservedXid;
@@ -1501,6 +1504,7 @@ ProcArrayApplyRecoveryInfo(RunningTransactions running)
 	else
 	{
 		standbyState = STANDBY_SNAPSHOT_READY;
+		polar_set_hot_standby_state(STANDBY_SNAPSHOT_READY);
 
 		standbySnapshotPendingXmin = InvalidTransactionId;
 

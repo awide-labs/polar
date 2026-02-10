@@ -1,0 +1,21 @@
+set client_min_messages = warning;
+create extension if not exists test_px;
+CHECKPOINT;
+-- See README for explanation of arguments:
+BEGIN;
+SET TRANSACTION ISOLATION LEVEL SERIALIZABLE, READ ONLY, DEFERRABLE;
+SELECT test_px();
+WARNING:  test_plan_tree_mutator start
+WARNING:  Inject error test_scan
+WARNING:  Inject error test_join
+WARNING:  test_px_policy
+WARNING:  test_px_hash
+WARNING:  pxhashreduce result 0
+WARNING:  pxhashreduce result 0
+WARNING:  test_px_mutate
+ test_px 
+---------
+ 
+(1 row)
+
+ABORT;

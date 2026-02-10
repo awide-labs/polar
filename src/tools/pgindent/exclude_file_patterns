@@ -71,3 +71,7 @@ src/include/utils/faultinjector_lists.h
 # which pgindent cannot parse.
 src/include/protothread/
 src/backend/postmaster/polar_dispatcher\.c$
+
+# ORCA cpp module
+src/backend/px_optimizer/
+src/include/px_optimizer_util/

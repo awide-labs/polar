@@ -945,3 +945,19 @@ LANGUAGE C PARALLEL SAFE;
 
 CREATE VIEW polar_stat_node_metrics AS
 	SELECT * FROM polar_stat_node_metrics();
+
+-- POLAR: cluster info
+CREATE FUNCTION polar_cluster_info()
+RETURNS SETOF RECORD
+AS 'MODULE_PATHNAME', 'polar_cluster_info'
+LANGUAGE C PARALLEL SAFE;
+
+CREATE VIEW polar_cluster_info AS
+	SELECT P.* FROM polar_cluster_info() AS P
+		(name text, host text, port int4, release_date text, version text, slot_name text,
+		 type text, state text, cpu int, cpu_quota int, memory int, memory_quota int,
+		 iops int, iops_quota int, connection int, connection_quota int,
+		 px_connection int, px_connection_quota int);
+
+REVOKE ALL ON polar_cluster_info FROM PUBLIC;
+REVOKE ALL ON FUNCTION polar_cluster_info FROM PUBLIC;

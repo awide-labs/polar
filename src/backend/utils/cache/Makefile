@@ -30,5 +30,6 @@ OBJS = \
 
 OBJS += polar_local_cache.o
 OBJS += polar_session_inval.o
+OBJS += lsyscache_px.o
 
 include $(top_srcdir)/src/backend/common.mk

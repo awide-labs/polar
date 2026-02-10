@@ -431,6 +431,14 @@ for_each_cell_setup(const List *lst, const ListCell *initcell)
 	return r;
 }
 
+#define foreach_with_count(cell, lst, counter) \
+	for (ForEachState cell##__state = {(lst), 0}; \
+		 (cell##__state.l != NIL && \
+		  cell##__state.i < cell##__state.l->length) ? \
+		 (cell = &cell##__state.l->elements[cell##__state.i], (counter)=cell##__state.i, true) : \
+		 (cell = NULL, (counter)=cell##__state.i, false); \
+		 cell##__state.i++)
+
 /*
  * forboth -
  *	  a convenience macro for advancing through two linked lists

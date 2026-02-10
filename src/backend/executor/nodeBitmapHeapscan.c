@@ -52,6 +52,10 @@
 #include "utils/snapmgr.h"
 #include "utils/spccache.h"
 
+/* POLAR px */
+#include "px/px_vars.h"
+/* POLAR end */
+
 static TupleTableSlot *BitmapHeapNext(BitmapHeapScanState *node);
 static inline void BitmapDoneInitializingSharedState(ParallelBitmapHeapState *pstate);
 static inline void BitmapAdjustPrefetchIterator(BitmapHeapScanState *node,
@@ -225,6 +229,23 @@ BitmapHeapNext(BitmapHeapScanState *node)
 						  VM_ALL_VISIBLE(node->ss.ss_currentRelation,
 										 tbmres->blockno,
 										 &node->vmbuffer));
+
+			/* POLAR px */
+			/* do not scan another worker's page/tuples */
+			if (scan->px_scan != NULL)
+			{
+				BlockNumber unitno = PXSCAN_BlockNum2UnitNum(tbmres->blockno);
+
+				if ((unitno % scan->px_scan->pxs_total_workers) !=
+					scan->px_scan->pxs_worker_id)
+				{
+					node->tbmres = tbmres = NULL;
+					node->return_empty_tuples = 0;
+					BitmapAdjustPrefetchTarget(node);
+					continue;
+				}
+			}
+			/* POLAR end */
 
 			if (skip_fetch)
 			{
@@ -814,10 +835,20 @@ ExecInitBitmapHeapScan(BitmapHeapScan *node, EState *estate, int eflags)
 
 	scanstate->ss.ss_currentRelation = currentRelation;
 
-	scanstate->ss.ss_currentScanDesc = table_beginscan_bm(currentRelation,
-														  estate->es_snapshot,
-														  0,
-														  NULL);
+	/* POLAR px */
+	if (px_role == PX_ROLE_PX &&
+		px_is_executing &&
+		scanstate->ss.ps.plan->px_scan_partial)
+	{
+		scanstate->ss.ss_currentScanDesc =
+			table_beginscan_bm_px(currentRelation, estate->es_snapshot, 0, NULL);
+	}
+	/* POLAR end */
+	else
+	{
+		scanstate->ss.ss_currentScanDesc =
+			table_beginscan_bm(currentRelation, estate->es_snapshot, 0, NULL);
+	}
 
 	/*
 	 * all done.

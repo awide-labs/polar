@@ -94,6 +94,16 @@
 #include "postmaster/syslogger.h"
 #include "storage/polar_session_context.h"
 
+/* POLAR px */
+#include "px/px_vars.h"
+#include "px/px_util.h"
+#include "utils/guc.h"
+#include "px/px_snapshot.h"
+#include "px/px_srlz.h"
+#include "px/px_gang.h"
+#include "px/px_disp_query.h"
+/* POLAR end */
+
 /* ----------------
  *		global variables
  * ----------------
@@ -211,6 +221,11 @@ static bool polar_init_checkinterrupts = false;
  */
 sql_mapping_hook_type sql_mapping_hook = NULL;
 
+/* POLAR px */
+/* use this flag to check interrupt when px initialize, like DoingCommandRead */
+static bool px_check_interrupt = false;
+/* POLAR end */
+
 /* ----------------------------------------------------------------
  *		decls for routines only used in this file
  * ----------------------------------------------------------------
@@ -248,6 +263,14 @@ extern int	polar_query_delay_us;
 
 /* POLAR: handle cancel query interrupt during client read/write */
 static void polar_process_client_readwrite_cancel_interrupt(void);
+
+/* POLAR px */
+static void exec_px_query(const char *query_string,
+			   const char * serializedQuerytree, int serializedQuerytreelen,
+			   const char * serializedPlantree, int serializedPlantreelen,
+			   const char * serializedParams, int serializedParamslen,
+			   const char * serializedQueryDispatchDesc, int serializedQueryDispatchDesclen);
+/* POLAR end */
 
 /* ----------------------------------------------------------------
  *		routines to obtain user input
@@ -430,6 +453,14 @@ SocketBackend(StringInfo inBuf)
 			maxmsglen = PQ_LARGE_MESSAGE_LIMIT;
 			doing_extended_query_message = false;
 			break;
+
+		/* POLAR px */
+		/* dispatched statement from QC */
+		case 'M':
+			maxmsglen = PQ_LARGE_MESSAGE_LIMIT;
+			doing_extended_query_message = false;
+			break;
+		/* POLAR end */
 
 		case 'F':				/* fastpath function call */
 			maxmsglen = PQ_LARGE_MESSAGE_LIMIT;
@@ -3213,6 +3244,12 @@ die(SIGNAL_ARGS)
 	if (DoingCommandRead && whereToSendOutput != DestRemote)
 		ProcessInterrupts();
 
+	/* POLAR px */
+	/* check interrupt for px initialize state */
+	else if (px_check_interrupt)
+		ProcessInterrupts();
+	/* POLAR end */
+
 	errno = save_errno;
 }
 
@@ -4489,6 +4526,10 @@ PostgresMain(const char *dbname, const char *username)
 	long		secs = 0;
 	int			microsecs = 0;
 
+	/* POLAR px */
+	unsigned int px_workers_num = 0;
+	/* POLAR end */
+
 	/*
 	 * POLAR: login history Indicate that the login process starts.
 	 */
@@ -4808,6 +4849,23 @@ PostgresMain(const char *dbname, const char *username)
 	if (!ignore_till_sync)
 		send_ready_for_query = true;	/* initially, or after error */
 
+	/* POLAR px */
+	/* Also send PX-backend startup info (motion listener, version). */
+	if (px_role == PX_ROLE_PX && !IS_PX_SETUP_DONE())
+	{
+		px_check_interrupt = true;
+		px_setup();
+		on_proc_exit(px_cleanup, 0);
+		/* after px_setup, a new socket is ready to use between QC and PX, so make pxWorkerCounter++ */
+		if (px_max_workers_number > 0 &&
+			(px_workers_num = pg_atomic_add_fetch_u32(&ProcGlobal->pxWorkerCounter, 1)) >= px_max_workers_number)
+				elog(ERROR, "over px max workers, already %u workers, max %d workers",
+							px_workers_num, px_max_workers_number);
+		sendPXDetails();
+		px_check_interrupt = false;
+	}
+	/* POLAR end */
+
 	/*
 	 * Non-error queries loop here.
 	 */
@@ -5039,6 +5097,11 @@ PostgresMain(const char *dbname, const char *username)
 				load_hba();
 				load_ident();
 			}
+
+			/* POLAR px */
+#ifdef USE_SSL
+			px_tls_auth_init(false);
+#endif
 			/* POLAR end */
 		}
 
@@ -5075,6 +5138,115 @@ PostgresMain(const char *dbname, const char *username)
 					send_ready_for_query = true;
 				}
 				break;
+
+			/* POLAR px */
+			/* dispatched statement from QC */
+			case 'M':
+				{
+					/*
+					 * This is exactly like 'Q' above except we peel off and
+					 * set the snapshot information right away.
+					 *
+					 * Since PortalDefineQuery() does not take NULL query string,
+					 * we initialize it with a constant empty string.
+					 */
+#define INT32_DECODE(value) \
+	value = pq_getmsgint(&input_message, 4);
+
+#define UINT64_DECODE(value) \
+	value = pq_getmsgint64(&input_message);
+
+#define STR_DECODE(len, str) \
+	len = pq_getmsgint(&input_message, 4);\
+	str = len > 0 ? pq_getmsgbytes(&input_message, len) : NULL;
+
+					const char *queryString = pstrdup("");
+					const char *serializedQuerytree = NULL;
+					const char *serializedPlantree = NULL;
+					const char *serializedParams = NULL;
+					const char *serializedQueryDispatchDesc = NULL;
+					const char *serializedSnapshot = NULL;
+
+					int recv_px_serialize_version;
+					TimestampTz statementStart;
+					int suid;
+					Oid ouid;
+					Oid cuid;
+					int queryStringlen = 0;
+					int serializedQuerytreelen = 0;
+					int serializedPlantreelen = 0;
+					int serializedParamslen = 0;
+					int serializedQueryDispatchDesclen = 0;
+					int serializedSnapshotlen = 0;
+
+					if (px_role != PX_ROLE_PX)
+						ereport(ERROR,
+								(errcode(ERRCODE_PROTOCOL_VIOLATION),
+								 errmsg("PX protocol messages are only supported in QC - PX connections")));
+
+					/* Set statement_timestamp() */
+ 					SetCurrentStatementStartTimestamp();
+
+					elog(DEBUG1, "Message type %c received by from libpq, len = %d", firstchar, input_message.len);
+
+					INT32_DECODE(recv_px_serialize_version);
+
+					if (recv_px_serialize_version != px_serialize_version)
+						elog(ERROR, "missmatch px_serialize_version, expected=%d, recv=%d", px_serialize_version, recv_px_serialize_version);
+
+					INT32_DECODE(suid);
+					INT32_DECODE(ouid);
+					INT32_DECODE(cuid);
+
+					UINT64_DECODE(statementStart);
+					UINT64_DECODE(sql_trace_id.uval);
+
+					STR_DECODE(queryStringlen, queryString);
+					STR_DECODE(serializedQuerytreelen, serializedQuerytree);
+					STR_DECODE(serializedPlantreelen, serializedPlantree);
+					STR_DECODE(serializedParamslen, serializedParams);
+					STR_DECODE(serializedQueryDispatchDesclen, serializedQueryDispatchDesc);
+					STR_DECODE(serializedSnapshotlen, serializedSnapshot);
+
+					/*
+					 * GUC "is_supersuer" only provide value for SHOW to display,
+					 * so it's useless on segments. SessionUserIsSuperuser is
+					 * also designed to determine the value of is_superuser, so
+					 * setting it to false on segments is fine.
+					 */
+					if (suid > 0)
+						SetSessionAuthorization(suid, false); /* Set the session UserId */
+
+					if (ouid > 0 && ouid != GetSessionUserId())
+						SetCurrentRoleId(ouid, false); /* Set the outer UserId */
+
+					if (cuid > 0)
+						SetUserIdAndContext(cuid, false); /* Set current userid */
+
+					if (serializedSnapshotlen != 0)
+						pxsn_set_serialized_snapshot(serializedSnapshot, serializedSnapshotlen);
+
+					elog((px_enable_print ? LOG : DEBUG5), 
+						"px dispatched stmt from QC: %s. sendTime:%ld,recvTime:%ld",
+						queryString, statementStart, 
+						GetCurrentStatementStartTimestamp());
+
+					if (0 == serializedQuerytreelen && 
+						0 == serializedPlantreelen)
+						exec_simple_query(queryString);
+					else
+						exec_px_query(queryString,
+									   serializedQuerytree, serializedQuerytreelen,
+									   serializedPlantree, serializedPlantreelen,
+									   serializedParams, serializedParamslen,
+									   serializedQueryDispatchDesc, serializedQueryDispatchDesclen);
+
+					SetUserIdAndContext(GetOuterUserId(), false);
+
+					send_ready_for_query = true;
+				}
+				break;
+			/* POLAR end */
 
 			case 'P':			/* parse */
 				{
@@ -5847,6 +6019,10 @@ polar_procsignal_sigusr2_handler(SIGNAL_ARGS)
 		*polar_point_checkinterrupts = true;
 	}
 }
+
+/* POLAR px */
+#include "postgres_px.c"
+/* POLAR end */
 
 /*
  * POLAR: process cancel query request during client read/write

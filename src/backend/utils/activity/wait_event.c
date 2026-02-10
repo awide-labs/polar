@@ -307,6 +307,11 @@ pgstat_get_wait_client(WaitEventClient w)
 		case WAIT_EVENT_WAL_SENDER_WRITE_DATA:
 			event_name = "WalSenderWriteData";
 			break;
+			/* POLAR px */
+		case WAIT_EVENT_PX_MOTION_WAIT_RECV:
+			event_name = "PXMotionWaitRecv";
+			break;
+			/* POLAR end */
 			/* no default case, so that compiler will warn */
 	}
 

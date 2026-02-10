@@ -54,6 +54,7 @@ AC_DEFINE_UNQUOTED(POLAR_VERSION, "$POLAR_VERSION", [PolarDB internal version as
 AC_DEFINE_UNQUOTED(POLAR_PG_VERSION, "$POLAR_PG_VERSION", [PolarDB PG internal version as a string])
 AC_DEFINE_UNQUOTED(POLARDB_VERSION, "$POLARDB_VERSION", [PolarDB version as a string])
 AC_DEFINE_UNQUOTED(POLAR_RELEASE_DATE, "$POLAR_RELEASE_DATE", [PolarDB release date as a string])
+PX_VERSION="1.1"
 
 AC_CANONICAL_HOST
 
@@ -808,6 +809,27 @@ AC_SUBST(autodepend)
 PGAC_ARG_BOOL(enable, cassert, no, [enable assertion checks (for debugging)],
               [AC_DEFINE([USE_ASSERT_CHECKING], 1,
                          [Define to 1 to build with assertion checks. (--enable-cassert)])])
+
+#
+# Enable PX optimizer
+#
+PGAC_ARG_BOOL(enable, polar-px, no, [enable PX optimizer],
+[AC_DEFINE([USE_PX], 1,
+[Define to 1 to build with PX optimizer. (--enable-polar-px)])])
+AC_MSG_RESULT([checking whether to build with PX... $enable_polar_px])
+AC_SUBST(enable_polar_px)
+
+# Build PXOPT in debug if enable-gpos-debug
+PGAC_ARG_BOOL(enable, gpos-debug, no, [enable GPOS debug mode for PX optimizer],
+[AC_DEFINE([GPOS_DEBUG], 1,
+[Define to 1 to build with GPOS debug mode. (--enable-gpos-debug)])])
+AC_MSG_RESULT([checking whether to build with GPOS debug mode... $enable_gpos_debug])
+AC_SUBST(enable_gpos_debug)
+
+if test "$PORTNAME" = darwin; then
+  AC_DEFINE([GPOS_Darwin], 1,
+            [Define to 1 to build PX for MacOS (GPOS_Darwin=1)])
+fi
 
 #
 # Enable fault injector
@@ -2623,6 +2645,16 @@ fi
 AC_DEFINE_UNQUOTED(PG_VERSION_STR,
                    ["PostgreSQL $PG_VERSION (PolarDB $POLAR_PG_VERSION build $POLAR_COMMIT$debug_string) on $host_cpu-$host_os"],
                    [A string containing the PostgreSQL version number, PolarDB version number, PolarDB version commit])
+
+AC_DEFINE_UNQUOTED(PX_VERSION, "$PX_VERSION", [PolarDB PX version])
+
+AC_DEFINE_UNQUOTED(PX_VERSION_STR,
+                   ["PolarDB PX version $PX_VERSION"],
+                   [PolarDB Distribute Query version string])
+
+AC_DEFINE_UNQUOTED(PX_VERSION_NUMBER,
+                   [1.0],
+                   [PolarDB Distribute Query version number])
 
 # Supply a numeric version string for use by 3rd party add-ons
 # awk -F is a regex on some platforms, and not on others, so make "." a tab

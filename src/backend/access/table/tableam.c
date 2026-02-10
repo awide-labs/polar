@@ -30,6 +30,10 @@
 #include "storage/shmem.h"
 #include "storage/smgr.h"
 
+/* POLAR px */
+#include "px/px_gang.h"
+/* POLAR end */
+
 /*
  * Constants to control the behavior of block allocation to parallel workers
  * during a parallel seqscan.  Technically these values do not need to be
@@ -117,7 +121,7 @@ table_beginscan_catalog(Relation relation, int nkeys, struct ScanKeyData *key)
 	Snapshot	snapshot = RegisterSnapshot(GetCatalogSnapshot(relid));
 
 	return relation->rd_tableam->scan_begin(relation, snapshot, nkeys, key,
-											NULL, flags);
+											NULL, NULL, flags);
 }
 
 void
@@ -129,6 +133,43 @@ table_scan_update_snapshot(TableScanDesc scan, Snapshot snapshot)
 	scan->rs_snapshot = snapshot;
 	scan->rs_flags |= SO_TEMP_SNAPSHOT;
 }
+
+/* POLAR px */
+TableScanDesc
+table_beginscan_px(Relation rel, Snapshot snapshot, int nkeys,
+				   struct ScanKeyData *key)
+{
+	uint32		flags = SO_TYPE_SEQSCAN;
+
+	if (px_allow_pagemode_seqscan)
+		flags |= SO_ALLOW_PAGEMODE;
+	if (px_allow_sync_seqscan)
+		flags |= SO_ALLOW_SYNC;
+	if (px_allow_strat_seqscan)
+		flags |= SO_ALLOW_STRAT;
+
+	return rel->rd_tableam->scan_begin(rel, snapshot, nkeys, key, NULL,
+									   CreatePXScanDesc(), flags);
+}
+
+TableScanDesc
+table_beginscan_bm_px(Relation rel, Snapshot snapshot, int nkeys,
+					  struct ScanKeyData *key)
+{
+	uint32		flags = SO_TYPE_BITMAPSCAN;
+
+	if (px_allow_pagemode_bitmapscan)
+		flags |= SO_ALLOW_PAGEMODE;
+	if (px_allow_sync_bitmapscan)
+		flags |= SO_ALLOW_SYNC;
+	if (px_allow_strat_bitmapscan)
+		flags |= SO_ALLOW_STRAT;
+
+	return rel->rd_tableam->scan_begin(rel, snapshot, nkeys, key, NULL,
+									   CreatePXScanDesc(), flags);
+}
+
+/* POLAR end */
 
 
 /* ----------------------------------------------------------------------------
@@ -195,7 +236,7 @@ table_beginscan_parallel(Relation relation, ParallelTableScanDesc parallel_scan)
 	}
 
 	return relation->rd_tableam->scan_begin(relation, snapshot, 0, NULL,
-											parallel_scan, flags);
+											parallel_scan, NULL, flags);
 }
 
 

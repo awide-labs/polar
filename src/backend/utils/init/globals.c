@@ -41,6 +41,11 @@ volatile sig_atomic_t LogMemoryContextPending = false;
 /* POLAR */
 volatile sig_atomic_t MemoryContextDumpPending = false;
 
+/* POLAR px */
+volatile sig_atomic_t QueryFinishPending = false;
+
+/* POLAR end */
+
 volatile sig_atomic_t IdleStatsUpdateTimeoutPending = false;
 volatile uint32 InterruptHoldoffCount = 0;
 volatile uint32 QueryCancelHoldoffCount = 0;

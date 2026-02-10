@@ -79,4 +79,10 @@ OBJS = \
 	tqueue.o \
 	tstoreReceiver.o
 
+OBJS += \
+	execUtils_px.o \
+	nodeMotion_px.o \
+	nodeAssertOp_px.o \
+	execAmi_px.o
+
 include $(top_srcdir)/src/backend/common.mk

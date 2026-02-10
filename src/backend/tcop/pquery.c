@@ -40,7 +40,8 @@ static void ProcessQuery(PlannedStmt *plan,
 						 ParamListInfo params,
 						 QueryEnvironment *queryEnv,
 						 DestReceiver *dest,
-						 QueryCompletion *qc);
+						 QueryCompletion *qc,
+						 QueryDispatchDesc *ddesc /* POLAR px */ );
 static void FillPortalStore(Portal portal, bool isTopLevel);
 static uint64 RunFromStore(Portal portal, ScanDirection direction, uint64 count,
 						   DestReceiver *dest);
@@ -95,6 +96,13 @@ CreateQueryDesc(PlannedStmt *plannedstmt,
 	/* not yet executed */
 	qd->already_executed = false;
 
+	/* POLAR px */
+	qd->extended_query = false; /* default value */
+	qd->portal_name = NULL;
+	qd->ddesc = NULL;
+	qd->showstatctx = NULL;
+	/* POLAR end */
+
 	return qd;
 }
 
@@ -138,7 +146,8 @@ ProcessQuery(PlannedStmt *plan,
 			 ParamListInfo params,
 			 QueryEnvironment *queryEnv,
 			 DestReceiver *dest,
-			 QueryCompletion *qc)
+			 QueryCompletion *qc,
+			 QueryDispatchDesc *ddesc /* POLAR px */ )
 {
 	QueryDesc  *queryDesc;
 
@@ -148,6 +157,7 @@ ProcessQuery(PlannedStmt *plan,
 	queryDesc = CreateQueryDesc(plan, sourceText,
 								GetActiveSnapshot(), InvalidSnapshot,
 								dest, params, queryEnv, 0);
+	queryDesc->ddesc = ddesc;
 
 	/*
 	 * Call ExecutorStart to prepare the plan for execution
@@ -160,6 +170,12 @@ ProcessQuery(PlannedStmt *plan,
 	ExecutorRun(queryDesc, ForwardScanDirection, 0L, true);
 
 	/*
+	 * Now, we close down all the scans and free allocated resources.
+	 */
+	ExecutorFinish(queryDesc);
+	ExecutorEnd(queryDesc);
+
+	/*
 	 * Build command completion status data, if caller wants one.
 	 */
 	if (qc)
@@ -167,39 +183,33 @@ ProcessQuery(PlannedStmt *plan,
 		switch (queryDesc->operation)
 		{
 			case CMD_SELECT:
-				SetQueryCompletion(qc, CMDTAG_SELECT, queryDesc->estate->es_processed);
+				SetQueryCompletion(qc, CMDTAG_SELECT, queryDesc->es_processed);
 				/* POLAR */
-				polar_audit_log.select_row_count += queryDesc->estate->es_processed;
+				polar_audit_log.select_row_count += queryDesc->es_processed;
 				break;
 			case CMD_INSERT:
-				SetQueryCompletion(qc, CMDTAG_INSERT, queryDesc->estate->es_processed);
+				SetQueryCompletion(qc, CMDTAG_INSERT, queryDesc->es_processed);
 				break;
 			case CMD_UPDATE:
-				SetQueryCompletion(qc, CMDTAG_UPDATE, queryDesc->estate->es_processed);
+				SetQueryCompletion(qc, CMDTAG_UPDATE, queryDesc->es_processed);
 				/* POLAR */
-				polar_audit_log.update_row_count += queryDesc->estate->es_processed;
+				polar_audit_log.update_row_count += queryDesc->es_processed;
 				break;
 			case CMD_DELETE:
-				SetQueryCompletion(qc, CMDTAG_DELETE, queryDesc->estate->es_processed);
+				SetQueryCompletion(qc, CMDTAG_DELETE, queryDesc->es_processed);
 				/* POLAR */
-				polar_audit_log.delete_row_count += queryDesc->estate->es_processed;
+				polar_audit_log.delete_row_count += queryDesc->es_processed;
 				break;
 			case CMD_MERGE:
-				SetQueryCompletion(qc, CMDTAG_MERGE, queryDesc->estate->es_processed);
+				SetQueryCompletion(qc, CMDTAG_MERGE, queryDesc->es_processed);
 				break;
 			default:
-				SetQueryCompletion(qc, CMDTAG_UNKNOWN, queryDesc->estate->es_processed);
+				SetQueryCompletion(qc, CMDTAG_UNKNOWN, queryDesc->es_processed);
 				/* POLAR */
-				polar_audit_log.examined_row_count += queryDesc->estate->es_processed;
+				polar_audit_log.examined_row_count += queryDesc->es_processed;
 				break;
 		}
 	}
-
-	/*
-	 * Now, we close down all the scans and free allocated resources.
-	 */
-	ExecutorFinish(queryDesc);
-	ExecutorEnd(queryDesc);
 
 	FreeQueryDesc(queryDesc);
 }
@@ -508,6 +518,10 @@ PortalStart(Portal portal, ParamListInfo params,
 											params,
 											portal->queryEnv,
 											0);
+
+				/* POLAR px */
+				queryDesc->ddesc = portal->ddesc;
+				/* POLAR end */
 
 				/*
 				 * If it's a scrollable cursor, executor needs to support
@@ -1287,7 +1301,8 @@ PortalRunMulti(Portal portal,
 							 portal->sourceText,
 							 portal->portalParams,
 							 portal->queryEnv,
-							 dest, qc);
+							 dest, qc,
+							 portal->ddesc /* POLAR px */ );
 			}
 			else
 			{
@@ -1296,7 +1311,8 @@ PortalRunMulti(Portal portal,
 							 portal->sourceText,
 							 portal->portalParams,
 							 portal->queryEnv,
-							 altdest, NULL);
+							 altdest, NULL,
+							 portal->ddesc /* POLAR px */ );
 			}
 
 			if (log_executor_stats)

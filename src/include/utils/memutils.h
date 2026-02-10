@@ -61,6 +61,12 @@ extern PGDLLIMPORT MemoryContext MessageContext;
 extern PGDLLIMPORT MemoryContext TopTransactionContext;
 extern PGDLLIMPORT MemoryContext CurTransactionContext;
 
+/* POLAR px */
+extern PGDLLIMPORT MemoryContext px_DispatcherContext;
+extern PGDLLIMPORT MemoryContext px_InterconnectContext;
+extern PGDLLIMPORT MemoryContext px_OptimizerMemoryContext;
+/* POLAR end */
+
 /* This is a transient link to the active portal's memory context: */
 extern PGDLLIMPORT MemoryContext PortalContext;
 
@@ -95,6 +101,11 @@ extern void MemoryContextStatsDetail(MemoryContext context, int max_children,
 									 bool print_to_stderr);
 extern void MemoryContextAllowInCriticalSection(MemoryContext context,
 												bool allow);
+
+/* POLAR px: statistics */
+extern void MemoryContextDeclareAccountingRoot(MemoryContext context);
+extern Size MemoryContextGetPeakSpace(MemoryContext context);
+/* POLAR end */
 
 #ifdef MEMORY_CONTEXT_CHECKING
 extern void MemoryContextCheck(MemoryContext context);

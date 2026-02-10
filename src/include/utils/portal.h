@@ -203,6 +203,18 @@ typedef struct PortalData
 	/* Presentation data, primarily used by the pg_cursors system view */
 	TimestampTz creation_time;	/* time at which this portal was defined */
 	bool		visible;		/* include this portal in pg_cursors? */
+
+	/* POLAR px */
+
+	/*
+	 * if Resource Scheduling is enabled, we need to save the original
+	 * statement type, keep a unique id for name portals (i.e CURSORS) and
+	 * remember which queue wanted a lock on this portal.
+	 */
+	NodeTag		sourceTag;		/* nodetag for the original query */
+	QueryDispatchDesc *ddesc;	/* extra info dispatched from QC to PXs */
+	/* POLAR end */
+
 }			PortalData;
 
 /*

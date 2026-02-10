@@ -22,4 +22,9 @@ extern void ExecMaterialMarkPos(MaterialState *node);
 extern void ExecMaterialRestrPos(MaterialState *node);
 extern void ExecReScanMaterial(MaterialState *node);
 
+/* POLAR px */
+extern void ExecSquelchMaterial(MaterialState *node);
+
+/* POLAR end */
+
 #endif							/* NODEMATERIAL_H */

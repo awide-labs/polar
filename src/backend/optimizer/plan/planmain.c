@@ -30,7 +30,6 @@
 #include "optimizer/placeholder.h"
 #include "optimizer/planmain.h"
 
-
 /*
  * query_planner
  *	  Generate a path (that is, a simplified plan) for a basic query,

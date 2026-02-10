@@ -83,6 +83,10 @@
 #include "access/polar_csnlog.h"
 /* POLAR end */
 
+/* POLAR px */
+#include "px/px_disp.h"
+/* POLAR end */
+
 /*
  *	User-tweakable parameters
  */
@@ -2937,6 +2941,11 @@ AbortTransaction(void)
 	 */
 	AfterTriggerEndXact(false); /* 'false' means it's abort */
 	AtAbort_Portals();
+
+	/* POLAR px */
+	AtAbort_DispatcherState();
+	/* POLAR end */
+
 	smgrDoPendingSyncs(false, is_parallel_worker);
 	AtEOXact_LargeObject(false);
 	AtAbort_Notify();

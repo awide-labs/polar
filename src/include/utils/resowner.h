@@ -83,4 +83,11 @@ extern void UnregisterResourceReleaseCallback(ResourceReleaseCallback callback,
 extern void CreateAuxProcessResourceOwner(void);
 extern void ReleaseAuxProcessResources(bool isCommit);
 
+/* POLAR px */
+typedef void (*ResourceWalkerCallback) (const struct ResourceOwnerData *owner);
+extern void PxResourceOwnerWalker(ResourceOwner owner,
+								  ResourceWalkerCallback callback);
+
+/* POLAR end */
+
 #endif							/* RESOWNER_H */

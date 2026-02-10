@@ -1,0 +1,7 @@
+/log/
+/cluster_log/
+/results/
+/tmp_check/
+/tmp_cluster/
+regression.diffs
+regression.out

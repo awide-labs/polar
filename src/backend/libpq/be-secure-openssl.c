@@ -85,6 +85,28 @@ static const char *ssl_protocol_version_to_string(int v);
 /*						 Public interface						*/
 /* ------------------------------------------------------------ */
 
+/* POLAR px */
+/* This code borrowed from be_tls_init (below) to init openssl only once */
+/* SSL_library_init is not reentrant (from the doc) */
+void
+OSSL_init(void)
+{
+	/* This stuff need be done only once. */
+	if (!SSL_initialized)
+	{
+#ifdef HAVE_OPENSSL_INIT_SSL
+		OPENSSL_init_ssl(OPENSSL_INIT_LOAD_CONFIG, NULL);
+#else
+		OPENSSL_config(NULL);
+		SSL_library_init();
+		SSL_load_error_strings();
+#endif
+		SSL_initialized = true;
+	}
+}
+
+/* POLAR end */
+
 int
 be_tls_init(bool isServerStart)
 {

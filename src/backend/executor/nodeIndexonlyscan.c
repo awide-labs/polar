@@ -46,6 +46,10 @@
 #include "utils/memutils.h"
 #include "utils/rel.h"
 
+/* POLAR px */
+#include "px/px_vars.h"
+/* POLAR end */
+
 
 static TupleTableSlot *IndexOnlyNext(IndexOnlyScanState *node);
 static void StoreIndexTuple(IndexOnlyScanState *node, TupleTableSlot *slot,
@@ -97,6 +101,15 @@ IndexOnlyNext(IndexOnlyScanState *node)
 								   estate->es_snapshot,
 								   node->ioss_NumScanKeys,
 								   node->ioss_NumOrderByKeys);
+
+		/* POLAR px */
+		if (px_role == PX_ROLE_PX &&
+			px_is_executing &&
+			node->ss.ps.plan->px_scan_partial)
+		{
+			index_initscan_px(scandesc);
+		}
+		/* POLAR end */
 
 		node->ioss_ScanDesc = scandesc;
 

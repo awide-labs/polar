@@ -20,6 +20,12 @@
 #include "executor/instrument.h"
 #include "jit/jit.h"
 #include "utils/guc.h"
+/* POLAR px */
+#include "portability/instr_time.h"
+#include "px/px_explain.h"
+#include "px/px_disp.h"
+#include "px/px_vars.h"
+/* POLAR end */
 
 PG_MODULE_MAGIC;
 
@@ -68,7 +74,7 @@ static bool current_query_sampled = false;
 #define auto_explain_enabled() \
 	(auto_explain_log_min_duration >= 0 && \
 	 (nesting_level == 0 || auto_explain_log_nested_statements) && \
-	 current_query_sampled)
+	 current_query_sampled && px_role != PX_ROLE_PX)
 
 /* Saved hook values in case of unload */
 static ExecutorStart_hook_type prev_ExecutorStart = NULL;
@@ -280,6 +286,18 @@ explain_ExecutorStart(QueryDesc *queryDesc, int eflags)
 				queryDesc->instrument_options |= INSTRUMENT_BUFFERS;
 			if (auto_explain_log_wal)
 				queryDesc->instrument_options |= INSTRUMENT_WAL;
+
+			/* POLAR px */
+			if (queryDesc->plannedstmt->planGen == PLANGEN_PX)
+			{
+				instr_time	starttime;
+
+				queryDesc->instrument_options |= INSTRUMENT_PX;
+				INSTR_TIME_SET_CURRENT(starttime);
+				queryDesc->showstatctx = pxexplain_showExecStatsBegin(queryDesc,
+																	  starttime);
+			}
+			/* POLAR end */
 		}
 	}
 
@@ -360,6 +378,12 @@ explain_ExecutorEnd(QueryDesc *queryDesc)
 		MemoryContext oldcxt;
 		double		msec;
 
+		/* POLAR px */
+		/* Wait for completion of all qExec processes. */
+		if (queryDesc->estate->dispatcherState && queryDesc->estate->dispatcherState->primaryResults)
+			pxdisp_checkDispatchResult(queryDesc->estate->dispatcherState, DISPATCH_WAIT_NONE);
+		/* POLAR end */
+
 		/*
 		 * Make sure we operate in the per-query context, so any cruft will be
 		 * discarded later during ExecutorEnd.
@@ -394,6 +418,10 @@ explain_ExecutorEnd(QueryDesc *queryDesc)
 				ExplainPrintTriggers(es, queryDesc);
 			if (es->costs)
 				ExplainPrintJITSummary(es, queryDesc);
+			/* POLAR px */
+			if (es->analyze && queryDesc->showstatctx != NULL)
+				ExplainPrintExecStatsEnd(es, queryDesc);
+			/* POLAR end */
 			ExplainEndOutput(es);
 
 			/* Remove last line break */

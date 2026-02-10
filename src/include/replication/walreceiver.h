@@ -209,6 +209,12 @@ typedef struct
 	pg_atomic_uint32 polar_is_promote_allowed;
 	pg_atomic_uint64 polar_end_lsn;
 	pg_atomic_uint64 polar_latest_flush_lsn;
+
+	/*
+	 * POLAR: encoded token as pair <polar_available_state,
+	 * polar_hot_standby_state> of replica state sent to master
+	 */
+	HotStandbyState polar_hot_standby_state;
 } WalRcvData;
 
 extern PGDLLIMPORT WalRcvData *WalRcv;

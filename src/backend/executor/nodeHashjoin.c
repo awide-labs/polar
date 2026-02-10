@@ -153,6 +153,10 @@ static bool ExecHashJoinNewBatch(HashJoinState *hjstate);
 static bool ExecParallelHashJoinNewBatch(HashJoinState *hjstate);
 static void ExecParallelHashJoinPartitionOuter(HashJoinState *node);
 
+/* POLAR px */
+static bool polar_isNotDistinctJoin(List *qualList);
+
+/* POLAR end */
 
 /* ----------------------------------------------------------------
  *		ExecHashJoinImpl
@@ -288,6 +292,15 @@ ExecHashJoinImpl(PlanState *pstate, bool parallel)
 												HJ_FILL_INNER(node));
 				node->hj_HashTable = hashtable;
 
+				/* POLAR px */
+
+				/*
+				 * Only if doing a LASJ_NOTIN join, we want to quit as soon as
+				 * we find a NULL key on the inner side
+				 */
+				hashNode->hs_quit_if_hashkeys_null = (node->js.jointype == JOIN_LASJ_NOTIN);
+				/* POLAR end */
+
 				/*
 				 * Execute the Hash node, to build the hash table.  If using
 				 * Parallel Hash, then we'll try to help hashing unless we
@@ -295,6 +308,16 @@ ExecHashJoinImpl(PlanState *pstate, bool parallel)
 				 */
 				hashNode->hashtable = hashtable;
 				(void) MultiExecProcNode((PlanState *) hashNode);
+
+				/* POLAR px */
+
+				/*
+				 * If LASJ_NOTIN and a null was found on the inner side, then
+				 * clean out.
+				 */
+				if (node->js.jointype == JOIN_LASJ_NOTIN && hashNode->hs_hashkeys_null)
+					return NULL;
+				/* POLAR end */
 
 				/*
 				 * If the inner relation is completely empty, and we're not
@@ -317,6 +340,16 @@ ExecHashJoinImpl(PlanState *pstate, bool parallel)
 					}
 					return NULL;
 				}
+
+				/* POLAR px */
+
+				/*
+				 * We just scanned the entire inner side and built the
+				 * hashtable (and its overflow batches). Check here and
+				 * remember if the inner side is empty.
+				 */
+				node->hj_InnerEmpty = (hashtable->totalTuples == 0);
+				/* POLAR end */
 
 				/*
 				 * need to remember whether nbatch has increased since we
@@ -446,6 +479,24 @@ ExecHashJoinImpl(PlanState *pstate, bool parallel)
 				/* FALL THRU */
 
 			case HJ_SCAN_BUCKET:
+				/* POLAR px */
+
+				/*----------
+				 * OPT-3325: Handle NULLs in the outer side of LASJ_NOTIN
+				 *  - if tuple is NULL and inner is not empty, drop outer tuple
+				 *  - if tuple is NULL and inner is empty, keep going as we'll
+				 *    find no match for this tuple in the inner side
+				 *----------
+				 */
+				if (node->js.jointype == JOIN_LASJ_NOTIN &&
+					!node->hj_InnerEmpty &&
+					polar_isJoinExprNull(node->hj_OuterHashKeys, econtext))
+				{
+					node->hj_MatchedOuter = true;
+					node->hj_JoinState = HJ_NEED_NEW_OUTER;
+					continue;
+				}
+				/* POLAR end */
 
 				/*
 				 * Scan the selected hash bucket for matches to current outer
@@ -505,8 +556,12 @@ ExecHashJoinImpl(PlanState *pstate, bool parallel)
 						HeapTupleHeaderSetMatch(HJTUPLE_MINTUPLE(node->hj_CurTuple));
 					}
 
-					/* In an antijoin, we never return a matched tuple */
-					if (node->js.jointype == JOIN_ANTI)
+					/*
+					 * In an antijoin and LASJ NOT IN, we never return a
+					 * matched tuple
+					 */
+					if (node->js.jointype == JOIN_ANTI ||
+						node->js.jointype == JOIN_LASJ_NOTIN /* POLAR px */ )
 					{
 						node->hj_JoinState = HJ_NEED_NEW_OUTER;
 						continue;
@@ -678,6 +733,11 @@ ExecInitHashJoin(HashJoin *node, EState *estate, int eflags)
 	 */
 	ExecAssignExprContext(estate, &hjstate->js.ps);
 
+	/* POLAR px */
+	if (polar_isNotDistinctJoin(node->hashqualclauses))
+		elog(ERROR, "IS NOT DISTINCT FROM join not supported in Hash Join");
+	/* POLAR end */
+
 	/*
 	 * initialize child nodes
 	 *
@@ -720,6 +780,7 @@ ExecInitHashJoin(HashJoin *node, EState *estate, int eflags)
 			break;
 		case JOIN_LEFT:
 		case JOIN_ANTI:
+		case JOIN_LASJ_NOTIN:	/* POLAR px */
 			hjstate->hj_NullInnerTupleSlot =
 				ExecInitNullTupleSlot(estate, innerDesc, &TTSOpsVirtual);
 			break;
@@ -867,7 +928,8 @@ ExecHashJoinOuterGetTuple(PlanState *outerNode,
 									 hjstate->hj_OuterHashKeys,
 									 true,	/* outer tuple */
 									 HJ_FILL_OUTER(hjstate),
-									 hashvalue))
+									 hashvalue,
+									 NULL /* POLAR px */ ))
 			{
 				/* remember outer relation is not empty for possible rescan */
 				hjstate->hj_OuterNotEmpty = true;
@@ -935,7 +997,8 @@ ExecParallelHashJoinOuterGetTuple(PlanState *outerNode,
 									 hjstate->hj_OuterHashKeys,
 									 true,	/* outer tuple */
 									 HJ_FILL_OUTER(hjstate),
-									 hashvalue))
+									 hashvalue,
+									 NULL /* POLAR px */ ))
 				return slot;
 
 			/*
@@ -1432,7 +1495,8 @@ ExecParallelHashJoinPartitionOuter(HashJoinState *hjstate)
 								 hjstate->hj_OuterHashKeys,
 								 true,	/* outer tuple */
 								 HJ_FILL_OUTER(hjstate),
-								 &hashvalue))
+								 &hashvalue,
+								 NULL /* POLAR px */ ))
 		{
 			int			batchno;
 			int			bucketno;
@@ -1576,3 +1640,38 @@ ExecHashJoinInitializeWorker(HashJoinState *state,
 
 	ExecSetExecProcNode(&state->js.ps, ExecParallelHashJoin);
 }
+
+/* POLAR px */
+/*
+ * XXX We perform an abbreviated test based on the assumptions that
+ *     these are the only possibilities and that all conjuncts are
+ *     alike in this regard.
+ */
+pg_attribute_unused()
+bool
+polar_isNotDistinctJoin(List *qualList)
+{
+	ListCell   *lc;
+
+	foreach(lc, qualList)
+	{
+		BoolExpr   *bex = (BoolExpr *) lfirst(lc);
+		DistinctExpr *dex;
+
+		/*
+		 * Because DistinctExpr is an expression node for 'x IS DISTINCT FROM
+		 * y' we understand 'x IS NOT DISTINCT FROM y' as 'NOT
+		 * (DistinctExpr(...))'
+		 */
+		if (IsA(bex, BoolExpr) && bex->boolop == NOT_EXPR)
+		{
+			dex = (DistinctExpr *) linitial(bex->args);
+
+			if (IsA(dex, DistinctExpr))
+				return true;	/* We assume the rest follow suit! */
+		}
+	}
+	return false;
+}
+
+/* POLAR end */

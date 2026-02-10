@@ -1,0 +1,22 @@
+-- set system-wide parameters for testing PX engine
+alter system set polar_px_enable_replay_wait to on;
+select pg_reload_conf();
+ pg_reload_conf 
+----------------
+ t
+(1 row)
+
+-- check the number of available segments for query running
+select count(1)-1 as segments_count from polar_cluster_info;
+ segments_count 
+----------------
+              2
+(1 row)
+
+show polar_px_nodes;
+ polar_px_nodes 
+----------------
+ 
+(1 row)
+
+create extension polar_px;

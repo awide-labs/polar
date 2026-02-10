@@ -27,6 +27,7 @@
 #include "tcop/utility.h"
 #include "utils/lsyscache.h"
 #include "utils/syscache.h"
+#include "optimizer/px_walkers.h"
 
 
 typedef struct
@@ -61,6 +62,14 @@ typedef struct
 	int			rtoffset;
 	double		num_exec;
 } fix_join_expr_context;
+
+/* POLAR px */
+typedef struct
+{
+	PlannerInfo *root;
+	plan_tree_base_prefix base;
+} polar_extract_plan_dependencies_context;
+/* POLAR end */
 
 typedef struct
 {
@@ -3433,3 +3442,45 @@ extract_query_dependencies_walker(Node *node, PlannerInfo *context)
 	return expression_tree_walker(node, extract_query_dependencies_walker,
 								  (void *) context);
 }
+
+/* POLAR px */
+static bool
+polar_extract_plan_dependencies_walker(Node *node, polar_extract_plan_dependencies_context *context)
+{
+	if (node == NULL)
+		return false;
+	/* Extract function dependencies and check for regclass Consts */
+	fix_expr_common(context->root, node);
+
+	return plan_tree_walker(node, polar_extract_plan_dependencies_walker,
+							(void *) context, true);
+}
+
+/*
+ * polar_extract_plan_dependencies()
+ *		Given a fully built Plan tree, extract their dependencies just as
+ *		set_plan_references_ would have done.
+ *
+ * This is used to extract dependencies from a plan that has been created
+ * by PXOPT (set_plan_references() does this usually, but PXOPT doesn't use
+ * it). This adds the new entries directly to PlannerGlobal.relationOids
+ * and invalItems.
+ *
+ * Note: This recurses into SubPlans. You better still call this for
+ * every subplan in a overall plan, to make sure you capture dependencies
+ * from subplans that are not referenced from the main plan, because
+ * changes to the relations in eliminated subplans might require
+ * re-planning, too. (XXX: it would be better to not recurse into SubPlans
+ * here, as that's a waste of time.)
+ */
+void
+polar_extract_plan_dependencies(PlannerInfo *root, Plan *plan)
+{
+	polar_extract_plan_dependencies_context context;
+
+	context.base.node = (Node *) (root->glob);
+	context.root = root;
+
+	(void) polar_extract_plan_dependencies_walker((Node *) plan, &context);
+}
+/* POLAR end */

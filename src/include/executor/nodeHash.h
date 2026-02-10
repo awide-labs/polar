@@ -48,7 +48,8 @@ extern bool ExecHashGetHashValue(HashJoinTable hashtable,
 								 List *hashkeys,
 								 bool outer_tuple,
 								 bool keep_nulls,
-								 uint32 *hashvalue);
+								 uint32 *hashvalue,
+								 bool *hashkeys_null /* POLAR px */ );
 extern void ExecHashGetBucketAndBatch(HashJoinTable hashtable,
 									  uint32 hashvalue,
 									  int *bucketno,

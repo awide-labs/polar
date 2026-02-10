@@ -140,6 +140,10 @@
 #include "utils/timestamp.h"
 #include "utils/typcache.h"
 
+/* POLAR px */
+#include "px/px_util.h"
+/* POLAR end */
+
 
 /* Hooks for plugins to get control when we ask for stats */
 get_relation_stats_hook_type get_relation_stats_hook = NULL;
@@ -186,8 +190,6 @@ static double convert_one_bytea_to_scalar(unsigned char *value, int valuelen,
 										  int rangelo, int rangehi);
 static char *convert_string_datum(Datum value, Oid typid, Oid collid,
 								  bool *failure);
-static double convert_timevalue_to_scalar(Datum value, Oid typid,
-										  bool *failure);
 static void examine_simple_variable(PlannerInfo *root, Var *var,
 									VariableStatData *vardata);
 static bool get_variable_range(PlannerInfo *root, VariableStatData *vardata,
@@ -4766,7 +4768,7 @@ convert_one_bytea_to_scalar(unsigned char *value, int valuelen,
  * On failure (e.g., unsupported typid), set *failure to true;
  * otherwise, that variable is not changed.
  */
-static double
+double
 convert_timevalue_to_scalar(Datum value, Oid typid, bool *failure)
 {
 	switch (typid)
@@ -5726,6 +5728,16 @@ get_variable_numdistinct(VariableStatData *vardata, bool *isdefault)
 				case TableOidAttributeNumber:
 					stadistinct = 1.0;	/* only 1 value */
 					break;
+
+				/* POLAR px */
+				case PxWorkerIdAttributeNumber:
+					stadistinct = getPxWorkerCount();
+					break;
+				case RootSelfItemPointerAttributeNumber:
+					stadistinct = 0.0;	/* means "unknown" */
+					break;
+				/* POLAR end */
+
 				default:
 					stadistinct = 0.0;	/* means "unknown" */
 					break;

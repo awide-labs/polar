@@ -278,6 +278,13 @@ static void AllocSetStats(MemoryContext context,
 						  MemoryContextCounters *totals,
 						  bool print_to_stderr);
 
+/* POLAR px */
+static void polar_AllocSetDeclareAccountingRoot(MemoryContext context);
+static Size polar_AllocSetGetPeakUsage(MemoryContext context);
+static Size polar_AllocUsableSize(MemoryContext context, void *pointer);
+
+/* POLAR end */
+
 #ifdef MEMORY_CONTEXT_CHECKING
 static void AllocSetCheck(MemoryContext context);
 #endif
@@ -297,6 +304,11 @@ static const MemoryContextMethods AllocSetMethods = {
 #ifdef MEMORY_CONTEXT_CHECKING
 	,AllocSetCheck
 #endif
+	/* POLAR px */
+	,polar_AllocSetDeclareAccountingRoot
+	,polar_AllocSetGetPeakUsage
+	,polar_AllocUsableSize
+	/* POLAR end */
 };
 
 
@@ -1534,3 +1546,38 @@ AllocSetCheck(MemoryContext context)
 }
 
 #endif							/* MEMORY_CONTEXT_CHECKING */
+
+/* POLAR px */
+/* pg15_px: TODO: adopt this part */
+static void
+polar_AllocSetDeclareAccountingRoot(MemoryContext context)
+{
+	return;
+}
+
+static Size
+polar_AllocSetGetPeakUsage(MemoryContext context)
+{
+	/*
+	 * return not zero mem size to have not empmty explain output like:
+	 * localhost:6000 alex@postgres=# explain analyze select avg(i) from test
+	 * ; QUERY PLAN
+	 * -------------------------------------------------------------------------------------------------------------------------------
+	 * Aggregate  (cost=0.00..431.00 rows=1 width=8) (actual time=2.126..2.127
+	 * rows=1 loops=1) ->  PX Coordinator 6:1  (slice1; segments: 6)
+	 * (cost=0.00..431.00 rows=1 width=4) (actual time=2.108..2.109 rows=2
+	 * loops=1) ->  Partial Seq Scan on test  (cost=0.00..431.00 rows=1
+	 * width=4) (actual time=0.129..0.131 rows=2 loops=1) Planning Time:
+	 * 23.129 ms Optimizer: PolarDB PX Optimizer (slice0) (slice1) Execution
+	 * Time: 17.646 ms (8 rows)
+	 */
+	return 1024;
+}
+
+static Size
+polar_AllocUsableSize(MemoryContext context, void *pointer)
+{
+	return 1024;
+}
+
+/* POLAR end */

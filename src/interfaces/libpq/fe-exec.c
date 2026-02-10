@@ -14,6 +14,15 @@
  */
 #include "postgres_fe.h"
 
+/*
+ * This file is compiled with both frontend and backend codes, symlinked by
+ * src/backend/Makefile, and use macro FRONTEND to switch.
+ *
+ * Include "c.h" to adopt pg C types. Don't include "postgres_fe.h",
+ * which only defines FRONTEND besides including "c.h"
+ */
+#include "c.h"
+
 #include <ctype.h>
 #include <fcntl.h>
 #include <limits.h>
@@ -28,6 +37,10 @@
 #include "libpq-fe.h"
 #include "libpq-int.h"
 #include "mb/pg_wchar.h"
+
+/* POLAR px */
+#include "px/px_pq.h"
+/* POLAR end */
 
 /* keep this in same order as ExecStatusType in libpq-fe.h */
 char	   *const pgresStatus[] = {
@@ -183,6 +196,12 @@ PQmakeEmptyPGresult(PGconn *conn, ExecStatusType status)
 	result->curOffset = 0;
 	result->spaceLeft = 0;
 	result->memorySize = sizeof(PGresult);
+
+	/* POLAR px */
+	result->pxstats = NULL;
+	result->numRejected = 0;
+	result->numCompleted = 0;
+	/* POLAR end */
 
 	if (conn)
 	{
@@ -4634,3 +4653,89 @@ PQunescapeBytea(const unsigned char *strtext, size_t *retbuflen)
 	*retbuflen = buflen;
 	return tmpbuf;
 }
+
+/* POLAR px */
+int
+PQsendPxQuery_shared(PGconn *conn, char *shared_query, int query_len, bool nonblock)
+{
+	int			ret;
+	PGcmdQueueEntry *entry = NULL;
+
+	if (!PQsendQueryStart(conn, true /* newQuery */ ))
+		return 0;
+
+	if (!shared_query)
+	{
+		printfPQExpBuffer(&conn->errorMessage,
+						  libpq_gettext("shared mpp-query string is a null pointer\n"));
+		return 0;
+	}
+
+	if (conn->outBuffer_shared)
+	{
+		printfPQExpBuffer(&conn->errorMessage,
+						  libpq_gettext("Cannot overwrite shared query string\n"));
+		return 0;
+	}
+
+	if (conn->pipelineStatus != PQ_PIPELINE_OFF)
+	{
+		appendPQExpBuffer(&conn->errorMessage,
+						  libpq_gettext("%s not allowed in pipeline mode\n"),
+						  "PQsendQuery");
+		return 0;
+	}
+
+	entry = pqAllocCmdQueueEntry(conn);
+	if (entry == NULL)
+		return 0;
+
+	/*
+	 * Stash the original buffer and switch to the incoming pointer. We will
+	 * restore the buffer after completing to send the shared query.
+	 */
+	conn->outBufferSaved = conn->outBuffer;
+
+	conn->outBuffer = shared_query;
+	conn->outBuffer_shared = true;
+
+	conn->outMsgStart = 0;
+	conn->outMsgEnd = query_len;
+	conn->outCount = query_len;
+
+	/* remember we are using simple query protocol */
+	entry->queryclass = PGQUERY_SIMPLE;
+	/* and remember the query text too, if possible */
+	entry->query = strdup(shared_query);
+
+	/*
+	 * Give the data a push.  In nonblock mode, don't complain if we're unable
+	 * to send it all; PQgetResult() will do any additional flushing needed.
+	 */
+	Assert(conn->outCount > 0);
+	if (nonblock)
+		ret = pqFlushNonBlocking(conn);
+	else
+		ret = pqFlush(conn);
+
+	if (ret < 0)
+		goto sendFailed;
+
+	/*
+	 * The code is expected not to work in pipelined execution, so this
+	 * assumption let us to just append entry to conn->cmd_queue. If that is
+	 * not true, then whole execution can be broken, because we will execute
+	 * this command twice (this execution + when queue will be advanced).
+	 */
+	Assert(conn->cmd_queue_head == NULL);
+
+	pqAppendCmdQueueEntry(conn, entry);
+	return 1;
+
+sendFailed:
+	pqRecycleCmdQueueEntry(conn, entry);
+	/* error message should be set up already */
+	return 0;
+}
+
+/* POLAR end */

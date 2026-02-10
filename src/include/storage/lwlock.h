@@ -290,6 +290,8 @@ typedef enum BuiltinTrancheIds
 	LWTRANCHE_POLAR_SS_SESSION_CONTEXT,
 	/* POLAR end */
 
+	LWTRANCHE_POLAR_CLUSTER_INFO,
+
 	LWTRANCHE_FIRST_USER_DEFINED
 }			BuiltinTrancheIds;
 

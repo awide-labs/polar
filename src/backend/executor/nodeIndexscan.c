@@ -44,6 +44,10 @@
 #include "utils/memutils.h"
 #include "utils/rel.h"
 
+/* POLAR px */
+#include "px/px_vars.h"
+/* POLAR end */
+
 /*
  * When an ordering operator is used, tuples fetched from the index that
  * need to be reordered are queued in a pairing heap, as ReorderTuples.
@@ -114,6 +118,15 @@ IndexNext(IndexScanState *node)
 								   estate->es_snapshot,
 								   node->iss_NumScanKeys,
 								   node->iss_NumOrderByKeys);
+
+		/* POLAR px */
+		if (px_role == PX_ROLE_PX &&
+			px_is_executing &&
+			node->ss.ps.plan->px_scan_partial)
+		{
+			index_initscan_px(scandesc);
+		}
+		/* POLAR end */
 
 		node->iss_ScanDesc = scandesc;
 
