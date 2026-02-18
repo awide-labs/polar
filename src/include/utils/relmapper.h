@@ -69,4 +69,6 @@ extern void relmap_redo(XLogReaderState *record);
 extern void relmap_desc(StringInfo buf, XLogReaderState *record);
 extern const char *relmap_identify(uint8 info);
 
+/* POLAR: invalidate all replica-local relmap caches at startup */
+extern void polar_invalidate_local_relmap_caches(void);
 #endif							/* RELMAPPER_H */

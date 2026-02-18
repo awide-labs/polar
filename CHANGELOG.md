@@ -17,6 +17,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Fixed a race condition in VACUUM FULL, CLUSTER, REINDEX, and TRUNCATE
+  operations on mapped system catalogs. Previously, these commands would
+  recreate relfilenodes and commit the switch by updating `pg_filenode.map`.
+  While the relmap update was WAL-logged and flushed before the map file was
+  guaranteed visible on shared storage, fast replicas could replay the relmap
+  WAL record before the updated map file was readable, causing them to resolve
+  OIDs using stale filenodes that may have already been removed. This led to
+  intermittent catalog and relcache failures (XCOM-193)
 - Fixed replica promotion failure after primary shutdown in shared storage mode,
   eventually ending with `PANIC: "<lsn> is not the last valid record's EndRecPtr"` (XCOM-193)
 - Fixed pg_bulkload client errors reporting a bare "ERROR:" with no message text (XCOM-186)
