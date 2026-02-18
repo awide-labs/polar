@@ -939,6 +939,7 @@ polar_xlog_queue_ref_pop_ahead(polar_ringbuf_ref_t *ref, XLogReaderState *state,
 				{
 					XLogRecPtr	catch_up_ptr = polar_xlog_queue_remove_outdate(ref, state);
 
+					XLogReaderResetError(state);
 					decode_record = XLogReadAhead(state, false);
 					pg_atomic_fetch_add_u64(&(ref->rbuf->prs.send_phys_io_cnt), 1);
 

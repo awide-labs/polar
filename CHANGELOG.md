@@ -17,6 +17,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Fixed replica promotion failure after primary shutdown in shared storage mode,
+  eventually ending with `PANIC: "<lsn> is not the last valid record's EndRecPtr"` (XCOM-193)
 - Fixed pg_bulkload client errors reporting a bare "ERROR:" with no message text (XCOM-186)
 - Fixed primary hanging during shutdown when replicas were already stopped,
   repeatedly logging "Checkpoint blocked" warnings until killed (XCOM-153)
