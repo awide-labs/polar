@@ -57,6 +57,8 @@ my $count_proxy_sql =
 my $wait_proxy_sql =
   " select count(*) from pg_stat_activity where pid = $proxy_session_id"
   . " and state = 'active'";
+my $wait_proxy_gone_sql =
+  " select count(*) from pg_stat_activity where pid = $proxy_session_id";
 my $display_sql = 'set polar_session_id_display_method=';
 
 sub set_env
@@ -104,6 +106,18 @@ sub proxy_safe_psql
 sub start_proxy_backend
 {
 	my ($node) = @_;
+
+	# Wait for any previous proxy backend with this SID to fully exit.
+	# pg_terminate_backend sends SIGTERM but returns before the process dies;
+	# without this barrier the new connection may get "already in use" because
+	# the dying backend still has st_procpid > 0 in BackendStatusArray.
+	while (
+		$node->safe_psql($dbname,
+			$display_sql . 'force_proxy;' . $wait_proxy_gone_sql) > 0)
+	{
+		sleep(0.1);
+	}
+
 	Task::start_new_task('proxy sleep', [$node], \&proxy_psql,
 		[ 'select pg_sleep(3);', @client_addr, $proxy_session_id, $cancel_key ],
 		Task::EXEC_ONCE, -3);
