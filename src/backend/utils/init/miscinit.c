@@ -65,6 +65,7 @@
 #include "access/xlog.h"
 #include "catalog/pg_control.h"
 #include "storage/polar_fd.h"
+#include "utils/relmapper.h"
 
 #define DIRECTORY_LOCK_FILE		"postmaster.pid"
 
@@ -2104,6 +2105,14 @@ polar_init_local_dir(void)
 	{
 		if (polar_is_replica())
 		{
+			/*
+			 * Drop replica-local relmap caches before copying dirs: stale
+			 * pg_filenode.map files can survive across restarts or role swaps
+			 * and cause backends to look up wrong filenodes for mapped
+			 * catalogs
+			 */
+			polar_invalidate_local_relmap_caches();
+
 			elog(LOG, "copy dirs from shared storage to local for replica");
 			polar_copy_dirs_from_shared_storage_to_local();
 		}

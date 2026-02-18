@@ -144,6 +144,10 @@ static void apply_map_update(RelMapFile *map, Oid relationId,
 static void merge_map_updates(RelMapFile *map, const RelMapFile *updates,
 							  bool add_okay);
 static void load_relmap_file(bool shared, bool lock_held);
+
+/* POLAR */
+static bool try_load_relmap_file_from_local(bool shared, bool lock_held);
+
 static void read_relmap_file(RelMapFile *map, char *dbpath, bool lock_held,
 							 int elevel);
 static void write_relmap_file(RelMapFile *newmap, bool write_wal,
@@ -764,14 +768,163 @@ RestoreRelationMap(char *startAddress)
  * failure to load either of them is a fatal error.
  *
  * Note that the local case requires DatabasePath to be set up.
+ *
+ * POLAR: On a shared-storage replica we first attempt to read from a
+ * replica-local cached copy of pg_filenode.map. If the local copy is
+ * missing or corrupt, we fall back to reading from shared storage.
  */
 static void
 load_relmap_file(bool shared, bool lock_held)
 {
+	bool		use_local_cache;
+
+	use_local_cache = polar_is_replica() && polar_enable_shared_storage_mode;
+
+	/* POLAR: try the replica-local cached file first */
+	if (use_local_cache && try_load_relmap_file_from_local(shared, lock_held))
+		return;
+
 	if (shared)
 		read_relmap_file(&shared_map, "global", lock_held, FATAL);
 	else
 		read_relmap_file(&local_map, DatabasePath, lock_held, FATAL);
+}
+
+/*
+ * POLAR: try_load_relmap_file_from_local
+ *
+ * Attempt to load the relation map from a replica-local cached copy of
+ * pg_filenode.map. This is only meaningful on a shared-storage replica.
+ *
+ * On success the appropriate static map (shared_map / local_map) is filled
+ * and we return true. On any problem (file missing, short read, bad magic,
+ * wrong CRC) we return false so the caller can fall back to reading from
+ * shared storage.
+ */
+static bool
+try_load_relmap_file_from_local(bool shared, bool lock_held)
+{
+	char		mapfilename[MAXPGPATH];
+	RelMapFile	local_buf;
+	pg_crc32c	crc;
+	int			fd;
+	int			r;
+
+	Assert(polar_is_replica() && polar_enable_shared_storage_mode);
+
+	if (shared)
+		snprintf(mapfilename, sizeof(mapfilename), "global/%s",
+				 RELMAPPER_FILENAME);
+	else
+		snprintf(mapfilename, sizeof(mapfilename), "%s/%s",
+				 DatabasePath, RELMAPPER_FILENAME);
+
+	/* Open the local cached file; ENOENT is expected on first access. */
+	fd = OpenTransientFile(mapfilename, O_RDONLY | PG_BINARY);
+	if (fd < 0)
+		return false;
+
+	if (!lock_held)
+		LWLockAcquire(RelationMappingLock, LW_SHARED);
+
+	/* Read the entire map in one shot. */
+	pgstat_report_wait_start(WAIT_EVENT_RELATION_MAP_READ);
+	r = polar_read(fd, &local_buf, sizeof(RelMapFile));
+	pgstat_report_wait_end();
+
+	if (!lock_held)
+		LWLockRelease(RelationMappingLock);
+
+	if (CloseTransientFile(fd) != 0)
+		return false;
+
+	if (r != sizeof(RelMapFile))
+		return false;
+
+	/* Validate magic number and mapping count. */
+	if (local_buf.magic != RELMAPPER_FILEMAGIC ||
+		local_buf.num_mappings < 0 ||
+		local_buf.num_mappings > MAX_MAPPINGS)
+		return false;
+
+	/* Verify the CRC. */
+	INIT_CRC32C(crc);
+	COMP_CRC32C(crc, (char *) &local_buf, offsetof(RelMapFile, crc));
+	FIN_CRC32C(crc);
+
+	if (!EQ_CRC32C(crc, local_buf.crc))
+		return false;
+
+	/* All checks passed; install the map. */
+	if (shared)
+		memcpy(&shared_map, &local_buf, sizeof(RelMapFile));
+	else
+		memcpy(&local_map, &local_buf, sizeof(RelMapFile));
+
+	return true;
+}
+
+/*
+ * POLAR: polar_invalidate_local_relmap_caches
+ *
+ * Remove all replica-local cached copies of pg_filenode.map: both the shared
+ * catalog map (global/pg_filenode.map) and every per-database map
+ * (base/<dboid>/pg_filenode.map).
+ *
+ * Must be called during shared-storage replica startup, before any backend
+ * loads the relmap, to guarantee that stale caches left over from a previous
+ * run or a role swap are discarded.
+ */
+void
+polar_invalidate_local_relmap_caches(void)
+{
+	char		mapfilename[MAXPGPATH];
+	DIR		   *dir;
+	struct dirent *de;
+
+	/* Remove the global relmap cache */
+	snprintf(mapfilename, sizeof(mapfilename), "global/%s", RELMAPPER_FILENAME);
+
+	if (unlink(mapfilename) < 0 && errno != ENOENT)
+	{
+		ereport(LOG,
+				(errcode_for_file_access(),
+				 errmsg("could not remove local relmap cache file \"%s\": %m",
+						mapfilename)));
+	}
+
+	/* Remove per-database relmap caches under base/ */
+	dir = AllocateDir("base");
+	if (dir == NULL)
+	{
+		if (errno == ENOENT)
+			return;
+
+		ereport(LOG,
+				(errcode_for_file_access(),
+				 errmsg("could not open directory \"base\": %m")));
+
+		return;
+	}
+
+	while ((de = ReadDirExtended(dir, "base", LOG)) != NULL)
+	{
+		if (strcmp(de->d_name, ".") == 0 || strcmp(de->d_name, "..") == 0)
+			continue;
+
+		snprintf(mapfilename, sizeof(mapfilename), "base/%s/%s",
+				 de->d_name, RELMAPPER_FILENAME);
+
+		if (unlink(mapfilename) < 0 && errno != ENOENT)
+		{
+			ereport(LOG,
+					(errcode_for_file_access(),
+					 errmsg("could not remove local relmap cache file \"%s\": %m",
+							mapfilename)));
+		}
+	}
+
+	FreeDir(dir);
 }
 
 /*
@@ -927,10 +1080,24 @@ write_relmap_file(RelMapFile *newmap, bool write_wal, bool send_sinval,
 	 */
 	snprintf(mapfilename, sizeof(mapfilename), "%s/%s",
 			 dbpath, RELMAPPER_FILENAME);
-	polar_make_file_path_level2(polar_mapfilename, mapfilename);
 	snprintf(maptempfilename, sizeof(maptempfilename), "%s/%s",
 			 dbpath, RELMAPPER_TEMP_FILENAME);
-	polar_make_file_path_level2(polar_maptempfilename, maptempfilename);
+
+	/*
+	 * On a shared-storage replica, write the files to the local PGDATA path
+	 * (the replica-local cache) rather than to shared storage. This is called
+	 * from relmap_redo() to keep the local cache up to date.
+	 */
+	if (polar_is_replica() && polar_enable_shared_storage_mode)
+	{
+		snprintf(polar_mapfilename, MAXPGPATH, "%s", mapfilename);
+		snprintf(polar_maptempfilename, MAXPGPATH, "%s", maptempfilename);
+	}
+	else
+	{
+		polar_make_file_path_level2(polar_mapfilename, mapfilename);
+		polar_make_file_path_level2(polar_maptempfilename, maptempfilename);
+	}
 
 	/*
 	 * Open a temporary file. If a file already exists with this name, it must
@@ -1124,33 +1291,25 @@ relmap_redo(XLogReaderState *record)
 		/* We need to construct the pathname for this database */
 		dbpath = GetDatabasePath(xlrec->dbid, xlrec->tsid);
 
-		if (polar_is_replica())
-		{
-			CacheInvalidateRelmap(xlrec->dbid);
-		}
-		else
-		{
-			/*
-			 * Write out the new map and send sinval, but of course don't
-			 * write a new WAL entry.  There's no surrounding transaction to
-			 * tell to preserve files, either.
-			 *
-			 * There shouldn't be anyone else updating relmaps during WAL
-			 * replay, but grab the lock to interlock against
-			 * load_relmap_file().
-			 *
-			 * Note that we use the same WAL record for updating the relmap of
-			 * an existing database as we do for creating a new database. In
-			 * the latter case, taking the relmap log and sending sinval
-			 * messages is unnecessary, but harmless. If we wanted to avoid
-			 * it, we could add a flag to the WAL record to indicate which
-			 * operation is being performed.
-			 */
-			LWLockAcquire(RelationMappingLock, LW_EXCLUSIVE);
-			write_relmap_file(&newmap, false, true, false,
-							  xlrec->dbid, xlrec->tsid, dbpath);
-			LWLockRelease(RelationMappingLock);
-		}
+		/*
+		 * Write out the new map and send sinval, but of course don't write a
+		 * new WAL entry.  There's no surrounding transaction to tell to
+		 * preserve files, either.
+		 *
+		 * There shouldn't be anyone else updating relmaps during WAL replay,
+		 * but grab the lock to interlock against load_relmap_file().
+		 *
+		 * Note that we use the same WAL record for updating the relmap of an
+		 * existing database as we do for creating a new database. In the
+		 * latter case, taking the relmap log and sending sinval messages is
+		 * unnecessary, but harmless. If we wanted to avoid it, we could add a
+		 * flag to the WAL record to indicate which operation is being
+		 * performed.
+		 */
+		LWLockAcquire(RelationMappingLock, LW_EXCLUSIVE);
+		write_relmap_file(&newmap, false, true, false, xlrec->dbid, xlrec->tsid,
+						  dbpath);
+		LWLockRelease(RelationMappingLock);
 
 		pfree(dbpath);
 	}

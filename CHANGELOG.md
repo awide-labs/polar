@@ -25,6 +25,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- VACUUM FULL/CLUSTER/REINDEX/TRUNCATE of mapped system catalogs recreates
+  relfilenodes and commits the switch by updating pg_filenode.map. The relmap
+  update is WAL-logged and flushed before the updated map file is guaranteed to
+  be visible on shared storage. A fast replica can therefore replay the relmap
+  WAL record and start resolving mapped OIDs while still reading an old
+  pg_filenode.map from shared storage, producing stale filenodes that may have
+  already been removed and leading to intermittent catalog/relcache failures
+  (XCOM-195)
 - Fixed replica promotion failure (FATAL: "WAL segment has already been removed")
   when primary crashed while creating a new WAL segment file (XCOM-195)
 - Fixed non-working log rotation via pg_ctl logrotate (XCOM-195)
