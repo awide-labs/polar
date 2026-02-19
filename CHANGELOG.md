@@ -17,6 +17,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Added support for cgroup v2 memory statistics retrieval, resolving the
+  recurring `Failed to get instance memory` error that previously flooded the
+  logs (XCOM-193)
 - Fixed a race condition in VACUUM FULL, CLUSTER, REINDEX, and TRUNCATE
   operations on mapped system catalogs. Previously, these commands would
   recreate relfilenodes and commit the switch by updating `pg_filenode.map`.

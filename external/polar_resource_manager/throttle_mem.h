@@ -41,8 +41,11 @@
 #define PidIsValid(objectId)  ((bool) ((objectId) != InvalidPid))
 
 #define CGROUPMEMFILE "memory.stat"
+#define CGROUPMEM_LIMIT_FILE "memory.max"
 
 extern char polar_cgroup_mem_path[MAXPGPATH];
+extern char polar_cgroup_mem_limit_path[MAXPGPATH];
+extern bool polar_cgroup_v2;
 
 extern FILE *polar_get_statfd_by_pid(int pid);
 extern FILE *polar_get_statmfd_by_pid(int pid);

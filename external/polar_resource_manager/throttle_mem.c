@@ -39,6 +39,8 @@ typedef enum PROCARGTYPE
 static const char *delim = " ";
 
 char		polar_cgroup_mem_path[MAXPGPATH] = "";
+char		polar_cgroup_mem_limit_path[MAXPGPATH] = "";
+bool		polar_cgroup_v2 = false;
 
 static char *readone(char *curstr, void *x, PROCARGTYPE argtype);
 
@@ -320,7 +322,10 @@ polar_get_procrss_by_pidstatm(int pid, int procflag, Size *rss)
 
 /*
  * Get the instance memory limit and memory usage.
- * Parse a /sys/fs/cgroup/memory/memory.stat file.
+ *
+ * For cgroup v1: parses /sys/fs/cgroup/memory/memory.stat.
+ * For cgroup v2: parses /sys/fs/cgroup/memory.stat and reads
+ * /sys/fs/cgroup/memory.max for the limit.
  */
 int
 polar_get_ins_memorystat(Size *rss, Size *mapped_file, Size *limit)
@@ -333,6 +338,7 @@ polar_get_ins_memorystat(Size *rss, Size *mapped_file, Size *limit)
 
 	*rss = 0;
 	*mapped_file = 0;
+	*limit = 0;
 
 	/* Get the memory.stat file handle */
 	fd = fopen(polar_cgroup_mem_path, "r");
@@ -340,29 +346,66 @@ polar_get_ins_memorystat(Size *rss, Size *mapped_file, Size *limit)
 	if (NULL == fd)
 		return 1;
 
-	/*
-	 * Hierarchical_memory_limit is the instance memory limit. Rss and
-	 * mapped_file is the instance memory usage.
-	 */
-	while (fgets(procbuf, MAXSTATLEN, fd) != NULL)
+	if (polar_cgroup_v2)
 	{
-		curstr = readone(procbuf, key, PROCSTR);
-		if (strcmp(key, "rss") == 0)
+		/*
+		 * cgroup v2: "anon" is the anonymous memory usage (equivalent of
+		 * cgroup v1 "rss"), "file_mapped" is the file-backed mapped memory
+		 * (equivalent of cgroup v1 "mapped_file").  The memory limit is
+		 * stored in a separate file (memory.max).
+		 */
+		while (fgets(procbuf, MAXSTATLEN, fd) != NULL)
 		{
-			curstr = readone(curstr, rss, PROCNUM);
+			curstr = readone(procbuf, key, PROCSTR);
+			if (strcmp(key, "anon") == 0)
+				curstr = readone(curstr, rss, PROCNUM);
+			else if (strcmp(key, "file_mapped") == 0)
+				curstr = readone(curstr, mapped_file, PROCNUM);
 		}
-		else if (strcmp(key, "mapped_file") == 0)
-		{
-			curstr = readone(curstr, mapped_file, PROCNUM);
-		}
-		else if (strcmp(key, "hierarchical_memory_limit") == 0)
-		{
-			curstr = readone(curstr, limit, PROCNUM);
-			break;
-		}
-	}
 
-	fclose(fd);
+		fclose(fd);
+
+		/* Read memory limit from memory.max */
+		fd = fopen(polar_cgroup_mem_limit_path, "r");
+		if (NULL == fd)
+			return 1;
+
+		if (fgets(procbuf, MAXSTATLEN, fd) != NULL)
+		{
+			if (strncmp(procbuf, "max", 3) == 0)
+				*limit = (Size) LLONG_MAX;	/* no limit configured */
+			else
+				*limit = (Size) atoll(procbuf);
+		}
+
+		fclose(fd);
+	}
+	else
+	{
+		/*
+		 * cgroup v1: hierarchical_memory_limit is the instance memory limit.
+		 * Rss and mapped_file is the instance memory usage.
+		 */
+		while (fgets(procbuf, MAXSTATLEN, fd) != NULL)
+		{
+			curstr = readone(procbuf, key, PROCSTR);
+			if (strcmp(key, "rss") == 0)
+			{
+				curstr = readone(curstr, rss, PROCNUM);
+			}
+			else if (strcmp(key, "mapped_file") == 0)
+			{
+				curstr = readone(curstr, mapped_file, PROCNUM);
+			}
+			else if (strcmp(key, "hierarchical_memory_limit") == 0)
+			{
+				curstr = readone(curstr, limit, PROCNUM);
+				break;
+			}
+		}
+
+		fclose(fd);
+	}
 
 	return *rss == 0 || *limit == 0;
 }

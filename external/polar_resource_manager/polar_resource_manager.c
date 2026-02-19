@@ -25,6 +25,8 @@
 #include "postgres.h"
 
 #include <sys/time.h>
+#include <sys/vfs.h>
+#include <unistd.h>
 
 #include "miscadmin.h"
 #include "pgstat.h"
@@ -107,9 +109,114 @@ check_cgroupmem_prefix(char **newval, void **extra, GucSource source)
 	/* Need a modifiable copy of string */
 	rawname = pstrdup(*newval);
 	sprintf(polar_cgroup_mem_path, "%s%s", rawname, CGROUPMEMFILE);
+	sprintf(polar_cgroup_mem_limit_path, "%s%s", rawname, CGROUPMEM_LIMIT_FILE);
 
 	pfree(rawname);
+
+	/*
+	 * Re-sync the cgroup version flag with the provided path.  When the
+	 * default path is used, polar_cgroup_v2 is already set correctly by
+	 * detect_cgroup_mem_prefix().  This assignment is only meaningful when
+	 * the user overrides cgroup_mem_prefix_path manually: presence of
+	 * memory.max (cgroup v2 only) determines the correct parsing mode for
+	 * polar_get_ins_memorystat().
+	 */
+	polar_cgroup_v2 = (access(polar_cgroup_mem_limit_path, F_OK) == 0);
+
 	return true;
+}
+
+/*
+ * Detect the cgroup version in use and return the appropriate
+ * cgroup_mem_prefix_path default value.
+ *
+ * cgroup v1: memory stats are under /sys/fs/cgroup/memory/
+ * cgroup v2: the process's actual cgroup is read from /proc/self/cgroup;
+ *            memory.stat and memory.max live directly in that directory.
+ *
+ * Version is detected via statfs(2) on /sys/fs/cgroup: if the filesystem
+ * type is CGROUP2_SUPER_MAGIC (0x63677270) it is v2, otherwise v1.
+ * This is equivalent to: stat -fc %T /sys/fs/cgroup/ == "cgroup2fs"
+ */
+static const char *
+detect_cgroup_mem_prefix(void)
+{
+#define CGROUP_MOUNT        "/sys/fs/cgroup"
+#define CGROUP_SELF_FILE    "/proc/self/cgroup"
+#define CGROUP2_SUPER_MAGIC 0x63677270
+
+	static char cgroup_v2_prefix[MAXPGPATH];
+	struct statfs buf;
+
+	/*
+	 * Check the filesystem type of /sys/fs/cgroup.  This is equivalent to
+	 * `stat -fc %T /sys/fs/cgroup/`: cgroup2fs → v2, tmpfs → v1.
+	 */
+	if (statfs(CGROUP_MOUNT, &buf) != 0 || buf.f_type != CGROUP2_SUPER_MAGIC)
+	{
+		/* cgroup v1: memory controller is under /sys/fs/cgroup/memory/ */
+		polar_cgroup_v2 = false;
+		return "/sys/fs/cgroup/memory/";
+	}
+
+	/*
+	 * cgroup v2 unified hierarchy: read the actual cgroup path of this
+	 * process from /proc/self/cgroup.  Each line has the form:
+	 * "0::/path/to/cgroup". The full path on disk is /sys/fs/cgroup + that
+	 * relative path.
+	 */
+	{
+		FILE	   *fp = fopen(CGROUP_SELF_FILE, "r");
+
+		if (fp != NULL)
+		{
+			/*
+			 * Each line has the form: "0::/path/to/cgroup, so MAXPGPATH
+			 * buffer should be enough.
+			 */
+			char		line[MAXPGPATH];
+
+			while (fgets(line, sizeof(line), fp) != NULL)
+			{
+				if (strncmp(line, "0::", 3) == 0)
+				{
+					char	   *cgroup_rel = line + 3;
+					char	   *nl = strchr(cgroup_rel, '\n');
+					char		stat_path[MAXPGPATH];
+
+					if (nl)
+						*nl = '\0';
+
+					if (strcmp(cgroup_rel, "/") == 0)
+						snprintf(cgroup_v2_prefix, MAXPGPATH,
+								 "/sys/fs/cgroup/");
+					else
+						snprintf(cgroup_v2_prefix, MAXPGPATH,
+								 "/sys/fs/cgroup%s/", cgroup_rel);
+
+					snprintf(stat_path, MAXPGPATH, "%s%s",
+							 cgroup_v2_prefix, CGROUPMEMFILE);
+
+					if (access(stat_path, F_OK) == 0)
+					{
+						fclose(fp);
+						polar_cgroup_v2 = true;
+						return cgroup_v2_prefix;
+					}
+					break;
+				}
+			}
+			fclose(fp);
+		}
+	}
+
+	/*
+	 * Fallback: statfs confirmed cgroup v2 but we couldn't resolve the
+	 * process's specific cgroup path — use the root cgroup directory.
+	 */
+	polar_cgroup_v2 = true;
+	snprintf(cgroup_v2_prefix, MAXPGPATH, "/sys/fs/cgroup/");
+	return cgroup_v2_prefix;
 }
 
 /*
@@ -261,7 +368,7 @@ _PG_init(void)
 							   gettext_noop("Database in which polar_resource_manager metadata is kept."),
 							   NULL,
 							   &cgroup_mem_prefix_path,
-							   "/sys/fs/cgroup/memory/",
+							   detect_cgroup_mem_prefix(),
 							   PGC_POSTMASTER,
 							   GUC_SUPERUSER_ONLY | POLAR_GUC_IS_VISIBLE | POLAR_GUC_IS_CHANGABLE,
 							   check_cgroupmem_prefix, NULL, NULL);
