@@ -203,6 +203,8 @@ get_wal_records($node_primary, $prev_insert, $cur_insert, "*",
 $node_primary->stop('i');
 
 # promote replica
+# Wait for startup BEFORE dropping slots: polar_drop_all_slots() calls
+# safe_psql which dies if the server is still in crash recovery.
 $node_replica->promote;
 $node_replica->polar_wait_for_startup(300, 0);
 $node_replica->polar_drop_all_slots();
