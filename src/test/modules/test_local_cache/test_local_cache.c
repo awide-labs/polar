@@ -52,6 +52,8 @@
 #define BLOCK_PER_SEGMENT (32)
 #define LOOP_MAX_SEGMENT  (3)
 #define MAX_SEGMENTS (5)
+#define NUM_READ_WORKERS (2)
+#define NUM_WRITE_WORKERS (2)
 
 #define LOCAL_CACHE_STAT_INIT (0)
 #define LOCAL_CACHE_STAT_START (1)
@@ -73,6 +75,7 @@ typedef struct test_local_cache_meta
 	int			status;
 	uint64		del_seg;
 	polar_local_cache cache;
+	uint64		reader_active_page[NUM_READ_WORKERS];
 }			test_local_cache_meta;
 
 
@@ -598,6 +601,10 @@ test_local_cache_read_worker(Datum main_arg)
 	uint64		read_page = 0;
 	uint64		segno;
 	uint32		offset;
+	int			reader_idx;
+
+	/* Get my reader index */
+	reader_idx = DatumGetInt32(main_arg);
 
 	test_meta = (test_local_cache_meta *) ShmemInitStruct("test_local_cache_meta", sizeof(test_local_cache_meta), &found);
 	Assert(found == true);
@@ -619,6 +626,9 @@ test_local_cache_read_worker(Datum main_arg)
 		i++;
 
 		SpinLockAcquire(&test_meta->lock);
+
+		/* Mark ourselves as idle so remover won't wait for us */
+		test_meta->reader_active_page[reader_idx] = PG_UINT64_MAX;
 		status = test_meta->status;
 
 		if (status == LOCAL_CACHE_STAT_START)
@@ -631,6 +641,8 @@ test_local_cache_read_worker(Datum main_arg)
 				if (i % 3 == 0 && test_meta->read_min_page < test_meta->max_page)
 					test_meta->read_min_page++;
 
+				/* Publish page before releasing lock so remover sees it */
+				test_meta->reader_active_page[reader_idx] = read_page;
 				need_read = true;
 			}
 		}
@@ -739,8 +751,21 @@ test_local_cache_remove_worker(Datum main_arg)
 			{
 				if (test_meta->read_min_page - test_meta->min_page > BLOCK_PER_SEGMENT)
 				{
-					segno = test_meta->min_page % BLOCK_PER_SEGMENT;
+					segno = test_meta->min_page / BLOCK_PER_SEGMENT;
+
+					/*
+					 * Safe to remove only if no reader has an in-flight read
+					 * from this segment.
+					 */
 					need_remove = true;
+					for (int r = 0; r < NUM_READ_WORKERS; r++)
+					{
+						if (test_meta->reader_active_page[r] < (segno + 1) * BLOCK_PER_SEGMENT)
+						{
+							need_remove = false;
+							break;
+						}
+					}
 				}
 			}
 		}
@@ -776,7 +801,8 @@ test_local_cache_remove_worker(Datum main_arg)
 }
 
 static BackgroundWorkerHandle *
-test_local_cache_launch_worker(BackgroundWorker *worker, char *func)
+test_local_cache_launch_worker(BackgroundWorker *worker, char *func,
+							   int32 worker_id)
 {
 	BackgroundWorkerHandle *handler = NULL;
 
@@ -787,6 +813,10 @@ test_local_cache_launch_worker(BackgroundWorker *worker, char *func)
 	worker->bgw_restart_time = BGW_NEVER_RESTART;
 	sprintf(worker->bgw_library_name, "test_local_cache");
 	sprintf(worker->bgw_function_name, "%s", func);
+
+	if (worker_id != -1)
+		worker->bgw_main_arg = Int32GetDatum(worker_id);
+
 	worker->bgw_notify_pid = MyProcPid;
 	snprintf(worker->bgw_name, BGW_MAXLEN, "%s", func);
 	snprintf(worker->bgw_type, BGW_MAXLEN, "test_local_cache");
@@ -799,30 +829,45 @@ test_local_cache_launch_worker(BackgroundWorker *worker, char *func)
 static void
 test_local_cache_bgworker(polar_local_cache cache)
 {
-#define MAX_BACK_PROCESS (6)
+#define MAX_BACK_PROCESS (NUM_READ_WORKERS + NUM_WRITE_WORKERS + 2)
 	bool		found;
 	test_local_cache_meta *test_meta = NULL;
 	BackgroundWorkerHandle *handler[MAX_BACK_PROCESS];
 	BackgroundWorker worker[MAX_BACK_PROCESS];
+	char	   *back_read_func = "test_local_cache_read_worker";
+	char	   *back_write_func = "test_local_cache_write_worker";
 	char	   *back_func[] =
 	{
-		"test_local_cache_write_worker",
-		"test_local_cache_write_worker",
-		"test_local_cache_read_worker",
-		"test_local_cache_read_worker",
 		"test_local_cache_flush_worker",
 		"test_local_cache_remove_worker"
 	};
 
-	int			i = 0;
+	int32		i = 0;
 
 	test_meta = (test_local_cache_meta *) ShmemInitStruct("test_local_cache_meta", sizeof(test_local_cache_meta), &found);
 	Assert(found == true);
 
 	SpinLockInit(&test_meta->lock);
 
-	for (i = 0; i < MAX_BACK_PROCESS; i++)
-		handler[i] = test_local_cache_launch_worker(&worker[i], back_func[i]);
+	/* PG_UINT64_MAX means "not reading" — won't block remover */
+	for (i = 0; i < NUM_READ_WORKERS; i++)
+		test_meta->reader_active_page[i] = PG_UINT64_MAX;
+
+	/* Launch read workers with unique indices for active page tracking */
+	for (i = 0; i < NUM_READ_WORKERS; i++)
+		handler[i] = test_local_cache_launch_worker(&worker[i], back_read_func,
+													i);
+
+	/* Launch write workers */
+	for (i = NUM_READ_WORKERS; i < NUM_READ_WORKERS + NUM_WRITE_WORKERS; i++)
+		handler[i] = test_local_cache_launch_worker(&worker[i], back_write_func,
+													-1);
+
+	/* Launch other workers */
+	for (i = NUM_READ_WORKERS + NUM_WRITE_WORKERS; i < MAX_BACK_PROCESS; i++)
+		handler[i] = test_local_cache_launch_worker(&worker[i],
+													back_func[i - NUM_READ_WORKERS - NUM_WRITE_WORKERS],
+													-1);
 
 	for (i = 0; i < MAX_BACK_PROCESS; i++)
 	{
