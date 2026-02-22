@@ -29,6 +29,7 @@ ifeq ($(enable_minimal),no)
 #SUBDIRS += log_fdw
 #SUBDIRS += pase
 #SUBDIRS += pg_bigm
+SUBDIRS += pg_bulkload
 SUBDIRS += pg_cron
 #SUBDIRS += pg_jieba
 #SUBDIRS += pg_partman

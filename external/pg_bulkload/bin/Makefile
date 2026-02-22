@@ -25,14 +25,14 @@ PG_CONFIG = pg_config
 PGXS := $(shell $(PG_CONFIG) --pgxs)
 include $(PGXS)
 else
-subdir = contrib/$(MODULE_big)
+subdir = external/pg_bulkload/bin
 include $(makefile_global)
 include $(top_srcdir)/contrib/contrib-global.mk
 endif
 
 # libs pgport, pgcommon moved somewhere else in some ubuntu version
 # see ticket #97
-PG_LIBS += -L$(shell $(PG_CONFIG) --pkglibdir)
+PG_LIBS += -L$(pkglibdir)
 
 # remove dependency to libxml2 and libxslt
 LIBS := $(filter-out -lxml2, $(LIBS))
