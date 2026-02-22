@@ -26,6 +26,7 @@
 #include "storage/bufmgr.h"
 #include "storage/fd.h"
 #include "storage/polar_fd.h"
+#include "storage/smgr.h"
 #include "utils/builtins.h"
 #include "utils/rel.h"
 #include "storage/bufpage.h"
@@ -93,8 +94,6 @@ typedef struct DirectWriter
 	TransactionId	xid;
 	CommandId		cid;
 
-	int				datafd;		/**< File descriptor of data file */
-
 	char		   *blocks;		/**< Local heap block buffer */
 	int				curblk;		/**< Index of the current block buffer */
 } DirectWriter;
@@ -122,15 +121,7 @@ static int	DirectWriterSendQuery(DirectWriter *self, PGconn *conn, char *queueNa
 #define LS_TOTAL_CNT(ls)	((ls)->ls.exist_cnt + (ls)->ls.create_cnt)
 
 /* Signature of static functions */
-static int	open_data_file(
-#if PG_VERSION_NUM >= 160000
-			RelFileLocator rLocator, 
-#else
-			RelFileNode rnode, 
-#endif
-			bool istemp, BlockNumber blknum);
 static void	flush_pages(DirectWriter *loader);
-static void	close_data_file(DirectWriter *loader);
 static void	UpdateLSF(DirectWriter *loader, BlockNumber num);
 static void UnlinkLSF(DirectWriter *loader);
 
@@ -155,8 +146,7 @@ CreateDirectWriter(void *opt)
 	self->base.sendQuery = (WriterSendQueryProc) DirectWriterSendQuery;
 	self->base.max_dup_errors = -2;
 	self->lsf_fd = -1;
-	self->datafd = -1;
-	self->blocks = palloc(BLCKSZ * BLOCK_BUF_NUM);
+	self->blocks = palloc_aligned(BLCKSZ * BLOCK_BUF_NUM, PG_IO_ALIGN_SIZE, 0);
 	self->curblk = 0;
 
 	return (Writer *) self;
@@ -332,11 +322,20 @@ DirectWriterClose(DirectWriter *self, bool onError)
 
 	Assert(self != NULL);
 
-	/* Flush unflushed block buffer and close the heap file. */
+	/* Flush unflushed block buffer. */
 	if (!onError)
+	{
 		flush_pages(self);
 
-	close_data_file(self);
+
+		/*
+		 * Fsync the relation.  Direct writer skips WAL, so fsync is the only
+		 * guarantee that data survives a crash.
+		 */
+		if (self->ls.ls.create_cnt > 0)
+			smgrimmedsync(RelationGetSmgr(self->base.rel), MAIN_FORKNUM);
+	}
+
 	UnlinkLSF(self);
 
 	if (!onError)
@@ -482,22 +481,20 @@ DirectWriterSendQuery(DirectWriter *self, PGconn *conn, char *queueName, char *l
  *
  * Flow:
  * <ol>
- *	 <li>If no more space is available in the data file, switch to a new one.</li>
- *	 <li>Compute block number which can be written to the current file.</li>
+ *	 <li>Compute checksums for all buffered blocks.</li>
  *	 <li>Save the last block number in the load status file.</li>
- *	 <li>Write to the current file.</li>
- *	 <li>If there are other data, write them too.</li>
+ *	 <li>Write all blocks via polar_smgrbulkextend (handles segment boundaries).</li>
  * </ol>
  *
  * @param loader [in] Direct Writer.
- * @return File descriptor for the current data file.
  */
 static void
 flush_pages(DirectWriter *loader)
 {
-	int			i;
 	int			num;
 	LoadStatus *ls = &loader->ls;
+	BlockNumber	blkno;
+	SMgrRelation smgr;
 
 	num = loader->curblk;
 	if (!PageIsEmpty(GetCurrentPage(loader)))
@@ -539,9 +536,9 @@ flush_pages(DirectWriter *loader)
 
 		recptr = log_newpage(
 #if PG_VERSION_NUM >= 160000
-				&ls->ls.rLocator, 
+				&ls->ls.rLocator,
 #else
-				&ls->ls.rnode, 
+				&ls->ls.rnode,
 #endif
 				MAIN_FORKNUM,
 			ls->ls.exist_cnt, loader->blocks);
@@ -557,179 +554,36 @@ flush_pages(DirectWriter *loader)
 		XLogFlush(recptr);
 	}
 #endif
-	/*
-	 * Write blocks. We might need to write multiple files on boundary of
-	 * relation segments.
-	 */
-	for (i = 0; i < num;)
-	{
-		char	   *buffer;
-		int			total;
-		int			written;
-		int			flush_num;
-		BlockNumber	relblks = LS_TOTAL_CNT(ls);
 
-		/* Switch to the next file if the current file has been filled up. */
-		if (relblks % RELSEG_SIZE == 0)
-			close_data_file(loader);
-		if (loader->datafd == -1)
-			loader->datafd = open_data_file(
-#if PG_VERSION_NUM >= 160000
-											ls->ls.rLocator,
-#else
-											ls->ls.rnode,
-#endif
-											RELATION_IS_LOCAL(loader->base.rel),
-											relblks);
-
-		/* Number of blocks to be added to the current file. */
-		flush_num = Min(num - i, RELSEG_SIZE - relblks % RELSEG_SIZE);
-		Assert(flush_num > 0);
+	blkno = LS_TOTAL_CNT(ls);
 
 #if PG_VERSION_NUM >= 90300
-		if (DataChecksumsEnabled())
-		{
-			Page	contained_page;
-			int		j;
+	if (DataChecksumsEnabled())
+	{
+		int		j;
 
-			/*
-			 * Write checksum for pages that are going to be written to the
-			 * current file.  We will be writing flush_num pages from the
-			 * block buffer starting at block offset i.
-			 */
-			for (j = 0; j < flush_num; j++)
-			{
-				contained_page = GetTargetPage(loader, i + j);
-				PageSetChecksumInplace(contained_page, LS_TOTAL_CNT(ls) + j);
-			}
-		}	
+		for (j = 0; j < num; j++)
+		{
+			Page	contained_page = GetTargetPage(loader, j);
+			PageSetChecksumInplace(contained_page, blkno + j);
+		}
+	}
 #endif
 
-		/* Write the last block number to the load status file. */
-		UpdateLSF(loader, flush_num);
+	/* Write the last block number to the load status file. */
+	UpdateLSF(loader, num);
 
-		/*
-		 * Write flush_num blocks to the current file starting at block
-		 * offset i.  The current file might get full, ie, RELSEG_SIZE blocks
-		 * full, after writing that much (see how flush_num is calculated
-		 * above to understand why) .  We write the remaining content of the
-		 * block buffer (ie, loader->blocks) in the new file during the next
-		 * iteration.
-		 */
-		buffer = loader->blocks + BLCKSZ * i;
-		total = BLCKSZ * flush_num;
-		written = 0;
-		while (total > 0)
-		{
-			int	len = polar_write(loader->datafd, buffer + written, total);
-			if (len == -1)
-			{
-				/* fatal error, do not want to write blocks anymore */
-				ereport(ERROR, (errcode_for_file_access(),
-								errmsg("could not write to data file: %m")));
-			}
-			written += len;
-			total -= len;
-		}
-
-		i += flush_num;
-	}
+	/*
+	 * Write all blocks via the storage manager.  polar_smgrbulkextend
+	 * handles relation segment boundaries internally.
+	 */
+	smgr = RelationGetSmgr(loader->base.rel);
+	polar_smgrbulkextend(smgr, MAIN_FORKNUM, blkno, num, loader->blocks, true);
 
 	/*
 	 * NOTICE: Be sure reset curblk to 0 and reinitialize recycled page
 	 * if you will continue to use blocks.
 	 */
-}
-
-/**
- * @brief Open the next data file and returns its descriptor.
- * @param rnode  [in] RelFileNode of target relation.
- * @param blknum [in] Block number to seek.
- * @return File descriptor of the last data file.
- */
-static int
-open_data_file(
-#if PG_VERSION_NUM >= 160000
-				RelFileLocator rLocator, 
-#else
-				RelFileNode rnode, 
-#endif
-				bool istemp, BlockNumber blknum)
-{
-	int			fd = -1;
-	int			ret;
-	BlockNumber segno;
-	char	   *fname = NULL;
-
-#if PG_VERSION_NUM >= 90100
-#if PG_VERSION_NUM >= 160000
-	RelFileLocatorBackend	bknode;
-	bknode.locator = rLocator;
-#else
-	RelFileNodeBackend	bknode;
-	bknode.node = rnode;
-#endif  /* PG_VERSION_NUM >= 160000 */
-#if PG_VERSION_NUM >= 170000
-	bknode.backend = istemp ? MyBackendType : InvalidCommandId;
-#else
-	bknode.backend = istemp ? MyBackendId : InvalidBackendId;
-#endif  /* PG_VERSION_NUM >= 170000 */
-#if PG_VERSION_NUM >= 180000
-	fname = pstrdup(relpath(bknode, MAIN_FORKNUM).str);
-#else
-	fname = relpath(bknode, MAIN_FORKNUM);
-#endif  /* PG_VERSION_NUM >= 180000 */
-#else
-	fname = relpath(rnode, MAIN_FORKNUM);
-#endif  /* PG_VERSION_NUM >= 90100 */
-	segno = blknum / RELSEG_SIZE;
-	if (segno > 0)
-	{
-		/*
-		 * The length `+ 12' is taken from _mdfd_openmesg() in backend/storage/smgr/md.c.
-		 */
-		char	   *tmp = palloc(strlen(fname) + 12);
-
-		sprintf(tmp, "%s.%u", fname, segno);
-		pfree(fname);
-		fname = tmp;
-	}
-	fd = polar_open(fname, O_CREAT | O_WRONLY | PG_BINARY, S_IRUSR | S_IWUSR);
-	if (fd == -1)
-		ereport(ERROR, (errcode_for_file_access(),
-						errmsg("could not open data file: %m")));
-	ret = polar_lseek(fd, BLCKSZ * (blknum % RELSEG_SIZE), SEEK_SET);
-	if (ret == -1)
-	{
-		polar_close(fd);
-		ereport(ERROR, (errcode_for_file_access(),
-						errmsg
-						("could not seek the end of the data file: %m")));
-	}
-
-	pfree(fname);
-
-	return fd;
-}
-
-/**
- * @brief Flush and close the data file.
- * @param loader [in] Direct Writer.
- * @return void
- */
-static void
-close_data_file(DirectWriter *loader)
-{
-	if (loader->datafd != -1)
-	{
-		if (polar_fsync(loader->datafd) != 0)
-			ereport(WARNING, (errcode_for_file_access(),
-						errmsg("could not sync data file: %m")));
-		if (polar_close(loader->datafd) < 0)
-			ereport(WARNING, (errcode_for_file_access(),
-						errmsg("could not close data file: %m")));
-		loader->datafd = -1;
-	}
 }
 
 /**
