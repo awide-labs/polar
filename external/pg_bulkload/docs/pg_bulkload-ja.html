@@ -1,0 +1,994 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD html 4.01 Transitional//EN" "http://www.w3.org/TR/html4/loose.dtd">
+<html>
+<head>
+<title>pg_bulkload</title>
+<link rel="home" title="pg_bulkload" href="index.html">
+<link rel="stylesheet" TYPE="text/css"href="style.css">
+<meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+</head>
+
+<body>
+<h1 id="pg_bulkload">pg_bulkload 3.1</h1>
+<div class="navigation">
+  <a href="index_ja.html">Top</a> &gt;
+  <a href="pg_bulkload-ja.html">pg_bulkload</a>
+<div>
+<hr />
+
+<div class="index">
+<ol>
+<li><a href="#name">名前</a></li>
+<li><a href="#synopsis">概要</a></li>
+<li><a href="#description">説明</a></li>
+<li><a href="#examples">使用例</a></li>
+<li><a href="#options">オプション</a></li>
+<li><a href="#controlfile">制御ファイル</a></li>
+<li><a href="#environment">環境変数</a></li>
+<li><a href="#restrictions">使用上の注意と制約</a></li>
+<li><a href="#details">詳細</a></li>
+<li><a href="#install">インストール方法</a></li>
+<li><a href="#requirement">動作環境</a></li>
+<li><a href="#releasenote">リリースノート<a></li>
+<li><a href="#seealso">関連項目</a></li>
+</ol>
+</div>
+
+<h2 id="name">名前</h2>
+<p>pg_bulkload -- 一定の制約条件の下で大量のデータを高速にロードするためのプログラムです。</p>
+
+<h2 id="synopsis">概要</h2>
+<p>
+pg_bulkload [ OPTIONS ] [ controlfile ]
+</p>
+
+<h2 id="description">説明</h2>
+<p style="color:red">
+重要な制約: pg_bulkloadは、PITRやレプリケーション環境では期待どおりに動作しません。詳細は<a href="#restrictions">こちら</a>を参照してください。
+</p>
+<p>
+pg_bulkload は、大量のデータを高速に投入する目的のためのツールです。
+データベース制約のチェックの有無や、エラーデータをスキップして投入を継続するか否かを制御でき、入力データに応じた柔軟なデータができます。
+たとえば、あるデータベースに格納されている情報を別のデータベースへ移送するような状況では、データの整合性は既に確認済みですので、細かなチェックは省いてとにかく高速にデータをロードできます。
+一方、別のツールの出力など整合性が怪しい場合には、制約をチェックしながら投入できます。
+</p>
+<p>
+pg_bulkload は元々は PostgreSQL 組み込みのデータロード用コマンドである COPY を上回る性能を目指して開発されました。
+バージョン 3.0 以降はさらに入力データの検証機能やフィルタによる変換機能を備え、ETL ツールの T (Transform) と L (Load) を強力にサポートします。
+</p>
+<p>
+バージョン 3.1 では、テーブルの他に固定長のバイナリファイルへ出力できます。
+入力データの整合性を確認しながらバイナリファイルに変換できるため、出力されたバイナリファイルのテーブルへのロード時間を短縮できます。
+また、マルチプロセス実行機能を改良し、入力ファイルの読み込みと、テーブルデータの書き込みを別プロセスで並列に実行することにより、さらに高速にロードできるようになりました。
+</p>
+
+<p>
+ご利用の際はなるべく最新バージョンにてお願い致します。古いバージョンにて発覚した不具合については<a href="#releasenote">リリースノート</a>を参照ください。
+</p>
+
+<h2 id="examples">使用例</h2>
+<p>pg_bulkload を利用するユーザが直接扱うプログラムは以下の2つです。</p>
+
+<h3>postgresql スクリプト</h3>
+<p>pg_ctl コマンドのラッパコマンドで、PostgreSQL サーバを起動・停止するプログラムです。
+postgresql スクリプトの内部で pg_ctl コマンドを呼び出しています。
+また、pg_bulkload によるロード中にサーバがダウンした場合、pg_bulkload コマンドを呼び出して自動的に独自のリカバリを行う機能を持っています。
+pg_bulkload を利用する場合、必ずこの postgresql スクリプトを使用してください。</p>
+
+<p>
+下記の "<a href="#restrictions">使用上の注意と制約</a>" を必ず読んでください。
+特に、pg_bulkload を DIRECT モードまたは PARALLEL モードで使った際のリカバリに関係します。
+DIRECT モードは<b>デフォルトの設定</b>であるため、ほとんどのユーザに影響があります。
+</p>
+
+<h3>pg_bulkload</h3>
+<p>データのロードを行うために呼び出すプログラムです。
+内部で pg_bulkload() ユーザ定義関数を呼び出して、PostgreSQL サーバ内で実際のロード処理を行います。
+pg_bulkload() ユーザ定義関数は、pg_bulkload のインストール時に作成されます。</p>
+
+<p>次の 3 ステップにより、pg_bulkload でロードすることが可能です。</p>
+
+<ol>
+<li>ロードに関する設定を記述する制御ファイルを作成し、ロード対象のテーブル名、入力ファイルのパスなどを指定します。
+"<a href="sample_csv.ctl">sample_csv.ctl</a>" もしくは "<a href="sample_bin.ctl">sample_bin.ctl</a>" を参考にして下さい。
+</li>
+<li>$PGDATA/pg_bulkload ディレクトリが存在することを確認してください。そのディレクトリにはロードステータスファイルが作成されます。</li>
+<li>制御ファイルを引数としてコマンドを実行します。
+<pre>$ pg_bulkload sample_csv.ctl
+NOTICE: BULK LOAD START
+NOTICE: BULK LOAD END
+	0 Rows skipped.
+	8 Rows successfully loaded.
+	0 Rows not loaded due to parse errors.
+	0 Rows not loaded due to duplicate errors.
+	0 Rows replaced with new rows.</pre>
+</ol>
+
+<h2 id="options">オプション</h2>
+<p>pg_bulkload では、下記のコマンドライン引数を指定できます。</p>
+
+<h3>ロードオプション</h3>
+<p>ロード内容を指定するためのパラメータです。</p>
+
+<dl>
+<dt>
+-i INPUT<br />
+--input=INPUT<br />
+--infile=INPUT
+</dt>
+<dd>ロードの入力データソースを指定します。
+制御ファイルの設定項目の "<a href="#INPUT">INPUT</a>" と同じです。
+</dd>
+
+<dt>
+-O OUTPUT<br />
+--output=OUTPUT
+</dt>
+<dd>データの出力先を指定します。
+制御ファイルの設定項目の "<a href="#OUTPUT">OUTPUT</a>" と同じです。
+</dd>
+
+<dt>
+-l LOGFILE<br />
+--logfile=LOGFILE
+</dt>
+<dd>ロード処理の結果を記録するログファイルのパスを指定します。
+制御ファイルの設定項目の "<a href="#LOGFILE">LOGFILE</a>" と同じです。
+</dd>
+
+<dt>
+-P PARSE_BADFILE<br />
+--parse-badfile=PARSE_BADFILE
+</dt>
+<dd>入力データのパース時に見つかった不良レコードを記録するBADファイルのパスを指定します。
+制御ファイルの設定項目の "<a href="#PARSE_BADFILE">PARSE_BADFILE</a>" と同じです。
+</dd>
+
+<dt>
+-u DUPLICATE_BADFILE<br />
+--duplicate-badfile=DUPLICATE_BADFILE
+</dt>
+<dd>インデックスメンテナンス処理で見つかった一意制約違反の不良レコードを記録するBADファイルのパスを指定します。
+制御ファイルの設定項目の "<a href="#DUPLICATE_BADFILE">DUPLICATE_BADFILE</a>" と同じです。
+</dd>
+
+<dt>
+-o "key=val"<br />
+--option="key=val"
+</dt>
+<dd>
+<a href="#controlfile">制御ファイル</a>で指定可能な設定項目を指定します。
+複数の設定項目を指定することもできます。
+</dd>
+
+</dl>
+
+<h3>接続オプション</h3>
+<p>PostgreSQL に接続するためのパラメータです。</p>
+
+<dl>
+<dt>
+-d DBNAME<br />
+--dbname=DBNAME
+</dt>
+<dd>接続するデータベース名を指定します。
+データベース名が指定されていない場合、データベース名はPGDATABASE 環境変数から読み取られます。
+この変数も設定されていない場合は、接続時に指定したユーザ名が使用されます。
+</dd>
+
+<dt>-h HOSTNAME<br />
+--host=HOSTNAME</dt>
+<dd>サーバが稼働しているマシンのホスト名を指定します。ホスト名がスラッシュから始まる場合、Unix ドメインソケット用のディレクトリとして使用されます。</dd>
+
+<dt>-p PORT<br />
+--port=PORT</dt>
+<dd>サーバが接続を監視する TCP ポートもしくは Unix ドメインソケットファイルの拡張子を指定します。</dd>
+
+<dt>-U USERNAME<br />
+--username=USERNAME</dt>
+<dd>接続するユーザ名を指定します。pg_bulkloadの実行ユーザは、スーパユーザ権限が必要です。</dd>
+
+<dt>-W<br />
+--password</dt>
+<dd>データベースに接続する前に、pg_bulkload は強制的にパスワード入力を促します。
+サーバがパスワード認証を要求する場合 pg_bulkload は自動的にパスワード入力を促しますので、これが重要になることはありません。
+しかし、pg_bulkload は、サーバにパスワードが必要かどうかを判断するための接続試行を無駄に行います。
+こうした余計な接続試行を防ぐために -W の入力が有意となる場合もあります。</dd>
+</dl>
+
+<h3>一般オプション</h3>
+<dl>
+<dt>-e<br />
+--echo</dt>
+<dd>サーバに送信するSQLを表示します</dd>
+
+<dt>-E<br />
+--elevel = LEVEL</dt>
+<dd>ログ出力レベルを設定します。
+DEBUG, INFO, NOTICE, WARNING, ERROR, LOG, FATAL, PANIC から選択します。
+デフォルトは INFO です。</dd>
+
+<dt>--help</dt>
+<dd>ヘルプを表示し、終了します</dd>
+
+<dt>--version</dt>
+<dd>バージョン情報を出力し、終了します</dd>
+</dl>
+
+<h2 id="controlfile">制御ファイル</h2>
+
+<p>pg_bulkload では、データのロード方法を制御ファイルで指定できます。制御ファイルはクライアント側に配置してください。
+絶対パスでも相対パスでも指定できます。
+相対パスで指定した場合は、pg_bulkload コマンド実行時のカレントディレクトリが基準となります。
+省略する場合は pg_bulkload コマンドのコマンドライン引数でロード方法を指定してください。
+</p>
+<p>
+制御ファイルには、下記の設定項目を指定できます。
+なお、"#" 以降はコメントとして無視されます。
+</p>
+
+<h3>フォーマット共通の設定項目</h3>
+<dl>
+
+<dt>TYPE = CSV | BINARY | FIXED | FUNCTION </dt>
+<dd>
+入力データのタイプを以下のいずれかで指定します。
+デフォルトは CSV です。
+<ul>
+  <li>CSV : CSV フォーマットのテキストデータを読み込みます。</li>
+  <li>BINARY | FIXED : 固定長のバイナリデータを読み込みます。</li>
+  <li>FUNCTION : 関数が返した行セットを読み込みます。<br/>このタイプを指定した場合は、INPUT に関数呼び出し式を指定してください。</li>
+</ul>
+</dd>
+
+<dt id="INPUT">INPUT | INFILE = path | stdin | [ schemaname. ] function_name (argvalue, ...)</dt>
+<dd>
+ロードの入力データソースを指定します。
+必須のパラメータです。
+使用する入力データに応じて、以下のように指定します。
+<ul>
+  <li>サーバ上のファイル :
+      サーバ上でのパスで入力ファイルのパスを指定します。
+      相対パスで指定した場合、制御ファイルで指定した場合は制御ファイル相対として、pg_bulkload コマンド引数として指定した場合は実行時のカレントディレクトリ相対として扱われます。
+      PostgreSQL プロセスを起動したユーザにファイルに対する読み込み権限を与える必要があります。
+      「TYPE=CSV」および「TYPE=BINARY」と指定した場合のみ使用可能です。</li>
+  <li>pg_bulkload コマンドの標準入力 :
+      「INPUT=stdin」と記述すると、pg_bulkload コマンドの標準入力から入力データを読み取ります。
+      入力ファイルとデータベースが異なるサーバに配置されている場合には、こちらの形式を使用してください。「TYPE=CSV」および「TYPE=BINARY」と指定した場合のみ使用可能です。使用例を以下に示します。
+<pre>$ pg_bulkload csv_load.ctl &lt; DATA.csv</pre></li>
+  <li>SQL関数：入力データを返す SQL 関数の呼び出し式を指定します。
+      「TYPE=FUNCTION」と指定した場合のみ使用可能です。
+      組み込みの関数だけでなく、ユーザ定義関数を指定することも可能です。
+      この形式で使用するSQL関数は、SETOF sometype型、もしくは、RETURNS TABLE(columns)を返す必要があります。
+      ただし、sometype型は、各属性の型も定義をしてください。内部的にcstring型を
+      利用していますが、record型では、各属性の代入キャストが出来ないケースがあるためです。
+      なお、大量のデータをロードする場合には PL/pgSQL ではなく C言語での関数作成を推奨します。
+      ストリーミング・ロードを行うため SFRM_ValuePerCall モードで実装される必要があるためです。<br>
+      <p>ユーザ関数の定義例を以下に示します。</p>
+<pre>$ CREATE TYPE sample_type AS (sum integer, name char(10));
+$ CREATE FUNCTION sample_function() RETURNS SETOF sample_type
+    AS $$ SELECT id1 + id2, upper(name) FROM INPUT_TABLE $$
+    LANGUAGE SQL;
+</pre>
+      <p>制御ファイルの作成例を以下に示します。</p>
+<pre>TABLE = sample_table
+TYPE = FUNCTION
+WRITER = DIRECT
+INPUT = sample_function()          # ユーザ定義の関数を利用する場合
+#INPUT = generate_series(1, 1000)  # 組み込みの関数を利用する場合。1から1,000の連番をロードする
+...</pre></li>
+</ul>
+</dd>
+
+<dt>WRITER | LOADER = DIRECT | BUFFERED | BINARY | PARALLEL</dt>
+<dd>
+ロード方式を以下のいずれかで指定します。デフォルトは DIRECT です。
+<ul>
+  <li>DIRECT   : テーブルに直接データをロードします。高速ですが特殊なリカバリ手順が必要です。WALを<b>極力スキップ</b>し、共有バッファも汚しません。（※トランザクション管理上必要なWALは出力します。）</li>
+  <li>BUFFERED : 共有バッファを使用してテーブルにデータをロードします。特殊なリカバリは不要です。ただし、WALを書き、共有バッファも汚します。</li>
+  <li>BINARY   : バイナリファイルに出力します。バイナリファイルと同じディレクトリに、出力したバイナリファイルをロードするためのサンプル制御ファイルを出力します。サンプル制御ファイルのファイル名は &lt;バイナリファイル名&gt;.ctl となります。</li>
+  <li>PARALLEL : 「WRITER=DIRECT」と「MULTI_PROCESS=YES」を指定した場合と同じです。
+「WRITER=PARALLEL」と指定した場合は、<a href="#MULTI_PROCESS">MULTI_PROCESS</a> は無視されます。
+なお、ロード先のデータベースに対してパスワード認証を必要とする場合には .pgpass を設定しなければなりません。
+詳細は<a href="#restrictions">使用上の注意と制約</a>を参照して下さい。</li>
+</ul>
+</dd>
+
+<dt id="OUTPUT">OUTPUT | TABLE = { [ schema_name. ] table_name | outfile }</dt>
+<dd>
+データの出力先を指定します。
+必須のパラメータです。
+ロード方式に応じて、以下のように指定します。
+<ul>
+  <li>ロード先のテーブル :
+      ロード先のテーブルを指定します。
+      schema_name を省略した場合は、search_path に指定した検索パスから見つかったテーブルを使用します。
+      「WRITER=DIRECT」、「WRITER=BUFFERED」および「WRITER=PARALLEL」と指定した場合のみ使用可能です。</li>
+  <li>サーバ上のファイル :
+      サーバ上でのパスで出力ファイルのパスを指定します。
+      相対パスで指定した場合の扱いは <a href="#INPUT">INPUT</a> と同じです。
+      PostgreSQL プロセスを起動したユーザに親ディレクトリに対する書き込み権限を与える必要があります。
+      「WRITER=BINARY」と指定した場合のみ使用可能です。</li>
+</ul>
+</dd>
+
+<dt>SKIP | OFFSET = n</dt>
+<dd>
+先頭から何行をスキップするかを指定します。
+デフォルトは 0 です。
+ただし「TYPE=FUNCTION」とSKIP の両方を指定した場合はエラーになります。
+</dd>
+
+<dt>LIMIT | LOAD = n</dt>
+<dd>
+ロード行数を指定します。
+デフォルトは指定なし、または INFINITE (全行ロード) です。
+「TYPE=FUNCTION」と指定した場合でも使用可能です。
+</dd>
+
+<dt>ENCODING = encoding </dt>
+<dd>
+入力データのエンコーディングを指定します。
+入力データのエンコーディングを検証し、必要に応じてエンコーディングを変換します。
+もし入力データのエンコーディングの正当性が保証されており、かつ DB エンコーディングと同じ場合には、この設定項目を指定しないことで、検証と変換をスキップして高速にロードできます。
+デフォルトでは、エンコーディングの正当性チェックも変換も行いません。
+ただし「INPUT=stdin」と指定した場合のデフォルトは client_encoding の値を使用します。
+ENCODING を「TYPE=FUNCTION」と同時に指定した場合はエラーになります。
+</dd>
+<dd>
+有効なエンコーディングについては <a href="http://www.postgresql.jp/document/current/html/functions-string.html#CONVERSION-NAMES">Built-in Conversions</a> を参照してください。 
+設定値と処理内容の関係を以下の表に示します。
+</dd>
+
+<dd>
+<table>
+<thead>
+  <tr>
+    <th colspan=2 rowspan=2>　</th>
+    <th colspan=2>DB エンコーディング</th>
+  </tr>
+  <tr>
+    <th>SQL_ASCII</th>
+    <th>SQL_ASCII 以外</th>
+  </tr>
+</thead>
+  <tr>
+    <th rowspan=4>ENCODING</th>
+    <th>指定なし</th>
+    <td>正当性チェックも変換もしない</td>
+    <td>正当性チェックも変換もしない</td>
+  </tr>
+  <tr>
+    <th>SQL_ASCII</th>
+    <td>正当性チェックも変換もしない</td>
+    <td>正当性チェックのみ</td>
+  </tr>
+  <tr>
+    <th>SQL_ASCII 以外で DB エンコーディングと同じ</th>
+    <td>正当性チェックのみ</td>
+    <td>正当性チェックのみ</td>
+  </tr>
+  <tr>
+    <th>SQL_ASCII 以外で DB エンコーディングと違う</th>
+    <td>正当性チェックのみ</td>
+    <td>エンコーディング変換</td>
+  </tr>
+</table>
+</dd>
+
+<dt>FILTER = [ schema_name. ] function_name [ (argtype, ... ) ]</dt>
+<dd>
+入力データを変換するユーザ定義関数 (FILTER 関数) を指定します。
+argtype は省略可能ですが、関数を一意に特定できない場合はエラーになります。
+指定しない場合は、入力データの変換を行いません。
+FILTER 関数の作り方は <a href="#filter">FILTER 関数の作り方</a>に示しています。
+</dd>
+<dd>
+FILTER オプションは、「TYPE=FUNCTION」と FILTER の両方を指定した場合はエラーになります。
+また、CSV フォーマット固有の設定項目の FORCE_NOT_NULL と FILTER の両方を指定した場合はエラーになります。
+</dd>
+
+<dt>CHECK_CONSTRAINTS = YES | NO</dt>
+<dd>
+ロード時に CHECK 制約を検査するかどうかを指定します。
+デフォルトは NO です。
+CHECK_CONSTRAINTS を「WRITER=BINARY」と同時に指定した場合はエラーになります。
+</dd>
+
+<dt>PARSE_ERRORS = n </dt>
+<dd>
+パース処理、エンコーディングチェック、エンコーディング変換、FILTER 関数の実行、CHECK 制約適用、非 NULL 制約適用およびデータ型変換時に発生したエラーの許容件数を指定します。
+エラーを許容された不良データはロードされず、PARSE BADFILE に記録されます。
+デフォルトは 0 です。
+発生したエラーの件数がこの値を超えた場合は、<strong>その時点でコミットして残りの入力データのロードは行いません</strong>。
+エラーを1件も許容しない場合は 0 を、全てのエラーを許容する場合は -1 または INFINITE を指定します。
+</dd>
+
+<dt>DUPLICATE_ERRORS = n </dt>
+<dd>一意制約違反の許容件数を指定します。エラーを許容された一意制約違反のレコードはロードされず、DUPLICATE_BADFILE に記録されます。
+デフォルトは 0 です。
+一意制約に違反するレコードの数がこの値を超えた場合は、<strong>その時点でロールバックしてロード処理全体を取り消します</strong>。
+エラーを1件も許容しない場合は 0 を、全てのエラーを許容する場合は -1 または INFINITE を指定します。
+DUPLICATE_ERRORS を「WRITER=BINARY」と同時に指定した場合はエラーになります。
+</dd>
+
+<dt>ON_DUPLICATE_KEEP = NEW | OLD</dt>
+<dd>一意制約違反のレコードが存在した場合の挙動を以下のいずれかで指定します。
+削除されたレコードの内容は DUPLICATE_BADFILE に書き出されます。
+デフォルトは NEW です。
+このオプションを利用する場合、DUPLICATE_ERRORS も 0 より大きな数に設定する必要があります。
+ON_DUPLICATE_KEEP を「WRITER=BINARY」と同時に指定した場合はエラーになります。
+<ul>
+  <li>NEW : 入力データに存在するレコードを残し、既にテーブルに存在していたレコードを削除します。
+            入力データ内に一意制約違反となるレコードが存在していた場合は、ファイルの末尾側のレコードを残します。</li>
+  <li>OLD : 既にテーブルに存在するレコードを残し、入力データに存在するレコードを削除します（ロードしません）。</li>
+</ul>
+</dd>
+
+<dt id="LOGFILE">LOGFILE = path</dt>
+<dd>
+処理内容を記録するログファイルのパスを指定します。
+相対パスで指定した場合の扱いは <a href="#INPUT">INPUT</a> と同じです。
+デフォルトは $PGDATA/pg_bulkload/&lt;タイムスタンプ&gt;_&lt;DB名&gt;_&lt;スキーマ名&gt;_&lt;テーブル名&gt;.log です。
+</dd>
+
+<dt id="PARSE_BADFILE">PARSE_BADFILE = path</dt>
+<dd>
+パース処理、エンコーディングチェック、エンコーディング変換、FILTER 関数の実行、CHECK 制約適用、非 NULL 制約適用およびデータ型変換時に見つかった不良レコードを記録するBADファイルのパスを指定します。
+このファイルには、入力ファイルと同じ形式(CSVまたは固定長)で記録されます。
+相対パスで指定した場合の扱いは <a href="#INPUT">INPUT</a> と同じです。
+デフォルトは $PGDATA/pg_bulkload/&lt;タイムスタンプ&gt;_&lt;DB名&gt;_&lt;スキーマ名&gt;_&lt;テーブル名&gt;.bad.&lt;入力ファイルの拡張子&gt; です。
+</dd>
+
+<dt id="DUPLICATE_BADFILE">DUPLICATE_BADFILE = path</dt>
+<dd>
+一意制約違反の不良レコードを記録する BAD ファイルのパスを指定します。
+このファイルには、入力ファイルの形式によらず CSV 形式で記録されます。
+相対パスで指定した場合の扱いは <a href="#INPUT">INPUT</a> と同じです。
+デフォルトは $PGDATA/pg_bulkload/&lt;タイムスタンプ&gt;_&lt;DB名&gt;_&lt;スキーマ名&gt;_&lt;テーブル名&gt;.dup.csv です。
+DUPLICATE_BADFILE を「WRITER=BINARY」と同時に指定した場合はエラーになります。
+</dd>
+
+<dt>TRUNCATE = YES | NO</dt>
+<dd>
+YES の場合は、データロードの前にテーブルから全ての行を削除します。
+内部的には SQL の TRUNCATE 相当の処理を行っています。
+NO の場合は削除しません。デフォルトは NO です。
+TRUNCATE を「WRITER=BINARY」と同時に指定した場合はエラーになります。
+</dd>
+
+<dt>VERBOSE = YES | NO</dt>
+<dd>
+YES の場合は、入力データのパース時に見つかった不良データのエラーログおよび一意制約違反のエラーログをサーバログにも出力します。
+NO の場合はサーバログに出力しません。デフォルトは NO です。
+</dd>
+
+<dt id="MULTI_PROCESS">MULTI_PROCESS = YES | NO</dt>
+<dd>
+YES の場合は、データの読み取り、パース処理および書き出しをそれぞれ異なるプロセスまたはスレッドで実行します。
+NO の場合は並行処理を行わず、シングルスレッドで実行します。デフォルトは NO です。
+「WRITER=PARALLEL」と指定した場合は、MULTI_PROCESS は無視されます。
+なお、ロード先のデータベースに対してパスワード認証を必要とする場合には .pgpass を設定しなければなりません。
+詳細は<a href="#restrictions">使用上の注意と制約</a>を参照して下さい。
+pg_bulkloadのMULTI_PROCESSやPARALLELを有効にして実行する場合、他のPostgreSQLバックエンドプロセスがテーブルスキーマを変更しないようにしてください。
+データを読み取るプロセスとデータを書き出すプロセスで見られるテーブルスキーマが異なり、問題が発生する可能性があります。
+</dd>
+
+</dl>
+
+<h3>CSV フォーマット入力特有の設定項目</h3>
+<dl>
+<dt id="DELIMITER">DELIMITER = delimiter_character </dt>
+<dd>デリミタを指定します。
+デフォルトは「,」です。ASCII 文字 (1バイト文字) でなければなりません。
+タブ区切り形式のファイル (TSV) をロードする場合には、DELIMITER にタブ文字を指定します。
+タブ単独だと行末と扱われてしまうため、ダブルクォートで囲んでください。
+<pre>DELIMITER="	" # a double-quoted tab</pre>
+コマンドラインから指定する場合には<code>$'\t'</code>を使います。
+<pre>$ pg_bulkload tsv.ctl -o $'DELIMITER=\t'</pre>
+</dd>
+<dt>QUOTE = quote_character </dt>
+<dd>引用符を指定します。
+デフォルトは「"」です。ASCII 文字 (1バイト文字) でなければなりません。</dd>
+<dt>ESCAPE = escape_character </dt>
+<dd>エスケープ文字を指定します。
+デフォルトは「"」です。ASCII 文字 (1バイト文字) でなければなりません。</dd>
+<dt>NULL = null_string </dt>
+<dd>NULL 値を表す文字列を指定します。
+デフォルトは空文字列 (長さ 0 の文字列) です。</dd>
+<dt>FORCE_NOT_NULL = column </dt>
+<dd>入力ファイル中の表現が NULL 値文字列であっても NULL として扱わないカラムを 1行 1カラム名で指定します。
+複数個指定することが可能です。
+フォーマット共通の設定項目の FILTER と FORCE_NOT_NULL の両方を指定した場合はエラーになります。</dd>
+</dl>
+
+<h3>バイナリフォーマット入力特有の設定項目</h3>
+<dl>
+<dt>COL = type [ (size) ] [ NULLIF { 'null_string' | null_hex } ]<dt>
+<dd>
+入力ファイルの列の定義を左から順に指定します。
+列の定義は、型名、開始位置、サイズを組み合わせて指定します。
+CHAR と VARCHAR の場合、入力データがテキストであることを表します。
+それ以外の場合はバイナリであることを表します。
+バイナリの場合はロード先のサーバのエンディアンと一致させてください。
+  <ul>
+    <li>CHAR | CHARACTER : 文字列として扱い、末尾の空白を取り除きます。サイズの指定が必要です。</li>
+    <li>VARCHAR | CHARACTER VARYING : 文字列として扱い、末尾の空白を残します。サイズの指定が必要です。</li>
+    <li>SMALLINT | SHOFT : 2バイトの符号付き整数として扱います。</li>
+    <li>INTEGER | INT : 2 or 4 or 8バイトの符号付き整数として扱います。デフォルトは 4 です。</li>
+    <li>BIGINT | LONG : 8バイトの符号付き整数として扱います。</li>
+    <li>UNSIGNED SMALLINT | SHORT : 2バイトの符号無し整数として扱います。</li>
+    <li>UNSIGNED INTEGER | INT : 2 or 4バイトの符号無し整数として扱います。デフォルトは 4 です。</li>
+    <li>FLOAT | REAL : 4 or 8バイトの浮動小数点実数として扱います。デフォルトは 4 です。</li>
+    <li>DOUBLE : 8バイトの浮動小数点実数として扱います。</li>
+  </ul>
+上記の型に対して、開始位置とサイズを以下のように指定します。
+  <ul>
+    <li>TYPE : 直前のカラムに続く型ごとの長さ分をカラムデータとみなします。</li>
+    <li>TYPE(L) : 直前のカラムに続く L バイト分をカラムデータとみなします。</li>
+    <li>TYPE(S+L) : レコード先頭から数えて S バイト目から L バイト分をカラムデータとみなします。</li>
+    <li>TYPE(S:E) : レコード先頭から数えて S バイト目から E バイト目までをカラムデータとみなします。</li>
+  </ul>
+上記の型およびサイズに対して、NULL 値を表す文字列を以下のように指定します。
+  <ul>
+    <li>NULLIF 'null_string' : 型が CHAR および VARCHAR の場合の NULL 値を表す文字列を指定します。型のサイズと同じサイズになるように指定する必要があります。</li>
+    <li>NULLIF null_hex : 型が CHAR および VARCHAR 以外の場合の NULL 値を表すバイナリ値を16進数で指定します。型のサイズと同じサイズになるように指定する必要があります。</li>
+  </ul>
+上記の他に「COL=L」で指定できます。この指定方法は「COL=CHAR(L)」と同じで、後方互換のために残されています。
+
+</dd>
+<dt>PRESERVE_BLANKS = YES | NO</dt>
+<dd>
+カラムフォーマットを「COL=N」で指定した場合に、カラムデータの末尾の空白を残すかどうかを指定します。
+複数個指定することが可能で、PRESERVE_BLANKS を指定した行以降の「COL=N」の扱いを変更します。YES の場合、「COL=N」を「COL=VARCHAR(N)」とみなし、末尾の空白を残します。NO の場合、「COL=CHAR(N)」とみなし、末尾の空白を取り除きます。
+デフォルトは NO です。
+</dd>
+
+<dt>STRIDE = n</dt>
+<dd>
+1 行あたりのバイト数を指定します。
+指定しない場合は COL パラメータから計算された値を使います。
+行の末尾にロードには使用しないパディングが含まれる場合にのみ明示的な指定が必要です。
+</dd>
+
+</dl>
+
+<h3>バイナリフォーマット出力特有の設定項目</h3>
+<dl>
+<dt>OUT_COL = type [ (size) ] [ NULLIF { 'null_string' | null_hex } ]<dt>
+<dd>
+出力ファイルの列の定義を左から順に指定します。
+列の定義は、型名、開始位置、サイズを組み合わせて指定します。
+CHAR と VARCHAR の場合、入力データがテキストであることを表します。
+それ以外の場合はバイナリであることを表します。
+バイナリの場合はロード先のサーバのエンディアンと一致させてください。
+  <ul>
+    <li>CHAR | CHARACTER : 固定長文字列として出力します。サイズの指定が必要です。指定したサイズよりも文字列が短い時は、末尾が空白で埋められます。サンプル制御ファイルに「COL=CHAR(size)」として出力されます。</li>
+    <li>VARCHAR | CHARACTER VARYING : 固定長文字列として出力します。サイズの指定が必要です。指定したサイズよりも文字列が短い時は、末尾が空白で埋められます。サンプル制御ファイルに「COL=VARCHAR(size)」として出力されます。</li>
+    <li>SMALLINT | SHOFT : 2バイトの符号付き整数として出力します。</li>
+    <li>INTEGER | INT : 2 or 4 or 8バイトの符号付き整数として出力します。デフォルトは 4 です。</li>
+    <li>BIGINT | LONG : 8バイトの符号付き整数として出力します。</li>
+    <li>UNSIGNED SMALLINT | SHORT : 2バイトの符号無し整数として出力します。</li>
+    <li>UNSIGNED INTEGER | INT : 2 or 4バイトの符号無し整数として出力します。デフォルトは 4 です。</li>
+    <li>FLOAT | REAL : 4 or 8バイトの浮動小数点実数として出力します。デフォルトは 4 です。</li>
+    <li>DOUBLE : 8バイトの浮動小数点実数として出力します。</li>
+  </ul>
+上記の型およびサイズに対して、NULL 値を表す文字列を以下のように指定します。指定しない場合に NULL 値が入力された場合は、不良データとして PARSE_BADFILE に記録されます。
+  <ul>
+    <li>NULLIF 'null_string' : 型が CHAR および VARCHAR の場合の NULL 値を表す文字列を指定します。型のサイズと同じサイズになるように指定する必要があります。</li>
+    <li>NULLIF null_hex : 型が CHAR および VARCHAR 以外の場合の NULL 値を表すバイナリ値を16進数で指定します。型のサイズと同じサイズになるように指定する必要があります。</li>
+  </ul>
+</dd>
+</dl>
+
+<h2 id="environment">環境変数</h2>
+<p>以下の環境変数に影響されます。</p>
+
+<dl>
+	<dt>
+		PGDATABASE<br />
+		PGHOST<br />
+		PGPORT<br />
+		PGUSER
+	</dt>
+	<dd>デフォルトの接続パラメータです。</dd>
+</dl>
+
+<p>
+また、このユーティリティは、他のほとんどの PostgreSQL ユーティリティと同様、libpq でサポートされる環境変数を使用します。
+詳細については、<a href="http://www.postgresql.jp/document/current/html/libpq-envars.html">環境変数の項目</a>を参照してください。
+</p>
+
+<h2 id="restrictions">使用上の注意と制約</h2>
+
+<h3>PostgreSQL 12のプラガブルなテーブルアクセスメソッドをサポート。</h3>
+ <p>
+  pg_bulkload「ヒープ」構造のテーブルへのデータロードのみサポートしています。
+  PostgreSQL 12では新しいプラガブルなテーブルアクセスメソッドAPIを通過するように修正されていることになりますが、
+  pg_bulkloadは「ヒープ」構造以外はサポートしません。
+ </p>
+
+<h3>pg_bulkload の終了コード</h3>
+<p>
+データロードが正常に終了した場合は 0 が返ります。
+ロードは完了してもパースエラーや一意性エラーによりロードできない行が発生している場合には、WARNING メッセージと共に 3 が返ります。
+この際、スキップされた行 (Rows skipped) や、置換された行 (Rows replaced, ON_DUPLICATE_KEEP = NEW) が存在する場合も正常終了 (返値 0) 扱いであることに注意してください。
+</p>
+
+<p>
+ロード中にエラーが発生した場合には ERROR が報告されます。
+エラーの多くはロード中にサーバで生じるため、1 がほとんどです。
+終了コードの一覧を以下の表に示します。
+</p>
+
+<table>
+<thead>
+  <tr>
+    <th>終了コード</th>
+    <th>意味</th>
+  </tr>
+</thead>
+  <tr>
+    <td>0</td>
+    <td>正常終了</td>
+  </tr>
+  <tr>
+    <td>1</td>
+    <td>PostgreSQL へのSQLでエラー</td>
+  </tr>
+  <tr>
+    <td>2</td>
+    <td>PostgreSQL への接続に失敗</td>
+  </tr>
+  <tr>
+    <td>3</td>
+    <td>準正常終了(ロードされない入力データあり)</td>
+  </tr>
+</table>
+
+<h3>ダイレクトロードで使用する場合</h3>
+<p>ダイレクトロードで使用する場合 (WRITER=DIRECT または PARALLEL)、以下のことに注意しなければなりません：</p>
+
+<h4>PostgreSQL 起動手順</h4>
+<p>pg_bulkload がクラッシュし、.loadstatus ファイルが $PGDATA/pg_bulkload に残っていた場合、データベースは pg_bulkload 独自のリカバリ手順によってリカバリする必要があります。これは "pg_bulkload -r" コマンドを "pg_ctl start" より前に実行することにより行います。PostgreSQL の起動・停止を postgresql スクリプトにより行うことで、このリカバリをし忘れることを防ぎます。postgresql スクリプトは内部的に "pg_bulkload -r" を実行し、続けて "pg_ctl start" を行っています。そのためダイレクトロードの利用環境下では、pg_ctl を直接使わずに、postgresql スクリプトを利用することをお勧めいたします。</p>
+
+<h4>PITR/Replication</h4>
+<p>適切なWAL を残さないため、pg_bulkloadを利用したときのWALを用いてアーカイブログリカバリ(PITR)を行うことは推奨できません。もし PITR を利用する場合には、pg_bulkloadによるロード終了後に対象のデータベースのバックアップを取って、そこからを起点に実施してください。ストリーミングレプリケーションを利用している場合は、ロード終了後のバックアップからスタンバイを作り直してください。</p>
+
+<h4>$PGDATA/pg_bulkload 内のロードステータスファイル</h4>
+<p>$PGDATA/pg_bulkload ディレクトリ中のロードステータスファイル (*.loadstatus) は絶対に削除してはいけません。 pg_bulkload のリカバリのために必要になるからです。</p>
+
+<h4>kill -9は使わない</h4>
+<p>pg_bulkload を "kill -9" を使って停止させるのはできる限りやめてください。もし実行すると postgresql スクリプトによるリカバリが実行されます。</p>
+
+<h3>パラレルロードで使用する場合</h3>
+<p>パラレルロードで使用する場合(MULTI_PROCESS=YES または WRITER=PARALLEL)、以下のことに注意しなければなりません：</p>
+<h4>認証における制約</h4>
+<p>MULTI_PROCESS=YESかつロード対象のデータベースにlocalhostから接続するのにパスワードが必要な場合、たとえパスワードを正しくプロンプトに入力しても、パスワード認証に失敗してしまいます。この問題を回避するには、以下のいずれかを設定してください。<br/>
+<ul>
+<li>
+localhost からのアクセスの認証方式に trust を指定する<br/>
+localhost からの接続には、UNIX 環境では UNIX ドメインソケット接続を使用し、Windows 環境では TCP/IP ループバック接続を使用します。UNIX 環境では以下の行を pg_hba.conf ファイルに追加します。<br/>
+<pre>
+# TYPE  DATABASE        USER            CIDR-ADDRESS            METHOD [for UNIX]
+local   all             foo                                     trust<br/></pre>
+Windows 環境では以下の行を pg_hba.conf ファイルに追加します。<br/>
+<pre>
+# TYPE  DATABASE        USER            CIDR-ADDRESS            METHOD [for Windows]
+host    all             foo             127.0.0.1/32            trust</pre>
+</li>
+<li>
+パスワードを.pgpassファイルに指定する<br/>
+もし trust 認証がセキュリティ上問題であれば、認証方式を password または md5 に指定した上で、パスワードを<a href="http://www.postgresql.jp/document/current/html/libpq-pgpass.html">.pgpassファイル</a>に指定してください。ただし、.pgpassファイルは、PostgreSQLサーバを起動したOSユーザ(典型的には"postgres"ユーザ)のホームディレクトリに配置する必要があります。例えば、pg_bulkloadが、ポート番号5432で稼働しているサーバに、パスワードが"foopass"であるユーザ"foo"として接続する場合では、管理者は以下の行を.pgpassファイルに追加します。
+<pre>
+localhost:5432:*:foo:foopass</pre>
+</li>
+<li>
+WRITER=PARALLE を使用しない<br/>
+.pgpass も指定できない場合は WRITER=PARALLE を使用できないため、WRITER=DIRECT を指定してください。
+</li>
+</ul>
+</p>
+<h4>PostgreSQLサーバを起動したOSユーザのクライアントエンコーディング</h4>
+<p>PostgreSQLサーバを起動したOSユーザのクライアントエンコーディングは、DBエンコーディングを指定してください。</p>
+
+<h3>データベース制約の扱い</h3>
+<p>
+デフォルトでは、ロード時のデータの整合性は、一意制約と非NULL制約のみ適用します。
+CHECK 制約を適用する場合は "CHECK_CONSTRAINTS=YES" を指定してください。
+外部キー制約は適用しません。
+入力データセットの妥当性についてはユーザにより保証してください。
+</p>
+
+<h2 id="details">詳細</h2>
+<h3 id="internal">内部構成</h3>
+<p>以下に pg_bulkload の内部構成を示します。</p>
+<img src="img/internal.png" width="600" />
+
+<p>ファイル、標準入力、SQL関数のそれぞれを入力とした場合の構成を以下に示します。</p>
+<ul>
+<li><a href="img/from-file.png">ファイル</a></li>
+<li><a href="img/from-stdin.png">標準入力</a></li>
+<li><a href="img/from-func.png">SQL関数</a></li>
+</ul>
+
+<h3 id="filter">FILTER 関数の作り方</h3>
+<p>以下に FILTER 関数を作る際の注意点や制約を示します。</p>
+
+<ul>
+  <li>入力データの 1 行分のデータが、FILTER 関数の引数として渡されます。</li>
+  <li>関数を実行した結果、エラーが発生した場合は、そのレコードはロードされずに PARSE BADFILE に記録されます。</li>
+  <li>FILTER 関数の返り値は record 型またはテーブル型で作成する必要があります。また、関数の実行によって実際に返されるレコードのデータ型は、ロード対象のテーブルの列定義と一致する必要があります。</li>
+  <li>関数が NULL を返した場合は、全ての列が NULL のレコードをロードします。</li>
+  <li>引数にデフォルト値を持つ関数に対応しています。入力データの列数が関数の引数の数に満たない場合に、デフォルト値が適用されます。</li>
+  <li>可変長引数を取る関数 (VARIADIC 引数を持つ関数) には対応していません。</li>
+  <li>集合を返す関数 (SETOF 修飾子を持つ関数) には対応していません。</li>
+  <li>多様SQL関数 (多様型を引数に持つ関数) には対応していません。</li>
+  <li>FILTER 関数を実装する言語は問いません。SQL, C言語, 手続型言語のどの言語で実装しても構いませんが、何度も呼び出されるため効率の良い実装が求められます。</li>
+  <li>FILTER と FORCE_NOT_NULL 設定項目はどちらか一方しか指定できないため、FILTER 関数を使用したい場合に FORCE_NOT_NULL の機能が必要な場合は、 FILTER 関数に FORCE_NOT_NULL 機能を実装してください。</li>
+</ul>
+
+<p>作成例を以下に示します。</p>
+<pre>CREATE FUNCTION sample_filter(integer, text, text, real DEFAULT 0.05) RETURNS record
+    AS $$ SELECT $1 * $4, upper($3) $$
+    LANGUAGE SQL;
+</pre>
+
+<h2 id="install">インストール方法</h2>
+<p>pg_bulkload のインストールは、標準の contrib モジュールと同様です。</p>
+
+<h3>環境設定</h3>
+<p>pg_bulkload をインストールする前に以下を実行しているものとします。</p>
+<ul>
+<li>PostgreSQL がインストールされていること</li>
+<li>initdb を実行し、データベースクラスタが作られていること</li>
+</ul>
+
+<h3 id="build">ソースコードからのインストール</h3>
+<p>ソースコードからインストールするには、以下のライブラリが必要です。利用しているLinuxディストリビューションに応じたものをインストールしてください。
+<ul>
+<li>PostgreSQL devel package : postgresqlxx-devel(RHEL), postgresql-server-dev-x.x(Ubuntu)</li>
+<li>PAM devel package : pam-devel(RHEL), libpam-devel(Ubuntu)</li>
+<li>Readline devel or libedit devel package : readline-devel or libedit-devel(RHEL), libreadline-dev or libedit-dev(Ubuntu)</li>
+<li>C compiler and build utility : "Development Tools" (RHEL), build-essential(Ubuntu)</li>
+</ul>
+</p>
+<p>必要なライブラリが揃っていれば、pgxs を使ってビルドできます。「USE_PGXS=1」オプションは省略可能です。</p>
+<pre>$ cd pg_bulkload
+$ make USE_PGXS=1
+$ su
+# make USE_PGXS=1 install</pre>
+
+<p>CREATE EXTENSION文を用いて pg_bulkload 用の関数を登録します。ただし、CREATE EXTENSION文はDBスーパーユーザにて実行してください。</p>
+<pre>$ psql database_name
+database_name=# CREATE EXTENSION pg_bulkload;</pre>
+
+<h3 id="rpm">RPM パッケージからのインストール</h3>
+<p>通常の RPM パッケージのインストール手順と同様です。
+pg_bulkload インストール前に postgresql パッケージがインストールされていることを確認してください。
+</p>
+<p> 次のコマンドで pg_bulkload をインストールします。</p>
+<pre># rpm -ivh pg_bulkload-&lt;version&gt;.rpm</pre>
+
+<p>以下のコマンドでインストールされたかどうかを確認できます。</p>
+<pre># rpm -qa | grep pg_bulkload</pre>
+
+<p>また、以下のコマンドで、各ファイルがどこにインストールされたかを確認できます。</p>
+<pre># rpm -qs pg_bulkload </pre>
+
+<p>ソースコードからのインストール同様、CREATE EXTENSION文を用いて pg_bulkload 用の関数を登録します。ただし、CREATE EXTENSION文はDBスーパーユーザにて実行してください。</p>
+<pre>$ psql database_name
+database_name=# CREATE EXTENSION pg_bulkload;</pre>
+
+<p>なお、regression testを行うにはPostgreSQLサーバを起動させた状態で、以下のコマンドを実行してください。</p>
+<pre>$ make installcheck</pre>
+
+<h2 id="upgrade">アップグレード方法</h2>
+<p>pg_bulkload を新しいバージョンにアップグレードする場合、前のバージョンを削除する必要があります。</p>
+<p>次の3ステップにより、pg_bulkloadをアップグレードすることが可能です。</p>
+<ol>
+<li>DROP EXTENSION文を実行し、古いバージョンの pg_bulkload を database からドロップします。</li>
+<pre>database_name# DROP EXTENSION pg_bulkload;
+DROP EXTENSION</pre>
+<li>古いバージョンの pg_bulkload を削除します。</li>
+<p>ソースコードからインストールした場合:</p>
+<pre># make USE_PGXS=1 uninstall</pre>
+<p>RPM パッケージからインストールした場合:</p>
+<pre># rpm -e pg_bulkload-&lt;version&gt;.rpm</pre>
+<li><a href="#install">インストール方法</a>の手順に沿って、新しいバージョンの pg_bulkload をインストールします。</li>
+</ol>
+
+<h2 id="requirement">動作環境</h2>
+<dl>
+<dt>PostgreSQLバージョン</dt>
+<dd>PostgreSQL 14, 15, 16, 17, 18</dd>
+<dt>OS</dt>
+<dd>RHEL 8, 9, 10</dd>
+</dl>
+
+<h2 id="releasenote">リリースノート</h2>
+
+<p>
+<h4>3.1.23</h4>
+<ul>
+<li>PostgreSQL 18に対応</li>
+</ul>
+</p>
+
+<p>
+<h4>3.1.22</h4>
+<ul>
+<li>PostgreSQL 17に対応</li>
+</ul>
+</p>
+
+<p>
+<h4>3.1.21</h4>
+<ul>
+<li>PostgreSQL 16に対応</li>
+<li>バージョンが適切に表示されない問題を修正しました。</li>
+<li>一意制約違反を許容している場合でも、一意制約違反でロード時にエラーが発生する問題を修正しました。</li>
+</ul>
+</p>
+
+<p>
+<h4>3.1.20</h4>
+<ul>
+<li>PostgreSQL 15に対応</li>
+</ul>
+</p>
+
+<p>
+<h4>3.1.19</h4>
+<ul>
+<li>PostgreSQL 14に対応</li>
+</ul>
+</p>
+
+<p>
+<h4>3.1.18</h4>
+<ul>
+<li>バージョン3.1.17で残されていた"-o TYPE=FUNCTION" オプション使用時の問題について、当該オプション使用する際の注意点をドキュメントに追記しました</li>
+<li>Ubuntu環境において、ビルドが失敗する問題を修正しました</li>
+</ul>
+</p>
+
+<p>
+<h4>3.1.17</h4>
+<ul>
+<li>PostgreSQL 13に対応</li>
+<li>Bツリーインデックスに対してマージする場合、エラーが発生した問題を解決しました</li>
+</ul>
+</p>
+
+<p>
+<h4>3.1.16</h4>
+<ul>
+<li>PostgreSQL 12に対応</li>
+<li>pg_bulkloadのPARALLELやMULTI_PROCESS機能を有効化して使用する場合、いくつかの注意点をドキュメントに追加しました</li>
+<li>pg_bulkloadは「ヒープ」構造のテーブルのみサポートすることをドキュメントに追加しました</li>
+</ul>
+</p>
+
+<p>
+<h4>3.1.15</h4>
+<ul>
+<li>PostgreSQL 11に対応</li>
+<li>CVE-2018-1058の脆弱性に対してpg_bulkloadを修正しました</li>
+</ul>
+</p>
+
+<p>
+<h4>3.1.14</h4>
+<ul>
+<li>PostgreSQL 10に対応</li>
+<li>RPMの名前を標準名前ルールに変更
+pg_bulkload-VERSIONX_X_X-X.pgXX.rhelX.rpmからpg_bulkload-X.X.XX-X.pgXX.rhelX.rpmへ
+</li>
+</ul>
+</p>
+
+<p>
+<h4>3.1.13</h4>
+<ul>
+<li>MULTI_PROCESSモードが有効かつ入力ファイルに不正なレコードが含まれる場合にpg_bulkloadがクラッシュする問題を修正しました。</li>
+<li>CSVParserRead()が大量のメモリを要求しないよう修正しました。以前は、この動作によりエラーが発生することがありました。</li>
+</ul>
+</p>
+<p>
+<h4>3.1.12</h4>
+<ul>
+<li>--version オプション時に表示されるバージョン番号が適切でありませんでした。</li>
+</ul>
+</p>
+
+<p>
+<h4>3.1.11</h4>
+<ul>
+<li>DIRECTモードでデータをロードする際にデータチェックサムの値を誤って設定する可能性がありました。</li>
+</ul>
+</p>
+
+<p>
+<h4>3.1.10</h4>
+<ul>
+<li>PostgreSQL 9.6 に対応しました。</li>
+</ul>
+</p>
+
+<p>
+<h4>3.1.9</h4>
+<ul>
+<li>PostgreSQL 9.5 に対応しました。</li>
+<li>動的にPostgreSQLにロードされる他のライブラリと競合することで発生しうる意図しない挙動を防ぐように修正しました</li>
+</ul>
+</p>
+
+<p>
+<h4>3.1.8</h4>
+<ul>
+<li>PostgreSQL 9.4.1, 9.3.6, 9.2.10, 9.1.15, 9.0.19において、CHECK 制約を有効にしたロードを行った際に PostgreSQL がクラッシュする可能性がありました。</li>
+</ul>
+</p>
+
+<p>
+<h4>3.1.7</h4>
+<ul>
+<li>PostgreSQL 9.4 に対応しました。</li>
+</ul>
+</p>
+
+<p>
+<h4>3.1.6</h4>
+<ul>
+<li>WRITER=PARALLELモードを利用した際、環境変数PGHOSTのハンドリングが適切に行われていませんでした。これにより、PostgreSQLのunix_socket_directory(9.3以降はunix_socket_directories)設定値をデフォルトから変更していた場合、WRITER=PARALLELモードでのロードが動作しませんでした。</li>
+<li>PostgreSQL9.2.4以降で、SQL以外で作成したFILTER関数を使用した際に、ロードに失敗する不具合がありました。</li>
+<li>PostgreSQL 9.4beta1に対応しました。</li>
+</ul>
+</p>
+
+<p>
+<h4>3.1.5</h4>
+<ul>
+<li>PostgreSQL9.3に対応しました。</li>
+<li>UNLOGGEDテーブルの取り扱い時に誤ってWALを出力する不具合がありました。</li>
+</ul>
+</p>
+
+<p>
+<h4>3.1.4</h4>
+<ul>
+<li>PostgreSQL9.2.4において、SQLで作成したFILTER関数を用いてデータをロードした際、メモリリークが発生する不具合がありました。</li>
+<li>postgresqlスクリプトに、現在は廃止されたpg_bulkloadのオプションに関するコードが残っていました。</li>
+</ul>
+</p>
+
+<p>
+<h4>3.1.3</h4>
+<ul>
+<li>WRITER=PARALLELモードを利用した際、一部データが正しくロードされない場合がありました。</li>
+<li>ストリーミング・レプリケーション構成のPostgreSQLに対して、マスタ側にWRITER=BUFFERDモードでデータをロードした際、スレーブ側のテーブルのインデックスが破損する場合がありました。</li>
+</ul>
+</p>
+
+
+<h2 id="seealso">関連項目</h2>
+<a href="http://www.postgresql.jp/document/current/html/sql-copy.html">COPY</a>
+
+<hr />
+<div class="navigation">
+  <a href="index_ja.html">Top</a> &gt;
+  <a href="pg_bulkload-ja.html">pg_bulkload</a>
+<div>
+<p class="footer">Copyright (c) 2007-2026, NTT, Inc.</p>
+
+<script type="text/javascript">
+var gaJsHost = (("https:" == document.location.protocol) ? "https://ssl." : "http://www.");
+document.write(unescape("%3Cscript src='" + gaJsHost + "google-analytics.com/ga.js' type='text/javascript'%3E%3C/script%3E"));
+</script>
+<script type="text/javascript">
+try {
+var pageTracker = _gat._getTracker("UA-10244036-1");
+pageTracker._trackPageview();
+} catch(err) {}</script>
+</body>
+</html>

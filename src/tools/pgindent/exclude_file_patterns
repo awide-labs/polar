@@ -71,6 +71,7 @@ external/ip4r/
 external/log_fdw/
 external/pase/
 external/pg_bigm/
+external/pg_bulkload/
 external/pg_cron/
 external/pg_hint_plan/
 external/pg_jieba/
