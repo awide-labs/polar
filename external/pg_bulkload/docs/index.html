@@ -1,0 +1,261 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE html
+	PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"
+	"http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en" lang="en   ">
+<head>
+	<link rel="icon" type="image/png" href="https://wiki.postgresql.org/images/3/30/PostgreSQL_logo.3colors.120x120.png" />
+	<meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
+	<title>pg_bulkload: Project Home Page</title>
+	<link rel="stylesheet" TYPE="text/css"href="style.css">
+</head>
+
+<body>
+<Div Align="right"><h2><a href="index_ja.html"> Japanese</a></h2></Div>
+
+<center><img style="border: none; margin-left: auto; margin-right: auto; " src="https://wiki.postgresql.org/images/3/30/PostgreSQL_logo.3colors.120x120.png" height="75" width="75" />
+<hr />
+<h1>Welcome to the pg_bulkload Project Home Page</h1>
+<hr />
+</center>
+<p>
+pg_bulkload is a high speed data loading utility for PostgreSQL.
+</p>
+<p>
+<a href="index_ja.html">日本語ページはこちら</a>
+</p>
+
+<hr />
+
+<h1 id="documentation">Documentation</h1>
+<ul>
+<li>
+<a href="pg_bulkload.html">High speed data loader: <strong>pg_bulkload</strong> documentation</a>
+  <ul>
+    <li>pg_bulkload provides high-speed data loading capability to PostgreSQL users.</li>
+  </ul>
+</li>
+<li>
+<a href="pg_timestamp.html">Optional tool : <strong>pg_timestamp</strong> documentation</a>
+  <ul>
+    <li>pg_timestamp ia an optional tool to skip parsing overhead of timestamp string.</li>
+  </ul>
+</li>
+</ul>
+
+<hr />
+
+<h1 id="performance">Performance Results</h1>
+
+<p>
+Here is a comparison of the performance of PostgreSQL's COPY and pg_bulkload.
+Performance was measured with basic-tuned PostgreSQL server.
+</p>
+
+<dl>
+  <dt>Table definition</dt>
+  <dd>
+  Customer table in <a href="http://www.osdl.net/lab_activities/kernel_testing/osdl_database_test_suite/osdl_dbt-2/">DBT-2</a> benchmark, that is an implementation of <a href="http://www.tpc.org/tpcc/">TPC-C</a>.</li>
+  <dt>Index definition</dt>
+  <dd>
+  There are 2 indexes.
+  The first one is a primary key with one ascending integer column.
+  The second one is a non-unique index with one random integer column.
+  </dd>
+</dl>
+
+<p>
+There are the following measurement patterns.
+</p>
+
+<ol>
+  <li>Initial data loading to an empty table for 4GB of data</li>
+  <li>Appended data loading to a table with 4GB of data for 1GB of new data</li>
+  <li>Performance efficiencies by maintenance_work_mem and FILTER features</li>
+</ol>
+
+<h2>Result 1: Initial data loading</h2>
+<p>
+Pg_bulkload on WRITER = PARALLEL mode can load data with an almost half time against COPY.
+In PARALLEL mode, performance will be improved on multi-CPU server because reading an input file and writing rows to a table are done with two processes.
+</p>
+<p>
+COPY also can be more fast by loading into table without indexes and create indexes after it.
+</p>
+
+<table style="float:left">
+<caption>Initial Load (4GB) </caption>
+<thead>
+  <tr>
+    <th>Item</th>
+    <th>Duration</th>
+    <th>Duration comparison</th>
+  </tr>
+</thead>
+<tbody>
+  <tr>
+    <td>COPY with indexes</td>
+    <td align="right">500 sec</td>
+    <td align="center">-</td>
+  </tr>
+  <tr>
+    <td>COPY without indexes<br>+ CREATE INDEX</td>
+    <td align="right">333 sec <br>(229 sec + 51 sec+ 53 sec)</td>
+    <td align="right">66.7 %</td>
+  </tr>
+  <tr>
+    <td>pg_bulkload (DIRECT)<br>with indexes</td>
+    <td align="right">334 sec</td>
+    <td align="right">66.8 %</td>
+  </tr>
+  <tr>
+    <td>pg_bulkload (PARALLEL)<br>with indexes</td>
+    <td align="right">221 sec</td>
+    <td align="right">44.2 %</td>
+  </tr>
+</tbody>
+</table>
+
+<div style="float:left">
+<img src="./img/initial_load_93.png">
+</div>
+
+<h2 style="clear:both">Result 2: Appended data loading</h2>
+<p>
+Pg_bulkload on WRITER = PARALLEL mode can load data with an almost half time against COPY in this case also.
+COPY without indexes is not faster than COPY with indexes. Because it has to create indexes for total records of the table from initial.
+</p>
+
+<table style="float:left">
+<caption>Appended Load (1GB)</caption>
+<thead>
+  <tr>
+    <th>Item</th>
+    <th>Duration</th>
+    <th>Duration comparison</th>
+  </tr>
+</thead>
+<tbody>
+  <tr>
+    <td>COPY with indexes</td>
+    <td align="right">140 sec</td>
+    <td align="center">-</td>
+  </tr>
+  <tr>
+    <td>COPY without indexes<br>+ CREATE INDEX</td>
+    <td align="right">187 sec <br>(62 sec + 60 sec + 65 sec)</td>
+    <td align="right">133.6 %</td>
+  </tr>
+  <tr>
+    <td>pg_bulkload (DIRECT)<br>with indexes</td>
+    <td align="right">93 sec</td>
+    <td align="right">66.4 %</td>
+  </tr>
+  <tr>
+    <td>pg_bulkload (PARALLEL)<br>with indexes</td>
+    <td align="right">70 sec</td>
+    <td align="right">50.0 %</td>
+  </tr>
+</tbody>
+</table>
+
+<div style="float:left">
+<img src="./img/appended_load_93.png">
+</div>
+
+<h2 style="clear:both">Result 3: Influence from parameters and features</h2>
+<p>
+The maintenece_work_mem, PostgreSQL parameter, affects the performance of pg_bulkload.
+The duration becomes almost 15 % shorter if this parameter is changed from 64 MB to 1 GB.
+</p>
+
+<p>
+FILTER feature transforms input data in various operations, but it's not free.
+The actual measurement shows the loading time is increased to almost 240 % with SQL functions and almost 140 % with C functions.
+</p>
+
+<table style="float:left">
+<caption>pg_bulkload features</caption>
+<thead>
+  <tr>
+    <th rowspan="2" colspan="2">項目</th>
+    <th colspan="2">時間</th>
+  </tr>
+  <tr>
+    <th>Initial (4GB)</th>
+    <th>Appended (1GB)</th>
+  </tr>
+</thead>
+<tbody>
+  <tr>
+    <td>MWM = 64 MB</td>
+    <td>DIRECT</td>
+    <td align="right">397 sec</td>
+    <td align="right">109 sec</td>
+  </tr>
+  <tr>
+    <td rowspan="4">MWM = 1 GB</td>
+  </tr>
+  <tr>
+    <td>DIRECT</td>
+    <td align="right">334 sec</td>
+    <td align="right">93 sec</td>
+  </tr>
+  <tr>
+    <td>DIRECT with SQL FILTER</td>
+    <td align="right">801 sec</td>
+    <td align="right">216 sec</td>
+  </tr>
+  <tr>
+    <td>DIRECT with C FILTER</td>
+    <td align="right">456 sec</td>
+    <td align="right">126 sec</td>
+  </tr>
+</tbody>
+</table>
+
+<div style="float:left">
+<img src="./img/filter.png">
+</div>
+
+<h2 style="clear:both">Conditions</h2>
+<table>
+<thead>
+  <tr><th>Item</th><th>Value</th></tr>
+</thead>
+<tbody>
+  <tr><td>Server</td><td>Dell PowerEdge R410</td></tr>
+  <tr><td>CPU</td><td>Intel Xeon E5645 (2.4GHz) 12 core * 2</td></tr>
+  <tr><td>Memory</td><td>32GB</td></tr>
+  <tr><td>Disks</td><td>SAS 10000rpm 2TB * 4</td></tr>
+  <tr><td>OS</td><td>CentOS 6.2 (64bit)</td></tr>
+  <tr><td>PostgreSQL version</td><td>9.3.4</td></tr>
+  <tr><td>pg_bulkload version</td><td>3.1.6</td></tr>
+  <tr><td>shared_buffers</td><td>3210MB</td></tr>
+  <tr><td>checkpoint_segments</td><td>300</td></tr>
+  <tr><td>checkpoint_timeout</td><td>15min</td></tr>
+  <tr><td>work_mem</td><td>1MB</td></tr>
+  <tr><td>maintenance_work_mem</td><td>1GB</td></tr>
+  <tr><td>Table definition</td><td>DBT-2 customer table</td></tr>
+  <tr><td rowspan="2">Indexed columns</td><td>c_id (PRIMARY KEY)</td></tr>
+  <tr><td>c_d_id (non-unique B-Tree)</td></tr>
+  <tr><td>Constraints</td><td>NOT NULL for all columns</td></tr>
+  <tr><td>Input file format</td><td>CSV</td></tr>
+</tbody>
+</table>
+
+<hr />
+<p class="footer">Copyright (c) 2007-2026, NTT, Inc.</p>
+
+<script type="text/javascript">
+var gaJsHost = (("https:" == document.location.protocol) ? "https://ssl." : "http://www.");
+document.write(unescape("%3Cscript src='" + gaJsHost + "google-analytics.com/ga.js' type='text/javascript'%3E%3C/script%3E"));
+</script>
+<script type="text/javascript">
+try {
+var pageTracker = _gat._getTracker("UA-10244036-1");
+pageTracker._trackPageview();
+} catch(err) {}</script>
+</body>
+</html>

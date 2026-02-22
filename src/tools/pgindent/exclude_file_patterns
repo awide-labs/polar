@@ -56,6 +56,7 @@ external/hypopg/
 external/log_fdw/
 external/pase/
 external/pg_bigm/
+external/pg_bulkload/
 external/pg_jieba/
 external/pg_repack
 external/pg_similarity/

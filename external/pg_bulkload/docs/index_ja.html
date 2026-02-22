@@ -1,0 +1,263 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE html
+	PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"
+	"http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en" lang="en   ">
+
+<head>
+	<link rel="icon" type="image/png" href="https://wiki.postgresql.org/images/3/30/PostgreSQL_logo.3colors.120x120.png" />
+	<meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
+	<title>pg_bulkload: プロジェクト ホームページ</title>
+	<link rel="stylesheet" TYPE="text/css"href="style.css">
+</head>
+
+<body>
+<div Align="right"><h2><a href="index.html"> English</a></h2></div>
+<center>
+<img style="border: none; margin-left: auto; margin-right: auto; " src="https://wiki.postgresql.org/images/3/30/PostgreSQL_logo.3colors.120x120.png" height="75" width="75" />
+<hr />
+<h1>pg_bulkload ホームページへようこそ</h1>
+</center>
+
+<p>
+pg_bulkload は PostgreSQL 向けの高速データロードユーティリティです。
+</p>
+<p>
+<a href="index.html">Here is an English page.</a>
+</p>
+
+<hr />
+
+<h1 id="documentation">ドキュメント</h1>
+<ul>
+<li>
+<a href="pg_bulkload-ja.html">高速データローダ: <strong>pg_bulkload</strong> ドキュメント</a>
+  <ul>
+    <li>一定の制約条件の下で大量のデータを高速にロードするためのプログラムです。</li>
+  </ul>
+</li>
+<li>
+<a href="pg_timestamp-ja.html">オプションツール: <strong>pg_timestamp</strong> ドキュメント</a>
+  <ul>
+    <li>タイムスタンプ文字列のパースのオーバヘッドをスキップするための追加モジュールです。</li>
+  </ul>
+</li>
+</ul>
+
+<hr />
+
+<h1 id="performance">性能測定結果</h1>
+
+<p>
+COPY と pg_bulkload の比較のため、以下の条件で測定を行いました。
+PostgreSQL サーバは、基本的なチューニングを済ませた状態です。
+詳細な環境条件については末尾に記載しています。
+</p>
+
+<dl>
+  <dt>テーブル定義</dt>
+  <dd>
+  <a href="http://www.tpc.org/tpcc/">TPC-C</a> ベンチマークの簡易実装である
+  <a href="http://www.osdl.net/lab_activities/kernel_testing/osdl_database_test_suite/osdl_dbt-2/">DBT-2</a> の、customer テーブルと同じ構成です。</li>
+  <dt>インデックス定義</dt>
+  <dd>
+  2つのインデックスを定義しています。
+  1つ目は、integer 1列を含む昇順の主キーです。
+  2つ目は、integer 1列を含むランダム・キーから成る非ユニークインデックスです。
+  </dd>
+</dl>
+
+<p>
+測定パターンは以下です。
+</p>
+
+<ol>
+  <li>空のテーブルへの 4GB のデータの初期ロード</li>
+  <li>既に 4GB のデータを持つテーブルへの、1GB の追加ロード</li>
+  <li>maintenance_work_mem、FILTER 機能の性能への影響</li>
+</ol>
+
+<h2>結果1 : 初期ロード</h2>
+<p>
+pg_bulkload の PARALLEL モードを用いることで、COPY に比べて半分程度の時間でロードを行うことができています。
+COPY を用いる場合でも、インデックス定義なしで COPY することで処理時間を 2/3 程度にまで短縮することが可能です。
+これは pg_bulkload の DIRECT モードとほぼ同等の効果があります。
+</p>
+<table style="float:left">
+<caption>初期ロード(4GB) </caption>
+<thead>
+  <tr>
+    <th>項目</th>
+    <th>時間</th>
+    <th>時間比</th>
+  </tr>
+</thead>
+<tbody>
+  <tr>
+    <td>COPY with indexes</td>
+    <td align="right">500 sec</td>
+    <td align="center">-</td>
+  </tr>
+  <tr>
+    <td>COPY without indexes<br>+ CREATE INDEX</td>
+    <td align="right">333 sec <br>(229 sec + 51 sec+ 53 sec)</td>
+    <td align="right">66.7 %</td>
+  </tr>
+  <tr>
+    <td>pg_bulkload (DIRECT)<br>with indexes</td>
+    <td align="right">334 sec</td>
+    <td align="right">66.8 %</td>
+  </tr>
+  <tr>
+    <td>pg_bulkload (PARALLEL)<br>with indexes</td>
+    <td align="right">221 sec</td>
+    <td align="right">44.2 %</td>
+  </tr>
+</tbody>
+</table>
+
+<div style="float:left">
+<img src="./img/initial_load_93.png">
+</div>
+
+<h2 style="clear:both">結果2 : 追加ロード</h2>
+<p>
+pg_bulkload を用いることで、インデックスを付けたままのロードでも、COPY と比較して DIRECT モードで 2/3 程度、PARALLEL モードで半分程度の時間での実施が可能です。
+追加ロードの COPY では、インデックスを落としてロードを行う手段は有効ではありません。
+インデックスの再作成の際に既存のデータもインデックスしなければならないためです。
+</p>
+
+<table style="float:left">
+<caption>追加ロード(1GB)</caption>
+<thead>
+  <tr>
+    <th>項目</th>
+    <th>時間</th>
+    <th>時間比</th>
+  </tr>
+</thead>
+<tbody>
+  <tr>
+    <td>COPY with indexes</td>
+    <td align="right">140 sec</td>
+    <td align="center">-</td>
+  </tr>
+  <tr>
+    <td>COPY without indexes<br>+ CREATE INDEX</td>
+    <td align="right">187 sec <br>(62 sec + 60 sec + 65 sec)</td>
+    <td align="right">133.6 %</td>
+  </tr>
+  <tr>
+    <td>pg_bulkload (DIRECT)<br>with indexes</td>
+    <td align="right">93 sec</td>
+    <td align="right">66.4 %</td>
+  </tr>
+  <tr>
+    <td>pg_bulkload (PARALLEL)<br>with indexes</td>
+    <td align="right">70 sec</td>
+    <td align="right">50.0 %</td>
+  </tr>
+</tbody>
+</table>
+
+<div style="float:left">
+<img src="./img/appended_load_93.png">
+</div>
+
+<h2 style="clear:both">結果3 : パラメータ、各種機能による性能影響</h2>
+<p>
+pg_bulkload は インデックス作成処理において maintenance_work_mem の影響を受けます。
+この値を大きくすることでさらにロードが高速になる可能性があります。
+ここでは、maintenance_work_mem が 64 MB と 1 GB の場合で 15 % 程度処理時間に差が出ています。
+</p>
+
+<p>
+pg_bulkload の FILTER 機能を用いることで、入力データを柔軟に編集しながらロードすることができますが、性能へのトレードオフがあります。
+この検証では、SQL関数を利用する場合には2倍以上、C言語関数を利用する場合には 1.3倍強 までロード時間が増加しました。
+</p>
+
+<table style="float:left">
+<caption>maintenace_work_mem、 FILTER 機能の性能への影響</caption>
+<thead>
+  <tr>
+    <th rowspan="2" colspan="2">項目</th>
+    <th colspan="2">時間</th>
+  </tr>
+  <tr>
+    <th>初期ロード(4GB)</th>
+    <th>追加ロード(1GB)</th>
+  </tr>
+</thead>
+<tbody>
+  <tr>
+    <td>MWM = 64 MB</td>
+    <td>DIRECT</td>
+    <td align="right">397 sec</td>
+    <td align="right">109 sec</td>
+  </tr>
+  <tr>
+    <td rowspan="4">MWM = 1 GB</td>
+  </tr>
+  <tr>
+    <td>DIRECT</td>
+    <td align="right">334 sec</td>
+    <td align="right">93 sec</td>
+  </tr>
+  <tr>
+    <td>DIRECT with SQL FILTER</td>
+    <td align="right">801 sec</td>
+    <td align="right">216 sec</td>
+  </tr>
+  <tr>
+    <td>DIRECT with C FILTER</td>
+    <td align="right">456 sec</td>
+    <td align="right">126 sec</td>
+  </tr>
+</tbody>
+</table>
+
+<div style="float:left">
+<img src="./img/filter.png">
+</div>
+
+<h2 style="clear:both">測定条件</h2>
+<table>
+<thead>
+  <tr><th>項目</th><th>値</th></tr>
+</thead>
+<tbody>
+  <tr><td>Server</td><td>Dell PowerEdge R410</td></tr>
+  <tr><td>CPU</td><td>Intel Xeon E5645 (2.4GHz) 12 core * 2</td></tr>
+  <tr><td>Memory</td><td>32GB</td></tr>
+  <tr><td>Disks</td><td>SAS 10000rpm 2TB * 4</td></tr>
+  <tr><td>OS</td><td>CentOS 6.2 (64bit)</td></tr>
+  <tr><td>PostgreSQL version</td><td>9.3.4</td></tr>
+  <tr><td>pg_bulkload version</td><td>3.1.6</td></tr>
+  <tr><td>shared_buffers</td><td>3210MB</td></tr>
+  <tr><td>checkpoint_segments</td><td>300</td></tr>
+  <tr><td>checkpoint_timeout</td><td>15min</td></tr>
+  <tr><td>work_mem</td><td>1MB</td></tr>
+  <tr><td>maintenance_work_mem</td><td>1GB</td></tr>
+  <tr><td>Table definition</td><td>DBT-2 customer table</td></tr>
+  <tr><td rowspan="2">Indexed columns</td><td>c_id (PRIMARY KEY)</td></tr>
+  <tr><td>c_d_id (non-unique B-Tree)</td></tr>
+  <tr><td>Constraints</td><td>NOT NULL for all columns</td></tr>
+  <tr><td>Input file format</td><td>CSV</td></tr>
+</tbody>
+</table>
+
+<hr />
+<p class="footer">Copyright (c) 2007-2026, NTT, Inc.</p>
+
+<script type="text/javascript">
+var gaJsHost = (("https:" == document.location.protocol) ? "https://ssl." : "http://www.");
+document.write(unescape("%3Cscript src='" + gaJsHost + "google-analytics.com/ga.js' type='text/javascript'%3E%3C/script%3E"));
+</script>
+<script type="text/javascript">
+try {
+var pageTracker = _gat._getTracker("UA-10244036-1");
+pageTracker._trackPageview();
+} catch(err) {}</script>
+</body>
+</html>
