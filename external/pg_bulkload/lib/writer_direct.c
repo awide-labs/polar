@@ -25,6 +25,7 @@
 #include "miscadmin.h"
 #include "storage/bufmgr.h"
 #include "storage/fd.h"
+#include "storage/polar_fd.h"
 #include "utils/builtins.h"
 #include "utils/rel.h"
 #include "storage/bufpage.h"
@@ -218,19 +219,14 @@ DirectWriterInit(DirectWriter *self)
 	 * load to the same table.
 	 */
 	BULKLOAD_LSF_PATH(self->lsf_path, ls);
-#if PG_VERSION_NUM >= 110000
-	self->lsf_fd = BasicOpenFilePerm(self->lsf_path,
+	self->lsf_fd = polar_open(self->lsf_path,
 		O_CREAT | O_EXCL | O_RDWR | PG_BINARY, S_IRUSR | S_IWUSR);
-#else
-	self->lsf_fd = BasicOpenFile(self->lsf_path,
-		O_CREAT | O_EXCL | O_RDWR | PG_BINARY, S_IRUSR | S_IWUSR);
-#endif
 	if (self->lsf_fd == -1)
 		ereport(ERROR, (errcode_for_file_access(),
 			errmsg("could not create loadstatus file \"%s\": %m", self->lsf_path)));
 
-	if (write(self->lsf_fd, ls, sizeof(LoadStatus)) != sizeof(LoadStatus) ||
-		pg_fsync(self->lsf_fd) != 0)
+	if (polar_write(self->lsf_fd, ls, sizeof(LoadStatus)) != sizeof(LoadStatus) ||
+		polar_fsync(self->lsf_fd) != 0)
 	{
 		UnlinkLSF(self);
 		ereport(ERROR, (errcode_for_file_access(),
@@ -625,7 +621,7 @@ flush_pages(DirectWriter *loader)
 		written = 0;
 		while (total > 0)
 		{
-			int	len = write(loader->datafd, buffer + written, total);
+			int	len = polar_write(loader->datafd, buffer + written, total);
 			if (len == -1)
 			{
 				/* fatal error, do not want to write blocks anymore */
@@ -698,18 +694,14 @@ open_data_file(
 		pfree(fname);
 		fname = tmp;
 	}
-#if PG_VERSION_NUM >= 110000
-	fd = BasicOpenFilePerm(fname, O_CREAT | O_WRONLY | PG_BINARY, S_IRUSR | S_IWUSR);
-#else
-	fd = BasicOpenFile(fname, O_CREAT | O_WRONLY | PG_BINARY, S_IRUSR | S_IWUSR);
-#endif
+	fd = polar_open(fname, O_CREAT | O_WRONLY | PG_BINARY, S_IRUSR | S_IWUSR);
 	if (fd == -1)
 		ereport(ERROR, (errcode_for_file_access(),
 						errmsg("could not open data file: %m")));
-	ret = lseek(fd, BLCKSZ * (blknum % RELSEG_SIZE), SEEK_SET);
+	ret = polar_lseek(fd, BLCKSZ * (blknum % RELSEG_SIZE), SEEK_SET);
 	if (ret == -1)
 	{
-		close(fd);
+		polar_close(fd);
 		ereport(ERROR, (errcode_for_file_access(),
 						errmsg
 						("could not seek the end of the data file: %m")));
@@ -730,10 +722,10 @@ close_data_file(DirectWriter *loader)
 {
 	if (loader->datafd != -1)
 	{
-		if (pg_fsync(loader->datafd) != 0)
+		if (polar_fsync(loader->datafd) != 0)
 			ereport(WARNING, (errcode_for_file_access(),
 						errmsg("could not sync data file: %m")));
-		if (close(loader->datafd) < 0)
+		if (polar_close(loader->datafd) < 0)
 			ereport(WARNING, (errcode_for_file_access(),
 						errmsg("could not close data file: %m")));
 		loader->datafd = -1;
@@ -754,13 +746,13 @@ UpdateLSF(DirectWriter *loader, BlockNumber num)
 
 	ls->ls.create_cnt += num;
 
-	lseek(loader->lsf_fd, 0, SEEK_SET);
-	ret = write(loader->lsf_fd, ls, sizeof(LoadStatus));
+	polar_lseek(loader->lsf_fd, 0, SEEK_SET);
+	ret = polar_write(loader->lsf_fd, ls, sizeof(LoadStatus));
 	if (ret != sizeof(LoadStatus))
 		ereport(ERROR, (errcode_for_file_access(),
 						errmsg("could not write to \"%s\": %m",
 							   loader->lsf_path)));
-	if (pg_fsync(loader->lsf_fd) != 0)
+	if (polar_fsync(loader->lsf_fd) != 0)
 		ereport(ERROR,
 				(errcode_for_file_access(),
 				 errmsg("could not fsync file \"%s\": %m", loader->lsf_path)));
@@ -771,9 +763,9 @@ UnlinkLSF(DirectWriter *loader)
 {
 	if (loader->lsf_fd != -1)
 	{
-		close(loader->lsf_fd);
+		polar_close(loader->lsf_fd);
 		loader->lsf_fd = -1;
-		if (unlink(loader->lsf_path) < 0 && errno != ENOENT)
+		if (polar_unlink(loader->lsf_path) < 0 && errno != ENOENT)
 			ereport(ERROR, (errcode_for_file_access(),
 						errmsg("could not unlink load status file: %m")));
 	}
@@ -787,7 +779,7 @@ ValidateLSFDirectory(const char *path)
 {
 	struct stat	stat_buf;
 
-	if (stat(path, &stat_buf) == 0)
+	if (polar_stat(path, &stat_buf) == 0)
 	{
 		/* Check for weird cases where it exists but isn't a directory */
 		if (!S_ISDIR(stat_buf.st_mode))
@@ -799,7 +791,7 @@ ValidateLSFDirectory(const char *path)
 	{
 		ereport(LOG,
 				(errmsg("pg_bulkload: creating missing LSF directory \"%s\"", path)));
-		if (mkdir(path, 0700) < 0)
+		if (polar_mkdir(path, 0700) < 0)
 			ereport(ERROR,
 					(errmsg("could not create missing directory \"%s\": %m",
 							path)));
