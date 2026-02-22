@@ -32,6 +32,7 @@ SUBDIRS += hypopg
 #SUBDIRS += log_fdw
 #SUBDIRS += pase
 #SUBDIRS += pg_bigm
+SUBDIRS += pg_bulkload
 #SUBDIRS += pg_jieba
 SUBDIRS += pg_repack
 # SUBDIRS += pgvector

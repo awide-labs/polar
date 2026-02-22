@@ -58,7 +58,7 @@ PG_CONFIG = pg_config
 PGXS := $(shell $(PG_CONFIG) --pgxs)
 include $(PGXS)
 else
-subdir = contrib/$(MODULE_big)
+subdir = external/pg_bulkload/lib
 include $(makefile_global)
 include $(top_srcdir)/contrib/contrib-global.mk
 endif
