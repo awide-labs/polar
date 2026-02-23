@@ -1,26 +1,27 @@
+\setenv PGDATABASE :DBNAME
 SET extra_float_digits = 0;
 TRUNCATE customer;
-\! pg_bulkload -d contrib_regression data/bin1.ctl -i infile_logfile -l infile_logfile -P pbfile -u dbfile
+\! pg_bulkload data/bin1.ctl -i infile_logfile -l infile_logfile -P pbfile -u dbfile
 NOTICE: BULK LOAD START
 ERROR: query failed: ERROR:  INPUT, PARSE_BADFILE, DUPLICATE_BADFILE and LOGFILE cannot set the same file name.
 DETAIL: query was: SELECT * FROM pgbulkload.pg_bulkload($1)
-\! pg_bulkload -d contrib_regression data/bin1.ctl -i infile_pbfile -l logfile -P infile_pbfile -u dbfile
+\! pg_bulkload data/bin1.ctl -i infile_pbfile -l logfile -P infile_pbfile -u dbfile
 NOTICE: BULK LOAD START
 ERROR: query failed: ERROR:  INPUT, PARSE_BADFILE, DUPLICATE_BADFILE and LOGFILE cannot set the same file name.
 DETAIL: query was: SELECT * FROM pgbulkload.pg_bulkload($1)
-\! pg_bulkload -d contrib_regression data/bin1.ctl -i infile_dbfile -l logfile -P pbfile -u infile_dbfile
+\! pg_bulkload data/bin1.ctl -i infile_dbfile -l logfile -P pbfile -u infile_dbfile
 NOTICE: BULK LOAD START
 ERROR: query failed: ERROR:  INPUT, PARSE_BADFILE, DUPLICATE_BADFILE and LOGFILE cannot set the same file name.
 DETAIL: query was: SELECT * FROM pgbulkload.pg_bulkload($1)
-\! pg_bulkload -d contrib_regression data/bin1.ctl -i infile -l logfile_pbfile -P logfile_pbfile -u dbfile
+\! pg_bulkload data/bin1.ctl -i infile -l logfile_pbfile -P logfile_pbfile -u dbfile
 NOTICE: BULK LOAD START
 ERROR: query failed: ERROR:  INPUT, PARSE_BADFILE, DUPLICATE_BADFILE and LOGFILE cannot set the same file name.
 DETAIL: query was: SELECT * FROM pgbulkload.pg_bulkload($1)
-\! pg_bulkload -d contrib_regression data/bin1.ctl -i infile -l logfile_dbfile -P pbfile -u logfile_dbfile
+\! pg_bulkload data/bin1.ctl -i infile -l logfile_dbfile -P pbfile -u logfile_dbfile
 NOTICE: BULK LOAD START
 ERROR: query failed: ERROR:  INPUT, PARSE_BADFILE, DUPLICATE_BADFILE and LOGFILE cannot set the same file name.
 DETAIL: query was: SELECT * FROM pgbulkload.pg_bulkload($1)
-\! pg_bulkload -d contrib_regression data/bin1.ctl -i infile -l logfile -P pbfile_dbfile -u pbfile_dbfile
+\! pg_bulkload data/bin1.ctl -i infile -l logfile -P pbfile_dbfile -u pbfile_dbfile
 NOTICE: BULK LOAD START
 ERROR: query failed: ERROR:  INPUT, PARSE_BADFILE, DUPLICATE_BADFILE and LOGFILE cannot set the same file name.
 DETAIL: query was: SELECT * FROM pgbulkload.pg_bulkload($1)
@@ -33,7 +34,7 @@ SELECT * FROM customer ORDER BY c_id;
 ------+--------+--------+---------+----------+--------+------------+------------+--------+---------+-------+---------+---------+----------+--------------+------------+-----------+---------------+---------------+----------------+--------
 (0 rows)
 
-\! pg_bulkload -d contrib_regression data/bin1.ctl -i data/data1.bin -l results/bin1.log -P results/bin1.prs -u results/bin1.dup
+\! pg_bulkload data/bin1.ctl -i data/data1.bin -l results/bin1.log -P results/bin1.prs -u results/bin1.dup
 NOTICE: BULK LOAD START
 NOTICE: BULK LOAD END
 	1 Rows skipped.
@@ -127,7 +128,7 @@ SELECT * FROM customer ORDER BY c_id;
  16777224 |    224 |      0 | ABCDEFG | AA       | AAAAAAAAAAAAAAAA | c_street_2 | c_street_1           | AAAAAAAAAAAAAAAAAAAA | AA      | AAAAAAAAA | AAAAAAAAAAAAAAAA | Sun Jan 01 12:34:56 2006 | AA       |        32768 |      12345 |     12345 |       12345.7 |       12345.7 |     12345.6789 | 123456789012345678901234567890123456789
 (8 rows)
 
-\! pg_bulkload -d contrib_regression data/bin1.ctl -i data/data2.bin -l results/bin2.log -P results/bin2.prs -u results/bin2.dup
+\! pg_bulkload data/bin1.ctl -i data/data2.bin -l results/bin2.log -P results/bin2.prs -u results/bin2.dup
 NOTICE: BULK LOAD START
 NOTICE: BULK LOAD END
 	1 Rows skipped.
@@ -238,7 +239,7 @@ SELECT * FROM customer ORDER BY c_id;
 (16 rows)
 
 UPDATE customer SET c_data = 'OLD1';
-\! pg_bulkload -d contrib_regression data/bin2.ctl -o "SKIP=2" -o "LOAD=4" -o "VERBOSE=YES"
+\! pg_bulkload data/bin2.ctl -o "SKIP=2" -o "LOAD=4" -o "VERBOSE=YES"
 NOTICE: BULK LOAD START
 WARNING:  Duplicate error Record 1: Rejected - duplicate key value violates unique constraint "customer_pkey"
 WARNING:  Duplicate error Record 2: Rejected - duplicate key value violates unique constraint "customer_pkey"
@@ -357,7 +358,7 @@ SELECT * FROM customer ORDER BY c_id;
 (16 rows)
 
 UPDATE customer SET c_data = 'OLD2';
-\! pg_bulkload -d contrib_regression data/csv3.ctl -i results/bin3.dup -o "DUPLICATE_ERRORS=50" -l results/bin4.log -P results/bin4.prs -u results/bin4.dup
+\! pg_bulkload data/csv3.ctl -i results/bin3.dup -o "DUPLICATE_ERRORS=50" -l results/bin4.log -P results/bin4.prs -u results/bin4.dup
 NOTICE: BULK LOAD START
 NOTICE: BULK LOAD END
 	0 Rows skipped.
@@ -454,7 +455,7 @@ SELECT * FROM customer ORDER BY c_id;
 (16 rows)
 
 UPDATE customer SET c_data = 'OLD3';
-\! pg_bulkload -d contrib_regression data/csv3.ctl -i results/bin4.dup -o "ON_DUPLICATE_KEEP=OLD" -o "DUPLICATE_ERRORS=50" -l results/bin5.log -P results/bin5.prs -u results/bin5.dup
+\! pg_bulkload data/csv3.ctl -i results/bin4.dup -o "ON_DUPLICATE_KEEP=OLD" -o "DUPLICATE_ERRORS=50" -l results/bin5.log -P results/bin5.prs -u results/bin5.dup
 NOTICE: BULK LOAD START
 NOTICE: BULK LOAD END
 	0 Rows skipped.
@@ -552,7 +553,7 @@ SELECT * FROM customer ORDER BY c_id;
 (16 rows)
 
 -- do not error skip an error after of toast_insert_or_update.
-\! pg_bulkload -d contrib_regression data/bin3.ctl -i data/data3.bin -o "SKIP=3" -o "DUPLICATE_ERRORS=50" -o "LOAD=4" -o "VERBOSE=YES" -l results/bin6.log -P results/bin6.prs -u results/bin6.dup
+\! pg_bulkload data/bin3.ctl -i data/data3.bin -o "SKIP=3" -o "DUPLICATE_ERRORS=50" -o "LOAD=4" -o "VERBOSE=YES" -l results/bin6.log -P results/bin6.prs -u results/bin6.dup
 NOTICE: BULK LOAD START
 WARNING:  Parse error Record 1: Input Record 2: Rejected - column 3. invalid input syntax for type integer: "172270229a"
 WARNING:  Maximum parse error count exceeded - 1 error(s) found in input file
@@ -604,7 +605,7 @@ TRUNCATE = NO
 Parse error Record 1: Input Record 2: Rejected - column 3. invalid input syntax for type integer: "172270229a"
 Maximum parse error count exceeded - 1 error(s) found in input file
 integer out of range
-\! pg_bulkload -d contrib_regression data/bin3.ctl -i data/data3.bin -o "SKIP=4" -o "DUPLICATE_ERRORS=50" -o "PARSE_ERRORS=50" -o "LOAD=4" -o "VERBOSE=YES" -l results/bin7.log -P results/bin7.prs -u results/bin7.dup
+\! pg_bulkload data/bin3.ctl -i data/data3.bin -o "SKIP=4" -o "DUPLICATE_ERRORS=50" -o "PARSE_ERRORS=50" -o "LOAD=4" -o "VERBOSE=YES" -l results/bin7.log -P results/bin7.prs -u results/bin7.dup
 NOTICE: BULK LOAD START
 WARNING:  Parse error Record 1: Input Record 1: Rejected - column 3. invalid input syntax for type integer: "172270229a"
 WARNING:  Parse error Record 2: Input Record 2: Rejected - column 3. value "2147483648" is out of range for type integer
@@ -735,7 +736,7 @@ SELECT * FROM customer ORDER BY c_id;
 < SKIP RECORD2 ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 < SKIP RECORD3 ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 < 000012147483647ABCDEFG         AAAAAAAAAAAAAAAAAAc_street_1          c_street_2          AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA2006-01-01 12:34:56AA12345.678912345.678912345.678912345.678912345.678912345.6789123456789012345678
-\! pg_bulkload -d contrib_regression data/bin4.ctl -i data/data1.bin -l results/bin8.log -P pbfile -u dbfile -o "PARSE_ERRORS=-1" -o "DUPLICATE_ERRORS=-1"
+\! pg_bulkload data/bin4.ctl -i data/data1.bin -l results/bin8.log -P pbfile -u dbfile -o "PARSE_ERRORS=-1" -o "DUPLICATE_ERRORS=-1"
 NOTICE: BULK LOAD START
 NOTICE: BULK LOAD END
 	0 Rows skipped.
@@ -797,7 +798,7 @@ Run began on <TIMESTAMP>
 Run ended on <TIMESTAMP>
 
 CPU <TIME>s/<TIME>u sec elapsed <TIME> sec
-\! pg_bulkload -d contrib_regression data/bin4.ctl -i data/data1.bin -l results/bin9.log -P pbfile -u dbfile -o "PARSE_ERRORS=INFINITE" -o "DUPLICATE_ERRORS=INFINITE"
+\! pg_bulkload data/bin4.ctl -i data/data1.bin -l results/bin9.log -P pbfile -u dbfile -o "PARSE_ERRORS=INFINITE" -o "DUPLICATE_ERRORS=INFINITE"
 NOTICE: BULK LOAD START
 NOTICE: BULK LOAD END
 	0 Rows skipped.
@@ -859,7 +860,7 @@ Run began on <TIMESTAMP>
 Run ended on <TIMESTAMP>
 
 CPU <TIME>s/<TIME>u sec elapsed <TIME> sec
-\! echo -n "" | pg_bulkload -d contrib_regression data/bin5.ctl -l results/bin10.log -o PRESERVE_BLANKS=YES -o "COL=10"
+\! echo -n "" | pg_bulkload data/bin5.ctl -l results/bin10.log -o PRESERVE_BLANKS=YES -o "COL=10"
 NOTICE: BULK LOAD START
 NOTICE: BULK LOAD END
 	0 Rows skipped.
@@ -922,7 +923,7 @@ Run began on <TIMESTAMP>
 Run ended on <TIMESTAMP>
 
 CPU <TIME>s/<TIME>u sec elapsed <TIME> sec
-\! echo -n "" | pg_bulkload -d contrib_regression data/bin5.ctl -l results/bin11.log -o PRESERVE_BLANKS=NO -o "COL=10"
+\! echo -n "" | pg_bulkload data/bin5.ctl -l results/bin11.log -o PRESERVE_BLANKS=NO -o "COL=10"
 NOTICE: BULK LOAD START
 NOTICE: BULK LOAD END
 	0 Rows skipped.
@@ -985,32 +986,32 @@ Run began on <TIMESTAMP>
 Run ended on <TIMESTAMP>
 
 CPU <TIME>s/<TIME>u sec elapsed <TIME> sec
-\! echo -n "" | pg_bulkload -d contrib_regression data/bin5.ctl -l results/bin_error.log -o "COL=SHORT NULLIF abcg"
+\! echo -n "" | pg_bulkload data/bin5.ctl -l results/bin_error.log -o "COL=SHORT NULLIF abcg"
 NOTICE: BULK LOAD START
 ERROR: query failed: ERROR:  NULLIF argument must be '...' or hex digits
 DETAIL: query was: SELECT * FROM pgbulkload.pg_bulkload($1)
-\! echo -n "" | pg_bulkload -d contrib_regression data/bin5.ctl -l results/bin_error.log -o PRESERVE_BLANKS=NO -o "COL=10 aaaa"
+\! echo -n "" | pg_bulkload data/bin5.ctl -l results/bin_error.log -o PRESERVE_BLANKS=NO -o "COL=10 aaaa"
 NOTICE: BULK LOAD START
 ERROR: query failed: ERROR:  invalid input syntax for type integer: "10 aaaa"
 DETAIL: query was: SELECT * FROM pgbulkload.pg_bulkload($1)
-\! echo -n "" | pg_bulkload -d contrib_regression data/bin5.ctl -l results/bin_error.log -o "COL=SHORT (2) NULLIF abcd aaaa"
+\! echo -n "" | pg_bulkload data/bin5.ctl -l results/bin_error.log -o "COL=SHORT (2) NULLIF abcd aaaa"
 NOTICE: BULK LOAD START
 ERROR: query failed: ERROR:  NULLIF argument must be '...' or hex digits
 DETAIL: query was: SELECT * FROM pgbulkload.pg_bulkload($1)
-\! echo -n "" | pg_bulkload -d contrib_regression data/bin5.ctl -l results/bin_error.log -o "COL=SHORT NULLIF abcd aaaa"
+\! echo -n "" | pg_bulkload data/bin5.ctl -l results/bin_error.log -o "COL=SHORT NULLIF abcd aaaa"
 NOTICE: BULK LOAD START
 ERROR: query failed: ERROR:  NULLIF argument must be '...' or hex digits
 DETAIL: query was: SELECT * FROM pgbulkload.pg_bulkload($1)
-\! echo -n "" | pg_bulkload -d contrib_regression data/bin5.ctl -l results/bin_error.log -o "COL=SHORT (2) aaaa"
+\! echo -n "" | pg_bulkload data/bin5.ctl -l results/bin_error.log -o "COL=SHORT (2) aaaa"
 NOTICE: BULK LOAD START
 ERROR: query failed: ERROR:  syntax error at or near "aaaa" : SHORT (2) aaaa
 DETAIL: query was: SELECT * FROM pgbulkload.pg_bulkload($1)
-\! echo -n "" | pg_bulkload -d contrib_regression data/bin5.ctl -l results/bin_error.log -o "COL=SHORT aaaa"
+\! echo -n "" | pg_bulkload data/bin5.ctl -l results/bin_error.log -o "COL=SHORT aaaa"
 NOTICE: BULK LOAD START
 ERROR: query failed: ERROR:  invalid typename : SHORT aaaa
 DETAIL: query was: SELECT * FROM pgbulkload.pg_bulkload($1)
 -- load from stdin
-\! pg_bulkload -d contrib_regression data/bin1.ctl -i Stdin -l results/bin12.log -P results/bin12.prs -u results/bin12.dup -o TRUNCATE=YES -o ENCODING=SQLASCII < data/data1.bin
+\! pg_bulkload data/bin1.ctl -i Stdin -l results/bin12.log -P results/bin12.prs -u results/bin12.dup -o TRUNCATE=YES -o ENCODING=SQLASCII < data/data1.bin
 NOTICE: BULK LOAD START
 NOTICE: BULK LOAD END
 	1 Rows skipped.
@@ -1105,7 +1106,7 @@ SELECT * FROM customer ORDER BY c_id;
  16777224 |    224 |      0 | ABCDEFG | AA       | AAAAAAAAAAAAAAAA | c_street_2 | c_street_1           | AAAAAAAAAAAAAAAAAAAA | AA      | AAAAAAAAA | AAAAAAAAAAAAAAAA | Sun Jan 01 12:34:56 2006 | AA       |        32768 |      12345 |     12345 |       12345.7 |       12345.7 |     12345.6789 | 123456789012345678901234567890123456789
 (8 rows)
 
-\! pg_bulkload -d contrib_regression data/bin1.ctl -i Stdin -l results/bin13.log -P results/bin13.prs -u results/bin13.dup -o TRUNCATE=YES -o ENCODING=SQLASCII < data/data1.bin
+\! pg_bulkload data/bin1.ctl -i Stdin -l results/bin13.log -P results/bin13.prs -u results/bin13.dup -o TRUNCATE=YES -o ENCODING=SQLASCII < data/data1.bin
 NOTICE: BULK LOAD START
 NOTICE: BULK LOAD END
 	1 Rows skipped.

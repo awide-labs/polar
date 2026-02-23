@@ -1,3 +1,4 @@
+\setenv PGDATABASE :DBNAME
 CREATE TABLE binout1 (
   val1 smallint NOT NULL,
   val2 integer NOT NULL,
@@ -21,46 +22,46 @@ CREATE FUNCTION binout_f1() RETURNS SETOF RECORD AS $$
 $$ LANGUAGE SQL;
 
 /* error case */
-\! pg_bulkload -d contrib_regression data/binout1.ctl -i data/binout1.csv -l results/binout1.log -P results/binout1.prs -o TYPE=CSV -O results/binout1.bin -o TRUNCATE=YES
+\! pg_bulkload data/binout1.ctl -i data/binout1.csv -l results/binout1.log -P results/binout1.prs -o TYPE=CSV -O results/binout1.bin -o TRUNCATE=YES
 
 \! touch results/binout1.bin results/binout1.bin.ctl
-\! pg_bulkload -d contrib_regression data/binout1.ctl -i data/binout1.csv -l results/binout1.log -P results/binout1.prs -o TYPE=CSV -O results/binout1.bin
+\! pg_bulkload data/binout1.ctl -i data/binout1.csv -l results/binout1.log -P results/binout1.prs -o TYPE=CSV -O results/binout1.bin
 
 \! rm results/binout1.bin
-\! pg_bulkload -d contrib_regression data/binout1.ctl -i data/binout1.csv -l results/binout1.log -P results/binout1.prs -o TYPE=CSV -O results/binout1.bin
+\! pg_bulkload data/binout1.ctl -i data/binout1.csv -l results/binout1.log -P results/binout1.prs -o TYPE=CSV -O results/binout1.bin
 
 \! rm results/binout1.bin.ctl
-\! pg_bulkload -d contrib_regression data/binout1.ctl -i data/binout1.csv -l results/binout1.log -P results/binout1.prs -o TYPE=CSV -O results/binout1.bin -u results/binout1.dup
-\! pg_bulkload -d contrib_regression data/binout1.ctl -i data/binout1.csv -l results/binout1.log -P results/binout1.prs -o TYPE=CSV -O results/binout1.bin -o DUPLICATE_BADFILE=/tmp/binout1.dup
-\! pg_bulkload -d contrib_regression data/binout1.ctl -i data/binout1.csv -l results/binout1.log -P results/binout1.prs -o TYPE=CSV -O results/binout1.bin -o DUPLICATE_ERRORS=0
-\! pg_bulkload -d contrib_regression data/binout1.ctl -i data/binout1.csv -l results/binout1.log -P results/binout1.prs -o TYPE=CSV -O results/binout1.bin -o ON_DUPLICATE_KEEP=NEW
-\! pg_bulkload -d contrib_regression data/binout1.ctl -i data/binout1.csv -l results/binout1.log -P results/binout1.prs -o TYPE=CSV -O results/binout1.bin -o "OUT_COL=CHAR(100+10)"
-\! pg_bulkload -d contrib_regression data/binout1.ctl -i data/binout1.csv -l results/binout1.log -P results/binout1.prs -o TYPE=CSV -O results/binout1.bin -o "OUT_COL=CHAR(100:110)"
-\! pg_bulkload -d contrib_regression data/binout1.ctl -i data/binout1.csv -l results/binout1.log -P results/binout1.prs -o TYPE=CSV -O data/binout1.csv
-\! pg_bulkload -d contrib_regression data/binout1.ctl -i data/binout1.csv -l results/binout1.log -P results/binout1.prs -o TYPE=CSV -O results/binout1.log
-\! pg_bulkload -d contrib_regression data/binout1.ctl -i data/binout1.csv -l results/binout1.log -P results/binout1.prs -o TYPE=CSV -O results/binout1.prs
+\! pg_bulkload data/binout1.ctl -i data/binout1.csv -l results/binout1.log -P results/binout1.prs -o TYPE=CSV -O results/binout1.bin -u results/binout1.dup
+\! pg_bulkload data/binout1.ctl -i data/binout1.csv -l results/binout1.log -P results/binout1.prs -o TYPE=CSV -O results/binout1.bin -o DUPLICATE_BADFILE=/tmp/binout1.dup
+\! pg_bulkload data/binout1.ctl -i data/binout1.csv -l results/binout1.log -P results/binout1.prs -o TYPE=CSV -O results/binout1.bin -o DUPLICATE_ERRORS=0
+\! pg_bulkload data/binout1.ctl -i data/binout1.csv -l results/binout1.log -P results/binout1.prs -o TYPE=CSV -O results/binout1.bin -o ON_DUPLICATE_KEEP=NEW
+\! pg_bulkload data/binout1.ctl -i data/binout1.csv -l results/binout1.log -P results/binout1.prs -o TYPE=CSV -O results/binout1.bin -o "OUT_COL=CHAR(100+10)"
+\! pg_bulkload data/binout1.ctl -i data/binout1.csv -l results/binout1.log -P results/binout1.prs -o TYPE=CSV -O results/binout1.bin -o "OUT_COL=CHAR(100:110)"
+\! pg_bulkload data/binout1.ctl -i data/binout1.csv -l results/binout1.log -P results/binout1.prs -o TYPE=CSV -O data/binout1.csv
+\! pg_bulkload data/binout1.ctl -i data/binout1.csv -l results/binout1.log -P results/binout1.prs -o TYPE=CSV -O results/binout1.log
+\! pg_bulkload data/binout1.ctl -i data/binout1.csv -l results/binout1.log -P results/binout1.prs -o TYPE=CSV -O results/binout1.prs
 
 /* normal case */
-\! pg_bulkload -d contrib_regression data/binout1.ctl -i data/binout1.csv -l results/binout1.log -P results/binout1.prs -o TYPE=CSV -O results/binout1.bin
+\! pg_bulkload data/binout1.ctl -i data/binout1.csv -l results/binout1.log -P results/binout1.prs -o TYPE=CSV -O results/binout1.bin
 \! awk -f data/adjust.awk results/binout1.log
 
-\! pg_bulkload -d contrib_regression results/binout1.bin.ctl
+\! pg_bulkload results/binout1.bin.ctl
 \! awk -f data/adjust.awk results/binout1.bin.log
 
 SELECT * FROM binout1 ORDER BY val1;
 
-\! pg_bulkload -d contrib_regression data/binout2.ctl -i data/binout2.csv -l results/binout2.log -P results/binout2.prs -o TYPE=CSV -O results/binout2.bin
+\! pg_bulkload data/binout2.ctl -i data/binout2.csv -l results/binout2.log -P results/binout2.prs -o TYPE=CSV -O results/binout2.bin
 \! awk -f data/adjust.awk results/binout2.log
 
-\! pg_bulkload -d contrib_regression results/binout2.bin.ctl
+\! pg_bulkload results/binout2.bin.ctl
 \! awk -f data/adjust.awk results/binout2.bin.log
 
 SELECT * FROM binout2 ORDER BY val1;
 
-\! pg_bulkload -d contrib_regression data/binout1.ctl -i "binout_f1()" -l results/binout3.log -P results/binout3.prs -o TYPE=FUNCTION -O results/binout3.bin
+\! pg_bulkload data/binout1.ctl -i "binout_f1()" -l results/binout3.log -P results/binout3.prs -o TYPE=FUNCTION -O results/binout3.bin
 \! awk -f data/adjust.awk results/binout3.log
 
-\! pg_bulkload -d contrib_regression results/binout3.bin.ctl
+\! pg_bulkload results/binout3.bin.ctl
 \! awk -f data/adjust.awk results/binout3.bin.log
 
 SELECT * FROM binout3 ORDER BY val1;

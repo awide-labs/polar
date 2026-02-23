@@ -1,3 +1,4 @@
+\setenv PGDATABASE :DBNAME
 CREATE TABLE binout1 (
   val1 smallint NOT NULL,
   val2 integer NOT NULL,
@@ -46,59 +47,59 @@ CREATE FUNCTION binout_f1() RETURNS SETOF test_type AS $$
 	;
 $$ LANGUAGE SQL;
 /* error case */
-\! pg_bulkload -d contrib_regression data/binout1.ctl -i data/binout1.csv -l results/binout1.log -P results/binout1.prs -o TYPE=CSV -O results/binout1.bin -o TRUNCATE=YES
+\! pg_bulkload data/binout1.ctl -i data/binout1.csv -l results/binout1.log -P results/binout1.prs -o TYPE=CSV -O results/binout1.bin -o TRUNCATE=YES
 NOTICE: BULK LOAD START
 ERROR: query failed: ERROR:  invalid keyword "TRUNCATE"
 DETAIL: query was: SELECT * FROM pgbulkload.pg_bulkload($1)
 \! touch results/binout1.bin results/binout1.bin.ctl
-\! pg_bulkload -d contrib_regression data/binout1.ctl -i data/binout1.csv -l results/binout1.log -P results/binout1.prs -o TYPE=CSV -O results/binout1.bin
+\! pg_bulkload data/binout1.ctl -i data/binout1.csv -l results/binout1.log -P results/binout1.prs -o TYPE=CSV -O results/binout1.bin
 NOTICE: BULK LOAD START
 ERROR: query failed: ERROR:  could not open binary output file: File exists
 DETAIL: query was: SELECT * FROM pgbulkload.pg_bulkload($1)
 \! rm results/binout1.bin
-\! pg_bulkload -d contrib_regression data/binout1.ctl -i data/binout1.csv -l results/binout1.log -P results/binout1.prs -o TYPE=CSV -O results/binout1.bin
+\! pg_bulkload data/binout1.ctl -i data/binout1.csv -l results/binout1.log -P results/binout1.prs -o TYPE=CSV -O results/binout1.bin
 NOTICE: BULK LOAD START
 ERROR: query failed: ERROR:  could not open sample control file: File exists
 DETAIL: query was: SELECT * FROM pgbulkload.pg_bulkload($1)
 \! rm results/binout1.bin.ctl
-\! pg_bulkload -d contrib_regression data/binout1.ctl -i data/binout1.csv -l results/binout1.log -P results/binout1.prs -o TYPE=CSV -O results/binout1.bin -u results/binout1.dup
+\! pg_bulkload data/binout1.ctl -i data/binout1.csv -l results/binout1.log -P results/binout1.prs -o TYPE=CSV -O results/binout1.bin -u results/binout1.dup
 NOTICE: BULK LOAD START
 ERROR: query failed: ERROR:  invalid keyword "duplicate-badfile"
 DETAIL: query was: SELECT * FROM pgbulkload.pg_bulkload($1)
-\! pg_bulkload -d contrib_regression data/binout1.ctl -i data/binout1.csv -l results/binout1.log -P results/binout1.prs -o TYPE=CSV -O results/binout1.bin -o DUPLICATE_BADFILE=/tmp/binout1.dup
+\! pg_bulkload data/binout1.ctl -i data/binout1.csv -l results/binout1.log -P results/binout1.prs -o TYPE=CSV -O results/binout1.bin -o DUPLICATE_BADFILE=/tmp/binout1.dup
 NOTICE: BULK LOAD START
 ERROR: query failed: ERROR:  invalid keyword "DUPLICATE_BADFILE"
 DETAIL: query was: SELECT * FROM pgbulkload.pg_bulkload($1)
-\! pg_bulkload -d contrib_regression data/binout1.ctl -i data/binout1.csv -l results/binout1.log -P results/binout1.prs -o TYPE=CSV -O results/binout1.bin -o DUPLICATE_ERRORS=0
+\! pg_bulkload data/binout1.ctl -i data/binout1.csv -l results/binout1.log -P results/binout1.prs -o TYPE=CSV -O results/binout1.bin -o DUPLICATE_ERRORS=0
 NOTICE: BULK LOAD START
 ERROR: query failed: ERROR:  invalid keyword "DUPLICATE_ERRORS"
 DETAIL: query was: SELECT * FROM pgbulkload.pg_bulkload($1)
-\! pg_bulkload -d contrib_regression data/binout1.ctl -i data/binout1.csv -l results/binout1.log -P results/binout1.prs -o TYPE=CSV -O results/binout1.bin -o ON_DUPLICATE_KEEP=NEW
+\! pg_bulkload data/binout1.ctl -i data/binout1.csv -l results/binout1.log -P results/binout1.prs -o TYPE=CSV -O results/binout1.bin -o ON_DUPLICATE_KEEP=NEW
 NOTICE: BULK LOAD START
 ERROR: query failed: ERROR:  invalid keyword "ON_DUPLICATE_KEEP"
 DETAIL: query was: SELECT * FROM pgbulkload.pg_bulkload($1)
-\! pg_bulkload -d contrib_regression data/binout1.ctl -i data/binout1.csv -l results/binout1.log -P results/binout1.prs -o TYPE=CSV -O results/binout1.bin -o "OUT_COL=CHAR(100+10)"
+\! pg_bulkload data/binout1.ctl -i data/binout1.csv -l results/binout1.log -P results/binout1.prs -o TYPE=CSV -O results/binout1.bin -o "OUT_COL=CHAR(100+10)"
 NOTICE: BULK LOAD START
 ERROR: query failed: ERROR:  TYPE argument must be ( L )
 DETAIL: query was: SELECT * FROM pgbulkload.pg_bulkload($1)
-\! pg_bulkload -d contrib_regression data/binout1.ctl -i data/binout1.csv -l results/binout1.log -P results/binout1.prs -o TYPE=CSV -O results/binout1.bin -o "OUT_COL=CHAR(100:110)"
+\! pg_bulkload data/binout1.ctl -i data/binout1.csv -l results/binout1.log -P results/binout1.prs -o TYPE=CSV -O results/binout1.bin -o "OUT_COL=CHAR(100:110)"
 NOTICE: BULK LOAD START
 ERROR: query failed: ERROR:  TYPE argument must be ( L )
 DETAIL: query was: SELECT * FROM pgbulkload.pg_bulkload($1)
-\! pg_bulkload -d contrib_regression data/binout1.ctl -i data/binout1.csv -l results/binout1.log -P results/binout1.prs -o TYPE=CSV -O data/binout1.csv
+\! pg_bulkload data/binout1.ctl -i data/binout1.csv -l results/binout1.log -P results/binout1.prs -o TYPE=CSV -O data/binout1.csv
 NOTICE: BULK LOAD START
 ERROR: query failed: ERROR:  INPUT, PARSE_BADFILE, OUTPUT, LOGFILE and sample control file cannot set the same file name.
 DETAIL: query was: SELECT * FROM pgbulkload.pg_bulkload($1)
-\! pg_bulkload -d contrib_regression data/binout1.ctl -i data/binout1.csv -l results/binout1.log -P results/binout1.prs -o TYPE=CSV -O results/binout1.log
+\! pg_bulkload data/binout1.ctl -i data/binout1.csv -l results/binout1.log -P results/binout1.prs -o TYPE=CSV -O results/binout1.log
 NOTICE: BULK LOAD START
 ERROR: query failed: ERROR:  INPUT, PARSE_BADFILE, OUTPUT, LOGFILE and sample control file cannot set the same file name.
 DETAIL: query was: SELECT * FROM pgbulkload.pg_bulkload($1)
-\! pg_bulkload -d contrib_regression data/binout1.ctl -i data/binout1.csv -l results/binout1.log -P results/binout1.prs -o TYPE=CSV -O results/binout1.prs
+\! pg_bulkload data/binout1.ctl -i data/binout1.csv -l results/binout1.log -P results/binout1.prs -o TYPE=CSV -O results/binout1.prs
 NOTICE: BULK LOAD START
 ERROR: query failed: ERROR:  INPUT, PARSE_BADFILE, OUTPUT, LOGFILE and sample control file cannot set the same file name.
 DETAIL: query was: SELECT * FROM pgbulkload.pg_bulkload($1)
 /* normal case */
-\! pg_bulkload -d contrib_regression data/binout1.ctl -i data/binout1.csv -l results/binout1.log -P results/binout1.prs -o TYPE=CSV -O results/binout1.bin
+\! pg_bulkload data/binout1.ctl -i data/binout1.csv -l results/binout1.log -P results/binout1.prs -o TYPE=CSV -O results/binout1.bin
 NOTICE: BULK LOAD START
 NOTICE: BULK LOAD END
 	0 Rows skipped.
@@ -163,7 +164,7 @@ Run began on <TIMESTAMP>
 Run ended on <TIMESTAMP>
 
 CPU <TIME>s/<TIME>u sec elapsed <TIME> sec
-\! pg_bulkload -d contrib_regression results/binout1.bin.ctl
+\! pg_bulkload results/binout1.bin.ctl
 NOTICE: BULK LOAD START
 NOTICE: BULK LOAD END
 	0 Rows skipped.
@@ -224,7 +225,7 @@ SELECT * FROM binout1 ORDER BY val1;
   32767 |  2147483647 |  9223372036854775807 | 65535 | 4294967295 |  1e+37 |  1e+308 | test     8
 (7 rows)
 
-\! pg_bulkload -d contrib_regression data/binout2.ctl -i data/binout2.csv -l results/binout2.log -P results/binout2.prs -o TYPE=CSV -O results/binout2.bin
+\! pg_bulkload data/binout2.ctl -i data/binout2.csv -l results/binout2.log -P results/binout2.prs -o TYPE=CSV -O results/binout2.bin
 NOTICE: BULK LOAD START
 NOTICE: BULK LOAD END
 	0 Rows skipped.
@@ -272,7 +273,7 @@ Run began on <TIMESTAMP>
 Run ended on <TIMESTAMP>
 
 CPU <TIME>s/<TIME>u sec elapsed <TIME> sec
-\! pg_bulkload -d contrib_regression results/binout2.bin.ctl
+\! pg_bulkload results/binout2.bin.ctl
 NOTICE: BULK LOAD START
 NOTICE: BULK LOAD END
 	0 Rows skipped.
@@ -337,7 +338,7 @@ SELECT * FROM binout2 ORDER BY val1;
     1 |    2 |    3 |    4 |    5 |  0.1 |  0.2 | test0
 (1 row)
 
-\! pg_bulkload -d contrib_regression data/binout3.ctl -i "binout_f1()" -l results/binout3.log -P results/binout3.prs -o TYPE=FUNCTION -O results/binout3.bin
+\! pg_bulkload data/binout3.ctl -i "binout_f1()" -l results/binout3.log -P results/binout3.prs -o TYPE=FUNCTION -O results/binout3.bin
 NOTICE: BULK LOAD START
 NOTICE: BULK LOAD END
 	0 Rows skipped.
@@ -384,7 +385,7 @@ Run began on <TIMESTAMP>
 Run ended on <TIMESTAMP>
 
 CPU <TIME>s/<TIME>u sec elapsed <TIME> sec
-\! pg_bulkload -d contrib_regression results/binout3.bin.ctl
+\! pg_bulkload results/binout3.bin.ctl
 NOTICE: BULK LOAD START
 NOTICE: BULK LOAD END
 	0 Rows skipped.
