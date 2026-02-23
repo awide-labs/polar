@@ -148,6 +148,13 @@ rsc_replica_redo_smgr(XLogReaderState *record)
 			 */
 		case XLOG_SMGR_TRUNCATE:
 			break;
+		case XLOG_SMGR_BULK_EXTEND:
+			{
+				xl_smgr_bulk_extend *xlrec = (xl_smgr_bulk_extend *) XLogRecGetData(record);
+
+				polar_rsc_drop_entry(&xlrec->rlocator);
+				break;
+			}
 
 		default:
 			break;
