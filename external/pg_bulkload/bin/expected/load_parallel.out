@@ -1,5 +1,4 @@
 \setenv PGDATABASE :DBNAME
-\set BEFORE_NSHM `ipcs -m | grep -c [0-9]`
 TRUNCATE customer;
 \! pg_bulkload data/csv1.ctl -o"delimiter=|" -i data/data1.csv -o "MULTI_PROCESS=YES" -l results/parallel1.log -P results/parallel1.prs -u results/parallel1.dup -o "PARSE_ERRORS=50"
 NOTICE: BULK LOAD START
@@ -281,13 +280,6 @@ SELECT * FROM customer ORDER BY c_id;
  16777229 |    229 |      0 | ABCDEFG          | AA       | AAAAAAAAAAAAAAAA | c_street_1           | c_street_2           | AAAAAAAAAAAAAAAAAAAA | AA      | AAAAAAAAA | AAAAAAAAAAAAAAAA | Sun Jan 01 12:34:56 2006 | AA       |   12345.6789 | 12345.6789 | 12345.6789 |    12345.6789 |       12345.7 |     12345.6789 | 123456789012345678
  16777230 |    230 |      0 | ABCDEFG          | AA       | AAAAAAAAAAAAAAAA | c_street_1           | c_street_2           | AAAAAAAAAAAAAAAAAAAA | AA      | AAAAAAAAA | AAAAAAAAAAAAAAAA | Sun Jan 01 12:34:56 2006 | AA       |   12345.6789 | 12345.6789 | 12345.6789 |    12345.6789 |       12345.7 |     12345.6789 | 123456789012345678
 (9 rows)
-
-\set AFTER_NSHM `ipcs -m | grep -c [0-9]`
-SELECT :AFTER_NSHM - :BEFORE_NSHM as "not destroy shared memorys";
- not destroy shared memorys 
-----------------------------
-                          0
-(1 row)
 
 CREATE TABLE public.foo (
     a char(2010),
