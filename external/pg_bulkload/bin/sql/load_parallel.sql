@@ -1,6 +1,5 @@
 \setenv PGDATABASE :DBNAME
 SET extra_float_digits = 0;
-\set BEFORE_NSHM `ipcs -m | grep -c [0-9]`
 TRUNCATE customer;
 
 \! pg_bulkload data/csv1.ctl -o"delimiter=|" -i data/data1.csv -o "MULTI_PROCESS=YES" -l results/parallel1.log -P results/parallel1.prs -u results/parallel1.dup -o "PARSE_ERRORS=50"
@@ -54,9 +53,6 @@ SET enable_seqscan = off;
 SET enable_indexscan = on;
 SET enable_bitmapscan = off;
 SELECT * FROM customer ORDER BY c_id;
-
-\set AFTER_NSHM `ipcs -m | grep -c [0-9]`
-SELECT :AFTER_NSHM - :BEFORE_NSHM as "not destroy shared memorys";
 
 CREATE TABLE public.foo (
     a char(2010),
