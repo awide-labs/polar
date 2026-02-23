@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- Add pg_bulkload v3.1.23, a high-speed bulk data loading utility,
+  as an in-tree extension with full PolarDB shared storage support
+  (XCOM-195)
+
 ### Removed
 
 - The pg_partman extension has been temporarily disabled due to broken
