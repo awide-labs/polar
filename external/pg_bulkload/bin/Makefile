@@ -218,6 +218,39 @@ sql/write_bin-17.sql:
 sql/write_bin-18.sql:
 	cp sql/write_bin-v2.sql sql/write_bin-18.sql
 
+# Prerequisite tracking: rebuild versioned SQL files whenever their source
+# template changes.  Without these rules the versioned files are never
+# regenerated once they exist, so edits to the templates are silently ignored.
+sql/init-9.3.sql sql/init-9.4.sql sql/init-9.5.sql sql/init-9.6.sql \
+sql/init-10.sql sql/init-11.sql: sql/init-extension.sql
+sql/init-12.sql sql/init-13.sql sql/init-14.sql: sql/init-extension-v2.sql
+sql/init-15.sql sql/init-16.sql sql/init-17.sql sql/init-18.sql: sql/init-extension-v3.sql
+
+sql/load_bin-9.3.sql sql/load_bin-9.4.sql sql/load_bin-9.5.sql sql/load_bin-9.6.sql \
+sql/load_bin-10.sql sql/load_bin-11.sql: sql/load_bin-v1.sql
+sql/load_bin-12.sql sql/load_bin-13.sql sql/load_bin-14.sql \
+sql/load_bin-15.sql sql/load_bin-16.sql sql/load_bin-17.sql sql/load_bin-18.sql: sql/load_bin-v2.sql
+
+sql/load_csv-9.3.sql sql/load_csv-9.4.sql sql/load_csv-9.5.sql sql/load_csv-9.6.sql \
+sql/load_csv-10.sql sql/load_csv-11.sql: sql/load_csv-v1.sql
+sql/load_csv-12.sql sql/load_csv-13.sql sql/load_csv-14.sql: sql/load_csv-v2.sql
+sql/load_csv-15.sql sql/load_csv-16.sql sql/load_csv-17.sql sql/load_csv-18.sql: sql/load_csv-v3.sql
+
+sql/load_filter-9.3.sql sql/load_filter-9.4.sql sql/load_filter-9.5.sql sql/load_filter-9.6.sql \
+sql/load_filter-10.sql sql/load_filter-11.sql: sql/load_filter-v2.sql
+sql/load_filter-12.sql sql/load_filter-13.sql sql/load_filter-14.sql \
+sql/load_filter-15.sql sql/load_filter-16.sql sql/load_filter-17.sql sql/load_filter-18.sql: sql/load_filter-v3.sql
+
+sql/load_function-9.3.sql sql/load_function-9.4.sql sql/load_function-9.5.sql sql/load_function-9.6.sql \
+sql/load_function-10.sql sql/load_function-11.sql: sql/load_function-v2.sql
+sql/load_function-12.sql sql/load_function-13.sql sql/load_function-14.sql \
+sql/load_function-15.sql sql/load_function-16.sql sql/load_function-17.sql sql/load_function-18.sql: sql/load_function-v3.sql
+
+sql/write_bin-9.3.sql sql/write_bin-9.4.sql sql/write_bin-9.5.sql sql/write_bin-9.6.sql \
+sql/write_bin-10.sql sql/write_bin-11.sql sql/write_bin-12.sql: sql/write_bin-v1.sql
+sql/write_bin-13.sql sql/write_bin-14.sql sql/write_bin-15.sql \
+sql/write_bin-16.sql sql/write_bin-17.sql sql/write_bin-18.sql: sql/write_bin-v2.sql
+
 .PHONY: subclean
 clean: subclean
 
