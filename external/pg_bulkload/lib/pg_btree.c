@@ -98,8 +98,8 @@
 /**
  * @brief Reader for existing B-Tree index
  *
- * The 'page' field should be allocate with palloc(BLCKSZ) to
- * avoid bus error.
+ * The 'page' field must be allocated with palloc_aligned(BLCKSZ, PG_IO_ALIGN_SIZE, 0)
+ * because mdread() requires I/O-aligned buffers.
  */
 typedef struct BTReader
 {
@@ -882,11 +882,7 @@ BTReaderInit(BTReader *reader, Relation rel)
 	reader->blkno = InvalidBlockNumber;
 	reader->offnum = InvalidOffsetNumber;
 
-#if PG_VERSION_NUM >= 160000
 	reader->page = (Page) palloc_aligned(BLCKSZ, PG_IO_ALIGN_SIZE, 0);
-#else
-	reader->page = palloc(BLCKSZ);
-#endif
 
 	/*
 	 * Read meta page and check sanity of it.
