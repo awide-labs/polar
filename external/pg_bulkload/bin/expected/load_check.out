@@ -1,4 +1,5 @@
-\! pg_bulkload -d contrib_regression data/csv7.ctl -o "DUPLICATE_ERRORS=50" -i data/data5.csv -l results/check1.log -P results/check1.prs -u results/check1.dup -o "PARSE_ERRORS=-1"
+\setenv PGDATABASE :DBNAME
+\! pg_bulkload data/csv7.ctl -o "DUPLICATE_ERRORS=50" -i data/data5.csv -l results/check1.log -P results/check1.prs -u results/check1.dup -o "PARSE_ERRORS=-1"
 NOTICE: BULK LOAD START
 NOTICE: BULK LOAD END
 	0 Rows skipped.
@@ -74,7 +75,7 @@ SELECT * FROM target ORDER BY id;
   7 | fff        |      7
 (5 rows)
 
-\! pg_bulkload -d contrib_regression data/csv7.ctl -i data/data5.csv -l results/check2.log -P results/check2.prs -u results/check2.dup -o "PARSE_ERRORS=-1" -o CHECK_CONSTRAINTS=NO
+\! pg_bulkload data/csv7.ctl -i data/data5.csv -l results/check2.log -P results/check2.prs -u results/check2.dup -o "PARSE_ERRORS=-1" -o CHECK_CONSTRAINTS=NO
 NOTICE: BULK LOAD START
 ERROR: query failed: ERROR:  could not create unique index "target_pkey"
 DETAIL:  Key (id)=(1) is duplicated.
@@ -134,7 +135,7 @@ SELECT * FROM target ORDER BY id;
   7 | fff        |      7
 (5 rows)
 
-\! pg_bulkload -d contrib_regression data/csv7.ctl -o "DUPLICATE_ERRORS=50" -i data/data5.csv -l results/check3.log -P results/check3.prs -u results/check3.dup -o "PARSE_ERRORS=2" -o CHECK_CONSTRAINTS=NO
+\! pg_bulkload data/csv7.ctl -o "DUPLICATE_ERRORS=50" -i data/data5.csv -l results/check3.log -P results/check3.prs -u results/check3.dup -o "PARSE_ERRORS=2" -o CHECK_CONSTRAINTS=NO
 NOTICE: BULK LOAD START
 NOTICE: BULK LOAD END
 	0 Rows skipped.
@@ -209,7 +210,7 @@ SELECT * FROM target ORDER BY id;
   6 | eee        |      6
 (4 rows)
 
-\! pg_bulkload -d contrib_regression data/csv7.ctl -o "DUPLICATE_ERRORS=50" -i data/data5.csv -l results/check4.log -P results/check4.prs -u results/check4.dup -o "PARSE_ERRORS=4" -o CHECK_CONSTRAINTS=YES
+\! pg_bulkload data/csv7.ctl -o "DUPLICATE_ERRORS=50" -i data/data5.csv -l results/check4.log -P results/check4.prs -u results/check4.dup -o "PARSE_ERRORS=4" -o CHECK_CONSTRAINTS=YES
 NOTICE: BULK LOAD START
 NOTICE: BULK LOAD END
 	0 Rows skipped.

@@ -1,3 +1,4 @@
+\setenv PGDATABASE :DBNAME
 --------------------------------
 -- normal case
 --------------------------------
@@ -28,87 +29,87 @@ $$ LANGUAGE SQL;
 TRUNCATE target;
 INSERT INTO target VALUES(1, 'dummy', 1);
 -- FILTER option parse error
-\! pg_bulkload -d contrib_regression data/csv4.ctl -i data/data6.csv -l results/filter_e.log -P results/filter_e1.prs -u results/filter_e1.dup -o 'FILTER=variadic_f(int, text)'
+\! pg_bulkload data/csv4.ctl -i data/data6.csv -l results/filter_e.log -P results/filter_e1.prs -u results/filter_e1.dup -o 'FILTER=variadic_f(int, text)'
 NOTICE: BULK LOAD START
 ERROR: query failed: ERROR:  filter function does not support a valiadic function variadic_f
 DETAIL: query was: SELECT * FROM pgbulkload.pg_bulkload($1)
-\! pg_bulkload -d contrib_regression data/csv4.ctl -i data/data6.csv -l results/filter_e.log -P results/filter_e1.prs -u results/filter_e1.dup -o 'FILTER=overload_f'
+\! pg_bulkload data/csv4.ctl -i data/data6.csv -l results/filter_e.log -P results/filter_e1.prs -u results/filter_e1.dup -o 'FILTER=overload_f'
 NOTICE: BULK LOAD START
 ERROR: query failed: ERROR:  function overload_f() is not unique
 HINT:  Could not choose a best candidate function.
 DETAIL: query was: SELECT * FROM pgbulkload.pg_bulkload($1)
-\! pg_bulkload -d contrib_regression data/csv4.ctl -i data/data6.csv -l results/filter_e.log -P results/filter_e1.prs -u results/filter_e1.dup -o 'FILTER=using_out_f()'
+\! pg_bulkload data/csv4.ctl -i data/data6.csv -l results/filter_e.log -P results/filter_e1.prs -u results/filter_e1.dup -o 'FILTER=using_out_f()'
 NOTICE: BULK LOAD START
 ERROR: query failed: ERROR:  function using_out_f() does not exist
 HINT:  No function matches the given name and argument types.
 DETAIL: query was: SELECT * FROM pgbulkload.pg_bulkload($1)
-\! pg_bulkload -d contrib_regression data/csv4.ctl -i data/data6.csv -l results/filter_e.log -P results/filter_e1.prs -u results/filter_e1.dup -o 'FILTER=using_out_f(int4, int4, text)'
+\! pg_bulkload data/csv4.ctl -i data/data6.csv -l results/filter_e.log -P results/filter_e1.prs -u results/filter_e1.dup -o 'FILTER=using_out_f(int4, int4, text)'
 NOTICE: BULK LOAD START
 ERROR: query failed: ERROR:  function using_out_f(integer, integer, text) does not exist
 HINT:  No function matches the given name and argument types.
 DETAIL: query was: SELECT * FROM pgbulkload.pg_bulkload($1)
-\! pg_bulkload -d contrib_regression data/csv4.ctl -i data/data7.csv -l results/filter_e.log -P results/filter_e1.prs -u results/filter_e1.dup -o 'FILTER=outarg_f()'
+\! pg_bulkload data/csv4.ctl -i data/data7.csv -l results/filter_e.log -P results/filter_e1.prs -u results/filter_e1.dup -o 'FILTER=outarg_f()'
 NOTICE: BULK LOAD START
 ERROR: query failed: ERROR:  could not create unique index "target_pkey"
 DETAIL:  Key (id)=(1) is duplicated.
 DETAIL: query was: SELECT * FROM pgbulkload.pg_bulkload($1)
-\! pg_bulkload -d contrib_regression data/csv4.ctl -i data/data6.csv -l results/filter_e.log -P results/filter_e1.prs -u results/filter_e1.dup -o 'FILTER=setof_f()'
+\! pg_bulkload data/csv4.ctl -i data/data6.csv -l results/filter_e.log -P results/filter_e1.prs -u results/filter_e1.dup -o 'FILTER=setof_f()'
 NOTICE: BULK LOAD START
 ERROR: query failed: ERROR:  filter function must not return set
 DETAIL: query was: SELECT * FROM pgbulkload.pg_bulkload($1)
-\! pg_bulkload -d contrib_regression data/csv4.ctl -i data/data6.csv -l results/filter_e.log -P results/filter_e1.prs -u results/filter_e1.dup -o 'FILTER=using_out_f(int4, int4, int4)' -o FORCE_NOT_NULL=id
+\! pg_bulkload data/csv4.ctl -i data/data6.csv -l results/filter_e.log -P results/filter_e1.prs -u results/filter_e1.dup -o 'FILTER=using_out_f(int4, int4, int4)' -o FORCE_NOT_NULL=id
 NOTICE: BULK LOAD START
 ERROR: query failed: ERROR:  cannot use FILTER with FORCE_NOT_NULL
 DETAIL: query was: SELECT * FROM pgbulkload.pg_bulkload($1)
-\! pg_bulkload -d contrib_regression data/csv4.ctl -i data/data7.csv -l results/filter_e.log -P results/filter_e1.prs -u results/filter_e1.dup -o 'FILTER=type_mismatch_f()'
+\! pg_bulkload data/csv4.ctl -i data/data7.csv -l results/filter_e.log -P results/filter_e1.prs -u results/filter_e1.dup -o 'FILTER=type_mismatch_f()'
 NOTICE: BULK LOAD START
 ERROR: query failed: ERROR:  function return row and target table row do not match
 DETAIL:  Returned row contains 2 attribute(s), but target table expects 3.
 DETAIL: query was: SELECT * FROM pgbulkload.pg_bulkload($1)
-\! pg_bulkload -d contrib_regression data/csv4.ctl -i data/data6.csv -l results/filter_e.log -P results/filter_e1.prs -u results/filter_e1.dup -o 'FILTER=no_create_f()'
+\! pg_bulkload data/csv4.ctl -i data/data6.csv -l results/filter_e.log -P results/filter_e1.prs -u results/filter_e1.dup -o 'FILTER=no_create_f()'
 NOTICE: BULK LOAD START
 ERROR: query failed: ERROR:  function no_create_f() does not exist
 HINT:  No function matches the given name and argument types.
 DETAIL: query was: SELECT * FROM pgbulkload.pg_bulkload($1)
-\! pg_bulkload -d contrib_regression data/csv4.ctl -i data/data7.csv -l results/filter_e.log -P results/filter_e1.prs -u results/filter_e1.dup -o 'FILTER=rec_mismatch_f()'
+\! pg_bulkload data/csv4.ctl -i data/data7.csv -l results/filter_e.log -P results/filter_e1.prs -u results/filter_e1.dup -o 'FILTER=rec_mismatch_f()'
 NOTICE: BULK LOAD START
 ERROR: query failed: ERROR:  could not create unique index "target_pkey"
 DETAIL:  Key (id)=(1) is duplicated.
 DETAIL: query was: SELECT * FROM pgbulkload.pg_bulkload($1)
 -- FILTER option error
-\! pg_bulkload -d contrib_regression data/csv4.ctl -i data/data6.csv -l results/filter_e.log -P results/filter_e1.prs -u results/filter_e1.dup -o 'FILTER="f1'
+\! pg_bulkload data/csv4.ctl -i data/data6.csv -l results/filter_e.log -P results/filter_e1.prs -u results/filter_e1.dup -o 'FILTER="f1'
 NOTICE: BULK LOAD START
 ERROR: query failed: ERROR:  function call syntax error: "f1
 DETAIL: query was: SELECT * FROM pgbulkload.pg_bulkload($1)
-\! pg_bulkload -d contrib_regression data/csv4.ctl -i data/data6.csv -l results/filter_e.log -P results/filter_e1.prs -u results/filter_e1.dup -o 'FILTER=  (int4)'
+\! pg_bulkload data/csv4.ctl -i data/data6.csv -l results/filter_e.log -P results/filter_e1.prs -u results/filter_e1.dup -o 'FILTER=  (int4)'
 NOTICE: BULK LOAD START
 ERROR: query failed: ERROR:  function call syntax error:   (int4)
 DETAIL: query was: SELECT * FROM pgbulkload.pg_bulkload($1)
-\! pg_bulkload -d contrib_regression data/csv4.ctl -i data/data6.csv -l results/filter_e.log -P results/filter_e1.prs -u results/filter_e1.dup -o 'FILTER="f1" int4, int4, text)'
+\! pg_bulkload data/csv4.ctl -i data/data6.csv -l results/filter_e.log -P results/filter_e1.prs -u results/filter_e1.dup -o 'FILTER="f1" int4, int4, text)'
 NOTICE: BULK LOAD START
 ERROR: query failed: ERROR:  function call syntax error: "f1" int4, int4, text)
 DETAIL: query was: SELECT * FROM pgbulkload.pg_bulkload($1)
-\! pg_bulkload -d contrib_regression data/csv4.ctl -i data/data6.csv -l results/filter_e.log -P results/filter_e1.prs -u results/filter_e1.dup -o 'FILTER=f1(int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4)'
+\! pg_bulkload data/csv4.ctl -i data/data6.csv -l results/filter_e.log -P results/filter_e1.prs -u results/filter_e1.dup -o 'FILTER=f1(int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4,int4)'
 NOTICE: BULK LOAD START
 ERROR: query failed: ERROR:  functions cannot have more than 100 arguments
 DETAIL: query was: SELECT * FROM pgbulkload.pg_bulkload($1)
-\! pg_bulkload -d contrib_regression data/csv4.ctl -i data/data6.csv -l results/filter_e.log -P results/filter_e1.prs -u results/filter_e1.dup -o 'FILTER=f1(int4, int4, text)    aaa'
+\! pg_bulkload data/csv4.ctl -i data/data6.csv -l results/filter_e.log -P results/filter_e1.prs -u results/filter_e1.dup -o 'FILTER=f1(int4, int4, text)    aaa'
 NOTICE: BULK LOAD START
 ERROR: query failed: ERROR:  function call syntax error: f1(int4, int4, text)    aaa
 DETAIL: query was: SELECT * FROM pgbulkload.pg_bulkload($1)
-\! pg_bulkload -d contrib_regression data/csv4.ctl -i data/data6.csv -l results/filter_e.log -P results/filter_e1.prs -u results/filter_e1.dup -o 'FILTER=f1(numeric((1,2)))'
+\! pg_bulkload data/csv4.ctl -i data/data6.csv -l results/filter_e.log -P results/filter_e1.prs -u results/filter_e1.dup -o 'FILTER=f1(numeric((1,2)))'
 NOTICE: BULK LOAD START
 ERROR: query failed: ERROR:  function call syntax error: f1(numeric((1,2)))
 DETAIL: query was: SELECT * FROM pgbulkload.pg_bulkload($1)
-\! pg_bulkload -d contrib_regression data/csv4.ctl -i data/data6.csv -l results/filter_e.log -P results/filter_e1.prs -u results/filter_e1.dup -o 'FILTER=f1(numeric(1, 2) (1, 2))'
+\! pg_bulkload data/csv4.ctl -i data/data6.csv -l results/filter_e.log -P results/filter_e1.prs -u results/filter_e1.dup -o 'FILTER=f1(numeric(1, 2) (1, 2))'
 NOTICE: BULK LOAD START
 ERROR: query failed: ERROR:  function call syntax error: f1(numeric(1, 2) (1, 2))
 DETAIL: query was: SELECT * FROM pgbulkload.pg_bulkload($1)
-\! pg_bulkload -d contrib_regression data/csv4.ctl -i data/data6.csv -l results/filter_e.log -P results/filter_e1.prs -u results/filter_e1.dup -o 'FILTER=f1(    , text)'
+\! pg_bulkload data/csv4.ctl -i data/data6.csv -l results/filter_e.log -P results/filter_e1.prs -u results/filter_e1.dup -o 'FILTER=f1(    , text)'
 NOTICE: BULK LOAD START
 ERROR: query failed: ERROR:  function call syntax error: f1(    , text)
 DETAIL: query was: SELECT * FROM pgbulkload.pg_bulkload($1)
-\! pg_bulkload -d contrib_regression data/csv4.ctl -i data/data6.csv -l results/filter_e.log -P results/filter_e1.prs -u results/filter_e1.dup -o 'FILTER=f1(double)'
+\! pg_bulkload data/csv4.ctl -i data/data6.csv -l results/filter_e.log -P results/filter_e1.prs -u results/filter_e1.dup -o 'FILTER=f1(double)'
 NOTICE: BULK LOAD START
 ERROR: query failed: ERROR:  type "double" does not exist
 DETAIL: query was: SELECT * FROM pgbulkload.pg_bulkload($1)
@@ -132,7 +133,7 @@ SELECT * FROM target ORDER BY id;
 
 -- FILTER option test
 \pset null (null)
-\! pg_bulkload -d contrib_regression data/csv5.ctl -o "PARSE_ERRORS=50" -i data/data6.csv -l results/filter1.log -P results/filter1.prs -u results/filter1.dup -o 'FILTER=using_out_f(int4, int4, int4, text)'
+\! pg_bulkload data/csv5.ctl -o "PARSE_ERRORS=50" -i data/data6.csv -l results/filter1.log -P results/filter1.prs -u results/filter1.dup -o 'FILTER=using_out_f(int4, int4, int4, text)'
 NOTICE: BULK LOAD START
 NOTICE: BULK LOAD END
 	0 Rows skipped.
@@ -206,7 +207,7 @@ SELECT * FROM target_like ORDER BY id;
  (null) | (null)        | (null)
 (4 rows)
 
-\! pg_bulkload -d contrib_regression data/csv5.ctl -i data/data6.csv -l results/filter2.log -P results/filter2.prs -u results/filter2.dup -o "PARSE_ERRORS=4" --option FILTER=plpgsql_f
+\! pg_bulkload data/csv5.ctl -i data/data6.csv -l results/filter2.log -P results/filter2.prs -u results/filter2.dup -o "PARSE_ERRORS=4" --option FILTER=plpgsql_f
 NOTICE: BULK LOAD START
 NOTICE: BULK LOAD END
 	0 Rows skipped.
@@ -280,7 +281,7 @@ SELECT * FROM target_like ORDER BY id;
  (null) | (null)        | (null)
 (4 rows)
 
-\! pg_bulkload -d contrib_regression data/csv5.ctl -i data/data6.csv -l results/filter3.log -P results/filter3.prs -u results/filter3.dup -o "PARSE_ERRORS=3" -o 'FILTER=plpgsql_f(int4, int4, int4, text)'
+\! pg_bulkload data/csv5.ctl -i data/data6.csv -l results/filter3.log -P results/filter3.prs -u results/filter3.dup -o "PARSE_ERRORS=3" -o 'FILTER=plpgsql_f(int4, int4, int4, text)'
 NOTICE: BULK LOAD START
 NOTICE: BULK LOAD END
 	0 Rows skipped.
@@ -349,7 +350,7 @@ SELECT * FROM target_like ORDER BY id;
  25 | 14  |     11
 (1 row)
 
-\! pg_bulkload -d contrib_regression data/csv5.ctl -i data/data7.csv -l results/filter4.log -P results/filter4.prs -u results/filter4.dup -o 'FILTER=no_arg_f()'
+\! pg_bulkload data/csv5.ctl -i data/data7.csv -l results/filter4.log -P results/filter4.prs -u results/filter4.dup -o 'FILTER=no_arg_f()'
 NOTICE: BULK LOAD START
 NOTICE: BULK LOAD END
 	0 Rows skipped.
@@ -420,7 +421,7 @@ SELECT * FROM target_like ORDER BY id;
   1 | call no_arg_f |      3
 (5 rows)
 
-\! pg_bulkload -d contrib_regression data/bin6.ctl -i data/data4.bin -l results/filter5.log -P results/filter5.prs -u results/filter5.dup -o "PARSE_ERRORS=4" -o FILTER=plpgsql_f
+\! pg_bulkload data/bin6.ctl -i data/data4.bin -l results/filter5.log -P results/filter5.prs -u results/filter5.dup -o "PARSE_ERRORS=4" -o FILTER=plpgsql_f
 NOTICE: BULK LOAD START
 NOTICE: BULK LOAD END
 	0 Rows skipped.
