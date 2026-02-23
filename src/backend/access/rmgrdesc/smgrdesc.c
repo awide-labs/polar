@@ -40,6 +40,14 @@ smgr_desc(StringInfo buf, XLogReaderState *record)
 						 xlrec->blkno, xlrec->flags);
 		pfree(path);
 	}
+	else if (info == XLOG_SMGR_BULK_EXTEND)
+	{
+		xl_smgr_bulk_extend *xlrec = (xl_smgr_bulk_extend *) rec;
+		char	   *path = relpathperm(xlrec->rnode, MAIN_FORKNUM);
+
+		appendStringInfoString(buf, path);
+		pfree(path);
+	}
 }
 
 const char *
@@ -54,6 +62,9 @@ smgr_identify(uint8 info)
 			break;
 		case XLOG_SMGR_TRUNCATE:
 			id = "TRUNCATE";
+			break;
+		case XLOG_SMGR_BULK_EXTEND:
+			id = "BULK_EXTEND";
 			break;
 	}
 

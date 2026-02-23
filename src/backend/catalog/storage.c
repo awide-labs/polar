@@ -1127,6 +1127,10 @@ smgr_redo(XLogReaderState *record)
 
 		FreeFakeRelcacheEntry(rel);
 	}
+	else if (info == XLOG_SMGR_BULK_EXTEND)
+	{
+		/* Data is already on shared storage; nothing to redo. */
+	}
 	else
 		elog(PANIC, "smgr_redo: unknown op code %u", info);
 }

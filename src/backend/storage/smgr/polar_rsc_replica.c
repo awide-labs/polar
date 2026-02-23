@@ -60,6 +60,14 @@ rsc_replica_redo_smgr(XLogReaderState *record)
 				break;
 			}
 
+		case XLOG_SMGR_BULK_EXTEND:
+			{
+				xl_smgr_bulk_extend *xlrec = (xl_smgr_bulk_extend *) XLogRecGetData(record);
+
+				polar_rsc_drop_entry(&xlrec->rnode);
+				break;
+			}
+
 		default:
 			break;
 	}

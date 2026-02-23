@@ -23,6 +23,7 @@
 #include "catalog/namespace.h"
 #include "executor/executor.h"
 #include "miscadmin.h"
+#include "catalog/storage_xlog.h"
 #include "storage/bufmgr.h"
 #include "storage/fd.h"
 #include "storage/polar_fd.h"
@@ -334,6 +335,24 @@ DirectWriterClose(DirectWriter *self, bool onError)
 		 */
 		if (self->ls.ls.create_cnt > 0)
 			smgrimmedsync(RelationGetSmgr(self->base.rel), MAIN_FORKNUM);
+
+		/*
+		 * Emit a WAL record so the replica invalidates its RSC entry for this
+		 * relation.  Without this the replica never learns about the new blocks
+		 * added by the direct writer.  Skipped for temp and unlogged relations
+		 * that don't stream WAL.
+		 */
+		if (self->ls.ls.create_cnt > 0 &&
+			!RELATION_IS_LOCAL(self->base.rel) &&
+			self->base.rel->rd_rel->relpersistence != RELPERSISTENCE_UNLOGGED)
+		{
+			xl_smgr_bulk_extend xlrec;
+
+			xlrec.rnode = self->base.rel->rd_node;
+			XLogBeginInsert();
+			XLogRegisterData((char *) &xlrec, sizeof(xlrec));
+			XLogInsert(RM_SMGR_ID, XLOG_SMGR_BULK_EXTEND);
+		}
 	}
 
 	UnlinkLSF(self);
