@@ -649,6 +649,17 @@ _bt_blwritepage(BTWriteState *wstate, Page page, BlockNumber blkno)
 		/* We use the XLOG_FPI record type for this */
 		log_newpage(&wstate->index->rd_node, MAIN_FORKNUM, blkno, page, true);
 	}
+	else
+	{
+		/*
+		 * WAL is not written for this page (direct-load mode), but we still
+		 * need a non-InvalidXLogRecPtr LSN stamped on the page.  Without it,
+		 * _bt_killitems() will trip over its Assert when an index scan drops
+		 * its buffer pin and later re-reads the page to apply LP_DEAD hints.
+		 * Use the current WAL insert position as a plausible stand-in.
+		 */
+		PageSetLSN(page, GetXLogInsertRecPtr());
+	}
 
 	/*
 	 * If we have to write pages nonsequentially, fill in the space with
