@@ -57,8 +57,6 @@ my $count_proxy_sql =
 my $wait_proxy_sql =
   " select count(*) from pg_stat_activity where pid = $proxy_session_id"
   . " and state = 'active'";
-my $wait_proxy_gone_sql =
-  " select count(*) from pg_stat_activity where pid = $proxy_session_id";
 my $display_sql = 'set polar_session_id_display_method=';
 
 sub set_env
@@ -89,6 +87,47 @@ sub set_envs
 	set_env('_polar_proxy_ssl_cipher_name', $ssl_cipher_name, 0);
 }
 
+sub wait_for_sid_gone
+{
+	my ($node, $sid) = @_;
+	return unless defined $sid;
+
+	# pg_terminate_backend / normal backend exit sends SIGTERM but returns
+	# before the process fully cleans up BackendStatusArray.  Poll
+	# pg_stat_activity until the slot is released so the next connection
+	# with the same SID does not get "already in use".
+	#
+	# Temporarily clear proxy session env vars so our polling connection is a
+	# plain direct connection: this avoids a false "already in use" error on
+	# the poll itself while still allowing force_proxy to show proxy SIDs in
+	# pg_stat_activity.
+	local $ENV{_polar_proxy_client_host};
+	local $ENV{_polar_proxy_client_port};
+	local $ENV{_polar_proxy_session_id};
+	local $ENV{_polar_proxy_cancel_key};
+	local $ENV{_polar_proxy_send_lsn};
+	local $ENV{_polar_proxy_use_ssl};
+	local $ENV{_polar_proxy_ssl_version};
+	local $ENV{_polar_proxy_ssl_cipher_name};
+	delete $ENV{_polar_proxy_client_host};
+	delete $ENV{_polar_proxy_client_port};
+	delete $ENV{_polar_proxy_session_id};
+	delete $ENV{_polar_proxy_cancel_key};
+	delete $ENV{_polar_proxy_send_lsn};
+	delete $ENV{_polar_proxy_use_ssl};
+	delete $ENV{_polar_proxy_ssl_version};
+	delete $ENV{_polar_proxy_ssl_cipher_name};
+
+	my $wait_sql =
+	  "select count(*) from pg_stat_activity where pid = $sid";
+	while (
+		$node->safe_psql($dbname,
+			$display_sql . 'force_proxy;' . $wait_sql) > 0)
+	{
+		sleep(0.1);
+	}
+}
+
 sub proxy_psql
 {
 	my ($node, $sql, @envs) = @_;
@@ -99,6 +138,7 @@ sub proxy_psql
 sub proxy_safe_psql
 {
 	my ($node, $sql, @envs) = @_;
+	wait_for_sid_gone($node, $envs[2]);
 	set_envs(@envs);
 	return $node->safe_psql($dbname, $sql);
 }
@@ -107,16 +147,7 @@ sub start_proxy_backend
 {
 	my ($node) = @_;
 
-	# Wait for any previous proxy backend with this SID to fully exit.
-	# pg_terminate_backend sends SIGTERM but returns before the process dies;
-	# without this barrier the new connection may get "already in use" because
-	# the dying backend still has st_procpid > 0 in BackendStatusArray.
-	while (
-		$node->safe_psql($dbname,
-			$display_sql . 'force_proxy;' . $wait_proxy_gone_sql) > 0)
-	{
-		sleep(0.1);
-	}
+	wait_for_sid_gone($node, $proxy_session_id);
 
 	Task::start_new_task('proxy sleep', [$node], \&proxy_psql,
 		[ 'select pg_sleep(3);', @client_addr, $proxy_session_id, $cancel_key ],
@@ -442,6 +473,7 @@ is( proxy_psql(
 		@client_addr, @session_info),
 	3,
 	'proxy cancel self with cancel key set');
+wait_for_sid_gone($node_primary, $session_id);
 is( proxy_psql(
 		$node_primary, 'select pg_cancel_backend(' . $session_id . ')',
 		@client_addr, @session_info),
