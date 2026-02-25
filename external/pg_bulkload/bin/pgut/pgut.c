@@ -69,6 +69,9 @@ static void on_after_exec(pgutConn *conn);
 static void on_interrupt(void);
 static void on_cleanup(void);
 static void exit_or_abort(int exitcode);
+static int pgut_errcode(int sqlerrcode);
+static int pgut_errmsg(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
+static int pgut_errdetail(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 
 void
 pgut_init(int argc, char **argv)
@@ -513,8 +516,8 @@ pgut_connect(const char *info, YesNo prompt, int elevel)
 		free(passwd);
 
 		ereport(elevel,
-			(errcode(E_PG_CONNECT),
-			 errmsg("could not connect to database with \"%s\": %s",
+			(pgut_errcode(E_PG_CONNECT),
+			 pgut_errmsg("could not connect to database with \"%s\": %s",
 				info, PQerrorMessage(conn))));
 		PQfinish(conn);
 		return NULL;
@@ -592,8 +595,8 @@ pgut_execute_elevel(PGconn* conn, const char *query, int nParams, const char **p
 	if (conn == NULL)
 	{
 		ereport(elevel,
-			(errcode(E_PG_COMMAND),
-			 errmsg("not connected")));
+			(pgut_errcode(E_PG_COMMAND),
+			 pgut_errmsg("not connected")));
 		return NULL;
 	}
 
@@ -621,9 +624,9 @@ pgut_execute_elevel(PGconn* conn, const char *query, int nParams, const char **p
 			break;
 		default:
 			ereport(elevel,
-				(errcode(E_PG_COMMAND),
-				 errmsg("query failed: %s", PQerrorMessage(conn)),
-				 errdetail("query was: %s", query)));
+				(pgut_errcode(E_PG_COMMAND),
+				 pgut_errmsg("query failed: %s", PQerrorMessage(conn)),
+				 pgut_errdetail("query was: %s", query)));
 			break;
 	}
 
@@ -675,8 +678,8 @@ pgut_send(PGconn* conn, const char *query, int nParams, const char **params)
 	if (conn == NULL)
 	{
 		ereport(ERROR,
-			(errcode(E_PG_COMMAND),
-			 errmsg("not connected")));
+			(pgut_errcode(E_PG_COMMAND),
+			 pgut_errmsg("not connected")));
 		return false;
 	}
 
@@ -688,9 +691,9 @@ pgut_send(PGconn* conn, const char *query, int nParams, const char **params)
 	if (res != 1)
 	{
 		ereport(ERROR,
-			(errcode(E_PG_COMMAND),
-			 errmsg("query failed: %s", PQerrorMessage(conn)),
-			 errdetail("query was: %s", query)));
+			(pgut_errcode(E_PG_COMMAND),
+			 pgut_errmsg("query failed: %s", PQerrorMessage(conn)),
+			 pgut_errdetail("query was: %s", query)));
 		return false;
 	}
 
@@ -758,7 +761,7 @@ void
 CHECK_FOR_INTERRUPTS(void)
 {
 	if (interrupted && !in_cleanup)
-		ereport(FATAL, (errcode(E_PG_OTHER), errmsg("interrupted")));
+		ereport(FATAL, (pgut_errcode(E_PG_OTHER), pgut_errmsg("interrupted")));
 }
 
 /*
@@ -950,8 +953,8 @@ format_elevel(int elevel)
 		return "PANIC";
 	default:
 		ereport(ERROR,
-			(errcode(E_PG_OTHER),
-			 errmsg("invalid elevel: %d", elevel)));
+			(pgut_errcode(E_PG_OTHER),
+			 pgut_errmsg("invalid elevel: %d", elevel)));
 		return "";		/* unknown value; just return an empty string */
 	}
 }
@@ -977,29 +980,21 @@ parse_elevel(const char *value)
 		return PANIC;
 
 	ereport(ERROR,
-		(errcode(E_PG_OTHER),
-		 errmsg("invalid elevel: %s", value)));
+		(pgut_errcode(E_PG_OTHER),
+		 pgut_errmsg("invalid elevel: %s", value)));
 	return ERROR;		/* unknown value; just return ERROR */
 }
 
-int
-errcode(int sqlerrcode)
+static int
+pgut_errcode(int sqlerrcode)
 {
 	pgutErrorData  *edata = getErrorData();
 	edata->code = sqlerrcode;
 	return 0;
 }
 
-int
-errcode_errno(void)
-{
-	pgutErrorData  *edata = getErrorData();
-	edata->code = edata->save_errno;
-	return 0;
-}
-
-int
-errmsg(const char *fmt,...)
+static int
+pgut_errmsg(const char *fmt,...)
 {
 	pgutErrorData  *edata = getErrorData();
 	va_list			args;
@@ -1020,8 +1015,8 @@ errmsg(const char *fmt,...)
 	return 0;	/* return value does not matter */
 }
 
-int
-errdetail(const char *fmt,...)
+static int
+pgut_errdetail(const char *fmt,...)
 {
 	pgutErrorData  *edata = getErrorData();
 	va_list			args;
@@ -1299,8 +1294,8 @@ pgut_malloc(size_t size)
 
 	if ((ret = malloc(size)) == NULL)
 		ereport(FATAL,
-			(errcode(E_PG_OTHER),
-			 errmsg("could not allocate memory (%lu bytes): ",
+			(pgut_errcode(E_PG_OTHER),
+			 pgut_errmsg("could not allocate memory (%lu bytes): ",
 				(unsigned long) size)));
 	return ret;
 }
@@ -1312,8 +1307,8 @@ pgut_realloc(void *p, size_t size)
 
 	if ((ret = realloc(p, size)) == NULL)
 		ereport(FATAL,
-			(errcode(E_PG_OTHER),
-			 errmsg("could not re-allocate memory (%lu bytes): ",
+			(pgut_errcode(E_PG_OTHER),
+			 pgut_errmsg("could not re-allocate memory (%lu bytes): ",
 				(unsigned long) size)));
 	return ret;
 }
@@ -1328,8 +1323,8 @@ pgut_strdup(const char *str)
 
 	if ((ret = strdup(str)) == NULL)
 		ereport(FATAL,
-			(errcode(E_PG_OTHER),
-			 errmsg("could not duplicate string \"%s\": ", str)));
+			(pgut_errcode(E_PG_OTHER),
+			 pgut_errmsg("could not duplicate string \"%s\": ", str)));
 	return ret;
 }
 
@@ -1401,8 +1396,8 @@ retry:
 		}
 
 		ereport(ERROR,
-			(errcode(E_PG_OTHER),
-			 errmsg("could not open file \"%s\": ", path)));
+			(pgut_errcode(E_PG_OTHER),
+			 pgut_errmsg("could not open file \"%s\": ", path)));
 	}
 
 	return fp;
@@ -1439,8 +1434,8 @@ pgut_mkdir(const char *dirpath)
 			{
 				free(path);
 				ereport(ERROR,
-					(errcode(E_PG_OTHER),
-					 errmsg("invalid path \"%s\"", dirpath)));
+					(pgut_errcode(E_PG_OTHER),
+					 pgut_errmsg("invalid path \"%s\"", dirpath)));
 				return false;
 			}
 		}
@@ -1497,8 +1492,8 @@ retry:
 	if (retval == 0)
 	{
 		ereport(ERROR,
-			(errcode(E_PG_OTHER),
-			 errmsg("could not create directory \"%s\": ", dirpath)));
+			(pgut_errcode(E_PG_OTHER),
+			 pgut_errmsg("could not create directory \"%s\": ", dirpath)));
 		return false;
 	}
 
@@ -1534,8 +1529,8 @@ wait_for_sockets(int nfds, fd_set *fds, struct timeval *timeout)
 			if (errno != EINTR)
 			{
 				ereport(ERROR,
-					(errcode(E_PG_OTHER),
-					 errmsg("select failed: ")));
+					(pgut_errcode(E_PG_OTHER),
+					 pgut_errmsg("select failed: ")));
 				return -1;
 			}
 		}

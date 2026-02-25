@@ -106,7 +106,6 @@ extern void elog(int elevel, const char *fmt, ...)
 __attribute__((format(printf, 2, 3)));
 extern const char *format_elevel(int elevel);
 extern int parse_elevel(const char *value);
-extern int errcode_errno(void);
 extern bool log_required(int elevel, int log_min_level);
 extern bool pgut_errstart(int elevel);
 extern void pgut_errfinish(int dummy, ...);

@@ -411,7 +411,11 @@ connect_to_localhost(void)
 	char   *host;
 	char	dbName[1024];
 
-#ifdef HAVE_UNIX_SOCKETS
+/*
+ * PostgreSQL 16 removed the HAVE_UNIX_SOCKETS macro because Unix-domain
+ * sockets are now always available; treat >= 16 the same as having sockets.
+ */
+#if defined(HAVE_UNIX_SOCKETS) || PG_VERSION_NUM >= 160000
 
 #if PG_VERSION_NUM >= 90300
     /* UnixSocketDir exist only 9.2 and before. */

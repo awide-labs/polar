@@ -13,6 +13,7 @@
 #define LOADSTATUS_H
 
 #include "storage/block.h"
+#include "storage/polar_fd.h"
 #if PG_VERSION_NUM >= 160000
 #include "storage/relfilelocator.h"
 #else
@@ -28,17 +29,6 @@
 /* typical sector size is 512 byte */
 #define BULKLOAD_LSF_BLCKSZ		512
 
-#if PG_VERSION_NUM >= 160000
-#define BULKLOAD_LSF_PATH(buffer, ls) \
-	snprintf((buffer), MAXPGPATH, \
-			 BULKLOAD_LSF_DIR "/%d.%d.loadstatus", \
-			 (ls)->ls.rLocator.dbOid, (ls)->ls.relid)
-#else
-#define BULKLOAD_LSF_PATH(buffer, ls) \
-	snprintf((buffer), MAXPGPATH, \
-			 BULKLOAD_LSF_DIR "/%d.%d.loadstatus", \
-			 (ls)->ls.rnode.dbNode, (ls)->ls.relid)
-#endif
 /**
  * @brief Loading status information
  */
@@ -57,5 +47,20 @@ typedef union LoadStatus
 	} ls;
 	char	padding[BULKLOAD_LSF_BLCKSZ];
 } LoadStatus;
+
+static inline void
+make_lsf_path(char *buffer, const LoadStatus *ls)
+{
+	char	relpath[MAXPGPATH];
+
+#if PG_VERSION_NUM >= 160000
+	snprintf(relpath, MAXPGPATH, BULKLOAD_LSF_DIR "/%d.%d.loadstatus",
+			 ls->ls.rLocator.dbOid, ls->ls.relid);
+#else
+	snprintf(relpath, MAXPGPATH, BULKLOAD_LSF_DIR "/%d.%d.loadstatus",
+			 ls->ls.rnode.dbNode, ls->ls.relid);
+#endif
+	polar_make_file_path_level2(buffer, relpath);
+}
 
 #endif   /* LOADSTATUS_H */

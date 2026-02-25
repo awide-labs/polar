@@ -8,9 +8,10 @@ OBJS = $(SRCS:.c=.o)
 PROGRAM = pg_bulkload
 SCRIPTS = postgresql
 REGRESS = init load_bin load_csv load_remote load_function load_encoding load_check load_filter load_parallel write_bin
+TAP_TESTS = 1
 
 PG_CPPFLAGS = -I../include -I$(libpq_srcdir)
-PG_LIBS = $(libpq)
+PG_LIBS = $(libpq) $(polar_libvfs)
 
 ifndef USE_PGXS
 top_builddir = ../../..

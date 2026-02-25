@@ -43,7 +43,7 @@ smgr_desc(StringInfo buf, XLogReaderState *record)
 	else if (info == XLOG_SMGR_BULK_EXTEND)
 	{
 		xl_smgr_bulk_extend *xlrec = (xl_smgr_bulk_extend *) rec;
-		char	   *path = relpathperm(xlrec->rnode, MAIN_FORKNUM);
+		char	   *path = relpathperm(xlrec->rlocator, MAIN_FORKNUM);
 
 		appendStringInfoString(buf, path);
 		pfree(path);
