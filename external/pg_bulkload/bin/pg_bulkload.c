@@ -16,6 +16,7 @@
 #include "common.h"
 #include "pgut/pgut-fe.h"
 #include "pgut/pgut-list.h"
+#include "polar_vfs/polar_vfs_fe.h"
 
 const char *PROGRAM_VERSION	= PG_BULKLOAD_VERSION;
 const char *PROGRAM_URL		= "http://github.com/ossc-db/pg_bulkload";
@@ -122,6 +123,7 @@ main(int argc, char *argv[])
 	char	control_file[MAXPGPATH] = "";
 	int		i;
 
+	polar_argv0 = argv[0];
 	pgut_init(argc, argv);
 	if (argc < 2)
 	{
@@ -156,6 +158,8 @@ main(int argc, char *argv[])
 	 */
 	if (recovery)
 	{
+		int		ret;
+
 		/* verify arguments */
 		if (!DataDir && (DataDir = getenv("PGDATA")) == NULL)
 			elog(ERROR, "no $PGDATA specified");
@@ -164,7 +168,14 @@ main(int argc, char *argv[])
 		if (control_file[0] != '\0')
 			elog(ERROR, "invalid argument 'control file' for recovery");
 
-		return LoaderRecoveryMain();
+		/* POLAR: init VFS so polar_* APIs and polar_make_file_path_level2
+		 * resolve LSF files against the shared-storage data directory */
+		polar_vfs_init_simple_fe(DataDir, DataDir, POLAR_VFS_RDWR);
+
+		ret = LoaderRecoveryMain();
+
+		polar_vfs_destroy_simple_fe();
+		return ret;
 	}
 	else
 	{

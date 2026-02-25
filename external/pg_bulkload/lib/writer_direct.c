@@ -6,6 +6,11 @@
 
 #include "pg_bulkload.h"
 
+/* Fault injector support for crash recovery testing */
+#ifdef FAULT_INJECTOR
+#include "utils/faultinjector.h"
+#endif
+
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <sys/types.h>
@@ -160,6 +165,7 @@ static void
 DirectWriterInit(DirectWriter *self)
 {
 	LoadStatus		   *ls;
+	char				lsf_dir[MAXPGPATH];
 
 	/*
 	 * Set defaults to unspecified parameters.
@@ -179,8 +185,9 @@ DirectWriterInit(DirectWriter *self)
 				self->base.max_dup_errors, self->base.dup_badfile);
 	self->base.context = GetPerTupleMemoryContext(self->spooler.estate);
 
-	/* Verify DataDir/pg_bulkload directory */
-	ValidateLSFDirectory(BULKLOAD_LSF_DIR);
+	/* Verify pg_bulkload directory on shared storage */
+	polar_make_file_path_level2(lsf_dir, BULKLOAD_LSF_DIR);
+	ValidateLSFDirectory(lsf_dir);
 
 	/* Initialize first block */
 	PageInit(GetCurrentPage(self), BLCKSZ, 0);
@@ -209,7 +216,7 @@ DirectWriterInit(DirectWriter *self)
 	 * error because recovery process haven't been executed after failing
 	 * load to the same table.
 	 */
-	BULKLOAD_LSF_PATH(self->lsf_path, ls);
+	make_lsf_path(self->lsf_path, ls);
 	self->lsf_fd = polar_open(self->lsf_path,
 		O_CREAT | O_EXCL | O_RDWR | PG_BINARY, S_IRUSR | S_IWUSR);
 	if (self->lsf_fd == -1)
@@ -598,6 +605,17 @@ flush_pages(DirectWriter *loader)
 	 */
 	smgr = RelationGetSmgr(loader->base.rel);
 	polar_smgrbulkextend(smgr, MAIN_FORKNUM, blkno, num, loader->blocks, true);
+
+	/*
+	 * Fault injection point for crash recovery testing.
+	 * Use: SELECT inject_fault('pg_bulkload_during_write', 'panic');
+	 * Fires only after more than one relation segment has been written,
+	 * so the LSF records blocks beyond the first segment boundary.
+	 */
+#if defined(FAULT_INJECTOR)
+	if (blkno >= BLOCK_BUF_NUM)
+		SIMPLE_FAULT_INJECTOR("pg_bulkload_during_write");
+#endif
 
 	/*
 	 * NOTICE: Be sure reset curblk to 0 and reinitialize recycled page

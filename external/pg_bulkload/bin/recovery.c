@@ -10,15 +10,13 @@
  */
 #include "postgres_fe.h"
 
-#include <dirent.h>
-#include <fcntl.h>
 #include <signal.h>
 #include <time.h>
-#include <sys/stat.h>
 #ifndef WIN32
 #include <sys/shm.h>
 #endif
 
+#include "polar_vfs/polar_vfs_fe.h"
 #include "pg_loadstatus.h"
 #include "pgut/pgut.h"
 
@@ -149,6 +147,7 @@ StartLoaderRecovery(void)
 	ListCell   *cur;
 	LoadStatus	ls;
 	bool		need_recovery;
+	char		pgcontrol_path[MAXPGPATH];
 
 	/*
 	 * verify DataDir
@@ -167,7 +166,8 @@ StartLoaderRecovery(void)
 	if (list_length(lsflist) == 0)
 		return;
 
-	need_recovery = GetDBClusterState("global/pg_control") != DB_SHUTDOWNED;
+	polar_make_file_path_level2(pgcontrol_path, "global/pg_control");
+	need_recovery = GetDBClusterState(pgcontrol_path) != DB_SHUTDOWNED;
 
 	/*
 	 * while there are load status files, process recovery.
@@ -176,10 +176,12 @@ StartLoaderRecovery(void)
 	{
 		char	   *lsfname;
 		char		lsfpath[MAXPGPATH];
+		char		lsf_relpath[MAXPGPATH];
 
 		lsfname = (char *) lfirst(cur);
 
-		snprintf(lsfpath, MAXPGPATH, BULKLOAD_LSF_DIR "/%s", lsfname);
+		snprintf(lsf_relpath, MAXPGPATH, BULKLOAD_LSF_DIR "/%s", lsfname);
+		polar_make_file_path_level2(lsfpath, lsf_relpath);
 
 		/*
 		 * if database cluster has abnormally shutdown,
@@ -219,7 +221,7 @@ StartLoaderRecovery(void)
 		/*
 		 * delete load status file.
 		 */
-		if (unlink(lsfpath) != 0)
+		if (polar_unlink(lsfpath) != 0)
 			elog(ERROR,
 				 "could not delete loadstatus file \"%s\": %s",
 				 lsfpath, strerror(errno));
@@ -262,6 +264,7 @@ GetLSFList(void)
 	struct dirent *dp;
 	List	   *list = NIL;
 	DIR		   *dir;
+	char		lsf_dir[MAXPGPATH];
 
 	/*
 	 * verify path of $PGDATA is not NULL
@@ -269,15 +272,15 @@ GetLSFList(void)
 	Assert(DataDir != NULL);
 
 	/*
-	 * If neither $PGDATA/pg_bulkload directory nor ".loadstatus"
-	 * file in it exists, we return the empty list and skip doing
-	 * recovery. Otherwise, we add the name of found LSF into
-	 * the list, then return it.
+	 * Build the path to the LSF directory on shared storage (or DataDir in
+	 * non-shared-storage mode), then scan it for ".loadstatus" files.
 	 */
-	if ((dir = opendir(BULKLOAD_LSF_DIR)) == NULL)
+	polar_make_file_path_level2(lsf_dir, BULKLOAD_LSF_DIR);
+
+	if ((dir = polar_opendir(lsf_dir)) == NULL)
 		return NIL;
 
-	while ((dp = readdir(dir)) != NULL)
+	while ((dp = polar_readdir(dir)) != NULL)
 	{
 		tmp = dp->d_name;
 		filelen = strlen(dp->d_name);
@@ -292,10 +295,10 @@ GetLSFList(void)
 		}
 	}
 
-	if (closedir(dir) == -1)
+	if (polar_closedir(dir) == -1)
 		elog(ERROR,
 			 "could not close LSF Directory \"%s\": %s",
-			 BULKLOAD_LSF_DIR, strerror(errno));
+			 lsf_dir, strerror(errno));
 
 	return list;
 }
@@ -330,19 +333,19 @@ GetDBClusterState(const char *fname)
 	/*
 	 * open, read, and close ControlFileData
 	 */
-	if ((fd = open(fname, O_RDONLY | PG_BINARY, 0)) == -1)
+	if ((fd = polar_open(fname, O_RDONLY | PG_BINARY, 0)) == -1)
 		elog(ERROR,
 			 "could not open control file \"%s\": %s",
 			 fname, strerror(errno));
 
-	if (read(fd, &ControlFile, sizeof(ControlFile)) != sizeof(ControlFile))
+	if (polar_read(fd, &ControlFile, sizeof(ControlFile)) != sizeof(ControlFile))
 		elog(ERROR,
 			 "could not read control file \"%s\": %s",
 			 fname, strerror(errno));
 
 	/* TODO: check CRC of the control file here. */
 
-	if (close(fd) == -1)
+	if (polar_close(fd) == -1)
 		elog(ERROR,
 			 "could not close control file \"%s\": %s",
 			 fname, strerror(errno));
@@ -376,18 +379,18 @@ GetLoadStatusInfo(const char *lsfpath, LoadStatus * ls)
 	/*
 	 * open and read LSF
 	 */
-	if ((fd = open(lsfpath, O_RDONLY | PG_BINARY, 0)) == -1)
+	if ((fd = polar_open(lsfpath, O_RDONLY | PG_BINARY, 0)) == -1)
 		elog(ERROR,
 			 "could not open LoadStatusFile \"%s\": %s",
 			 lsfpath, strerror(errno));
 
-	read_len = read(fd, ls, sizeof(LoadStatus));
+	read_len = polar_read(fd, ls, sizeof(LoadStatus));
 	if (read_len != sizeof(LoadStatus))
 		elog(ERROR,
 			 "could not read LoadStatusFile \"%s\": %s",
 			 lsfpath, strerror(errno));
 
-	if (close(fd) == -1)
+	if (polar_close(fd) == -1)
 		elog(ERROR,
 			 "could not close LoadStatusFile \"%s\": %s",
 			 lsfpath, strerror(errno));
@@ -459,13 +462,13 @@ ClearLoadedPage(
 	 * TODO: consider to use truncate instead of zero-fill to end of file.
 	 */
 
-	fd = open(segpath, O_RDWR | PG_BINARY, S_IRUSR | S_IWUSR);
+	fd = polar_open(segpath, O_RDWR | PG_BINARY, S_IRUSR | S_IWUSR);
 	if (fd == -1)
 		elog(ERROR,
 			 "could not open data file \"%s\": %s",
 			 segpath, strerror(errno));
 
-	seekpos = lseek(fd, (blkbeg % RELSEG_SIZE) * BLCKSZ, SEEK_SET);
+	seekpos = polar_lseek(fd, (blkbeg % RELSEG_SIZE) * BLCKSZ, SEEK_SET);
 
 	if (seekpos == -1)
 		elog(ERROR,
@@ -488,7 +491,7 @@ ClearLoadedPage(
 		 */
 		do
 		{
-			ret = read(fd, page + readlen, BLCKSZ - readlen);
+			ret = polar_read(fd, page + readlen, BLCKSZ - readlen);
 			if (ret == -1)
 			{
 				if (errno == EAGAIN || errno == EINTR)
@@ -516,9 +519,9 @@ ClearLoadedPage(
 		 */
 		if (IsPageCreatedByLoader((Page) page))
 		{
-			seekpos = lseek(fd, (blknum % RELSEG_SIZE) * BLCKSZ, SEEK_SET);
+			seekpos = polar_lseek(fd, (blknum % RELSEG_SIZE) * BLCKSZ, SEEK_SET);
 
-			if (write(fd, zeropage, BLCKSZ) == -1)
+			if (polar_write(fd, zeropage, BLCKSZ) == -1)
 				elog(ERROR,
 					 "could not write correct empty page : %s",
 					 strerror(errno));
@@ -535,12 +538,12 @@ ClearLoadedPage(
 		 */
 		if (blknum % RELSEG_SIZE == 0)
 		{
-			if (fsync(fd) != 0)
+			if (polar_fsync(fd) != 0)
 				elog(ERROR,
 					 "could not sync data file \"%s\": %s",
 					 segpath, strerror(errno));
 
-			if (close(fd) == -1)
+			if (polar_close(fd) == -1)
 				elog(ERROR,
 					 "could not close data file \"%s\": %s",
 					 segpath, strerror(errno));
@@ -554,7 +557,7 @@ ClearLoadedPage(
 #endif
 					segno);
 
-			fd = open(segpath, O_RDWR | PG_BINARY, S_IRUSR | S_IWUSR);
+			fd = polar_open(segpath, O_RDWR | PG_BINARY, S_IRUSR | S_IWUSR);
 			if (fd == -1)
 				elog(ERROR,
 					 "could not open data file \"%s\": %s",
@@ -565,12 +568,12 @@ ClearLoadedPage(
 	/*
 	 * post process
 	 */
-	if (fsync(fd) != 0)
+	if (polar_fsync(fd) != 0)
 		elog(ERROR,
 			 "could not sync data file \"%s\": %s",
 			 segpath, strerror(errno));
 
-	if (close(fd) == -1)
+	if (polar_close(fd) == -1)
 		elog(ERROR,
 			 "could not close data file \"%s\": %s",
 			 segpath, strerror(errno));
@@ -982,14 +985,16 @@ PageHeaderIsValid(Page page)
 }
 
 static void
-GetSegmentPath(char path[MAXPGPATH], 
+GetSegmentPath(char path[MAXPGPATH],
 #if PG_VERSION_NUM >= 160000
-		RelFileLocator rLocator, 
+		RelFileLocator rLocator,
 #else
-		RelFileNode rnode, 
+		RelFileNode rnode,
 #endif
 		int segno)
 {
+	char		relpath[MAXPGPATH];
+
 #if PG_VERSION_NUM >= 160000
 	if (rLocator.spcOid == GLOBALTABLESPACE_OID)
 #else
@@ -998,40 +1003,42 @@ GetSegmentPath(char path[MAXPGPATH],
 	{
 		/* Shared system relations live in {datadir}/global */
 #if PG_VERSION_NUM >= 160000
-		snprintf(path, MAXPGPATH, "global/%u", rLocator.relNumber);
+		snprintf(relpath, MAXPGPATH, "global/%u", rLocator.relNumber);
 #else
-		snprintf(path, MAXPGPATH, "global/%u", rnode.relNode);
+		snprintf(relpath, MAXPGPATH, "global/%u", rnode.relNode);
 #endif
 	}
 #if PG_VERSION_NUM >= 160000
 	else if (rLocator.spcOid == DEFAULTTABLESPACE_OID)
 #else
 	else if (rnode.spcNode == DEFAULTTABLESPACE_OID)
-#endif		
+#endif
 
 	{
 		/* The default tablespace is {datadir}/base */
 #if PG_VERSION_NUM >= 160000
-		snprintf(path, MAXPGPATH, "base/%u/%u", rLocator.dbOid, rLocator.relNumber);
+		snprintf(relpath, MAXPGPATH, "base/%u/%u", rLocator.dbOid, rLocator.relNumber);
 #else
-		snprintf(path, MAXPGPATH, "base/%u/%u", rnode.dbNode, rnode.relNode);
-#endif				
+		snprintf(relpath, MAXPGPATH, "base/%u/%u", rnode.dbNode, rnode.relNode);
+#endif
 	}
 	else
 	{
 		/* All other tablespaces are accessed via symlinks */
 #if PG_VERSION_NUM >= 160000
-		snprintf(path, MAXPGPATH, "pg_tblspc/%u/%u/%u", rLocator.spcOid, rLocator.dbOid, rLocator.relNumber);
+		snprintf(relpath, MAXPGPATH, "pg_tblspc/%u/%u/%u", rLocator.spcOid, rLocator.dbOid, rLocator.relNumber);
 #else
-		snprintf(path, MAXPGPATH, "pg_tblspc/%u/%u/%u", rnode.spcNode, rnode.dbNode, rnode.relNode);
-#endif			
+		snprintf(relpath, MAXPGPATH, "pg_tblspc/%u/%u/%u", rnode.spcNode, rnode.dbNode, rnode.relNode);
+#endif
 	}
 
 	if (segno > 0)
 	{
-		size_t	len = strlen(path);
-		snprintf(path + len, MAXPGPATH - len, ".%u", segno);
+		size_t	len = strlen(relpath);
+		snprintf(relpath + len, MAXPGPATH - len, ".%u", segno);
 	}
+
+	polar_make_file_path_level2(path, relpath);
 }
 
 
