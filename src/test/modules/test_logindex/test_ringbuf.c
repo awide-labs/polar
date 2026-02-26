@@ -351,6 +351,62 @@ test_ringbuf_bgworker()
 						 TEST_LOOP_TIMES * (1000000000 / cost))));
 }
 
+/*
+ * Verify that total_written and total_read track the same unit (physical
+ * bytes including PKTHDR) so that total_written >= total_read is a valid
+ * indicator of queue occupancy.
+ *
+ * Bug introduced in commit 6d0e00f96485 ("perf: speed up space reservation
+ * in XLog Queue"): push_cnt / total_written updates were moved from
+ * polar_ringbuf_pkt_reserve() (where len = POLAR_RINGBUF_PKT_SIZE(pktlen),
+ * i.e. physical bytes) to polar_ringbuf_set_pkt_length() (where len =
+ * pktlen, payload only). As a result total_written misses POLAR_RINGBUF_
+ * PKTHDRSIZE (5) bytes per packet, while total_read still counts physical
+ * bytes. After N consumed packets total_read exceeds total_written by N*5,
+ * making total_written > total_read false even when packets are in flight.
+ */
+static void
+test_stat_counters(void)
+{
+	uint8	   *data = malloc(RINGBUF_SIZE + 4);
+	polar_ringbuf_t rbuf;
+	polar_ringbuf_ref_t ref;
+	size_t		idx;
+	int			i;
+	uint64		tw,
+				tr;
+	const uint32 pktlen = 100;
+	const int	N = 10;
+	const uint64 phys_per_pkt = POLAR_RINGBUF_PKT_SIZE(pktlen); /* pktlen + 5 */
+
+	rbuf = polar_ringbuf_init(data, RINGBUF_SIZE, LWTRANCHE_POLAR_XLOG_QUEUE);
+	Assert(polar_ringbuf_new_ref(rbuf, true, &ref, "test_stats"));
+
+	/*
+	 * Push N packets and immediately consume each one so the queue is empty
+	 * at the end.
+	 */
+	for (i = 0; i < N; i++)
+	{
+		idx = polar_ringbuf_pkt_reserve(rbuf, POLAR_RINGBUF_PKT_SIZE(pktlen));
+		polar_ringbuf_set_pkt_length(rbuf, idx, pktlen);
+		polar_ringbuf_set_pkt_flag(rbuf, idx,
+								   POLAR_RINGBUF_PKT_WAL_META | POLAR_RINGBUF_PKT_READY);
+		polar_ringbuf_update_ref(&ref);
+		polar_ringbuf_update_keep_data(rbuf);
+	}
+
+	tw = pg_atomic_read_u64(&rbuf->prs.total_written);
+	tr = pg_atomic_read_u64(&rbuf->prs.total_read);
+
+	Assert(tw == (uint64) N * phys_per_pkt);
+	Assert(tr == (uint64) N * phys_per_pkt);
+	Assert(tw == tr);
+
+	polar_ringbuf_release_ref(&ref);
+	free(data);
+}
+
 PG_FUNCTION_INFO_V1(test_ringbuf);
 /*
  * SQL-callable entry point to perform all tests.
@@ -364,6 +420,7 @@ test_ringbuf(PG_FUNCTION_ARGS)
 {
 	test_fix_pktlen_overflow();
 	test_single_ringbuf();
+	test_stat_counters();
 	test_ringbuf_bgworker();
 	PG_RETURN_VOID();
 }

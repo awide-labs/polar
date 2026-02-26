@@ -17,6 +17,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Fixed xlog queue statistics reporting incorrect values on replicas: the
+  `polar_xlog_queue_stat_detail()` view could show `total_written < total_read`
+  even under normal WAL activity (XCOM-193)
 - Added support for cgroup v2 memory statistics retrieval, resolving the
   recurring `Failed to get instance memory` error that previously flooded the
   logs (XCOM-193)

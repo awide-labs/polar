@@ -331,7 +331,7 @@ polar_ringbuf_set_pkt_length(polar_ringbuf_t rbuf, uint64 idx, uint32 len)
 	memcpy(rbuf->data + phys, buf, todo);
 
 	pg_atomic_fetch_add_u64(&rbuf->prs.push_cnt, 1);
-	pg_atomic_fetch_add_u64(&rbuf->prs.total_written, len);
+	pg_atomic_fetch_add_u64(&rbuf->prs.total_written, POLAR_RINGBUF_PKT_SIZE(len));
 }
 
 /*
