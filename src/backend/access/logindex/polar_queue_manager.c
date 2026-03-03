@@ -1042,6 +1042,7 @@ polar_xlog_queue_decode(XLogReaderState *state, DecodedXLogRecord *decoded, XLog
 	{
 		int			i;
 
+		decoded->size = 0;
 		while (offset < record_meta_len)
 		{
 			DecodedBkpBlock *blk;
@@ -1256,8 +1257,20 @@ polar_xlog_queue_decode(XLogReaderState *state, DecodedXLogRecord *decoded, XLog
 
 			COPY_CONTENT(&blk->blkno, sizeof(BlockNumber));
 		}
+
+		if (decoded->size == 0)
+			decoded->size = MAXALIGN(offsetof(DecodedXLogRecord, blocks) +
+									 sizeof(decoded->blocks[0]) * (decoded->max_block_id + 1));
+		Assert(DecodeXLogRecordRequiredSpace(record->xl_tot_len) >= decoded->size);
 	}
-	else if (decode_payload)
+	else if (!decode_payload)
+	{
+		/* Report the actual size we used. */
+		decoded->size = MAXALIGN(offsetof(DecodedXLogRecord, blocks) +
+								 sizeof(decoded->blocks[0]) * (decoded->max_block_id + 1));
+		Assert(DecodeXLogRecordRequiredSpace(record->xl_tot_len) >= decoded->size);
+	}
+	else
 		return DecodeXLogRecord(state, decoded, record, state->DecodeRecPtr, &errormsg);
 
 	return true;
