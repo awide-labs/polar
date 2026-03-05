@@ -400,6 +400,8 @@ FunctionParserRead(FunctionParser *self, Checker *checker)
 	PgStat_FunctionCallUsage	fcusage;
 #endif
 
+	self->base.read_bytes = 0;
+
 	/*
 	 * If a previous call of the function returned a set result in the form of
 	 * a tuplestore, continue reading rows from the tuplestore until it's

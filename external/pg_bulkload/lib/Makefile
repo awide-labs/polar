@@ -21,6 +21,7 @@ SRCS = \
 	writer_direct.c \
 	writer_parallel.c \
 	pgut/pgut-be.c \
+	pgut/pgut-ctrlfile.c \
 	pgut/pgut-ipc.c \
 	pgut/pgut-recovery.c
 OBJS = $(SRCS:.c=.o)

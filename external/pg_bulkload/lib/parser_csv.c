@@ -362,6 +362,7 @@ CSVParserRead(CSVParser *self, Checker *checker)
 	int			field_num = 0;	/* Number of self->fields already parsed */
 	int			parsed_field;
 
+	self->base.read_bytes = 0;
 	/*
 	 * If EOF found in the previous calls, returns zero.
 	 */
@@ -377,6 +378,8 @@ CSVParserRead(CSVParser *self, Checker *checker)
 		while ((len = SourceRead(self->source, self->rec_buf, self->buf_len - 1)) > 0)
 		{
 			int		n;
+
+			self->base.read_bytes += (size_t) len;
 
 			for (n = 0; n < len; n++)
 			{
@@ -487,6 +490,8 @@ skip_done:
 			ret = SourceRead(self->source, self->rec_buf + self->used_len,
 								self->buf_len - self->used_len - 1);
 			BULKLOAD_PROFILE(&prof_reader_source);
+			if (ret > 0)
+				self->base.read_bytes += (size_t) ret;
 			if (ret == 0)
 			{
 				self->eof = true;

@@ -674,6 +674,40 @@ ProcessCopyOptions(ParseState *pstate,
 			log_verbosity_specified = true;
 			opts_out->log_verbosity = defGetCopyLogVerbosityChoice(defel, pstate);
 		}
+		else if (strcmp(defel->defname, "direct") == 0)
+		{
+			if (!is_from)
+				ereport(ERROR,
+						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+						 errmsg("option \"%s\" only available using COPY FROM",
+								defel->defname),
+						 parser_errposition(pstate, defel->location)));
+			opts_out->direct = defGetBoolean(defel);
+		}
+		else if (strcmp(defel->defname, "bulkload") == 0)
+		{
+			if (!is_from)
+				ereport(ERROR,
+						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+						 errmsg("option \"%s\" only available using COPY FROM",
+								defel->defname),
+						 parser_errposition(pstate, defel->location)));
+
+			if (opts_out->bulkload)
+				errorConflictingDefElem(defel, pstate);
+
+			opts_out->bulkload = defGetString(defel);
+		}
+		else if (strcmp(defel->defname, "wal_logged") == 0)
+		{
+			if (!is_from)
+				ereport(ERROR,
+						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+						 errmsg("option \"%s\" only available using COPY FROM",
+								defel->defname),
+						 parser_errposition(pstate, defel->location)));
+			opts_out->wal_logged = defGetBoolean(defel);
+		}
 		else
 			ereport(ERROR,
 					(errcode(ERRCODE_SYNTAX_ERROR),
@@ -686,6 +720,31 @@ ProcessCopyOptions(ParseState *pstate,
 	 * Check for incompatible options (must do these two before inserting
 	 * defaults)
 	 */
+
+	if (opts_out->direct)
+	{
+		/*
+		 * TODO: Remove this limitation when other files format support is
+		 * implemented.
+		 */
+		if (!opts_out->csv_mode)
+			ereport(ERROR,
+					(errcode(ERRCODE_SYNTAX_ERROR),
+					 errmsg("DIRECT mode is available only for CSV file format")));
+	}
+	else
+	{
+		if (opts_out->bulkload)
+			ereport(ERROR,
+					(errcode(ERRCODE_SYNTAX_ERROR),
+					 errmsg("BULKLOAD option can only be specified with DIRECT")));
+
+		if (opts_out->wal_logged)
+			ereport(ERROR,
+					(errcode(ERRCODE_SYNTAX_ERROR),
+					 errmsg("WAL_LOGGED option can only be specified with DIRECT")));
+	}
+
 	if (opts_out->binary && opts_out->delim)
 		ereport(ERROR,
 				(errcode(ERRCODE_SYNTAX_ERROR),

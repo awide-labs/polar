@@ -69,6 +69,7 @@ struct Parser
 
 	int			parsing_field;	/**< field number being parsed */
 	int64		count;			/**< number of records read from stream */
+	size_t		read_bytes;	/**< bytes read from input in current read call */
 };
 
 extern Parser *CreateBinaryParser(void);
@@ -150,6 +151,39 @@ extern char *CheckerConversion(Checker *checker, char *src);
 extern HeapTuple CheckerConstraints(Checker *checker, HeapTuple tuple, int *parsing_field);
 
 /**
+ * @brief COPY FROM–related byte/tuple counts and WHERE-filter accounting.
+ *
+ * Used by the pg_bulkload @ref Reader when loading from COPY FROM (including
+ * DIRECT mode with a WHERE clause).
+ */
+struct CopyFromProgress
+{
+	/**
+	 * @brief Total bytes read from the parser input since load start.
+	 *
+	 * Incremented in ReaderNext after each successful @ref ParserRead that
+	 * returns a tuple, using @c parser->read_bytes from that call.
+	 */
+	size_t		read_bytes;
+
+	/**
+	 * @brief Tuples accepted for load after optional COPY FROM ... WHERE filtering.
+	 *
+	 * Incremented in ReaderNext when there is no @c where_predicate, or when it returns
+	 * true (row satisfies the WHERE clause). Not incremented when the predicate rejects
+	 * a row (@see where_excluded).
+	 */
+	size_t		processed;
+
+	/**
+	 * @brief Tuples skipped because they did not satisfy COPY FROM ... WHERE.
+	 *
+	 * Incremented in ReaderNext when the optional predicate rejects a row.
+	 */
+	size_t		where_excluded;
+};
+
+/**
  * @brief Reader
  */
 struct Reader
@@ -163,6 +197,11 @@ struct Reader
 	int64		limit;				/**< max input lines */
 	int64		max_parse_errors;	/**< max ignorable errors in parse */
 
+	/**
+	 * @brief COPY FROM progress counters (@see CopyFromProgress).
+	 */
+	struct CopyFromProgress copy_from_progress;
+
 	/*
 	 * Parser
 	 */
@@ -172,6 +211,13 @@ struct Reader
 	 * Checker
 	 */
 	Checker			checker;		/**< load data checker */
+
+	/*
+	 * WHERE predicate (set by pg_bulkload_run for COPY FROM ... WHERE).
+	 * NULL when no predicate is active.
+	 */
+	WherePredicateFn	where_predicate;
+	void			   *where_state;
 
 	/*
 	 * Internal status

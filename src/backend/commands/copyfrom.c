@@ -41,15 +41,18 @@
 #include "miscadmin.h"
 #include "nodes/miscnodes.h"
 #include "optimizer/optimizer.h"
+#include "parser/parse_func.h"
 #include "pgstat.h"
 #include "rewrite/rewriteHandler.h"
 #include "storage/fd.h"
 #include "tcop/tcopprot.h"
+#include "utils/builtins.h"
 #include "utils/lsyscache.h"
 #include "utils/memutils.h"
 #include "utils/portal.h"
 #include "utils/rel.h"
 #include "utils/snapmgr.h"
+#include "utils/typcache.h"
 
 /*
  * No more than this many tuples per CopyMultiInsertBuffer
@@ -622,6 +625,637 @@ CopyMultiInsertInfoStore(CopyMultiInsertInfo *miinfo, ResultRelInfo *rri,
 }
 
 /*
+ * Compare two option keywords: non-separator bytes are compared
+ * case-insensitively; if the left side has '-', '_', or space at a position,
+ * the right side must have one of those characters there too.
+ *
+ * Copied from pg_bulkload so we need not export another symbol from that
+ * extension.
+ */
+static inline bool
+CompareKeyword(const char *lhs, const char *rhs)
+{
+	for (; *lhs && *rhs; lhs++, rhs++)
+	{
+		if (strchr("-_ ", *lhs))
+		{
+			if (!strchr("-_ ", *rhs))
+				return false;
+		}
+		else if (tolower(*lhs) != tolower(*rhs))
+			return false;
+	}
+
+	return *lhs == '\0' && *rhs == '\0';
+}
+
+/**
+ * @brief How a COPY FROM option maps to a pg_bulkload control-file parameter.
+ */
+typedef enum CopyOptAction
+{
+	COPY_OPT_MAP_CHARPTR,		/**< @c char* field — emit "KEY=value" */
+	COPY_OPT_MAP_COLUMN_LIST,	/**< @c List* of column names — one entry per
+								 *   column */
+	COPY_OPT_MAP_ENCODING,		/**< @c int encoding — emit "KEY=encoding_name" */
+	COPY_OPT_MAP_HEADER_SKIP,	/**< @c CopyHeaderChoice — emit "SKIP=1" (TRUE)
+								 *   or error (MATCH) */
+	COPY_OPT_INCOMPATIBLE		/**< error if non-default */
+} CopyOptAction;
+
+/**
+ * @brief C-level type of the CopyFormatOptions field so that
+ *        CopyOptIsNonDefault() can inspect it generically.
+ */
+typedef enum CopyOptFieldType
+{
+	FIELD_BOOL,					/**< @c bool */
+	FIELD_CHARPTR,				/**< @c char* — NULL means not set */
+	FIELD_LIST,					/**< @c List* — NIL means not set */
+	FIELD_INT,					/**< @c int   — -1 means not set */
+	FIELD_HEADER				/**< @c CopyHeaderChoice — FALSE means not set */
+} CopyOptFieldType;
+
+/**
+ * @brief One row of the COPY-option to pg_bulkload-option mapping table.
+ */
+typedef struct CopyOptMapping
+{
+	const char *copy_name;		/**< human-readable name (for error messages) */
+	CopyOptAction action;		/**< how to translate the option */
+	const char *bulkload_key;	/**< pg_bulkload key, or NULL */
+	CopyOptFieldType field_type;	/**< C type of the struct field */
+	size_t		field_offset;	/**< offsetof(CopyFormatOptions, field) */
+} CopyOptMapping;
+
+/**
+ * @brief Data-driven mapping of every CopyFormatOptions field that could be
+ *        set by a user-facing COPY FROM option.
+ *
+ * Fields that have no pg_bulkload equivalent are marked @c
+ * COPY_OPT_INCOMPATIBLE.
+ */
+static const CopyOptMapping copy_to_bulkload_map[] =
+{
+	/* 1:1 mappable CSV options */
+	{"DELIMITER", COPY_OPT_MAP_CHARPTR, "DELIMITER",
+	FIELD_CHARPTR, offsetof(CopyFormatOptions, delim)},
+	{"NULL", COPY_OPT_MAP_CHARPTR, "NULL",
+	FIELD_CHARPTR, offsetof(CopyFormatOptions, null_print)},
+	{"QUOTE", COPY_OPT_MAP_CHARPTR, "QUOTE",
+	FIELD_CHARPTR, offsetof(CopyFormatOptions, quote)},
+	{"ESCAPE", COPY_OPT_MAP_CHARPTR, "ESCAPE",
+	FIELD_CHARPTR, offsetof(CopyFormatOptions, escape)},
+	{"FORCE_NOT_NULL", COPY_OPT_MAP_COLUMN_LIST, "FORCE_NOT_NULL",
+	FIELD_LIST, offsetof(CopyFormatOptions, force_notnull)},
+	{"ENCODING", COPY_OPT_MAP_ENCODING, "ENCODING",
+	FIELD_INT, offsetof(CopyFormatOptions, file_encoding)},
+
+	/* Transformable option */
+	{"HEADER", COPY_OPT_MAP_HEADER_SKIP, "SKIP",
+	FIELD_HEADER, offsetof(CopyFormatOptions, header_line)},
+
+	/* Incompatible options — error if user set them */
+	{"FREEZE", COPY_OPT_INCOMPATIBLE, NULL,
+	FIELD_BOOL, offsetof(CopyFormatOptions, freeze)},
+	{"BINARY", COPY_OPT_INCOMPATIBLE, NULL,
+	FIELD_BOOL, offsetof(CopyFormatOptions, binary)},
+	{"FORCE_QUOTE", COPY_OPT_INCOMPATIBLE, NULL,
+	FIELD_LIST, offsetof(CopyFormatOptions, force_quote)},
+	{"FORCE_NULL", COPY_OPT_INCOMPATIBLE, NULL,
+	FIELD_LIST, offsetof(CopyFormatOptions, force_null)},
+	{"CONVERT_SELECTIVELY", COPY_OPT_INCOMPATIBLE, NULL,
+	FIELD_BOOL, offsetof(CopyFormatOptions, convert_selectively)},
+};
+
+/**
+ * @brief Return true when the CopyFormatOptions field described by @a m has
+ *        been explicitly set (differs from its zero/default value).
+ *
+ * @param opts  Parsed COPY FROM options.
+ * @param m     Mapping entry describing the field to inspect.
+ *
+ * @return @c true if the field holds a non-default value.
+ */
+static inline bool
+CopyOptIsNonDefault(const CopyFormatOptions *opts, const CopyOptMapping *m)
+{
+	const void *field = (const char *) opts + m->field_offset;
+
+	switch (m->field_type)
+	{
+		case FIELD_BOOL:
+			return *(const bool *) field;
+		case FIELD_CHARPTR:
+			return *(char *const *) field != NULL;
+		case FIELD_LIST:
+			return *(List *const *) field != NIL;
+		case FIELD_INT:
+			return *(const int *) field >= 0;
+		case FIELD_HEADER:
+			return *(const CopyHeaderChoice *) field != COPY_HEADER_FALSE;
+	}
+	return false;
+}
+
+/**
+ * @brief Append pg_bulkload "KEY=value" Datum(s) to @a elems for one mapped
+ *        option.
+ *
+ * @param[in,out] elems  Array of Datum elements being built.
+ * @param[in,out] count  Current number of elements; incremented on append.
+ * @param opts           Parsed COPY FROM options.
+ * @param m              Mapping entry describing the option to emit.
+ */
+static inline void
+EmitBulkloadOption(Datum *elems, unsigned int *count,
+				   const CopyFormatOptions *opts, const CopyOptMapping *m)
+{
+	const void *field = (const char *) opts + m->field_offset;
+
+	switch (m->action)
+	{
+		case COPY_OPT_MAP_CHARPTR:
+			elems[(*count)++] = CStringGetTextDatum(
+													psprintf("%s=%s", m->bulkload_key,
+															 *(char *const *) field));
+			break;
+
+		case COPY_OPT_MAP_COLUMN_LIST:
+			{
+				ListCell   *lc;
+
+				foreach(lc, *(List *const *) field)
+				{
+					elems[(*count)++] = CStringGetTextDatum(
+															psprintf("%s=%s", m->bulkload_key,
+																	 strVal(lfirst(lc))));
+				}
+			}
+			break;
+
+		case COPY_OPT_MAP_ENCODING:
+			elems[(*count)++] = CStringGetTextDatum(
+													psprintf("%s=%s", m->bulkload_key,
+															 pg_encoding_to_char(*(const int *) field)));
+			break;
+
+		case COPY_OPT_MAP_HEADER_SKIP:
+			{
+				CopyHeaderChoice h = *(const CopyHeaderChoice *) field;
+
+				if (h == COPY_HEADER_MATCH)
+					ereport(ERROR,
+							(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+							 errmsg("HEADER MATCH is not supported in DIRECT mode")));
+				/* COPY_HEADER_TRUE → SKIP=1 */
+				elems[(*count)++] = CStringGetTextDatum(
+														psprintf("%s=%d", m->bulkload_key, 1));
+			}
+			break;
+
+		case COPY_OPT_INCOMPATIBLE:
+			Assert(false);
+			break;
+	}
+}
+
+/**
+ * @brief Build the options array for the pg_bulkload() call.
+ *
+ * Uses a data-driven mapping table (@c copy_to_bulkload_map) to translate
+ * every user-visible COPY FROM option into its pg_bulkload equivalent.
+ * Options that have no pg_bulkload counterpart cause an error when set.
+ *
+ * The mandatory parameters (TYPE, TABLE, INPUT, WRITER, COPY_FROM,
+ * MULTI_PROCESS) are always emitted.  Extra options from the BULKLOAD
+ * passthrough clause are appended last, with MULTI_PROCESS overriding
+ * the default slot if present.
+ *
+ * @param cstate COPY FROM state describing the current load operation.
+ *
+ * @return Datum holding a `text[]` array with formatted option strings.
+ */
+static inline Datum
+BuildPgBulkloadOptions(CopyFromState cstate)
+{
+	static const unsigned int mandatory_opts_count = 6;
+	const CopyFormatOptions *opts = &cstate->opts;
+	const char *input_type;
+	const char *writer_type;
+	const char *input_opt;
+	char	   *bulkload_str = cstate->opts.bulkload;
+	unsigned int bulkload_count = 0;
+	char	   *p;
+	unsigned int max_elems;
+	Datum	   *elems;
+	unsigned int elems_count;
+	unsigned int multi_process_idx;
+	ArrayType  *arr;
+
+	if (cstate->filename != NULL)
+		input_opt = psprintf("INPUT=%s", cstate->filename);
+	else if (whereToSendOutput == DestRemote)
+		input_opt = pstrdup("INPUT=stdin");
+	else
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("COPY FROM stdin with DIRECT is not supported when the server reads from its own standard input"),
+				 errhint("Use a client connection (for example psql) so COPY data is sent over the wire.")));
+
+	Assert(opts->csv_mode);
+	input_type = "CSV";
+
+	Assert(opts->direct);
+	writer_type = opts->wal_logged ? "BUFFERED" : "DIRECT";
+
+	/*
+	 * Count BULKLOAD passthrough entries (comma-separated "OPT=VAL" pairs)
+	 * and NUL-terminate each one in place.
+	 */
+	if (bulkload_str)
+	{
+		bulkload_count = !!*bulkload_str;
+		for (p = bulkload_str; *p; ++p)
+			if (*p == ',')
+			{
+				++bulkload_count;
+				*p = 0;
+			}
+	}
+
+	/*
+	 * Upper-bound on the number of Datum elements: mandatory options + one
+	 * per mapping entry (FORCE_NOT_NULL can expand) + BULKLOAD entries.
+	 */
+	max_elems = mandatory_opts_count
+		+ lengthof(copy_to_bulkload_map)
+		+ (opts->force_notnull ? list_length(opts->force_notnull) : 0)
+		+ bulkload_count;
+	elems = palloc(max_elems * sizeof(Datum));
+
+	/* --- Mandatory options --- */
+	elems[0] = CStringGetTextDatum(psprintf("TYPE=%s", input_type));
+	elems[1] = CStringGetTextDatum(psprintf("TABLE=%s", cstate->cur_relname));
+	elems[2] = CStringGetTextDatum(input_opt);
+	elems[3] = CStringGetTextDatum(psprintf("WRITER=%s", writer_type));
+	elems[4] = CStringGetTextDatum("COPY_FROM=YES");
+	multi_process_idx = mandatory_opts_count - 1;
+	elems[multi_process_idx] = CStringGetTextDatum("MULTI_PROCESS=YES");
+	elems_count = mandatory_opts_count;
+
+	/* --- Walk the mapping table --- */
+	for (int i = 0; i < (int) lengthof(copy_to_bulkload_map); i++)
+	{
+		const CopyOptMapping *m = &copy_to_bulkload_map[i];
+
+		if (!CopyOptIsNonDefault(opts, m))
+			continue;
+
+		switch (m->action)
+		{
+			case COPY_OPT_INCOMPATIBLE:
+				ereport(ERROR,
+						(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+						 errmsg("COPY option %s is not supported in DIRECT mode",
+								m->copy_name)));
+				break;
+			default:
+				EmitBulkloadOption(elems, &elems_count, opts, m);
+				Assert(elems_count < max_elems);
+				break;
+		}
+	}
+
+	/* --- BULKLOAD passthrough options --- */
+	if (bulkload_count > 0)
+	{
+		bool		(*ParseControlFileLine) (char buf[], char **outKeyword, char **outValue) =
+			load_external_function("$libdir/pg_bulkload", "ParseControlFileLine", true, NULL);
+
+		if (!ParseControlFileLine)
+			ereport(ERROR,
+					(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+					 errmsg("please load pg_bulkload extension")));
+		p = bulkload_str;
+		for (unsigned int opt_index = 0; opt_index < bulkload_count; ++opt_index)
+		{
+			char	   *key;
+			char	   *val;
+			char	   *key_val;
+			char	   *begin = p;
+			unsigned int elems_index;
+
+			while (*p++);
+
+			if (!ParseControlFileLine(begin, &key, &val))
+				ereport(ERROR,
+						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+						 errmsg("invalid BULKLOAD option \"%s\"", begin)));
+			key_val = psprintf("%s=%s", key, val);
+			elems_index = CompareKeyword(key, "MULTI_PROCESS") ? multi_process_idx : elems_count++;
+			Assert(elems_count < max_elems);
+			elems[elems_index] = CStringGetTextDatum(key_val);
+		}
+	}
+
+	arr = construct_array(elems, elems_count, TEXTOID, -1, false, TYPALIGN_INT);
+	pfree(elems);
+	return PointerGetDatum(arr);
+}
+
+/**
+ * @brief Executor state for evaluating a COPY FROM ... WHERE predicate on
+ *        HeapTuples produced by pg_bulkload in DIRECT mode.
+ *
+ * Allocated by @c InitCopyFromWhere(), passed as opaque @c where_state to the
+ * pg_bulkload @c WherePredicateFn callback, and freed by
+ * @c TermCopyFromWhere() after the load completes.
+ */
+typedef struct CopyFromWhereState
+{
+	ExprState  *qualexpr;		/**< compiled WHERE qual expression */
+	ExprContext *econtext;		/**< per-tuple expression context for ExecQual */
+	TupleTableSlot *slot;		/**< HeapTuple-backed slot for the scan tuple */
+	EState	   *estate;			/**< executor state owning the above resources */
+} CopyFromWhereState;
+
+/**
+ * @brief Build the minimal executor infrastructure needed to evaluate a
+ *        COPY FROM ... WHERE clause on HeapTuples from pg_bulkload.
+ *
+ * Creates an EState, ResultRelInfo, and ModifyTableState just sufficient for
+ * @c ExecInitQual() to compile the WHERE expression and for @c ExecQual() to
+ * evaluate it at runtime.  The caller must release the returned state with
+ * @c TermCopyFromWhere() after the load completes.
+ *
+ * @param cstate  COPY FROM state; must have a non-NULL @c whereClause and an
+ *                open target relation (@c cstate->rel).
+ * @return Heap-allocated @c CopyFromWhereState ready for use as callback state.
+ */
+static CopyFromWhereState *
+InitCopyFromWhere(CopyFromState cstate)
+{
+	CopyFromWhereState *ws;
+	EState	   *estate;
+	ResultRelInfo *resultRelInfo;
+	ModifyTableState *mtstate;
+
+	Assert(cstate->whereClause);
+
+	ws = palloc0(sizeof(CopyFromWhereState));
+
+	estate = CreateExecutorState();
+	ExecInitRangeTable(estate, cstate->range_table, cstate->rteperminfos);
+
+	resultRelInfo = makeNode(ResultRelInfo);
+	ExecInitResultRelation(estate, resultRelInfo, 1);
+
+	mtstate = makeNode(ModifyTableState);
+	mtstate->ps.plan = NULL;
+	mtstate->ps.state = estate;
+	mtstate->operation = CMD_INSERT;
+	mtstate->mt_nrels = 1;
+	mtstate->resultRelInfo = resultRelInfo;
+	mtstate->rootResultRelInfo = resultRelInfo;
+
+	ws->estate = estate;
+	ws->qualexpr = ExecInitQual(castNode(List, cstate->whereClause),
+								&mtstate->ps);
+	ws->econtext = GetPerTupleExprContext(estate);
+	ws->slot = MakeSingleTupleTableSlot(RelationGetDescr(cstate->rel),
+										&TTSOpsHeapTuple);
+
+	return ws;
+}
+
+/**
+ * @brief Release executor resources allocated by @c InitCopyFromWhere().
+ *
+ * Drops the standalone tuple slot, closes result and range-table relations,
+ * frees the EState, and frees the @c CopyFromWhereState struct itself.
+ *
+ * @param ws  State previously returned by @c InitCopyFromWhere() (must not be NULL).
+ */
+static void
+TermCopyFromWhere(CopyFromWhereState *ws)
+{
+	ExecDropSingleTupleTableSlot(ws->slot);
+	ExecCloseResultRelations(ws->estate);
+	ExecCloseRangeTableRelations(ws->estate);
+	FreeExecutorState(ws->estate);
+	pfree(ws);
+}
+
+/**
+ * @brief WHERE predicate callback passed to @c pg_bulkload_run().
+ *
+ * Stores the incoming HeapTuple in a TupleTableSlot, sets it as the scan
+ * tuple in the expression context, and evaluates the compiled WHERE qual.
+ * Called once per tuple from @c ReaderNext() inside pg_bulkload.
+ *
+ * @param tuple    The HeapTuple to test (ownership is not transferred).
+ * @param tupdesc  Tuple descriptor of @p tuple (unused; the slot already
+ *                 knows the descriptor from @c InitCopyFromWhere()).
+ * @param state    Opaque pointer to a @c CopyFromWhereState allocated by
+ *                 @c InitCopyFromWhere().
+ * @return @c true if the tuple satisfies the WHERE clause, @c false to skip.
+ */
+static bool
+CopyFromWhereCallback(HeapTuple tuple, TupleDesc tupdesc, void *state)
+{
+	CopyFromWhereState *ws = (CopyFromWhereState *) state;
+
+	ExecStoreHeapTuple(tuple, ws->slot, false);
+	ws->econtext->ecxt_scantuple = ws->slot;
+	ResetExprContext(ws->econtext);
+
+	return ExecQual(ws->qualexpr, ws->econtext);
+}
+
+/**
+ * @brief Callback type matching pg_bulkload_run's @c where_predicate parameter.
+ *
+ * Declared locally so the dynamically-loaded @c pg_bulkload_run function
+ * pointer in @c CallPgBulkload() can be cast with the correct signature.
+ *
+ * @param tuple    HeapTuple to evaluate.
+ * @param tupdesc  Tuple descriptor of @p tuple.
+ * @param state    Opaque callback state.
+ * @return @c true to accept the tuple, @c false to skip it.
+ */
+typedef bool (*BulkloadWherePredicateFn) (HeapTuple tuple, TupleDesc tupdesc,
+										  void *state);
+
+/**
+ * @brief Invoke pg_bulkload_run() from the pg_bulkload extension.
+ *
+ * Resolves the @c pg_bulkload_run symbol from @c $libdir/pg_bulkload and
+ * calls it with the COPY options as the SQL function argument and NULL
+ * WHERE predicate/state.
+ *
+ * @param cstate COPY FROM state describing the current load operation.
+ *
+ * @return Composite Datum with the pg_bulkload result row (skip, count, etc.).
+ */
+static inline Datum
+CallPgBulkload(CopyFromState cstate)
+{
+	Datum		options_datum = BuildPgBulkloadOptions(cstate);
+	void	   *filehandle = NULL;
+	Datum		(*run_fn) (FunctionCallInfo fcinfo,
+						   BulkloadWherePredicateFn where_predicate,
+						   void *where_state);
+	BulkloadWherePredicateFn where_pred = NULL;
+	void	   *where_state = NULL;
+	List	   *funcname;
+	Oid			argtypes[1];
+	Oid			pg_bulkload_oid;
+	FmgrInfo	flinfo;
+
+	LOCAL_FCINFO(fcinfo, 1);
+	Datum		result;
+
+	run_fn = (Datum (*) (FunctionCallInfo, BulkloadWherePredicateFn, void *))
+		load_external_function("$libdir/pg_bulkload", "pg_bulkload_run",
+							   true, &filehandle);
+	if (!run_fn)
+		ereport(ERROR,
+				(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+				 errmsg("please load pg_bulkload extension")));
+
+	/*
+	 * The flinfo must be filled, otherwise get_call_result_type(), called
+	 * from pg_bulkload_run(), will crash.
+	 */
+	funcname = list_make2(makeString("pgbulkload"), makeString("pg_bulkload"));
+	argtypes[0] = TEXTARRAYOID;
+	pg_bulkload_oid = LookupFuncName(funcname, 1, argtypes, false);
+	list_free(funcname);
+	if (!OidIsValid(pg_bulkload_oid))
+		ereport(ERROR,
+				(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+				 errmsg("please load pg_bulkload extension")));
+	fmgr_info(pg_bulkload_oid, &flinfo);
+
+	InitFunctionCallInfoData(*fcinfo, &flinfo, 1, InvalidOid, NULL, NULL);
+
+	fcinfo->args[0].value = options_datum;
+	fcinfo->args[0].isnull = false;
+
+	if (cstate->whereClause)
+	{
+		where_state = InitCopyFromWhere(cstate);
+		where_pred = CopyFromWhereCallback;
+	}
+
+	result = run_fn(fcinfo, where_pred, where_state);
+
+	if (where_state)
+		TermCopyFromWhere(where_state);
+
+	return result;
+}
+
+/**
+ * @brief Construct a tuple descriptor for the pg_bulkload result row.
+ *
+ * The pg_bulkload() function returns a composite type with several
+ * statistics columns.  This helper builds a matching tuple descriptor
+ * so that attributes can be extracted from the result Datum.
+ *
+ * @return Tuple descriptor describing the pg_bulkload result row type.
+ */
+static inline TupleDesc
+GetPgBulkloadResultTupdesc(void)
+{
+	TupleDesc	tupdesc;
+
+	tupdesc = CreateTemplateTupleDesc(8);
+	TupleDescInitEntry(tupdesc, 1, "skip", INT8OID, -1, 0);
+	TupleDescInitEntry(tupdesc, 2, "count", INT8OID, -1, 0);
+	TupleDescInitEntry(tupdesc, 3, "parse_errors", INT8OID, -1, 0);
+	TupleDescInitEntry(tupdesc, 4, "duplicate_new", INT8OID, -1, 0);
+	TupleDescInitEntry(tupdesc, 5, "duplicate_old", INT8OID, -1, 0);
+	TupleDescInitEntry(tupdesc, 6, "system_time", FLOAT8OID, -1, 0);
+	TupleDescInitEntry(tupdesc, 7, "user_time", FLOAT8OID, -1, 0);
+	TupleDescInitEntry(tupdesc, 8, "duration", FLOAT8OID, -1, 0);
+
+	return tupdesc;
+}
+
+/**
+ * @brief Extract the number of inserted rows from a pg_bulkload result.
+ *
+ * This inspects the composite pg_bulkload() result Datum and reads the
+ * "count" field, which reports how many rows were successfully loaded.
+ *
+ * @param pg_bulkload_result Composite Datum returned by pg_bulkload().
+ *
+ * @return Number of inserted rows, or 0 if the result is invalid (null
+ *         Datum).  Raises an error if the "count" field is NULL.
+ */
+static inline uint64
+GetPgBulkloadInsertedRowsCount(Datum pg_bulkload_result)
+{
+	HeapTupleHeader hdr;
+	HeapTupleData tmptup;
+	TupleDesc	tupdesc;
+	bool		isnull;
+	Datum		count_datum;
+	int64		count;
+
+	if (pg_bulkload_result == 0)
+		return 0;
+
+	hdr = DatumGetHeapTupleHeader(pg_bulkload_result);
+
+	tupdesc = GetPgBulkloadResultTupdesc();
+
+	/*
+	 * Wrap the header for heap_getattr (needs HeapTuple with t_data and
+	 * t_len)
+	 */
+	tmptup.t_data = hdr;
+	tmptup.t_len = *(uint32 *) hdr; /* minimal tuple: first word is length */
+
+	count_datum = heap_getattr(&tmptup, 2, tupdesc, &isnull);
+
+	ReleaseTupleDesc(tupdesc);
+
+	if (isnull)
+		ereport(ERROR,
+				(errcode(ERRCODE_DATA_EXCEPTION),
+				 errmsg("pg_bulkload() returned NULL for the inserted row count"),
+				 errdetail("The \"count\" field of the pg_bulkload() result must not be null when used from COPY FROM ... WITH (DIRECT).")));
+
+	count = DatumGetInt64(count_datum);
+	return count;
+}
+
+/**
+ * @brief Execute COPY FROM in DIRECT mode via pg_bulkload.
+ *
+ * When the DIRECT option is enabled for COPY FROM, this function hands
+ * the load off to pg_bulkload() and converts its result into the usual
+ * COPY row count.  If @c WAL_LOGGED is set, @c BuildPgBulkloadOptions()
+ * passes @c WRITER=BUFFERED to pg_bulkload (shared buffers and WAL).
+ *
+ * @param cstate COPY FROM state describing the current load operation.
+ *
+ * @return Number of rows reported as inserted by pg_bulkload().
+ */
+static inline uint64
+CopyFromDirect(CopyFromState cstate)
+{
+	Datum		pg_bulkload_result;
+
+	Assert(cstate->opts.direct);
+	pg_bulkload_result = CallPgBulkload(cstate);
+	return GetPgBulkloadInsertedRowsCount(pg_bulkload_result);
+}
+
+/*
  * Copy FROM file to relation.
  */
 uint64
@@ -655,6 +1289,9 @@ CopyFrom(CopyFromState cstate)
 
 	if (cstate->opts.on_error != COPY_ON_ERROR_STOP)
 		Assert(cstate->escontext);
+
+	if (cstate->opts.direct)
+		return CopyFromDirect(cstate);
 
 	/*
 	 * The target must be a plain, foreign, or partitioned relation, or have
@@ -1413,6 +2050,17 @@ BeginCopyFrom(ParseState *pstate,
 	/* Extract options from the statement node tree */
 	ProcessCopyOptions(pstate, &cstate->opts, true /* is_from */ , options);
 
+	/*
+	 * DIRECT mode delegates input to pg_bulkload, whose INPUT is only a
+	 * server file path or "stdin" — not a shell command (see pg_bulkload
+	 * CreateSource).
+	 */
+	if (cstate->opts.direct && filename != NULL && is_program)
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("COPY FROM PROGRAM is not supported with DIRECT"),
+				 errhint("Use COPY FROM with a server file path, or COPY FROM stdin from a client session.")));
+
 	/* Process the target relation */
 	cstate->rel = rel;
 
@@ -1705,7 +2353,15 @@ BeginCopyFrom(ParseState *pstate,
 		progress_vals[1] = PROGRESS_COPY_TYPE_PIPE;
 		Assert(!is_program);	/* the grammar does not allow this */
 		if (whereToSendOutput == DestRemote)
-			ReceiveCopyBegin(cstate);
+		{
+			/*
+			 * DIRECT mode uses pg_bulkload INPUT=stdin, which sends its own
+			 * CopyInResponse via CreateRemoteSource.  Skipping
+			 * ReceiveCopyBegin avoids a duplicate 'G' message on the wire.
+			 */
+			if (!cstate->opts.direct)
+				ReceiveCopyBegin(cstate);
+		}
 		else
 			cstate->copy_file = stdin;
 	}

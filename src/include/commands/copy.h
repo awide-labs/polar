@@ -84,6 +84,18 @@ typedef struct CopyFormatOptions
 	CopyOnErrorChoice on_error; /* what to do when error happened */
 	CopyLogVerbosityChoice log_verbosity;	/* verbosity of logged messages */
 	List	   *convert_select; /* list of column names (can be NIL) */
+	bool		direct;			/* call pg_bulkload extension to load data if
+								 * true */
+	/**
+	 * When true together with @c direct, COPY FROM sets pg_bulkload
+	 * @c WRITER=BUFFERED: load data to the table via shared buffers, write
+	 * WAL, and use normal PostgreSQL crash recovery (see pg_bulkload control
+	 * file documentation for @c BUFFERED).  When false, COPY FROM uses
+	 * @c WRITER=DIRECT.  Ignored when @c direct is false.
+	 */
+	bool		wal_logged;
+	char	   *bulkload;		/* pg_bulkload DIRECT options (comma-separated
+								 * OPT=VAL) */
 } CopyFormatOptions;
 
 /* These are private in commands/copy[from|to].c */

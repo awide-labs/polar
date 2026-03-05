@@ -500,6 +500,7 @@ CopyDest
 CopyFormatOptions
 CopyFromState
 CopyFromStateData
+CopyFromWhereState
 CopyHeaderChoice
 CopyInsertMethod
 CopyLogVerbosityChoice
@@ -507,6 +508,9 @@ CopyMethod
 CopyMultiInsertBuffer
 CopyMultiInsertInfo
 CopyOnErrorChoice
+CopyOptAction
+CopyOptFieldType
+CopyOptMapping
 CopySource
 CopyStmt
 CopyToState

@@ -49,6 +49,13 @@ PG_MODULE_MAGIC;
 
 PG_FUNCTION_INFO_V1(pg_bulkload);
 
+/*
+ * True when pg_bulkload() is invoked from the backend's COPY FROM ... DIRECT
+ * path (CallPgBulkload).  Set by the backend via COPY_FROM option;
+ * readable by extension code.
+ */
+bool		copy_from = false;
+
 Datum	PGUT_EXPORT pg_bulkload(PG_FUNCTION_ARGS);
 
 static char *timeval_to_cstring(struct timeval tp);
@@ -154,11 +161,24 @@ BULKLOAD_PROFILE_PRINT()
 
 /**
  * @brief Entry point of the user-defined function for pg_bulkload.
- * @return Returns number of loaded tuples.  If the case of errors, -1 will be
- * returned.
+ * @return Datum of the result composite row (skip, count, parse_errors, etc.).
  */
 Datum
 pg_bulkload(PG_FUNCTION_ARGS)
+{
+	return pg_bulkload_run(fcinfo, NULL, NULL);
+}
+
+/**
+ * @brief Run the pg_bulkload pipeline (parse options, load loop, finalize).
+ *
+ * @param where_predicate  Per-tuple WHERE callback, or NULL for no filtering.
+ *                         When set, tuples for which the callback returns
+ *                         @c false are skipped inside @c ReaderNext().
+ * @param where_state      Opaque state forwarded to @p where_predicate.
+ */
+PGDLLEXPORT Datum
+pg_bulkload_run(PG_FUNCTION_ARGS, WherePredicateFn where_predicate, void *where_state)
 {
 	Reader		   *rd = NULL;
 	Writer		   *wt = NULL;
@@ -241,6 +261,10 @@ pg_bulkload(PG_FUNCTION_ARGS)
 	PG_END_TRY();
 
 	/* No throwable codes here! */
+
+	/* Install WHERE predicate on the reader (NULL means no filtering). */
+	rd->where_predicate = where_predicate;
+	rd->where_state = where_state;
 
 	PG_TRY();
 	{
@@ -494,6 +518,8 @@ ParseOptions(Datum options, Reader **rd, Writer **wt, time_t tm)
 
 	Assert(*rd == NULL);
 	Assert(*wt == NULL);
+	/* Reset per-call flag; COPY_FROM is meant to be call-scoped. */
+	copy_from = false;
 
 	/* parse for each option */
 	defs = untransformRelOptions(options);
@@ -528,6 +554,10 @@ ParseOptions(Datum options, Reader **rd, Writer **wt, time_t tm)
 		{
 			ASSERT_ONCE(infile == NULL);
 			infile = pstrdup(value);
+		}
+		else if (CompareKeyword(keyword, "COPY_FROM"))
+		{
+			copy_from = ParseBoolean(value);
 		}
 		else
 		{

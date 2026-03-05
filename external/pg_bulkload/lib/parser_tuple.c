@@ -88,6 +88,8 @@ TupleParserRead(TupleParser *self, Checker *checker)
 
 	BULKLOAD_PROFILE(&prof_reader_parser);
 
+	self->base.read_bytes = 0;
+
 	if (QueueRead(self->queue, &len, sizeof(uint32), false) == sizeof(uint32) && len > 0)
 	{
 		if (self->buflen < len)
@@ -100,6 +102,7 @@ TupleParserRead(TupleParser *self, Checker *checker)
 			BULKLOAD_PROFILE(&prof_reader_source);
 			self->tuple.t_len = len;
 			self->tuple.t_data = (HeapTupleHeader) self->buffer;
+			self->base.read_bytes = sizeof(uint32) + (size_t) len;
 			return &self->tuple;
 		}
 	}

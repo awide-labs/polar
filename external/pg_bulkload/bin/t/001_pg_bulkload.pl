@@ -83,7 +83,6 @@ program_options_handling_ok($pg_bulkload);
 
 $node_primary->safe_psql('postgres', "CREATE DATABASE test_bulkload;");
 $node_primary->safe_psql('test_bulkload', "CREATE EXTENSION pg_bulkload;");
-$node_primary->safe_psql('test_bulkload', "CREATE TABLE test_table (id SERIAL, data TEXT, padding TEXT);");
 
 # Generate large CSV test data (~200MB)
 print "Generating $num_rows rows of test data...\n";
@@ -120,74 +119,23 @@ WRITER = DIRECT
 EOF
 close $ctl;
 
-#############################################
-# Run pg_bulkload to load data in DIRECT mode
+test_for(sub {
+			 print "Loading data with pg_bulkload (DIRECT mode)...\n";
+			 $node_primary->command_ok(
+				 [ $pg_bulkload, '-d', 'test_bulkload', $control_file ],
+				 'pg_bulkload loads large data successfully in DIRECT mode');
+		 });
 
-print "Loading data with pg_bulkload (DIRECT mode)...\n";
-$node_primary->command_ok(
-	[ $pg_bulkload, '-d', 'test_bulkload', $control_file ],
-	'pg_bulkload loads large data successfully in DIRECT mode');
-
-# pg_bulkload bypasses the sequence; advance it to avoid future insert conflicts
-$node_primary->safe_psql('test_bulkload',
-	"SELECT setval(pg_get_serial_sequence('test_table', 'id'), $num_rows);"
-);
-
-#############################################
-# Verify data was loaded on primary
-
-my $primary_count = $node_primary->safe_psql('test_bulkload', 'SELECT COUNT(*) FROM test_table');
-is($primary_count, $num_rows, "Primary has $num_rows rows after pg_bulkload");
-
-# Verify data content on primary
-my $primary_sample = $node_primary->safe_psql('test_bulkload',
-	"SELECT id, SUBSTRING(data FROM 1 FOR 20) FROM test_table WHERE id = 1");
-like($primary_sample, qr/^1/, 'Primary has correct data for id=1');
-
-# Verify last row
-my $primary_last = $node_primary->safe_psql('test_bulkload',
-	"SELECT id FROM test_table ORDER BY id DESC LIMIT 1");
-is($primary_last, $num_rows, "Primary has correct last row id=$num_rows");
-
-#############################################
-# Wait for replica to catch up
-
-print "Waiting for replica to catch up...\n";
-
-my $primary_lsn = $node_primary->lsn('flush');
-$node_primary->wait_for_catchup($node_replica1, 'replay', $primary_lsn);
-print "Replica caught up!\n";
-
-#############################################
-# Verify data on replica
-
-my $replica_count = $node_replica1->safe_psql('test_bulkload', 'SELECT COUNT(*) FROM test_table');
-is($replica_count, $num_rows, "Replica has $num_rows rows (caught up via streaming)");
-
-my $replica_sample = $node_replica1->safe_psql('test_bulkload',
-	"SELECT id, SUBSTRING(data FROM 1 FOR 20) FROM test_table WHERE id = 1");
-like($replica_sample, qr/^1/, 'Replica has correct data for id=1');
-
-# Verify last row on replica
-my $replica_last = $node_replica1->safe_psql('test_bulkload',
-	"SELECT id FROM test_table ORDER BY id DESC LIMIT 1");
-is($replica_last, $num_rows, "Replica has correct last row id=$num_rows");
-
-#############################################
-# Verify data integrity - check random samples
-
-print "Verifying data integrity on replica...\n";
-my @sample_ids = (100, 10000, 100000, 250000, 400000, 500000);
-foreach my $sample_id (@sample_ids) {
-	my $primary_val = $node_primary->safe_psql('test_bulkload',
-		"SELECT SUBSTRING(data FROM 1 FOR 50) FROM test_table WHERE id = $sample_id");
-	my $replica_val = $node_replica1->safe_psql('test_bulkload',
-		"SELECT SUBSTRING(data FROM 1 FOR 50) FROM test_table WHERE id = $sample_id");
-	ok($primary_val ne '', "Primary has data for id=$sample_id");
-	is($replica_val, $primary_val, "Replica data matches primary for id=$sample_id");
+# Test for all combinations of MULTI_PROCESS and WAL_LOGGED
+for (my $i = 0; $i < 4; ++$i) {
+	my $multi_process = $i & 1 ? ', BULKLOAD  \'MULTI_PROCESS = YES\'' : ', BULKLOAD  \'MULTI_PROCESS = NO\'';
+	my $wal_logged = $i & 2 ? ', WAL_LOGGED' : '';
+	test_for(sub {
+		print "Loading data with COPY ... FROM ... WITH (FORMAT CSV, DIRECT $wal_logged $multi_process)...\n";
+		$node_primary->safe_psql('test_bulkload',
+								 "COPY test_table FROM '$data_file' WITH (FORMAT CSV, DIRECT $wal_logged $multi_process);");
+			 });
 }
-
-print "All data verified successfully!\n";
 
 #############################################
 # Cleanup
@@ -196,3 +144,76 @@ $node_primary->stop;
 $node_replica1->stop;
 
 done_testing();
+
+sub test_for {
+	my ($load_data_func) = @_;
+
+	$node_primary->safe_psql('test_bulkload', "CREATE TABLE test_table (id SERIAL, data TEXT, padding TEXT);");
+
+	#############################################
+	# Run pg_bulkload to load data in DIRECT mode
+
+	$load_data_func->();
+
+	# pg_bulkload bypasses the sequence; advance it to avoid future insert conflicts
+	$node_primary->safe_psql('test_bulkload',
+							 "SELECT setval(pg_get_serial_sequence('test_table', 'id'), $num_rows);");
+
+	#############################################
+	# Verify data was loaded on primary
+
+	my $primary_count = $node_primary->safe_psql('test_bulkload', 'SELECT COUNT(*) FROM test_table');
+	is($primary_count, $num_rows, "Primary has $num_rows rows after pg_bulkload");
+
+	# Verify data content on primary
+	my $primary_sample = $node_primary->safe_psql('test_bulkload',
+												  "SELECT id, SUBSTRING(data FROM 1 FOR 20) FROM test_table WHERE id = 1");
+	like($primary_sample, qr/^1/, 'Primary has correct data for id=1');
+
+	# Verify last row
+	my $primary_last = $node_primary->safe_psql('test_bulkload',
+												"SELECT id FROM test_table ORDER BY id DESC LIMIT 1");
+	is($primary_last, $num_rows, "Primary has correct last row id=$num_rows");
+
+	#############################################
+	# Wait for replica to catch up
+
+	print "Waiting for replica to catch up...\n";
+
+	my $primary_lsn = $node_primary->lsn('flush');
+	$node_primary->wait_for_catchup($node_replica1, 'replay', $primary_lsn);
+	print "Replica caught up!\n";
+
+	#############################################
+	# Verify data on replica
+
+	my $replica_count = $node_replica1->safe_psql('test_bulkload', 'SELECT COUNT(*) FROM test_table');
+	is($replica_count, $num_rows, "Replica has $num_rows rows (caught up via streaming)");
+
+	my $replica_sample = $node_replica1->safe_psql('test_bulkload',
+												   "SELECT id, SUBSTRING(data FROM 1 FOR 20) FROM test_table WHERE id = 1");
+	like($replica_sample, qr/^1/, 'Replica has correct data for id=1');
+
+	# Verify last row on replica
+	my $replica_last = $node_replica1->safe_psql('test_bulkload',
+												 "SELECT id FROM test_table ORDER BY id DESC LIMIT 1");
+	is($replica_last, $num_rows, "Replica has correct last row id=$num_rows");
+
+	#############################################
+	# Verify data integrity - check random samples
+
+	print "Verifying data integrity on replica...\n";
+	my @sample_ids = (100, 10000, 100000, 250000, 400000, 500000);
+	foreach my $sample_id (@sample_ids) {
+		my $primary_val = $node_primary->safe_psql('test_bulkload',
+												   "SELECT SUBSTRING(data FROM 1 FOR 50) FROM test_table WHERE id = $sample_id");
+		my $replica_val = $node_replica1->safe_psql('test_bulkload',
+													"SELECT SUBSTRING(data FROM 1 FOR 50) FROM test_table WHERE id = $sample_id");
+		ok($primary_val ne '', "Primary has data for id=$sample_id");
+		is($replica_val, $primary_val, "Replica data matches primary for id=$sample_id");
+	}
+
+	$node_primary->safe_psql('test_bulkload', "DROP TABLE test_table;");
+
+	print "All data verified successfully!\n";
+}

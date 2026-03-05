@@ -232,6 +232,13 @@ EOF
 	ok($count_after_offline == 0,
 		"Table is accessible after offline recovery on node_primary ($count_after_offline rows)");
 
+	#############################################
+	# 5.5 COPY FROM ... DIRECT, WAL_LOGGED (WRITER=BUFFERED): crash leaves no .loadstatus
+	#############################################
+
+	test_copy_from_direct_wal_logged_crash($node_primary, $data_file, $num_rows, 0);
+	test_copy_from_direct_wal_logged_crash($node_primary, $data_file, $num_rows, 1);
+
 	# Truncate table for subsequent tests
 	$node_primary->safe_psql('test_bulkload',
 		'TRUNCATE test_recovery RESTART IDENTITY;');
@@ -314,6 +321,70 @@ is($count_after_restart, $num_rows,
 $node_primary->stop;
 
 done_testing();
+
+
+# Runs TAP test 5.5: C<COPY FROM ... WITH (FORMAT CSV, DIRECT, WAL_LOGGED, ...)>
+# under fault injection, restart, and reload.  Exercises WRITER=BUFFERED
+# (WAL_LOGGED) crash recovery for both pg_bulkload single-process and
+# multi-process modes.
+sub test_copy_from_direct_wal_logged_crash
+{
+	my ($node, $data_file, $num_rows, $multi_process) = @_;
+
+	my $with = 'FORMAT CSV, DIRECT, WAL_LOGGED, BULKLOAD \'MULTI_PROCESS=';
+	$with .= $multi_process ? 'YES\'' : 'NO\'';
+	my $copy_sql = "COPY test_recovery FROM '$data_file' WITH ($with)";
+
+	my $mode_label = $multi_process ? 'multi-process' : 'single-process';
+
+	print "Test 5.5 ($mode_label): COPY FROM DIRECT WAL_LOGGED (BUFFERED) crash...\n";
+
+	my $psql = $node->installed_command('psql');
+
+	$node->safe_psql('test_bulkload', 'TRUNCATE test_recovery RESTART IDENTITY;');
+
+	$node->safe_psql('test_bulkload',
+					 "SELECT inject_fault('pg_bulkload_buffered_write', 'panic');");
+
+	$node->command_fails(
+		[
+			$psql, '-XAtq', '-d', $node->connstr('test_bulkload'),
+			'-v', 'ON_ERROR_STOP=1', '-c', $copy_sql
+		],
+		"COPY FROM DIRECT WAL_LOGGED crashes on fault injection ($mode_label)");
+
+	foreach my $i (0 .. 10 * $PostgreSQL::Test::Utils::timeout_default)
+	{
+		last if !-f $node->data_dir . '/postmaster.pid';
+		usleep(100_000);
+	}
+	$node->{_pid} = undef;
+
+	my @lsf_after_buffered_crash = FindLSF($node->polar_get_datadir);
+	ok(scalar(@lsf_after_buffered_crash) == 0,
+		"no .loadstatus files after COPY FROM DIRECT WAL_LOGGED crash ($mode_label)");
+
+	$node->start;
+
+	$node->safe_psql('test_bulkload', "SELECT inject_fault('all', 'reset');");
+
+	my $count_after_buffered_crash = $node->safe_psql(
+		'test_bulkload', 'SELECT COUNT(*) FROM test_recovery');
+	ok($count_after_buffered_crash == 0,
+		"incomplete COPY rolled back: table empty after crash ($mode_label)");
+
+	$node->safe_psql('test_bulkload', 'TRUNCATE test_recovery RESTART IDENTITY;');
+	$node->command_ok(
+		[
+			$psql, '-XAtq', '-d', $node->connstr('test_bulkload'),
+			'-v', 'ON_ERROR_STOP=1', '-c', $copy_sql
+		],
+		"COPY FROM DIRECT WAL_LOGGED completes after server recovered from crash ($mode_label)");
+	my $count_reload = $node->safe_psql(
+		'test_bulkload', 'SELECT COUNT(*) FROM test_recovery');
+	is($count_reload, $num_rows,
+		"after recovery, full COPY FROM DIRECT WAL_LOGGED loads all $num_rows rows ($mode_label)");
+}
 
 sub FindLSF {
 	my $datadir = shift;
