@@ -8,6 +8,34 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Wrapped the `pgbulkload` extension call with the native `COPY FROM`
+  command:
+  - Added the following new `COPY FROM` options:
+    - **DIRECT**: Enables the `pgbulkload` extension for data appends. This
+      option is restricted to the **CSV** format and is an analogue of
+      `WRITER=DIRECT` with `MULTI_PROCESS=YES` `pg_bulkload` options.
+    - **WAL_LOGGED**: Enables routing data through shared buffers with WAL
+      logging for standard PostgreSQL crash recovery, can be used only with
+      **DIRECT** option. This option maps to `WRITER=BUFFERED` `pg_bulkload`
+      option.
+    - **BULKLOAD**: Allows passing a string of comma-separated "key=value"
+      pairs to `pgbulkload`. This requires the **DIRECT** option and enables
+      access to specific extension features not available in native `COPY`.
+      Multi-process mode can be disabled using `BULKLOAD="MULTI_PROCESS=NO"`.
+  - Added support for the **WHERE** clause and progress update.
+  - Compatible **CSV** options (`DELIMITER`, `NULL`, `QUOTE`, `ESCAPE`,
+    `FORCE_NOT_NULL`, `ENCODING`, `HEADER` as `SKIP=1`) are forwarded to
+    `pgbulkload` extension; `FREEZE`, `FORCE_NULL`, `FORCE_QUOTE`, `BINARY`,
+    `CONVERT_SELECTIVELY`, and `HEADER MATCH` are rejected with clear errors.
+  - **`COPY FROM stdin` with `DIRECT`** is supported for normal client
+    connections (psql, libpq): input uses the standard copy-in protocol and
+    pg_bulkload `INPUT=stdin`. Not supported when the server reads from its
+    own standard input (no client) (XCOM-193).
+- The `pgbulkload` extension now utilizes PostgreSQL’s lock group mechanism to
+  prevent table lock conflicts between Reader and Writer processes in
+  multi-process mode. This eliminates the gap between the Reader releasing the
+  lock and the Writer acquiring it, preventing DDL statements from modifying
+  the relation during that window (XCOM-193).
 - **Postmaster** now performs `pg_bulkload` recovery on startup. After acquiring
   the data directory lock, it searches for Load Status Files (`*.loadstatus`).
   If any are found and the `pg_bulkload` extension is loaded, the corresponding

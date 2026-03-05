@@ -17,6 +17,7 @@
 #include "catalog/pg_proc.h"
 #include "catalog/pg_language.h"
 #include "catalog/pg_type.h"
+#include "commands/progress.h"
 #include "funcapi.h"
 #include "mb/pg_wchar.h"
 #include "nodes/parsenodes.h"
@@ -24,6 +25,7 @@
 #include "pgstat.h"
 #include "storage/lmgr.h"
 #include "utils/builtins.h"
+#include "utils/elog.h"
 #include "utils/lsyscache.h"
 #include "utils/memutils.h"
 #include "utils/rel.h"
@@ -242,9 +244,30 @@ ReaderNext(Reader *rd)
 				eof = true;
 			else
 			{
+				if (copy_from)
+				{
+					rd->copy_from_progress.read_bytes += parser->read_bytes;
+					pgstat_progress_update_param(PROGRESS_COPY_BYTES_PROCESSED, rd->copy_from_progress.read_bytes);
+				}
+
 				tuple = CheckerTuple(&rd->checker, tuple,
 									 &parser->parsing_field);
 				CheckerConstraints(&rd->checker, tuple, &parser->parsing_field);
+
+				if (copy_from && tuple)
+				{
+					if (rd->where_predicate &&
+						!rd->where_predicate(tuple, rd->checker.desc,
+											 rd->where_state))
+					{
+						pgstat_progress_update_param(PROGRESS_COPY_TUPLES_EXCLUDED,
+													 ++rd->copy_from_progress.where_excluded);
+						tuple = NULL;
+					}
+					else
+						pgstat_progress_update_param(PROGRESS_COPY_TUPLES_PROCESSED,
+													 ++rd->copy_from_progress.processed);
+				}
 			}
 		}
 		PG_CATCH();
@@ -270,6 +293,11 @@ ReaderNext(Reader *rd)
 					break;
 			}
 
+			if (copy_from)
+			{
+				rd->copy_from_progress.read_bytes += parser->read_bytes;
+				pgstat_progress_update_param(PROGRESS_COPY_BYTES_PROCESSED, rd->copy_from_progress.read_bytes);
+			}
 			/* Absorb parse errors. */
 			rd->parse_errors++;
 			if (errdata->message)
@@ -295,7 +323,7 @@ ReaderNext(Reader *rd)
 			if (rd->parse_errors > rd->max_parse_errors)
 			{
 				eof = true;
-				LoggerLog(WARNING,
+				LoggerLog(copy_from ? ERROR : WARNING,
 					"Maximum parse error count exceeded - " int64_FMT
 					" error(s) found in input file\n",
 					rd->parse_errors);

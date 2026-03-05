@@ -15,12 +15,42 @@
 #error pg_bulkload does not support PostgreSQL 8.2 or earlier versions.
 #endif
 
+#include "access/htup.h"
 #include "access/tupdesc.h"
+#include "fmgr.h"
 
 /**
  * @file
  * @brief General definition in pg_bulkload.
  */
+
+/**
+ * @brief Callback type for WHERE-clause predicate evaluation.
+ *
+ * Invoked by @c ReaderNext() for each successfully parsed tuple.  Returning
+ * @c false causes the tuple to be skipped (not passed to the writer).
+ *
+ * @param tuple    The fully-formed, coerced, constraint-checked HeapTuple.
+ * @param tupdesc  Tuple descriptor of @p tuple (from the target relation).
+ * @param state    Opaque caller-supplied state (e.g. compiled ExprState).
+ * @return @c true if the tuple satisfies the predicate, @c false to skip it.
+ */
+typedef bool (*WherePredicateFn)(HeapTuple tuple, TupleDesc tupdesc, void *state);
+
+/**
+ * @brief Run the pg_bulkload pipeline (parse options, load, finalize).
+ *
+ * @param fcinfo           Call information (argument 0 = @c text[] options).
+ * @param where_predicate  Per-tuple WHERE callback, or NULL for no filtering.
+ *                         When set, tuples for which the callback returns
+ *                         @c false are skipped inside @c ReaderNext().
+ * @param where_state      Opaque state forwarded to @p where_predicate.
+ *
+ * @return Datum of the result composite row (skip, count, parse_errors, etc.).
+ */
+PGDLLEXPORT Datum pg_bulkload_run(FunctionCallInfo fcinfo,
+								  WherePredicateFn where_predicate,
+								  void *where_state);
 
 /*-------------------------------------------------------------------------
  *
@@ -91,5 +121,12 @@ typedef Parser *(*ParserCreate)(void);
 #ifndef unlikely
 #define unlikely(x) __builtin_expect((x),0)
 #endif
+
+/*
+ * True when pg_bulkload() is invoked from the backend's COPY FROM ... DIRECT
+ * path (CallPgBulkload).  Set by the backend via COPY_FROM option; readable by
+ * extension code.
+ */
+extern bool copy_from;
 
 #endif   /* BULKLOAD_H_INCLUDED */

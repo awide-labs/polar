@@ -469,10 +469,14 @@ CopyDest
 CopyFormatOptions
 CopyFromState
 CopyFromStateData
+CopyFromWhereState
 CopyHeaderChoice
 CopyInsertMethod
 CopyMultiInsertBuffer
 CopyMultiInsertInfo
+CopyOptAction
+CopyOptFieldType
+CopyOptMapping
 CopySource
 CopyStmt
 CopyToState

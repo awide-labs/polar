@@ -698,7 +698,15 @@ RemoteSourceClose(RemoteSource *self)
 		{"duration", FLOAT8OID, 8, -1}
 	};
 
-	SendResultDescriptionMessage(attrs, PG_BULKLOAD_COLS);
+	/*
+	 * Protocol resync for SELECT pg_bulkload(...) with INPUT=stdin (see
+	 * comment on Wrappered_pq_getbyte).  When the loader runs inside SQL
+	 * COPY ... DIRECT, the top-level command is COPY; emitting a RowDescription
+	 * here makes libpq report an extra PGRES_TUPLES_OK (0 rows) before COPY
+	 * CommandComplete, which breaks psql/regression output.
+	 */
+	if (!copy_from)
+		SendResultDescriptionMessage(attrs, PG_BULKLOAD_COLS);
 	pfree(self);
 }
 

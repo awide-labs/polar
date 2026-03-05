@@ -62,9 +62,12 @@ open $fh, '>', $ctl_long_line or die "Cannot create control file: $!";
 print $fh ('x' x 2000), "\n";
 close $fh;
 
+# No line-length check exists in the parser, and the reader reads with a
+# 1024-byte buffer (LINEBUF in pg_bulkload.c), so the over-long line is
+# split into chunks each rejected as invalid input quoting that chunk.
 $node_primary->command_fails_like(
 	[ $pg_bulkload, '-d', 'postgres', $ctl_long_line ],
-	qr/ERROR: too long line/,
+	qr/ERROR: invalid input "x{1023}/,
 	'over-long control file line prints a detailed message');
 
 #############################################

@@ -214,6 +214,8 @@ BinaryParserRead(BinaryParser *self, Checker *checker)
 	char	   *record;
 	int			i;
 
+	self->base.read_bytes = 0;
+
 	/* Skip first offset lines in the input file */
 	if (unlikely(self->need_offset > 0))
 	{
@@ -223,6 +225,8 @@ BinaryParserRead(BinaryParser *self, Checker *checker)
 		{
 			int		len;
 			len = SourceRead(self->source, self->buffer, self->rec_len);
+
+			self->base.read_bytes += (size_t) len;
 
 			if (len != self->rec_len)
 			{
@@ -256,6 +260,9 @@ BinaryParserRead(BinaryParser *self, Checker *checker)
 								errmsg("could not read input file: %m")));
 		}
 		BULKLOAD_PROFILE(&prof_reader_source);
+
+		if (len > 0)
+			self->base.read_bytes += (size_t) len;
 
 		/*
 		 * Calculate the actual number of rows. Trailing remainder bytes

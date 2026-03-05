@@ -20,9 +20,20 @@
 #include "pg_strutil.h"
 #include "pgut/pgut-be.h"
 
+#if defined(FAULT_INJECTOR)
+#include "utils/faultinjector.h"
+#endif
+
 #if PG_VERSION_NUM >= 100000
 #include "utils/regproc.h"
 #endif
+
+/*
+ * Match writer_direct.c: fire fault injection only after a large prefix of
+ * the load so recovery tests exercise a mid-load crash (see
+ * bin/t/002_pg_bulkload_recovery.pl).
+ */
+#define BUFFERED_FAULT_MIN_INSERTED_TUPLES	150000
 
 typedef struct BufferedWriter
 {
@@ -103,6 +114,16 @@ BufferedWriterInsert(BufferedWriter *self, HeapTuple tuple)
 {
 	heap_insert(self->base.rel, tuple, self->cid, 0, self->bistate);
 	SpoolerInsert(&self->spooler, tuple);
+
+#if defined(FAULT_INJECTOR)
+	/*
+	 * Fault injection for BUFFERED-writer crash recovery tests (distinct from
+	 * writer_direct's pg_bulkload_during_write).
+	 * Use: SELECT inject_fault('pg_bulkload_buffered_write', 'panic');
+	 */
+	if (self->base.count >= BUFFERED_FAULT_MIN_INSERTED_TUPLES)
+		SIMPLE_FAULT_INJECTOR("pg_bulkload_buffered_write");
+#endif
 }
 
 static WriterResult

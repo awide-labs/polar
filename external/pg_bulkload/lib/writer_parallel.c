@@ -483,6 +483,16 @@ connect_to_localhost(void)
 	return conn;
 }
 
+/**
+ * @brief Map a libpq async message (notice/error fields) to @c ereport() level.
+ *
+ * Used as @c PQsetNoticeReceiver for the connection to the parallel worker.
+ * Remote severities @c E (ERROR), @c F (FATAL), and @c P (PANIC) are reported
+ * as @c ERROR so the Reader session fails.
+ *
+ * @param arg Unused (callback context; always NULL here).
+ * @param res libpq result holding @c PG_DIAG_* fields from the remote backend.
+ */
 static void
 transfer_message(void *arg, const PGresult *res)
 {
@@ -511,6 +521,7 @@ transfer_message(void *arg, const PGresult *res)
 			break;
 		case 'E':
 		case 'F':
+		case 'P':
 			elevel = ERROR;
 			break;
 		default:
