@@ -71,7 +71,7 @@ const char *basic_diff_opts = "-w";
 const char *pretty_diff_opts = "-w -U3";
 #endif
 
-#define RR_RECORD_CMD (rr ? "\"rr\" record" : "")
+#define RR_RECORD_CMD (rr ? "\"rr\" record -M" : "")
 
 /* options settable from command line */
 _stringlist *dblist = NULL;
