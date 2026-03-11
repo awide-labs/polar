@@ -94,7 +94,7 @@ typedef enum TAPtype
 	NONE,
 } TAPtype;
 
-#define RR_RECORD_CMD (rr ? "\"rr\" record" : "")
+#define RR_RECORD_CMD (rr ? "\"rr\" record -M" : "")
 
 /* options settable from command line */
 _stringlist *dblist = NULL;

@@ -36,7 +36,7 @@
 /* POLAR */
 #include "polar_vfs/polar_vfs_fe.h"
 
-#define RR_RECORD_CMD (rr ? "\"rr\" record" : "")
+#define RR_RECORD_CMD (rr ? "\"rr\" record -M" : "")
 
 typedef enum
 {
