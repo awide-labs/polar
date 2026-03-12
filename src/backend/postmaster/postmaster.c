@@ -78,6 +78,7 @@
 #include <netdb.h>
 #include <limits.h>
 #include <arpa/inet.h>
+#include <dirent.h>
 
 #ifdef HAVE_SYS_SELECT_H
 #include <sys/select.h>
@@ -140,6 +141,10 @@
 #ifdef EXEC_BACKEND
 #include "storage/spin.h"
 #endif
+
+/* pg_bulkload */
+/* copied from external/pg_bulkload/include/pg_loadstatus.h */
+#define BULKLOAD_LSF_DIR		"pg_bulkload"
 
 /* POLAR */
 #include "access/polar_logindex_redo.h"
@@ -568,6 +573,8 @@ static void ShmemBackendArrayAdd(Backend *bn);
 static void ShmemBackendArrayRemove(Backend *bn);
 #endif							/* EXEC_BACKEND */
 
+static bool GetPendingBulkloadRelations(StringInfo relnames);
+
 #define StartupDataBase()		StartChildProcess(StartupProcess)
 #define StartArchiver()			StartChildProcess(ArchiverProcess)
 #define StartBackgroundWriter() StartChildProcess(BgWriterProcess)
@@ -592,6 +599,53 @@ int			postmaster_alive_fds[2] = {-1, -1};
 /* Process handle of postmaster used for the same purpose on Windows */
 HANDLE		PostmasterHandle;
 #endif
+
+/*
+ * Check for unfinished pg_bulkload operations by looking for .loadstatus
+ * files under BULKLOAD_LSF_DIR.
+ *
+ * @param relnames StringInfo to which the names of relations with
+ *        unfinished pg_bulkload operations are appended, separated by
+ *        commas.
+ * @return true if at least one .loadstatus file is found, false otherwise.
+ */
+static bool
+GetPendingBulkloadRelations(StringInfo relnames)
+{
+	DIR		   *dir;
+	struct dirent *dp;
+	char		lsf_dir[MAXPGPATH];
+	bool		found = false;
+	const char *ext = ".loadstatus";
+	const int	extlen = 11;	/* strlen(".loadstatus") */
+
+	polar_make_file_path_level2(lsf_dir, BULKLOAD_LSF_DIR);
+
+	dir = polar_opendir(lsf_dir);
+	if (dir == NULL)
+		return false;
+
+	while ((dp = polar_readdir(dir)) != NULL)
+	{
+		int			filelen = strlen(dp->d_name);
+
+		if (filelen > extlen &&
+			strcmp(dp->d_name + (filelen - extlen), ext) == 0)
+		{
+			if (found)
+				appendStringInfoString(relnames, ", ");
+			appendStringInfoString(relnames, dp->d_name);
+			found = true;
+		}
+	}
+
+	if (polar_closedir(dir) == -1)
+		ereport(LOG,
+				(errmsg("could not close pg_bulkload status directory \"%s\": %m",
+						lsf_dir)));
+
+	return found;
+}
 
 /*
  * Postmaster main entry point
@@ -1285,6 +1339,54 @@ PostmasterMain(int argc, char *argv[])
 	 */
 	ereport(LOG,
 			(errmsg("starting %s", PG_VERSION_STR)));
+
+	/*
+	 * Check for unfinished pg_bulkload operations by looking for .loadstatus
+	 * files, but only if we detect a problem with running StartLoaderRecovery
+	 * (either the pg_bulkload library is not loaded, or the symbol is
+	 * missing).  In that case, report an error describing the inconsistent
+	 * relations.
+	 */
+	if (library_is_loaded("$libdir/pg_bulkload"))
+	{
+		typedef void (*StartLoaderRecoveryFunc) (const char *data_dir);
+		StartLoaderRecoveryFunc StartLoaderRecovery;
+
+		StartLoaderRecovery = (StartLoaderRecoveryFunc)
+			load_external_function("$libdir/pg_bulkload", "StartLoaderRecovery",
+								   false, NULL);
+
+		if (StartLoaderRecovery != NULL)
+			StartLoaderRecovery(DataDir);
+		else
+		{
+			StringInfoData relnames;
+
+			initStringInfo(&relnames);
+
+			if (GetPendingBulkloadRelations(&relnames))
+				ereport(ERROR,
+						(errmsg("bulkload data was not completely loaded: wrong pg_bulkload extension version in use"),
+						 errdetail("The following relations are inconsistent due to unfinished pg_bulkload operations: %s.",
+								   relnames.data),
+						 errhint("Install a pg_bulkload extension version that exports StartLoaderRecovery() and matches this server, "
+								 "or clean up the listed relations and their loadstatus files manually.")));
+		}
+	}
+	else
+	{
+		StringInfoData relnames;
+
+		initStringInfo(&relnames);
+
+		if (GetPendingBulkloadRelations(&relnames))
+			ereport(ERROR,
+					(errmsg("bulkload data was not completely loaded and pg_bulkload extension was not loaded"),
+					 errdetail("The following relations are inconsistent due to unfinished pg_bulkload operations: %s.",
+							   relnames.data),
+					 errhint("Load the pg_bulkload extension (for example via shared_preload_libraries) and restart the server, "
+							 "or clean up the listed relations and their loadstatus files manually.")));
+	}
 
 	/*
 	 * Establish input sockets.

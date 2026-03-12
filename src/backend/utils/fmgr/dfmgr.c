@@ -173,6 +173,62 @@ lookup_external_function(void *filehandle, const char *funcname)
 	return dlsym(filehandle, funcname);
 }
 
+/*
+ * Check whether a shared library is already loaded (e.g. via
+ * shared_preload_libraries). Does not load the library or
+ * touch the filesystem except for a possible stat() when matching
+ * by inode.
+ *
+ * @param libname name of the library to check; it is expanded the same
+ *        way as load_external_function().
+ * @return true if that path (or the same file by inode) is present in the
+ *         loaded-files list, false otherwise.
+ */
+bool
+library_is_loaded(const char *libname)
+{
+	char	   *fullname;
+	DynamicFileList *file_scanner;
+	struct stat stat_buf;
+	bool		result;
+
+	fullname = expand_dynamic_library_name(libname);
+
+	for (file_scanner = file_list;
+		 file_scanner != NULL;
+		 file_scanner = file_scanner->next)
+	{
+		if (strcmp(fullname, file_scanner->filename) == 0)
+		{
+			result = true;
+			goto exit;
+		}
+	}
+
+	/*
+	 * Same file under a different path? (e.g. preload "pg_bulkload" vs
+	 * "$libdir/pg_bulkload")
+	 */
+	if (stat(fullname, &stat_buf) == 0)
+	{
+		for (file_scanner = file_list;
+			 file_scanner != NULL;
+			 file_scanner = file_scanner->next)
+		{
+			if (SAME_INODE(stat_buf, *file_scanner))
+			{
+				result = true;
+				goto exit;
+			}
+		}
+	}
+
+	result = false;
+exit:
+	pfree(fullname);
+	return result;
+}
+
 
 /*
  * Load the specified dynamic-link library file, unless it already is

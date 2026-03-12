@@ -4,14 +4,22 @@
 #    Copyright (c) 2007-2026, NTT, Inc.
 #
 SRCS = pg_bulkload.c recovery.c pgut/pgut.c pgut/pgut-fe.c pgut/pgut-list.c
-OBJS = $(SRCS:.c=.o)
+OBJS = $(SRCS:.c=.o) pgut-recovery.o
 PROGRAM = pg_bulkload
 SCRIPTS = postgresql
 REGRESS = init load_bin load_csv load_remote load_function load_encoding load_check load_filter load_parallel write_bin
 TAP_TESTS = 1
 
-PG_CPPFLAGS = -I../include -I$(libpq_srcdir)
+PG_CPPFLAGS = -I../include -I../lib -I$(libpq_srcdir)
 PG_LIBS = $(libpq) $(polar_libvfs)
+
+# Recovery code is shared with lib; build in bin with FRONTEND to avoid overwriting lib's object
+pgut-recovery.o: ../lib/pgut/pgut-recovery.c
+	$(CC) $(CFLAGS) $(CPPFLAGS) $(PG_CPPFLAGS) -DFRONTEND -c -o $@ $<
+
+# Build bitcode for JIT when with_llvm=yes (same source as pgut-recovery.o, with FRONTEND)
+pgut-recovery.bc: ../lib/pgut/pgut-recovery.c
+	$(COMPILE.c.bc) $(PG_CPPFLAGS) -DFRONTEND -o $@ $<
 
 ifndef USE_PGXS
 top_builddir = ../../..

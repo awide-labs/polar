@@ -13,9 +13,11 @@ use strict;
 use warnings;
 
 use File::Copy;
+use File::Find;
 use File::Path qw(rmtree);
 use Time::HiRes qw(usleep);
 use PostgreSQL::Test::Cluster;
+use PostgreSQL::Test::RecursiveCopy;
 use PostgreSQL::Test::Utils;
 use Test::More;
 
@@ -31,10 +33,12 @@ my $tempdir = PostgreSQL::Test::Utils::tempdir;
 my $node_primary = PostgreSQL::Test::Cluster->new('primary');
 $node_primary->polar_init_primary;
 
-# Configure for pg_bulkload testing and fault injection
+# Configure for pg_bulkload testing and fault injection.
+# Note that shared_preload_libraries does not include pg_bulkload here;
+# pg_bulkload is loaded later via CREATE EXTENSION, so this node represents
+# the "no preload" configuration.
 $node_primary->append_conf(
 	'postgresql.conf', q[
-    shared_preload_libraries='pg_bulkload'
     polar_stat_cache_mode=1
     restart_after_crash=off
     logging_collector=off
@@ -99,7 +103,11 @@ my $pgdata = $node_primary->data_dir;
 # Test 5: Crash simulation using fault injection
 
 if ($has_faultinjector) {
-	print "Test 5: Testing crash recovery with fault injection...\n";
+	print "Test 5: Testing crash recovery with shared crash image (offline vs postmaster recovery)...\n";
+
+	#############################################
+	# 5.1 Generate inconsistent state on node_primary
+	#############################################
 
 	# Generate test data
 	my $data_file = "$tempdir/test_data_crash.csv";
@@ -122,17 +130,17 @@ EOF
 
 	# Inject fault: panic when pg_bulkload reaches the fault injection point
 	# This simulates a crash after LSF file is created but before data is fully written
-	print "Injecting fault 'pg_bulkload_after_lsf_create' with panic action...\n";
+	print "Injecting fault 'pg_bulkload_during_write' with panic action on node_primary...\n";
 	$node_primary->safe_psql('test_bulkload',
 		"SELECT inject_fault('pg_bulkload_during_write', 'panic');");
 
-	# Run pg_bulkload - it should crash due to fault injection
-	print "Running pg_bulkload (will crash due to fault injection)...\n";
-	my $result = $node_primary->command_fails(
+	# Run pg_bulkload on node_primary - it should crash due to fault injection
+	print "Running pg_bulkload on node_primary (will crash due to fault injection)...\n";
+	$node_primary->command_fails(
 		[ $pg_bulkload, '-d', 'test_bulkload', $control_file ],
-		'pg_bulkload crashes due to fault injection');
+		'pg_bulkload crashes on node_primary due to fault injection');
 
-	# Wait for postmaster to fully exit after crash
+	# Wait for postmaster to fully exit after crash on node_primary
 	foreach my $i (0 .. 10 * $PostgreSQL::Test::Utils::timeout_default)
 	{
 		last if !-f $node_primary->data_dir . '/postmaster.pid';
@@ -140,25 +148,93 @@ EOF
 	}
 	$node_primary->{_pid} = undef;
 
-	# Run recovery mode (offline, server is down)
-	print "Running recovery mode...\n";
-	my ($recovery_stdout, $recovery_stderr) = $node_primary->run_command(
-		[ $pg_bulkload, '-r', '-D', $pgdata ]);
-	print "Recovery stdout: $recovery_stdout\n";
-	print "Recovery stderr: $recovery_stderr\n";
+	ok(FindLSF($node_primary->polar_get_datadir), "At least one LSF was found");
 
-	like($recovery_stderr, qr/delete|remove|recover/i,
-		'Recovery processes loadstatus file');
+	PolarColdBackup($node_primary, 'bulkload_crash');
 
-	$node_primary->restart();
-	
-	# Verify table is accessible (might be empty or have partial data)
-	my $count_after_crash = $node_primary->safe_psql(
+	#############################################
+	# 5.2 Postmaster startup without pg_bulkload extension
+	#     but with pending .loadstatus files
+	#############################################
+
+	print
+	  "Test 5.2: Postmaster startup without pg_bulkload extension but with pending .loadstatus files should fail with proper error...\n";
+
+	my $node_no_pg_bulkload =
+	  PostgreSQL::Test::Cluster->new('bulkload_no_extension');
+
+	PolarColdRestore($node_no_pg_bulkload, $node_primary, 'bulkload_crash');
+
+	ok(FindLSF($node_no_pg_bulkload->polar_get_datadir), "At least one LSF was found");
+
+	my $logstart = 0;
+
+	is($node_no_pg_bulkload->start(fail_ok => 1),
+		0,
+		"postmaster fails to start when pg_bulkload extension is not loaded but pending .loadstatus files exist"
+	);
+
+	ok(
+		$node_no_pg_bulkload->log_contains(
+			qr/bulkload data was not completely loaded and pg_bulkload extension was not loaded/,
+			$logstart),
+		"postmaster log reports missing pg_bulkload extension with pending bulkload data"
+	);
+
+	$node_no_pg_bulkload->stop('immediate', fail_ok => 1);
+
+	#############################################
+	# 5.3 Postmaster-driven recovery with shared_preload_libraries='pg_bulkload'
+	#############################################
+
+	print "Test 5.3: Postmaster bulkload recovery with shared_preload_libraries='pg_bulkload' on cloned node...\n";
+
+	my $node_pg_bulkload_preload =
+	  PostgreSQL::Test::Cluster->new('bulkload_preload');
+
+	PolarColdRestore($node_pg_bulkload_preload, $node_primary, 'bulkload_crash');
+
+	ok(FindLSF($node_pg_bulkload_preload->polar_get_datadir), "At least one LSF was found");
+
+	$node_pg_bulkload_preload->append_conf(
+		'postgresql.conf', q[
+ 		shared_preload_libraries='pg_bulkload'
+ 		restart_after_crash=off
+		]);
+
+	$node_pg_bulkload_preload->start;
+
+	my $count_after_preload = $node_pg_bulkload_preload->safe_psql(
 		'test_bulkload', 'SELECT COUNT(*) FROM test_recovery');
-	ok($count_after_crash == 0, "Table is accessible after recovery ($count_after_crash rows)");
+	ok($count_after_preload == 0,
+		"Table is accessible after postmaster bulkload recovery on node_pg_bulkload_preload ($count_after_preload rows)");
 
-	# Truncate table for next test
-	$node_primary->safe_psql('test_bulkload', 'TRUNCATE test_recovery RESTART IDENTITY;');
+	$node_pg_bulkload_preload->stop;
+
+	#############################################
+	# 5.4 Offline recovery on node_primary (no shared_preload_libraries)
+	#############################################
+
+	print "Test 5.4: Offline recovery using pg_bulkload -r on node_primary (no shared_preload_libraries)...\n";
+
+	my ($recovery_stdout_offline, $recovery_stderr_offline) = $node_primary->run_command(
+		[ $pg_bulkload, '-r', '-D', $pgdata ]);
+	print "Offline recovery stdout: $recovery_stdout_offline\n";
+	print "Offline recovery stderr: $recovery_stderr_offline\n";
+
+	like($recovery_stderr_offline, qr/delete|remove|recover/i,
+		'Offline recovery processes loadstatus file on node_primary');
+
+	$node_primary->start;
+
+	my $count_after_offline = $node_primary->safe_psql(
+		'test_bulkload', 'SELECT COUNT(*) FROM test_recovery');
+	ok($count_after_offline == 0,
+		"Table is accessible after offline recovery on node_primary ($count_after_offline rows)");
+
+	# Truncate table for subsequent tests
+	$node_primary->safe_psql('test_bulkload',
+		'TRUNCATE test_recovery RESTART IDENTITY;');
 } else {
 	note "Skipping fault injection test (faultinjector not available)";
 }
@@ -238,3 +314,51 @@ is($count_after_restart, $num_rows,
 $node_primary->stop;
 
 done_testing();
+
+sub FindLSF {
+	my $datadir = shift;
+	my @found;
+	find(
+		sub {
+			return unless -f $File::Find::name;  # only regular files
+			push @found, $File::Find::name
+			  if ($File::Find::name =~ m/.*\.loadstatus/);
+		},
+		$datadir);
+	return @found;
+}
+
+sub PolarColdBackup {
+	my $node = shift;
+	my $name = shift;
+	# Take a cold filesystem backup of the crashed state (local PGDATA only)
+	$node->backup_fs_cold($name);
+
+	# Cold backup of Polar data directory (LSF and relation data live here)
+	my $backup_polar = $node->backup_dir . '/' . $name . '_polar';
+	PostgreSQL::Test::RecursiveCopy::copypath($node->polar_get_datadir,
+		$backup_polar);
+}
+
+sub PolarColdRestore {
+	my $new_node = shift;
+	my $old_node = shift;
+	my $name = shift;
+
+	$new_node->init_from_backup($old_node, $name, standby => 0);
+
+	# Restore Polar data directory from cold backup and point new node at it
+	my $new_polar_datadir = $new_node->polar_get_datadir;
+	PostgreSQL::Test::RecursiveCopy::copypath(
+		$old_node->backup_dir . '/' . $name . '_polar', $new_polar_datadir);
+
+	# Replace polar_datadir in copied postgresql.conf with this node's path
+	my $conffile = $new_node->data_dir . '/postgresql.conf';
+	my $content = PostgreSQL::Test::Utils::slurp_file($conffile);
+	$content =~ s/^\s*polar_datadir\s*=.*/polar_datadir='file-dio:\/\/$new_polar_datadir'/gm;
+	open my $fh, '>', $conffile or die "Cannot write $conffile: $!";
+	print $fh $content;
+	close $fh or die "Cannot close $conffile: $!";
+
+	$new_node->polar_set_datadir($new_polar_datadir);
+}
