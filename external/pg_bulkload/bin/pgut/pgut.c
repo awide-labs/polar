@@ -831,12 +831,45 @@ trimStringBuffer(StringInfo str)
 		str->data[--str->len] = '\0';
 }
 
+#ifndef __GLIBC__
+/**
+ * @brief Append @c strerror text for GNU printf @c \%m when not using glibc.
+ *
+ * Non-glibc @c vsnprintf does not implement the GNU @c \%m conversion. If
+ * @a fmt ends with the four-character suffix (colon, space, percent, m) used
+ * for that pattern, strips a literal percent-m from the end of @a msg when
+ * still present after formatting, then appends @c strerror(@a save_errno).
+ * That matches glibc output and avoids a literal percent-m immediately
+ * before the @c strerror text.
+ *
+ * @param msg String receiving formatted output; modified in place.
+ * @param save_errno @c errno value captured when the error was raised.
+ * @param fmt @c printf-style format string passed to @c vsnprintf.
+ */
+static void
+pgut_expand_percent_m(StringInfo msg, int save_errno, const char *fmt)
+{
+	size_t		flen;
+
+	flen = strlen(fmt);
+	if (flen <= 4 || strcmp(fmt + flen - 4, ": %m") != 0)
+		return;
+
+	if (msg->len >= 2 && strcmp(msg->data + msg->len - 2, "%m") == 0)
+	{
+		msg->len -= 2;
+		msg->data[msg->len] = '\0';
+	}
+
+	appendStringInfoString(msg, strerror(save_errno));
+}
+#endif
+
 void
 elog(int elevel, const char *fmt, ...)
 {
 	va_list			args;
 	bool			ok;
-	size_t			len;
 	pgutErrorData  *edata;
 
 	if (elevel < pgut_abort_level && !log_required(elevel, pgut_log_level))
@@ -850,9 +883,10 @@ elog(int elevel, const char *fmt, ...)
 		ok = appendStringInfoVA_c(&edata->msg, fmt, args);
 		va_end(args);
 	} while (!ok);
-	len = strlen(fmt);
-	if (len > 2 && strcmp(fmt + len - 2, ": ") == 0)
-		appendStringInfoString(&edata->msg, strerror(edata->save_errno));
+	/* glibc vsnprintf expands %m; other libcs need explicit strerror */
+#ifndef __GLIBC__
+	pgut_expand_percent_m(&edata->msg, edata->save_errno, fmt);
+#endif
 	trimStringBuffer(&edata->msg);
 
 	pgut_errfinish(true);
@@ -998,7 +1032,6 @@ pgut_errmsg(const char *fmt,...)
 {
 	pgutErrorData  *edata = getErrorData();
 	va_list			args;
-	size_t			len;
 	bool			ok;
 
 	do
@@ -1007,9 +1040,9 @@ pgut_errmsg(const char *fmt,...)
 		ok = appendStringInfoVA_c(&edata->msg, fmt, args);
 		va_end(args);
 	} while (!ok);
-	len = strlen(fmt);
-	if (len > 2 && strcmp(fmt + len - 2, ": ") == 0)
-		appendStringInfoString(&edata->msg, strerror(edata->save_errno));
+#ifndef __GLIBC__
+	pgut_expand_percent_m(&edata->msg, edata->save_errno, fmt);
+#endif
 	trimStringBuffer(&edata->msg);
 
 	return 0;	/* return value does not matter */
@@ -1028,6 +1061,9 @@ pgut_errdetail(const char *fmt,...)
 		ok = appendStringInfoVA_c(&edata->detail, fmt, args);
 		va_end(args);
 	} while (!ok);
+#ifndef __GLIBC__
+	pgut_expand_percent_m(&edata->detail, edata->save_errno, fmt);
+#endif
 	trimStringBuffer(&edata->detail);
 
 	return 0;	/* return value does not matter */
@@ -1295,7 +1331,7 @@ pgut_malloc(size_t size)
 	if ((ret = malloc(size)) == NULL)
 		ereport(FATAL,
 			(pgut_errcode(E_PG_OTHER),
-			 pgut_errmsg("could not allocate memory (%lu bytes): ",
+			 pgut_errmsg("could not allocate memory (%lu bytes): %m",
 				(unsigned long) size)));
 	return ret;
 }
@@ -1308,7 +1344,7 @@ pgut_realloc(void *p, size_t size)
 	if ((ret = realloc(p, size)) == NULL)
 		ereport(FATAL,
 			(pgut_errcode(E_PG_OTHER),
-			 pgut_errmsg("could not re-allocate memory (%lu bytes): ",
+			 pgut_errmsg("could not re-allocate memory (%lu bytes): %m",
 				(unsigned long) size)));
 	return ret;
 }
@@ -1324,7 +1360,7 @@ pgut_strdup(const char *str)
 	if ((ret = strdup(str)) == NULL)
 		ereport(FATAL,
 			(pgut_errcode(E_PG_OTHER),
-			 pgut_errmsg("could not duplicate string \"%s\": ", str)));
+			 pgut_errmsg("could not duplicate string \"%s\": %m", str)));
 	return ret;
 }
 
@@ -1397,7 +1433,7 @@ retry:
 
 		ereport(ERROR,
 			(pgut_errcode(E_PG_OTHER),
-			 pgut_errmsg("could not open file \"%s\": ", path)));
+			 pgut_errmsg("could not open file \"%s\": %m", path)));
 	}
 
 	return fp;
@@ -1493,7 +1529,7 @@ retry:
 	{
 		ereport(ERROR,
 			(pgut_errcode(E_PG_OTHER),
-			 pgut_errmsg("could not create directory \"%s\": ", dirpath)));
+			 pgut_errmsg("could not create directory \"%s\": %m", dirpath)));
 		return false;
 	}
 
@@ -1530,7 +1566,7 @@ wait_for_sockets(int nfds, fd_set *fds, struct timeval *timeout)
 			{
 				ereport(ERROR,
 					(pgut_errcode(E_PG_OTHER),
-					 pgut_errmsg("select failed: ")));
+					 pgut_errmsg("select failed: %m")));
 				return -1;
 			}
 		}

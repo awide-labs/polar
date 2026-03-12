@@ -8,6 +8,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Postmaster** now performs `pg_bulkload` recovery on startup. After acquiring
+  the data directory lock, it searches for Load Status Files (`*.loadstatus`). 
+  If any are found and the `pg_bulkload` extension is loaded, the corresponding
+  recovery function is invoked. If the extension is missing or an older version
+  is used that lacks the recovery function, the postmaster process will
+  terminate with an error message in the log (XCOM-195).
 - Expose 69 PolarDB-specific GUCs in `pg_settings` and
   `postgres --describe-config` so that Patroni can enumerate,
   validate, and track `pending_restart` for them (XCOM-195)

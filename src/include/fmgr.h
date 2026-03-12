@@ -749,6 +749,7 @@ extern PGDLLIMPORT bool polar_suppress_preload_error;
 extern void *load_external_function(const char *filename, const char *funcname,
 									bool signalNotFound, void **filehandle);
 extern void *lookup_external_function(void *filehandle, const char *funcname);
+extern bool library_is_loaded(const char *libname);
 extern void load_file(const char *filename, bool restricted);
 extern void **find_rendezvous_variable(const char *varName);
 extern Size EstimateLibraryStateSpace(void);

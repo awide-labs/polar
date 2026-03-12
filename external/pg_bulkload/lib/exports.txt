@@ -1,3 +1,4 @@
 Pg_magic_func           1
 pg_bulkload             2
 pg_finfo_pg_bulkload    3
+StartLoaderRecovery     4
