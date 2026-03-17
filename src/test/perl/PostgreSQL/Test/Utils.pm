@@ -101,6 +101,39 @@ our @EXPORT = qw(
 our ($windows_os, $is_msys2, $use_unix_sockets, $timeout_default,
 	$tmp_check, $log_path, $test_logfile);
 
+my $rr_record_cmd = [ 'rr', 'record', '-M' ];
+
+=pod
+
+=item wrap_rr_if_needed(cmd)
+
+Given a command array reference (command name and arguments), returns the same
+array possibly prefixed with C<rr record -M> for recording under rr.
+If the environment variable C<PGFERR> is set, it must contain a
+comma-separated list of command names to run under rr.  The command name
+(from the first element of the array, basename if it is a path) is matched
+against this list.  On non-Windows, when the command is in the list, the
+return value is C<[ rr record -M, @cmd ]>; otherwise the original array
+reference is returned unchanged.  On Windows, the array is always returned
+unchanged.
+
+=cut
+
+sub wrap_rr_if_needed
+{
+	my ($cmd) = @_;
+	return $cmd if $windows_os;
+	return $cmd if !defined $ENV{PGFERR} || $ENV{PGFERR} eq '';
+	my $prog = $cmd->[0];
+	$prog = basename($prog) if $prog =~ m{/};
+	my @allowed = map { my $x = $_; $x =~ s/^\s+|\s+$//g; $x } split(/,/, $ENV{PGFERR});
+	for my $allowed_cmd (@allowed)
+	{
+		return [ @{$rr_record_cmd}, @{$cmd} ] if $prog eq $allowed_cmd;
+	}
+	return $cmd;
+}
+
 BEGIN
 {
 
@@ -398,13 +431,19 @@ sub system_or_bail
 
 Run the given command via C<IPC::Run::run()>, noting it in the log.
 The return value from the command is passed through.
+If the environment variable C<PGFERR> is set (comma-separated list of
+command names), those commands are run under C<rr record -M> on non-Windows.
 
 =cut
 
 sub run_log
 {
-	print("# Running: " . join(" ", @{ $_[0] }) . "\n");
-	return IPC::Run::run(@_);
+	my ($cmd, @rest) = @_;
+
+	$cmd = wrap_rr_if_needed($cmd);
+
+	print("# Running: " . join(" ", @{$cmd}) . "\n");
+	return IPC::Run::run($cmd, @rest);
 }
 
 =pod
@@ -859,6 +898,7 @@ sub command_exit_is
 {
 	local $Test::Builder::Level = $Test::Builder::Level + 1;
 	my ($cmd, $expected, $test_name) = @_;
+	$cmd = wrap_rr_if_needed($cmd);
 	print("# Running: " . join(" ", @{$cmd}) . "\n");
 	my $h = IPC::Run::start $cmd;
 	$h->finish();
@@ -887,9 +927,9 @@ sub program_help_ok
 	local $Test::Builder::Level = $Test::Builder::Level + 1;
 	my ($cmd) = @_;
 	my ($stdout, $stderr);
-	print("# Running: $cmd --help\n");
-	my $result = IPC::Run::run [ $cmd, '--help' ], '>', \$stdout, '2>',
-	  \$stderr;
+	my $cmd_ary = wrap_rr_if_needed([ $cmd, '--help' ]);
+	print("# Running: " . join(" ", @{$cmd_ary}) . "\n");
+	my $result = IPC::Run::run $cmd_ary, '>', \$stdout, '2>', \$stderr;
 	ok($result, "$cmd --help exit code 0");
 	isnt($stdout, '', "$cmd --help goes to stdout");
 	is($stderr, '', "$cmd --help nothing to stderr");
@@ -918,9 +958,9 @@ sub program_version_ok
 	local $Test::Builder::Level = $Test::Builder::Level + 1;
 	my ($cmd) = @_;
 	my ($stdout, $stderr);
-	print("# Running: $cmd --version\n");
-	my $result = IPC::Run::run [ $cmd, '--version' ], '>', \$stdout, '2>',
-	  \$stderr;
+	my $cmd_ary = wrap_rr_if_needed([ $cmd, '--version' ]);
+	print("# Running: " . join(" ", @{$cmd_ary}) . "\n");
+	my $result = IPC::Run::run $cmd_ary, '>', \$stdout, '2>', \$stderr;
 	ok($result, "$cmd --version exit code 0");
 	isnt($stdout, '', "$cmd --version goes to stdout");
 	is($stderr, '', "$cmd --version nothing to stderr");
@@ -941,10 +981,9 @@ sub program_options_handling_ok
 	local $Test::Builder::Level = $Test::Builder::Level + 1;
 	my ($cmd) = @_;
 	my ($stdout, $stderr);
-	print("# Running: $cmd --not-a-valid-option\n");
-	my $result = IPC::Run::run [ $cmd, '--not-a-valid-option' ], '>',
-	  \$stdout,
-	  '2>', \$stderr;
+	my $cmd_ary = wrap_rr_if_needed([ $cmd, '--not-a-valid-option' ]);
+	print("# Running: " . join(" ", @{$cmd_ary}) . "\n");
+	my $result = IPC::Run::run $cmd_ary, '>', \$stdout, '2>', \$stderr;
 	ok(!$result, "$cmd with invalid option nonzero exit code");
 	isnt($stderr, '', "$cmd with invalid option prints error message");
 	return;
@@ -964,6 +1003,7 @@ sub command_like
 	local $Test::Builder::Level = $Test::Builder::Level + 1;
 	my ($cmd, $expected_stdout, $test_name) = @_;
 	my ($stdout, $stderr);
+	$cmd = wrap_rr_if_needed($cmd);
 	print("# Running: " . join(" ", @{$cmd}) . "\n");
 	my $result = IPC::Run::run $cmd, '>', \$stdout, '2>', \$stderr;
 	ok($result, "$test_name: exit code 0");
@@ -1015,6 +1055,7 @@ sub command_like_safe
 	my ($stdout, $stderr);
 	my $stdoutfile = File::Temp->new();
 	my $stderrfile = File::Temp->new();
+	$cmd = wrap_rr_if_needed($cmd);
 	print("# Running: " . join(" ", @{$cmd}) . "\n");
 	my $result = IPC::Run::run $cmd, '>', $stdoutfile, '2>', $stderrfile;
 	$stdout = slurp_file($stdoutfile);
@@ -1039,6 +1080,7 @@ sub command_fails_like
 	local $Test::Builder::Level = $Test::Builder::Level + 1;
 	my ($cmd, $expected_stderr, $test_name) = @_;
 	my ($stdout, $stderr);
+	$cmd = wrap_rr_if_needed($cmd);
 	print("# Running: " . join(" ", @{$cmd}) . "\n");
 	my $result = IPC::Run::run $cmd, '>', \$stdout, '2>', \$stderr;
 	ok(!$result, "$test_name: exit code not 0");
@@ -1077,6 +1119,7 @@ sub command_checks_all
 
 	# run command
 	my ($stdout, $stderr);
+	$cmd = wrap_rr_if_needed($cmd);
 	print("# Running: " . join(" ", @{$cmd}) . "\n");
 	IPC::Run::run($cmd, '>', \$stdout, '2>', \$stderr);
 
