@@ -240,7 +240,7 @@ static const char *const BuiltinTrancheNames[] = {
 	/* LWTRANCHE_POLAR_ASYNC_LOCK_REPLAY: */
 	"async_lock_replay",
 	/* LWTRANCHE_CSNLOG_BUFFERS: */
-	"csnlog_puffers",
+	"csnlog_buffers",
 	/* LWTRANCHE_POLAR_CSNLOG_LOCAL_CACHE: */
 	"csnlog_local_cache",
 	/* POLAR end */

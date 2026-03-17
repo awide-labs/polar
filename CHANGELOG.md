@@ -17,6 +17,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Corrected the wait event name for CSN log buffers in `pg_stat_activity`
+  from "csnlog\_puffers" to "csnlog\_buffers" (XCOM-193)
 - Fixed xlog queue statistics reporting incorrect values on replicas: the
   `polar_xlog_queue_stat_detail()` view could show `total_written < total_read`
   even under normal WAL activity (XCOM-193)
