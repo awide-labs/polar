@@ -60,6 +60,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Fixed stale-relfilenode errors on cascading shared-storage replicas
+  caused by the upstream standby removing or truncating relation files
+  before the replica had replayed the preceding DDL lock record. Queries
+  on the replica could crash with errors such as "could not open file"
+  or return incorrect results after VACUUM FULL, TRUNCATE, DROP TABLE,
+  DROP DATABASE, or DROP TABLESPACE on the primary (XCOM-193)
+- Fixed a possible PANIC and stale reads on a cascading shared-storage replica
+  when its upstream standby fell behind in WAL replay. The walsender on the
+  standby could advertise WAL beyond the standby's replayed position, so the
+  downstream replica tried to read data pages that the standby had not yet
+  extended on its shared storage, occasionally crashing with errors like
+  "could not read block" (XCOM-193)
 - Fixed a hang on fast or immediate shutdown of a standby or replica
   that was stopped right after being promoted: the logindex background
   worker could exit before the online promote finished, leaving the

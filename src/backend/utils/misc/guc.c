@@ -1692,6 +1692,17 @@ static struct config_bool ConfigureNamesBool[] =
 	},
 
 	{
+		{"polar_enable_cascading_sync_ddl", PGC_USERSET, REPLICATION_STANDBY,
+			gettext_noop("Enables synchronous ddl between a standby and its cascading replicas."),
+			NULL,
+			GUC_NO_RESET_ALL | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_UNCHANGABLE
+		},
+		&polar_enable_cascading_sync_ddl,
+		true,
+		NULL, NULL, NULL
+	},
+
+	{
 		{"polar_enable_alloc_checkinterrupts", PGC_SIGHUP, COMPAT_OPTIONS_PREVIOUS,
 			gettext_noop("Enable check interrupt when allocating memory."),
 			NULL,

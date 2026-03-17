@@ -485,6 +485,9 @@ pgstat_get_wait_ipc(WaitEventIPC w)
 		case WAIT_EVENT_WAL_PIPELINE_WAIT_UNFLUSHED_XLOG_SLOT:
 			event_name = "PolarWALPipelineWaitUnflushedXlogSlot";
 			break;
+		case WAIT_EVENT_POLAR_CASCADING_SYNC_DDL:
+			event_name = "PolarCascadingSyncDDL";
+			break;
 			/* no default case, so that compiler will warn */
 	}
 

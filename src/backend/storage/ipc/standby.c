@@ -1151,6 +1151,19 @@ standby_redo(XLogReaderState *record)
 				StandbyAcquireAccessExclusiveLock(xlrec->locks[i].xid,
 												  xlrec->locks[i].dbOid,
 												  xlrec->locks[i].relOid);
+
+			if (polar_is_standby() && polar_enable_shared_storage_mode
+				&& polar_enable_cascading_sync_ddl)
+			{
+				/*
+				 * POLAR: Record the barrier LSN for this transaction so that
+				 * polar_cascading_ddl_wait_and_clear() can later ensure every
+				 * cascading replica has acknowledged this position before the
+				 * standby deletes or truncates shared-storage files.
+				 */
+				polar_cascading_ddl_record_lock(xlrec->locks[i].xid,
+												record->EndRecPtr);
+			}
 		}
 	}
 	else if (info == XLOG_RUNNING_XACTS)

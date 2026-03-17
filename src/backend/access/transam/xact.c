@@ -6203,9 +6203,33 @@ xact_redo_commit(xl_xact_parsed_commit *parsed,
 		 */
 		XLogFlush(lsn);
 
+		/*
+		 * POLAR: On a standby, wait until all cascading replicas have
+		 * acknowledged the DDL lock LSN before deleting files on
+		 * shared-storage. Uses the per-xid hash table populated by
+		 * standby_redo() when it replayed the preceding XLOG_STANDBY_LOCK
+		 * record.
+		 */
+		if (polar_is_standby() && polar_enable_shared_storage_mode
+			&& polar_enable_cascading_sync_ddl)
+			polar_cascading_ddl_wait_and_clear(xid);
+
 		/* Make sure files supposed to be dropped are dropped */
 		DropRelationFiles(parsed->xnodes, parsed->nrels, true);
 	}
+
+	/*
+	 * POLAR: A barrier-LSN entry is recorded for every XLOG_STANDBY_LOCK,
+	 * including transactions that take an AccessExclusiveLock but drop no
+	 * files at commit (e.g. LOCK TABLE, non-rewriting ALTER TABLE). Such
+	 * entries are never consumed by the nrels > 0 path above, so clear them
+	 * unconditionally here to avoid leaking entries in the startup process.
+	 * This is a no-op when the entry was already removed by the wait above
+	 * or by an earlier smgr_redo().
+	 */
+	if (polar_is_standby() && polar_enable_shared_storage_mode
+		&& polar_enable_cascading_sync_ddl)
+		polar_cascading_ddl_discard(xid);
 
 	if (parsed->nstats > 0)
 	{
@@ -6317,6 +6341,18 @@ xact_redo_abort(xl_xact_parsed_abort *parsed, TransactionId xid,
 
 		DropRelationFiles(parsed->xnodes, parsed->nrels, true);
 	}
+
+	/*
+	 * POLAR: Remove the barrier-LSN hash entry for this xid without waiting.
+	 * The aborted transaction's files were created within it and never
+	 * committed, so cascading replicas hold no references to them. Done
+	 * unconditionally (not just when nrels > 0) so that aborted transactions
+	 * that took an AccessExclusiveLock but dropped no files do not leak an
+	 * entry in the startup process.
+	 */
+	if (polar_is_standby() && polar_enable_shared_storage_mode
+		&& polar_enable_cascading_sync_ddl)
+		polar_cascading_ddl_discard(xid);
 
 	if (parsed->nstats > 0)
 	{

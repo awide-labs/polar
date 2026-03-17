@@ -5045,6 +5045,17 @@ WakeupRecovery(void)
 }
 
 /*
+ * POLAR: Return the recovery wakeup latch so that external code (e.g.
+ * syncrep.c) can wait on it without having access to the static
+ * XLogRecoveryCtl structure.
+ */
+Latch *
+GetRecoveryWakeupLatch(void)
+{
+	return &XLogRecoveryCtl->recoveryWakeupLatch;
+}
+
+/*
  * Schedule a walreceiver wakeup in the main recovery loop.
  */
 void

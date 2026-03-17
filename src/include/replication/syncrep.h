@@ -13,6 +13,7 @@
 #ifndef _SYNCREP_H
 #define _SYNCREP_H
 
+#include "access/transam.h"
 #include "access/xlogdefs.h"
 #include "utils/guc.h"
 
@@ -86,6 +87,7 @@ extern PGDLLIMPORT char *syncrep_parse_error_msg;
 extern PGDLLIMPORT char *SyncRepStandbyNames;
 extern bool polar_enable_sync_ddl;
 extern bool polar_enable_sync_ddl_legacy;
+extern bool polar_enable_cascading_sync_ddl;
 
 extern XLogRecPtr polar_ddl_lock_lsn;
 
@@ -126,5 +128,9 @@ extern void syncrep_scanner_finish(void);
 extern bool polar_release_ddl_waiters(void);
 extern void polar_wait_ddl_lock(void);
 extern void polar_wait_ddl_lock_for_pending_deletes(void);
+extern void polar_wait_ddl_lock_on_standby(XLogRecPtr barrier_lsn);
+extern void polar_cascading_ddl_record_lock(TransactionId xid, XLogRecPtr lsn);
+extern void polar_cascading_ddl_wait_and_clear(TransactionId xid);
+extern void polar_cascading_ddl_discard(TransactionId xid);
 
 #endif							/* _SYNCREP_H */

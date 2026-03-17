@@ -3099,6 +3099,7 @@ XactLockTableWaitInfo
 XidBoundsViolation
 XidCacheStatus
 XidCommitStatus
+XidLsnEntry
 XidStatus
 XmlExpr
 XmlExprOp

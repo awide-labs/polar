@@ -88,16 +88,39 @@
 #include "utils/ps_status.h"
 
 /* POLAR */
+#include "access/subtrans.h"
+#include "access/xlog.h"
+#include "access/xlogrecovery.h"
 #include "access/xlogutils.h"
 #include "catalog/storage.h"
+#include "postmaster/startup.h"
 #include "replication/slot.h"
+#include "utils/hsearch.h"
 
 /* User-settable parameters for sync rep */
 char	   *SyncRepStandbyNames;
 bool		polar_enable_sync_ddl = true;
 bool		polar_enable_sync_ddl_legacy = false;
+bool		polar_enable_cascading_sync_ddl = true;
 
 XLogRecPtr	polar_ddl_lock_lsn = InvalidXLogRecPtr;
+
+/*
+ * POLAR: Per-xid barrier-LSN map for cascading sync DDL.
+ *
+ * On a standby, when XLOG_STANDBY_LOCK is replayed, each lock's xid is
+ * mapped to the end-LSN of that WAL record. Before deleting or truncating
+ * shared-storage files the startup process looks up the committing xid,
+ * waits for every cascading replica to acknowledge that LSN, then removes
+ * the entry.
+ */
+typedef struct XidLsnEntry
+{
+	TransactionId xid;			/* hash key */
+	XLogRecPtr	lsn;			/* end-LSN of the XLOG_STANDBY_LOCK record */
+} XidLsnEntry;
+
+static HTAB *polar_ddl_xid_lsn_map;
 
 #define SyncStandbysDefined() \
 	(SyncRepStandbyNames != NULL && SyncRepStandbyNames[0] != '\0')
@@ -1382,6 +1405,97 @@ polar_wait_ddl_lock(void)
 	polar_ddl_lock_lsn = InvalidXLogRecPtr;
 }
 
+/*
+ * POLAR: polar_cascading_ddl_record_lock
+ *
+ * Called from standby_redo() when replaying XLOG_STANDBY_LOCK. Records
+ * barrier_lsn (record->EndRecPtr) as the minimum LSN that every cascading
+ * replica must reach before the standby is allowed to delete or truncate
+ * shared-storage files on behalf of this transaction.
+ *
+ * xid may be a sub-transaction id (DDL run inside a SAVEPOINT). We always
+ * resolve it to the top-level xid via SubTransGetTopmostTransaction() so that
+ * the map is keyed uniformly by top-level xid.
+ *
+ * If multiple XLOG_STANDBY_LOCK records map to the same top-level xid (e.g.
+ * several DDLs in one transaction or across savepoints), WAL ordering
+ * guarantees each successive record has a higher LSN, so we unconditionally
+ * overwrite with the latest value.
+ */
+void
+polar_cascading_ddl_record_lock(TransactionId xid, XLogRecPtr lsn)
+{
+	XidLsnEntry *entry;
+	TransactionId top_xid;
+
+	if (!TransactionIdIsValid(xid) || XLogRecPtrIsInvalid(lsn))
+		return;
+
+	/* Normalise to top-level xid so commit/abort can find the entry easily */
+	top_xid = SubTransGetTopmostTransaction(xid);
+
+	if (polar_ddl_xid_lsn_map == NULL)
+	{
+		HASHCTL		ctl;
+
+		memset(&ctl, 0, sizeof(ctl));
+		ctl.keysize = sizeof(TransactionId);
+		ctl.entrysize = sizeof(XidLsnEntry);
+		polar_ddl_xid_lsn_map = hash_create("polar cascading DDL xid->lsn",
+											64, &ctl,
+											HASH_ELEM | HASH_BLOBS);
+	}
+
+	entry = hash_search(polar_ddl_xid_lsn_map, &top_xid, HASH_ENTER, NULL);
+
+	/* WAL is ordered: unconditionally overwrite with the latest LSN. */
+	entry->lsn = lsn;
+}
+
+/*
+ * POLAR: polar_cascading_ddl_wait_and_clear
+ *
+ * Called from xact_redo_commit() (before DropRelationFiles) and smgr_redo()
+ * (before smgrtruncate2) to wait for cascading replicas to acknowledge the
+ * barrier LSN recorded for this transaction, then remove the map entry.
+ *
+ * Returns immediately if the map is empty or no entry exists for this xid
+ * (e.g. already consumed by an earlier smgr_redo call).
+ */
+void
+polar_cascading_ddl_wait_and_clear(TransactionId xid)
+{
+	XidLsnEntry *entry;
+
+	if (!TransactionIdIsValid(xid) || !polar_ddl_xid_lsn_map)
+		return;
+
+	entry = hash_search(polar_ddl_xid_lsn_map, &xid, HASH_FIND, NULL);
+	if (entry == NULL)
+		return;
+
+	polar_wait_ddl_lock_on_standby(entry->lsn);
+
+	hash_search(polar_ddl_xid_lsn_map, &xid, HASH_REMOVE, NULL);
+}
+
+/*
+ * POLAR: polar_cascading_ddl_discard
+ *
+ * Called from xact_redo_abort() to discard the barrier-LSN entry for an
+ * aborted transaction without waiting. Files in parsed->nrels on abort were
+ * created within the transaction and never committed, so cascading replicas
+ * hold no buffer references to them.
+ */
+void
+polar_cascading_ddl_discard(TransactionId xid)
+{
+	if (!TransactionIdIsValid(xid) || !polar_ddl_xid_lsn_map)
+		return;
+
+	hash_search(polar_ddl_xid_lsn_map, &xid, HASH_REMOVE, NULL);
+}
+
 void
 polar_wait_ddl_lock_for_pending_deletes(void)
 {
@@ -1394,5 +1508,60 @@ polar_wait_ddl_lock_for_pending_deletes(void)
 	{
 		pfree(rels);
 		polar_wait_ddl_lock();
+	}
+}
+
+/*
+ * POLAR: polar_wait_ddl_lock_on_standby
+ *
+ * Mirrors polar_wait_ddl_lock() for the standby → cascading-replica path.
+ * Called during WAL replay on a standby just before deleting or truncating
+ * shared-storage files. Waits until every connected cascading replica has
+ * reported a polar_replica_lock_lsn >= barrier_lsn, meaning the replica has
+ * processed all DDL locks (and general WAL) up to that position and will no
+ * longer access the files about to be removed.
+ *
+ * barrier_lsn is the end-LSN of the WAL record that precedes the file
+ * removal (XLOG_STANDBY_LOCK EndRecPtr for relation drops/truncations,
+ * record->EndRecPtr for XLOG_DBASE_DROP / XLOG_TBLSPC_DROP which have no
+ * preceding XLOG_STANDBY_LOCK).
+ *
+ * Uses the recovery wakeup latch; cascading walsenders call WakeupRecovery()
+ * after each polar_record_replica_lsn() update so the startup process is
+ * woken promptly.
+ *
+ * If no cascading replica slots are present, or the barrier LSN is already
+ * satisfied, the function returns immediately.
+ */
+void
+polar_wait_ddl_lock_on_standby(XLogRecPtr barrier_lsn)
+{
+	if (XLogRecPtrIsInvalid(barrier_lsn))
+		return;
+
+	for (;;)
+	{
+		XLogRecPtr	min_lsn = InvalidXLogRecPtr;
+		bool		all_active = true;
+
+		ResetLatch(GetRecoveryWakeupLatch());
+
+		/* All cascading replicas disconnected */
+		if (!polar_get_ddl_applyptr(&min_lsn, &all_active))
+			break;
+
+		if (!XLogRecPtrIsInvalid(min_lsn) && min_lsn >= barrier_lsn)
+			break;
+
+		WaitLatch(GetRecoveryWakeupLatch(),
+				  WL_LATCH_SET | WL_TIMEOUT | WL_EXIT_ON_PM_DEATH,
+				  10L,			/* 10 ms safety net against missed wakeups */
+				  WAIT_EVENT_POLAR_CASCADING_SYNC_DDL);
+
+		/*
+		 * Use HandleStartupProcInterrupts rather than CHECK_FOR_INTERRUPTS so
+		 * that promote signals are handled correctly in the startup process.
+		 */
+		HandleStartupProcInterrupts();
 	}
 }

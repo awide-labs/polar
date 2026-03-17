@@ -21,6 +21,7 @@
 
 #include "access/parallel.h"
 #include "access/visibilitymap.h"
+#include "access/subtrans.h"
 #include "access/xact.h"
 #include "access/xlog.h"
 #include "access/xloginsert.h"
@@ -1111,6 +1112,24 @@ smgr_redo(XLogReaderState *record)
 		/* Do the real work to truncate relation forks */
 		if (nforks > 0)
 		{
+			/*
+			 * POLAR: On a standby, wait until all cascading replicas have
+			 * acknowledged the DDL lock LSN before truncating shared files.
+			 * Uses the per-xid hash table populated by standby_redo() when it
+			 * replayed the preceding XLOG_STANDBY_LOCK record.
+			 */
+			if (polar_is_standby() && polar_enable_shared_storage_mode
+				&& polar_enable_cascading_sync_ddl)
+			{
+				TransactionId smgr_xid = XLogRecGetXid(record);
+
+				/* xid may be a subxact id: resolve it to the top-level xid */
+				if (TransactionIdIsValid(smgr_xid))
+					smgr_xid = SubTransGetTopmostTransaction(smgr_xid);
+
+				polar_cascading_ddl_wait_and_clear(smgr_xid);
+			}
+
 			START_CRIT_SECTION();
 			smgrtruncate2(reln, forks, nforks, old_blocks, blocks);
 			END_CRIT_SECTION();

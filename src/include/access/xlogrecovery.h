@@ -14,6 +14,7 @@
 #include "access/xlogreader.h"
 #include "catalog/pg_control.h"
 #include "lib/stringinfo.h"
+#include "storage/latch.h"
 #include "utils/timestamp.h"
 
 /*
@@ -152,6 +153,7 @@ extern XLogRecPtr GetCurrentReplayRecPtr(TimeLineID *replayEndTLI);
 extern bool PromoteIsTriggered(void);
 extern bool CheckPromoteSignal(void);
 extern void WakeupRecovery(void);
+extern Latch *GetRecoveryWakeupLatch(void);
 
 extern void StartupRequestWalReceiverRestart(void);
 extern void XLogRequestWalReceiverReply(void);

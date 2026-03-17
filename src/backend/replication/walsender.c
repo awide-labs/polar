@@ -2425,6 +2425,17 @@ ProcessStandbyReplyMessage(void)
 		polar_release_ddl_waiters();
 		SyncRepReleaseWaiters();
 	}
+	else if (MyWalSnd->to_replica && polar_enable_cascading_sync_ddl
+			 && !XLogRecPtrIsInvalid(lockPtr))
+	{
+		/*
+		 * POLAR: This is a cascading walsender serving a shared-storage
+		 * replica. The startup process on this standby may be sleeping in
+		 * polar_wait_ddl_lock_on_standby(), waiting for lockPtr to advance.
+		 * Wake it so it can re-check.
+		 */
+		WakeupRecovery();
+	}
 
 	/*
 	 * Advance our local xmin horizon when the client confirmed a flush.
@@ -3324,6 +3335,13 @@ XLogSendPhysicalExt(polar_repl_mode_t polar_replication_mode)
 		 * replication, it's also OK to send any WAL that has been received
 		 * but not replayed.
 		 *
+		 * POLAR: For shared-storage replica connections (to_replica),
+		 * GetStandbyFlushRecPtr() returns only replayPtr, not receivePtr,
+		 * because pages on shared storage only reflect WAL up to replayPtr.
+		 * This means SendRqstPtr can temporarily be behind sentPtr when the
+		 * replica's slot position is between replayPtr and receivePtr. The
+		 * code below handles this by setting WalSndCaughtUp = true.
+		 *
 		 * The timeline we're recovering from can change, or we can be
 		 * promoted. In either case, the current timeline becomes historic. We
 		 * need to detect that so that we don't try to stream past the point
@@ -3456,8 +3474,17 @@ XLogSendPhysicalExt(polar_repl_mode_t polar_replication_mode)
 		return;
 	}
 
-	/* Do we have any work to do? */
-	Assert(sentPtr <= SendRqstPtr);
+	/*
+	 * Do we have any work to do?
+	 *
+	 * POLAR: For shared-storage replica connections, SendRqstPtr is limited
+	 * to replayPtr (see GetStandbyFlushRecPtr), but sentPtr may be ahead of
+	 * replayPtr e.g. when replica's startpoint or the last queue-sent
+	 * position exceeds the standby's current replay position. This is safe:
+	 * the walsender simply waits for replay to advance.
+	 */
+	Assert(sentPtr <= SendRqstPtr || (polar_enable_shared_storage_mode
+									  && MyWalSnd->to_replica));
 	if (SendRqstPtr <= sentPtr)
 	{
 		WalSndCaughtUp = true;
@@ -3821,6 +3848,16 @@ GetStandbyFlushRecPtr(TimeLineID *tli)
 	*tli = replayTLI;
 
 	result = replayPtr;
+
+	/*
+	 * POLAR: For shared-storage replica connections, pages on shared storage
+	 * only reflect WAL up to replayPtr. Advertising receivePtr would cause
+	 * the downstream replica to read WAL referencing pages not yet applied,
+	 * leading to incorrect data or PANIC.
+	 */
+	if (polar_enable_shared_storage_mode && MyWalSnd->to_replica)
+		return result;
+
 	if (receiveTLI == replayTLI && receivePtr > replayPtr)
 		result = receivePtr;
 

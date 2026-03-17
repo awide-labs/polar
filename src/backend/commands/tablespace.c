@@ -86,6 +86,7 @@
 #include "utils/varlena.h"
 
 /* POLAR */
+#include "replication/syncrep.h"
 #include "storage/polar_fd.h"
 
 /* GUC variables */
@@ -1559,6 +1560,15 @@ tblspc_redo(XLogReaderState *record)
 
 		/* Close all smgr fds in all backends. */
 		WaitForProcSignalBarrier(EmitProcSignalBarrier(PROCSIGNAL_BARRIER_SMGRRELEASE));
+
+		/*
+		 * POLAR: On a standby, wait until all cascading replicas have
+		 * acknowledged the end-LSN of this XLOG_TBLSPC_DROP record before
+		 * removing the tablespace directories from shared storage.
+		 */
+		if (polar_is_standby() && polar_enable_shared_storage_mode
+			&& polar_enable_cascading_sync_ddl)
+			polar_wait_ddl_lock_on_standby(record->EndRecPtr);
 
 		/*
 		 * If we issued a WAL record for a drop tablespace it implies that
