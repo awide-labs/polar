@@ -52,7 +52,6 @@ my $trust_host_ipv6 = '2001:db8::1234';
 my $reject_host_ipv6 = '2001:db8::1236';
 
 my $pid_sql = 'select pg_backend_pid()';
-my $dummy_sql = 'select 1';
 my $count_proxy_sql =
   " select count(*) from pg_stat_activity where pid > $session_id_base";
 my $wait_proxy_sql =
@@ -197,23 +196,23 @@ $node_primary->wait_for_catchup($node_standby);
 # Check connection & auto generated session id
 ok( proxy_safe_psql($node_primary, $pid_sql, @client_addr) < $session_id_base,
 	"suerpuser primary proxy pid less than $session_id_base");
-is(proxy_psql($node_primary, $pid_sql, '1.1.1.2', $client_port),
+is(proxy_psql($node_primary, undef, '1.1.1.2', $client_port),
 	2, 'primary proxy hba is not found');
-is(proxy_psql($node_primary, $pid_sql, $reject_host, $client_port),
+is(proxy_psql($node_primary, undef, $reject_host, $client_port),
 	2, 'primary proxy hba is rejected');
-is(proxy_psql($node_primary, $pid_sql, '2001:db8::1235', $client_port),
+is(proxy_psql($node_primary, undef, '2001:db8::1235', $client_port),
 	2, 'primary proxy hba is not found');
-is(proxy_psql($node_primary, $pid_sql, $reject_host_ipv6, $client_port),
+is(proxy_psql($node_primary, undef, $reject_host_ipv6, $client_port),
 	2, 'primary proxy hba is rejected');
 ok( proxy_safe_psql($node_standby, $pid_sql, @client_addr) < $session_id_base,
 	'standby proxy pid not start from $session_id_base');
-is(proxy_psql($node_standby, $pid_sql, '1.1.1.2', $client_port),
+is(proxy_psql($node_standby, undef, '1.1.1.2', $client_port),
 	2, 'standby proxy hba is not found');
-is(proxy_psql($node_standby, $pid_sql, $reject_host, $client_port),
+is(proxy_psql($node_standby, undef, $reject_host, $client_port),
 	2, 'standby proxy hba is rejected');
-is(proxy_psql($node_standby, $pid_sql, '2001:db8::1235', $client_port),
+is(proxy_psql($node_standby, undef, '2001:db8::1235', $client_port),
 	2, 'standby proxy hba is not found');
-is(proxy_psql($node_standby, $pid_sql, $reject_host_ipv6, $client_port),
+is(proxy_psql($node_standby, undef, $reject_host_ipv6, $client_port),
 	2, 'standby proxy hba is rejected');
 
 if (!$use_unix_sockets)
@@ -253,15 +252,15 @@ if (!$use_unix_sockets)
 }
 
 ## fault injection
-is(proxy_psql($node_primary, $pid_sql, $trust_host, 'xxxx'),
+is(proxy_psql($node_primary, undef, $trust_host, 'xxxx'),
 	2, 'primary proxy invalid port 1');
-is(proxy_psql($node_primary, $pid_sql, $trust_host, 0),
+is(proxy_psql($node_primary, undef, $trust_host, 0),
 	2, 'primary proxy invalid port 2');
-is(proxy_psql($node_primary, $pid_sql, $trust_host, 65536),
+is(proxy_psql($node_primary, undef, $trust_host, 65536),
 	2, 'primary proxy invalid port 3');
-is(proxy_psql($node_primary, $pid_sql, 'a.b.c.d', $client_port),
+is(proxy_psql($node_primary, undef, 'a.b.c.d', $client_port),
 	2, 'primary proxy invalid host');
-is(proxy_psql($node_primary, $pid_sql, 'a:b:c:d', $client_port),
+is(proxy_psql($node_primary, undef, 'a:b:c:d', $client_port),
 	2, 'primary proxy invalid host ipv6');
 
 # Check lsn
@@ -285,7 +284,7 @@ is( proxy_safe_psql($node_primary, '\lsn', @client_addr, @session_info, 1),
 	'standby ready for query lsn');
 
 ## fault injection
-is(proxy_psql($node_primary, $dummy_sql, undef, undef, undef, undef, 1),
+is(proxy_psql($node_primary, undef, undef, undef, undef, undef, 1),
 	2, 'primary direction connection request LSN');
 
 # Check ssl
@@ -341,16 +340,16 @@ if ($with_ssl)
 
 	## fault injection
 	is( proxy_psql(
-			$node_primary, $dummy_sql, undef, undef, @session_info, 0, 1),
+			$node_primary, undef, undef, undef, @session_info, 0, 1),
 		2,
 		'primary direction connection enable ssl');
 	is( proxy_psql(
-			$node_primary, $dummy_sql, @client_addr,
+			$node_primary, undef, @client_addr,
 			@session_info, @ssl_info, undef),
 		2,
 		'primary direction connection enable ssl missing cipher');
 	is( proxy_psql(
-			$node_primary, $dummy_sql, @client_addr, @session_info,
+			$node_primary, undef, @client_addr, @session_info,
 			0, 1, undef, 'dummy'),
 		2,
 		'primary direction connection enable ssl missing version');
@@ -453,17 +452,17 @@ is( proxy_psql($node_primary, $pid_sql, @client_addr, 200000000, $cancel_key),
 	0,
 	'set large proxy sid');
 ## fault injection
-is( proxy_psql($node_primary, $pid_sql, @client_addr, $proxy_session_id, $cancel_key),
+is( proxy_psql($node_primary, undef, @client_addr, $proxy_session_id, $cancel_key),
 	2,
 	'set same proxy sid');
-is( proxy_psql($node_primary, $pid_sql, @client_addr, 10000000, $cancel_key),
+is( proxy_psql($node_primary, undef, @client_addr, 10000000, $cancel_key),
 	2,
 	'set proxy sid too small 1');
-is(proxy_psql($node_primary, $pid_sql, @client_addr, 0, $cancel_key),
+is(proxy_psql($node_primary, undef, @client_addr, 0, $cancel_key),
 	2, 'set proxy sid too small 2');
-is(proxy_psql($node_primary, $pid_sql, @client_addr, $session_id, undef),
+is(proxy_psql($node_primary, undef, @client_addr, $session_id, undef),
 	2, 'only set session id');
-is(proxy_psql($node_primary, $pid_sql, @client_addr, undef, $cancel_key),
+is(proxy_psql($node_primary, undef, @client_addr, undef, $cancel_key),
 	2, 'only set cancel key');
 
 # Check cancel key and cancel request
