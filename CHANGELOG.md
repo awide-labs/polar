@@ -15,6 +15,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   as an in-tree extension with full PolarDB shared storage support
   (XCOM-195)
 
+### Changed
+
+- Added exponential backoff for the `Failed to get the instance memory
+  usage` warning that previously flooded the logs when memory statistics
+  were temporarily unavailable (XCOM-195)
+
 ### Removed
 
 - The pg_partman extension has been temporarily disabled due to broken
