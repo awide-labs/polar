@@ -40,6 +40,7 @@
 #include "utils/guc.h"
 #include "utils/memutils.h"
 #include "utils/resowner.h"
+#include "utils/timestamp.h"
 
 PG_MODULE_MAGIC;
 
@@ -762,6 +763,52 @@ polar_throttle_mem(Size mem_usage, Size mem_limit, bool force_evict)
 }
 
 /*
+ * Backoff state for "Failed to get the instance memory usage" warnings.
+ * The first failure is reported immediately; subsequent failures are
+ * reported with exponentially increasing intervals (30s, 60s, 120s, ...)
+ * up to a maximum of 600s (10 minutes).  A successful read resets the
+ * backoff so the next failure is reported immediately again.
+ */
+#define MEM_WARN_BACKOFF_INIT_MS	(30 * 1000)
+#define MEM_WARN_BACKOFF_MAX_MS		(600 * 1000)
+
+static TimestampTz mem_warn_last_report = 0;
+static int	mem_warn_backoff_ms = 0;
+static int	mem_warn_suppressed = 0;
+
+/*
+ * Report a memory-stat read failure with exponential backoff.
+ */
+static void
+report_memstat_failure(void)
+{
+	TimestampTz now = GetCurrentTimestamp();
+
+	if (mem_warn_last_report == 0 ||
+		TimestampDifferenceExceeds(mem_warn_last_report, now, mem_warn_backoff_ms))
+	{
+		if (mem_warn_suppressed > 0)
+			elog(WARNING, "Failed to get the instance memory usage "
+				 "(%d identical warnings suppressed since last report)",
+				 mem_warn_suppressed);
+		else
+			elog(WARNING, "Failed to get the instance memory usage");
+
+		mem_warn_suppressed = 0;
+		mem_warn_last_report = now;
+
+		/* Exponential backoff: 30s -> 60s -> 120s -> 240s -> 480s -> 600s */
+		if (mem_warn_backoff_ms == 0)
+			mem_warn_backoff_ms = MEM_WARN_BACKOFF_INIT_MS;
+		else
+			mem_warn_backoff_ms = Min(mem_warn_backoff_ms * 2,
+									  MEM_WARN_BACKOFF_MAX_MS);
+	}
+	else
+		mem_warn_suppressed++;
+}
+
+/*
  * check ins memory
  */
 void
@@ -777,9 +824,14 @@ polar_check_mem_exceed(void)
 	/* Get instance memory limit and memory usage */
 	if (polar_get_ins_memorystat(&ins_rss, &ins_mapped_file, &ins_rss_limit) != 0)
 	{
-		elog(WARNING, "Failed to get the instance memory usage");
+		report_memstat_failure();
 		return;
 	}
+
+	/* Success — reset backoff so the next failure is reported immediately */
+	mem_warn_last_report = 0;
+	mem_warn_backoff_ms = 0;
+	mem_warn_suppressed = 0;
 
 	/* Get the pfsdaemon process rss */
 	if (enable_account_otherproc && polar_get_procrss_by_name("(pfsdaemon)", &pfsd_pid, &pfsd_rss) != 0)
@@ -816,7 +868,7 @@ polar_check_mem_exceed(void)
 		 */
 		if (polar_get_ins_memorystat(&ins_rss, &ins_mapped_file, &ins_rss_limit) != 0)
 		{
-			elog(WARNING, "Failed to get the instance memory usage");
+			report_memstat_failure();
 			return;
 		}
 

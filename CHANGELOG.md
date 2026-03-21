@@ -15,6 +15,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `postgres --describe-config` so that Patroni can enumerate,
   validate, and track `pending_restart` for them (XCOM-124)
 
+### Changed
+
+- Added exponential backoff for the `Failed to get the instance memory
+  usage` warning that previously flooded the logs when memory statistics
+  were temporarily unavailable (XCOM-193)
+
 ### Fixed
 
 - Corrected the wait event name for CSN log buffers in `pg_stat_activity`
