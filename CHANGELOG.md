@@ -12,6 +12,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   as an in-tree extension with full PolarDB shared storage support
   (XCOM-99)
 
+- Expose 69 PolarDB-specific GUCs in `pg_settings` and
+  `postgres --describe-config` so that Patroni can enumerate,
+  validate, and track `pending_restart` for them (XCOM-124)
+
 ### Fixed
 
 - Fixed deadlock when WAL exceeds xlog queue capacity by releasing WALInsertLock
