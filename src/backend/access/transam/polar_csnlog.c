@@ -943,6 +943,13 @@ polar_csnlog_remove_all(void)
 	DIR		   *csnlog_dir;
 	struct dirent *csnlog_de;
 
+	/*
+	 * Replica shares storage with primary; only the primary may remove CSNLOG
+	 * files from the shared polar_datadir.
+	 */
+	if (polar_is_replica())
+		return;
+
 	snprintf((path), MAXPGPATH, "%s/%s", polar_enable_shared_storage_mode ?
 			 polar_datadir : DataDir, CSNLOG_DIR);
 	csnlog_dir = AllocateDir(path);

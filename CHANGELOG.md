@@ -25,6 +25,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `logrotate` file in the data directory upon receiving SIGUSR1 (XCOM-87)
 - Fixed replica promotion failure (FATAL: "WAL segment has already been removed")
   when primary crashed while creating a new WAL segment file (XCOM-114)
+- Fixed VFS crash (SIGSEGV in `strlen`) when replica attempts to unlink
+  shared CSNLOG files after disabling CSN; also prevent replica from
+  modifying shared storage CSNLOG files (XCOM-125)
 
 ### Removed
 
