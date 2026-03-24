@@ -8,6 +8,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Expose 69 PolarDB-specific GUCs in `pg_settings` and
+  `postgres --describe-config` so that Patroni can enumerate,
+  validate, and track `pending_restart` for them (XCOM-195)
 - Add pg_bulkload v3.1.23, a high-speed bulk data loading utility,
   as an in-tree extension with full PolarDB shared storage support
   (XCOM-195)

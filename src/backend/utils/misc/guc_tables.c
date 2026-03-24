@@ -981,6 +981,7 @@ const char *const config_group_names[] =
 	[POLAR_IO_MANAGEMENT] = gettext_noop("PolarDB I/O Management"),
 	[POLAR_LOGINDEX] = gettext_noop("PolarDB LogIndex"),
 	[POLAR_PROXY] = gettext_noop("PolarDB Proxy"),
+	[POLAR_CSN] = gettext_noop("PolarDB Commit Sequence Number (CSN)"),
 	/* POLAR end */
 
 	[DEVELOPER_OPTIONS] = gettext_noop("Developer Options"),
@@ -1053,7 +1054,7 @@ struct config_bool ConfigureNamesBool[] =
 		{"polar_enable_track_lock_stat", PGC_SIGHUP, STATS_CUMULATIVE,
 			gettext_noop("Enable track lock stat."),
 			NULL,
-			GUC_NO_SHOW_ALL | GUC_NO_RESET_ALL | GUC_NOT_IN_SAMPLE | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_UNCHANGEABLE
+			GUC_NO_RESET_ALL | GUC_NOT_IN_SAMPLE | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_UNCHANGEABLE
 		},
 		&polar_enable_track_lock_stat,
 		false,
@@ -1063,7 +1064,7 @@ struct config_bool ConfigureNamesBool[] =
 		{"polar_enable_track_lock_timing", PGC_SIGHUP, STATS_CUMULATIVE,
 			gettext_noop("Enable track lock timing."),
 			NULL,
-			GUC_NO_SHOW_ALL | GUC_NO_RESET_ALL | GUC_NOT_IN_SAMPLE | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_UNCHANGEABLE
+			GUC_NO_RESET_ALL | GUC_NOT_IN_SAMPLE | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_UNCHANGEABLE
 		},
 		&polar_enable_track_lock_timing,
 		false,
@@ -1073,7 +1074,7 @@ struct config_bool ConfigureNamesBool[] =
 		{"polar_enable_track_network_stat", PGC_SIGHUP, STATS_CUMULATIVE,
 			gettext_noop("Enable track net stat."),
 			NULL,
-			GUC_NO_SHOW_ALL | GUC_NO_RESET_ALL | GUC_NOT_IN_SAMPLE | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_UNCHANGEABLE
+			GUC_NO_RESET_ALL | GUC_NOT_IN_SAMPLE | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_UNCHANGEABLE
 		},
 		&polar_enable_track_network_stat,
 		true,
@@ -1083,17 +1084,17 @@ struct config_bool ConfigureNamesBool[] =
 		{"polar_enable_track_network_timing", PGC_SIGHUP, STATS_CUMULATIVE,
 			gettext_noop("Enable track net timing."),
 			NULL,
-			GUC_NO_SHOW_ALL | GUC_NO_RESET_ALL | GUC_NOT_IN_SAMPLE | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_UNCHANGEABLE
+			GUC_NO_RESET_ALL | GUC_NOT_IN_SAMPLE | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_UNCHANGEABLE
 		},
 		&polar_enable_track_network_timing,
 		false,
 		NULL, NULL, NULL
 	},
 	{
-		{"polar_enable_stat_wait_info", PGC_POSTMASTER, UNGROUPED,
+		{"polar_enable_stat_wait_info", PGC_POSTMASTER, STATS_CUMULATIVE,
 			gettext_noop("Enable to stat wait object and wait time."),
 			NULL,
-			GUC_NO_SHOW_ALL | GUC_NO_RESET_ALL | GUC_NOT_IN_SAMPLE | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_UNCHANGEABLE
+			GUC_NO_RESET_ALL | GUC_NOT_IN_SAMPLE | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_UNCHANGEABLE
 		},
 		&polar_enable_stat_wait_info,
 		false,
@@ -1134,10 +1135,10 @@ struct config_bool ConfigureNamesBool[] =
 	},
 
 	{
-		{"polar_enable_persisted_logical_slot", PGC_POSTMASTER, UNGROUPED,
+		{"polar_enable_persisted_logical_slot", PGC_POSTMASTER, REPLICATION_SENDING,
 			gettext_noop("Enable persisted logical slot on shared storage."),
 			NULL,
-			GUC_NO_SHOW_ALL | GUC_NO_RESET_ALL | GUC_NOT_IN_SAMPLE | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_CHANGEABLE
+			GUC_NO_RESET_ALL | GUC_NOT_IN_SAMPLE | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_CHANGEABLE
 		},
 		&polar_enable_persisted_logical_slot,
 		true,
@@ -1159,10 +1160,10 @@ struct config_bool ConfigureNamesBool[] =
 	},
 
 	{
-		{"polar_force_unlogged_to_logged_table", PGC_SUSET, UNGROUPED,
+		{"polar_force_unlogged_to_logged_table", PGC_SUSET, COMPAT_OPTIONS_PREVIOUS,
 			gettext_noop("A switch to control whether to force use logged table for unlogged table."),
 			NULL,
-			GUC_NO_SHOW_ALL | GUC_NO_RESET_ALL | GUC_NOT_IN_SAMPLE | POLAR_GUC_IS_UNCHANGEABLE | POLAR_GUC_IS_INVISIBLE
+			GUC_NO_RESET_ALL | GUC_NOT_IN_SAMPLE | POLAR_GUC_IS_UNCHANGEABLE | POLAR_GUC_IS_INVISIBLE
 		},
 		&polar_force_unlogged_to_logged_table,
 		false,
@@ -1173,7 +1174,7 @@ struct config_bool ConfigureNamesBool[] =
 		{"polar_suppress_preload_error", PGC_SIGHUP, CLIENT_CONN_PRELOAD,
 			gettext_noop("A switch to control whether to suppress error if the library to be preloaded is missing."),
 			NULL,
-			GUC_NO_SHOW_ALL | GUC_NO_RESET_ALL | GUC_SUPERUSER_ONLY | GUC_NOT_IN_SAMPLE | POLAR_GUC_IS_UNCHANGEABLE | POLAR_GUC_IS_INVISIBLE
+			GUC_NO_RESET_ALL | GUC_SUPERUSER_ONLY | GUC_NOT_IN_SAMPLE | POLAR_GUC_IS_UNCHANGEABLE | POLAR_GUC_IS_INVISIBLE
 		},
 		&polar_suppress_preload_error,
 		true,
@@ -1192,10 +1193,10 @@ struct config_bool ConfigureNamesBool[] =
 	},
 
 	{
-		{"polar_apply_global_guc_for_super", PGC_SIGHUP, UNGROUPED,
+		{"polar_apply_global_guc_for_super", PGC_SIGHUP, CONN_AUTH_SETTINGS,
 			gettext_noop("A switch to control whether to apply all-user-settings for superusers."),
 			NULL,
-			GUC_NO_SHOW_ALL | GUC_NO_RESET_ALL | GUC_NOT_IN_SAMPLE | GUC_SUPERUSER_ONLY | POLAR_GUC_IS_UNCHANGEABLE | POLAR_GUC_IS_INVISIBLE
+			GUC_NO_RESET_ALL | GUC_NOT_IN_SAMPLE | GUC_SUPERUSER_ONLY | POLAR_GUC_IS_UNCHANGEABLE | POLAR_GUC_IS_INVISIBLE
 		},
 		&polar_apply_global_guc_for_super,
 		false,
@@ -1203,7 +1204,7 @@ struct config_bool ConfigureNamesBool[] =
 	},
 
 	{
-		{"polar_wal_pipeline_enable", PGC_POSTMASTER, UNGROUPED,
+		{"polar_wal_pipeline_enable", PGC_POSTMASTER, WAL_SETTINGS,
 			gettext_noop("whether enable wal pipeline"),
 			NULL,
 			GUC_NO_RESET_ALL | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_CHANGABLE
@@ -1214,7 +1215,7 @@ struct config_bool ConfigureNamesBool[] =
 	},
 
 	{
-		{"polar_csn_xid_snapshot", PGC_SUSET, UNGROUPED,
+		{"polar_csn_xid_snapshot", PGC_SUSET, POLAR_CSN,
 			gettext_noop("enable polar xid snapshot under csn mode"),
 			NULL,
 			GUC_NO_RESET_ALL | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_CHANGABLE
@@ -1224,7 +1225,7 @@ struct config_bool ConfigureNamesBool[] =
 		NULL, NULL, NULL
 	},
 	{
-		{"polar_csn_enable", PGC_POSTMASTER, UNGROUPED,
+		{"polar_csn_enable", PGC_POSTMASTER, POLAR_CSN,
 			gettext_noop("enable polar csn snapshot"),
 			NULL,
 			GUC_NO_RESET_ALL | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_CHANGABLE
@@ -1234,7 +1235,7 @@ struct config_bool ConfigureNamesBool[] =
 		NULL, NULL, NULL
 	},
 	{
-		{"polar_csn_elog_panic_enable", PGC_POSTMASTER, UNGROUPED,
+		{"polar_csn_elog_panic_enable", PGC_POSTMASTER, POLAR_CSN,
 			gettext_noop("PANIC if subtransaction CSN state is inconsistent with parent"),
 			NULL,
 			GUC_NO_RESET_ALL | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_CHANGABLE
@@ -1244,7 +1245,7 @@ struct config_bool ConfigureNamesBool[] =
 		NULL, NULL, NULL
 	},
 	{
-		{"polar_csnlog_upperbound_enable", PGC_POSTMASTER, UNGROUPED,
+		{"polar_csnlog_upperbound_enable", PGC_POSTMASTER, POLAR_CSN,
 			gettext_noop("enable polar csn upperbound cache"),
 			NULL,
 			GUC_NO_RESET_ALL | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_CHANGABLE
@@ -1260,7 +1261,7 @@ struct config_bool ConfigureNamesBool[] =
 		{"polar_enable_shared_storage_mode", PGC_POSTMASTER, POLAR_STORAGE,
 			gettext_noop("Support rw/ro/standby shared storage mode."),
 			NULL,
-			GUC_NO_SHOW_ALL | GUC_NO_RESET_ALL | GUC_NOT_IN_SAMPLE | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_UNCHANGEABLE
+			GUC_NO_RESET_ALL | GUC_NOT_IN_SAMPLE | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_UNCHANGEABLE
 		},
 		&polar_enable_shared_storage_mode,
 		false,
@@ -1270,7 +1271,7 @@ struct config_bool ConfigureNamesBool[] =
 		{"polar_enable_debug", PGC_SIGHUP, POLAR_STORAGE,
 			gettext_noop("Enable output debug information."),
 			NULL,
-			GUC_NO_SHOW_ALL | GUC_NO_RESET_ALL | GUC_NOT_IN_SAMPLE | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_UNCHANGEABLE
+			GUC_NO_RESET_ALL | GUC_NOT_IN_SAMPLE | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_UNCHANGEABLE
 		},
 		&polar_enable_debug,
 		false,
@@ -1278,10 +1279,10 @@ struct config_bool ConfigureNamesBool[] =
 	},
 
 	{
-		{"polar_enable_simply_redo_error_log", PGC_USERSET, UNGROUPED,
+		{"polar_enable_simply_redo_error_log", PGC_USERSET, LOGGING_WHAT,
 			gettext_noop("A switch to print simple message in pg_log of rm_redo_error_callback."),
 			NULL,
-			GUC_NO_SHOW_ALL | GUC_NO_RESET_ALL | GUC_NOT_IN_SAMPLE | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_UNCHANGEABLE
+			GUC_NO_RESET_ALL | GUC_NOT_IN_SAMPLE | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_UNCHANGEABLE
 		},
 		&polar_enable_simply_redo_error_log,
 		true,
@@ -1289,10 +1290,10 @@ struct config_bool ConfigureNamesBool[] =
 	},
 
 	{
-		{"polar_enable_replica_copydata_optimization", PGC_POSTMASTER, UNGROUPED,
+		{"polar_enable_replica_copydata_optimization", PGC_POSTMASTER, REPLICATION_STANDBY,
 			gettext_noop("Enable copydata optimization when replica satrts."),
 			NULL,
-			GUC_NO_SHOW_ALL | GUC_NO_RESET_ALL | GUC_NOT_IN_SAMPLE | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_UNCHANGEABLE
+			GUC_NO_RESET_ALL | GUC_NOT_IN_SAMPLE | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_UNCHANGEABLE
 		},
 		&polar_enable_replica_copydata_optimization,
 		true,
@@ -1300,7 +1301,7 @@ struct config_bool ConfigureNamesBool[] =
 	},
 
 	{
-		{"polar_disable_escape_inside_gbk_character", PGC_USERSET, UNGROUPED,
+		{"polar_disable_escape_inside_gbk_character", PGC_USERSET, COMPAT_OPTIONS_PREVIOUS,
 			gettext_noop("A switch to control whether allow to escape slash in gbk(gb18030) encoding."),
 			NULL,
 			POLAR_GUC_IS_VISIBLE | POLAR_GUC_IS_CHANGEABLE
@@ -1320,7 +1321,7 @@ struct config_bool ConfigureNamesBool[] =
 		NULL, NULL, NULL
 	},
 	{
-		{"polar_enable_strategy_reject_buffer", PGC_SIGHUP, UNGROUPED,
+		{"polar_enable_strategy_reject_buffer", PGC_SIGHUP, RESOURCES_MEM,
 			gettext_noop("This guc allows strategy reject buffer during bufferAlloc, ignore xlog need flush condition."),
 			NULL,
 			GUC_NO_RESET_ALL | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_CHANGEABLE
@@ -1342,7 +1343,7 @@ struct config_bool ConfigureNamesBool[] =
 	},
 
 	{
-		{"polar_hot_standby_enable_vm", PGC_SIGHUP, UNGROUPED,
+		{"polar_hot_standby_enable_vm", PGC_SIGHUP, REPLICATION_STANDBY,
 			gettext_noop("Enable use visibilitymap when in hot_standby mode."),
 			NULL,
 			GUC_NO_RESET_ALL | POLAR_GUC_IS_VISIBLE | POLAR_GUC_IS_CHANGEABLE
@@ -1367,7 +1368,7 @@ struct config_bool ConfigureNamesBool[] =
 		{"polar_force_flush_buffer", PGC_SIGHUP, DEVELOPER_OPTIONS,
 			gettext_noop("Enable force flush buffer, this parameter is only helpful when there are not replicas."),
 			NULL,
-			GUC_NO_SHOW_ALL | GUC_NO_RESET_ALL | GUC_NOT_IN_SAMPLE | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_UNCHANGEABLE
+			GUC_NO_RESET_ALL | GUC_NOT_IN_SAMPLE | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_UNCHANGEABLE
 		},
 		&polar_force_flush_buffer,
 		false,
@@ -1378,7 +1379,7 @@ struct config_bool ConfigureNamesBool[] =
 		{"polar_ignore_ro_latency", PGC_SIGHUP, DEVELOPER_OPTIONS,
 			gettext_noop("Enables force flush dirty buffer without consideration of ro latency."),
 			NULL,
-			GUC_NO_SHOW_ALL | GUC_NO_RESET_ALL | GUC_NOT_IN_SAMPLE | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_UNCHANGEABLE
+			GUC_NO_RESET_ALL | GUC_NOT_IN_SAMPLE | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_UNCHANGEABLE
 		},
 		&polar_ignore_ro_latency,
 		false,
@@ -1466,7 +1467,7 @@ struct config_bool ConfigureNamesBool[] =
 		{"polar_enable_sync_ddl", PGC_USERSET, REPLICATION_STANDBY,
 			gettext_noop("Enable synchronous ddl."),
 			NULL,
-			GUC_NO_SHOW_ALL | GUC_NO_RESET_ALL | GUC_NOT_IN_SAMPLE | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_CHANGEABLE
+			GUC_NO_RESET_ALL | GUC_NOT_IN_SAMPLE | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_CHANGEABLE
 		},
 		&polar_enable_sync_ddl,
 		true,
@@ -1477,7 +1478,7 @@ struct config_bool ConfigureNamesBool[] =
 		{"polar_enable_sync_ddl_legacy", PGC_USERSET, REPLICATION_STANDBY,
 			gettext_noop("Enable old style synchronous ddl."),
 			NULL,
-			GUC_NO_SHOW_ALL | GUC_NO_RESET_ALL | GUC_NOT_IN_SAMPLE | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_UNCHANGEABLE
+			GUC_NO_RESET_ALL | GUC_NOT_IN_SAMPLE | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_UNCHANGEABLE
 		},
 		&polar_enable_sync_ddl_legacy,
 		false,
@@ -1485,7 +1486,7 @@ struct config_bool ConfigureNamesBool[] =
 	},
 
 	{
-		{"polar_enable_alloc_checkinterrupts", PGC_SIGHUP, UNGROUPED,
+		{"polar_enable_alloc_checkinterrupts", PGC_SIGHUP, COMPAT_OPTIONS_PREVIOUS,
 			gettext_noop("Enable check interrupt when allocating memory."),
 			NULL,
 			POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_UNCHANGEABLE
@@ -1587,7 +1588,7 @@ struct config_bool ConfigureNamesBool[] =
 		{"polar_force_change_checkpoint", PGC_POSTMASTER, POLAR_LOGINDEX,
 			gettext_noop("Force to recovery from redo point set in pg_control."),
 			NULL,
-			GUC_NO_SHOW_ALL | GUC_NO_RESET_ALL | GUC_NOT_IN_SAMPLE | POLAR_GUC_IS_UNCHANGEABLE | POLAR_GUC_IS_INVISIBLE
+			GUC_NO_RESET_ALL | GUC_NOT_IN_SAMPLE | POLAR_GUC_IS_UNCHANGEABLE | POLAR_GUC_IS_INVISIBLE
 		},
 		&polar_force_change_checkpoint,
 		false,
@@ -1598,7 +1599,7 @@ struct config_bool ConfigureNamesBool[] =
 		{"polar_has_partial_write", PGC_SIGHUP, POLAR_STORAGE,
 			gettext_noop("There are partial write problems."),
 			NULL,
-			GUC_NO_SHOW_ALL | GUC_SUPERUSER_ONLY | GUC_NO_RESET_ALL | GUC_NOT_IN_SAMPLE | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_UNCHANGEABLE
+			GUC_SUPERUSER_ONLY | GUC_NO_RESET_ALL | GUC_NOT_IN_SAMPLE | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_UNCHANGEABLE
 		},
 		&polar_has_partial_write,
 		false,
@@ -1609,7 +1610,7 @@ struct config_bool ConfigureNamesBool[] =
 		{"polar_hold_truncate_interrupt", PGC_SIGHUP, POLAR_LOGINDEX,
 			gettext_noop("A switch to control whether to disable query cancel during truncating."),
 			NULL,
-			GUC_NO_SHOW_ALL | GUC_NO_RESET_ALL | GUC_NOT_IN_SAMPLE | POLAR_GUC_IS_CHANGEABLE | POLAR_GUC_IS_INVISIBLE
+			GUC_NO_RESET_ALL | GUC_NOT_IN_SAMPLE | POLAR_GUC_IS_CHANGEABLE | POLAR_GUC_IS_INVISIBLE
 		},
 		&polar_hold_truncate_interrupt,
 		true,
@@ -1620,7 +1621,7 @@ struct config_bool ConfigureNamesBool[] =
 		{"polar_enable_standby_instant_recovery", PGC_POSTMASTER, POLAR_LOGINDEX,
 			gettext_noop("Enable standby instant recovery."),
 			NULL,
-			GUC_NO_SHOW_ALL | GUC_NO_RESET_ALL | GUC_NOT_IN_SAMPLE | POLAR_GUC_IS_CHANGEABLE | POLAR_GUC_IS_INVISIBLE
+			GUC_NO_RESET_ALL | GUC_NOT_IN_SAMPLE | POLAR_GUC_IS_CHANGEABLE | POLAR_GUC_IS_INVISIBLE
 		},
 		&polar_enable_standby_instant_recovery,
 		true,
@@ -1631,7 +1632,7 @@ struct config_bool ConfigureNamesBool[] =
 		{"polar_enable_coredump_print", PGC_SIGHUP, DEVELOPER_OPTIONS,
 			gettext_noop("Print backtrace when coredump signal triggered."),
 			NULL,
-			GUC_NO_SHOW_ALL | GUC_NOT_IN_SAMPLE | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_CHANGEABLE
+			GUC_NOT_IN_SAMPLE | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_CHANGEABLE
 		},
 		&polar_enable_coredump_print,
 		true,
@@ -1642,7 +1643,7 @@ struct config_bool ConfigureNamesBool[] =
 		{"polar_enable_coredump_cleanup", PGC_SIGHUP, DEVELOPER_OPTIONS,
 			gettext_noop("Cleanup outdate coredump files."),
 			NULL,
-			GUC_NO_SHOW_ALL | GUC_NOT_IN_SAMPLE | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_CHANGEABLE
+			GUC_NOT_IN_SAMPLE | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_CHANGEABLE
 		},
 		&polar_enable_coredump_cleanup,
 		true,
@@ -1653,7 +1654,7 @@ struct config_bool ConfigureNamesBool[] =
 		{"polar_ignore_coredump_fuzzy_match", PGC_USERSET, DEVELOPER_OPTIONS,
 			gettext_noop("Fuzz match coredump function to be ignored."),
 			NULL,
-			GUC_NO_SHOW_ALL | GUC_NOT_IN_SAMPLE | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_CHANGEABLE
+			GUC_NOT_IN_SAMPLE | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_CHANGEABLE
 		},
 		&polar_ignore_coredump_fuzzy_match,
 		false,
@@ -1664,7 +1665,7 @@ struct config_bool ConfigureNamesBool[] =
 		{"polar_enable_async_lock_replay", PGC_POSTMASTER, REPLICATION_STANDBY,
 			gettext_noop("Enable async lock replay in replica."),
 			NULL,
-			GUC_NO_SHOW_ALL | GUC_NO_RESET_ALL | GUC_NOT_IN_SAMPLE | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_CHANGEABLE
+			GUC_NO_RESET_ALL | GUC_NOT_IN_SAMPLE | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_CHANGEABLE
 		},
 		&polar_enable_async_lock_replay,
 		true,
@@ -1675,7 +1676,7 @@ struct config_bool ConfigureNamesBool[] =
 		{"polar_enable_async_lock_replay_debug", PGC_SIGHUP, REPLICATION_STANDBY,
 			gettext_noop("Enable async lock replay debug logging."),
 			NULL,
-			GUC_NO_SHOW_ALL | GUC_NO_RESET_ALL | GUC_NOT_IN_SAMPLE | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_UNCHANGEABLE
+			GUC_NO_RESET_ALL | GUC_NOT_IN_SAMPLE | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_UNCHANGEABLE
 		},
 		&polar_enable_async_lock_replay_debug,
 		false,
@@ -1686,7 +1687,7 @@ struct config_bool ConfigureNamesBool[] =
 		{"polar_enable_debug_proxy", PGC_USERSET, POLAR_PROXY,
 			gettext_noop("Enable proxy debug."),
 			NULL,
-			GUC_NO_SHOW_ALL | GUC_NO_RESET_ALL | GUC_NOT_IN_SAMPLE | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_UNCHANGEABLE
+			GUC_NO_RESET_ALL | GUC_NOT_IN_SAMPLE | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_UNCHANGEABLE
 		},
 		&polar_enable_debug_proxy,
 		false,
@@ -1708,7 +1709,7 @@ struct config_bool ConfigureNamesBool[] =
 		{"polar_enable_xact_split_debug", PGC_USERSET, POLAR_PROXY,
 			gettext_noop("Switch to decide whether transactions rw-split debug support is on."),
 			NULL,
-			GUC_NO_SHOW_ALL | GUC_NO_RESET_ALL | GUC_NOT_IN_SAMPLE | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_UNCHANGEABLE
+			GUC_NO_RESET_ALL | GUC_NOT_IN_SAMPLE | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_UNCHANGEABLE
 		},
 		&polar_enable_xact_split_debug,
 		false,
@@ -1716,10 +1717,10 @@ struct config_bool ConfigureNamesBool[] =
 	},
 
 	{
-		{"polar_enable_fullpage_snapshot", PGC_SIGHUP, UNGROUPED,
+		{"polar_enable_fullpage_snapshot", PGC_SIGHUP, WAL_SETTINGS,
 			gettext_noop("Enable fullpage snapshot feature."),
 			NULL,
-			GUC_NO_SHOW_ALL | GUC_NO_RESET_ALL | GUC_NOT_IN_SAMPLE | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_CHANGEABLE
+			GUC_NO_RESET_ALL | GUC_NOT_IN_SAMPLE | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_CHANGEABLE
 		},
 		&polar_enable_fullpage_snapshot,
 		true,
@@ -2642,7 +2643,7 @@ struct config_bool ConfigureNamesBool[] =
 		{"default_with_oids", PGC_USERSET, COMPAT_OPTIONS_PREVIOUS,
 			gettext_noop("WITH OIDS is no longer supported; this can only be false."),
 			NULL,
-			GUC_NO_SHOW_ALL | GUC_NOT_IN_SAMPLE | POLAR_GUC_IS_UNCHANGEABLE | POLAR_GUC_IS_INVISIBLE
+			GUC_NOT_IN_SAMPLE | POLAR_GUC_IS_UNCHANGEABLE | POLAR_GUC_IS_INVISIBLE
 		},
 		&default_with_oids,
 		false,
@@ -3052,10 +3053,10 @@ struct config_bool ConfigureNamesBool[] =
 	},
 
 	{
-		{"polar_log_statement_with_duration", PGC_SIGHUP, UNGROUPED,
+		{"polar_log_statement_with_duration", PGC_SIGHUP, LOGGING_WHAT,
 			gettext_noop("Enables printing SQL statement along with duration inforation."),
 			NULL,
-			GUC_NO_SHOW_ALL | GUC_NO_RESET_ALL | GUC_NOT_IN_SAMPLE | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_CHANGEABLE
+			GUC_NO_RESET_ALL | GUC_NOT_IN_SAMPLE | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_CHANGEABLE
 		},
 		&polar_log_statement_with_duration,
 		true,
@@ -3073,7 +3074,7 @@ struct config_bool ConfigureNamesBool[] =
 		{"polar_enable_multi_syslogger", PGC_SIGHUP, LOGGING_WHERE,
 			gettext_noop("Enable polar multi sys logger."),
 			NULL,
-			GUC_NO_SHOW_ALL | GUC_NO_RESET_ALL | GUC_NOT_IN_SAMPLE | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_CHANGEABLE
+			GUC_NO_RESET_ALL | GUC_NOT_IN_SAMPLE | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_CHANGEABLE
 		},
 		&polar_enable_multi_syslogger,
 		DEFAULT_MULTI_SYSLOGGER_FLAG,
@@ -3084,7 +3085,7 @@ struct config_bool ConfigureNamesBool[] =
 		{"polar_enable_syslog_pipe_buffer", PGC_SIGHUP, LOGGING_WHERE,
 			gettext_noop("Enable log pipe buffer."),
 			NULL,
-			GUC_NO_SHOW_ALL | GUC_NO_RESET_ALL | GUC_NOT_IN_SAMPLE | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_CHANGEABLE
+			GUC_NO_RESET_ALL | GUC_NOT_IN_SAMPLE | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_CHANGEABLE
 		},
 		&polar_enable_syslog_pipe_buffer,
 		true,
@@ -3095,7 +3096,7 @@ struct config_bool ConfigureNamesBool[] =
 		{"polar_enable_syslog_file_buffer", PGC_SIGHUP, LOGGING_WHERE,
 			gettext_noop("Enable log file buffer."),
 			NULL,
-			GUC_NO_SHOW_ALL | GUC_NO_RESET_ALL | GUC_NOT_IN_SAMPLE | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_CHANGEABLE
+			GUC_NO_RESET_ALL | GUC_NOT_IN_SAMPLE | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_CHANGEABLE
 		},
 		&polar_enable_syslog_file_buffer,
 		false,
@@ -3106,7 +3107,7 @@ struct config_bool ConfigureNamesBool[] =
 		{"polar_enable_error_to_audit_log", PGC_SIGHUP, LOGGING_WHERE,
 			gettext_noop("Enable error sql print to audit log."),
 			NULL,
-			GUC_NO_SHOW_ALL | GUC_NO_RESET_ALL | GUC_NOT_IN_SAMPLE | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_CHANGEABLE
+			GUC_NO_RESET_ALL | GUC_NOT_IN_SAMPLE | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_CHANGEABLE
 		},
 		&polar_enable_error_to_audit_log,
 		true,
@@ -3117,7 +3118,7 @@ struct config_bool ConfigureNamesBool[] =
 		{"polar_enable_output_search_path_to_log", PGC_SIGHUP, LOGGING_WHERE,
 			gettext_noop("Enable output search_path to log file."),
 			NULL,
-			GUC_NO_SHOW_ALL | GUC_NO_RESET_ALL | GUC_NOT_IN_SAMPLE | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_UNCHANGEABLE
+			GUC_NO_RESET_ALL | GUC_NOT_IN_SAMPLE | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_UNCHANGEABLE
 		},
 		&polar_enable_output_search_path_to_log,
 		true,
@@ -3215,7 +3216,7 @@ struct config_int ConfigureNamesInt[] =
 	},
 
 	{
-		{"polar_multixact_max_local_cache_segments", PGC_POSTMASTER, UNGROUPED,
+		{"polar_multixact_max_local_cache_segments", PGC_POSTMASTER, RESOURCES_DISK,
 			gettext_noop("Set the maximum number of local segment file cache for multixact."),
 			NULL,
 			GUC_NOT_IN_SAMPLE | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_CHANGEABLE
@@ -3226,7 +3227,7 @@ struct config_int ConfigureNamesInt[] =
 	},
 
 	{
-		{"polar_commit_ts_max_local_cache_segments", PGC_POSTMASTER, UNGROUPED,
+		{"polar_commit_ts_max_local_cache_segments", PGC_POSTMASTER, RESOURCES_DISK,
 			gettext_noop("Set the maximum number of local segment file cache for commit_ts."),
 			NULL,
 			GUC_NOT_IN_SAMPLE | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_CHANGEABLE
@@ -3237,7 +3238,7 @@ struct config_int ConfigureNamesInt[] =
 	},
 
 	{
-		{"polar_clog_max_local_cache_segments", PGC_POSTMASTER, UNGROUPED,
+		{"polar_clog_max_local_cache_segments", PGC_POSTMASTER, RESOURCES_DISK,
 			gettext_noop("Set the maximum number of local segment file cache for clog."),
 			NULL,
 			GUC_NOT_IN_SAMPLE | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_CHANGEABLE
@@ -3634,7 +3635,7 @@ struct config_int ConfigureNamesInt[] =
 			gettext_noop("Diff lsn(MB) between logindex parse lsn and bg_replayed_lsn, "
 						 "if reached, slow down logindex parse."),
 			NULL,
-			GUC_UNIT_MB | GUC_NO_SHOW_ALL | GUC_NO_RESET_ALL | GUC_NOT_IN_SAMPLE | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_CHANGEABLE
+			GUC_UNIT_MB | GUC_NO_RESET_ALL | GUC_NOT_IN_SAMPLE | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_CHANGEABLE
 		},
 		&polar_logindex_replay_delay_threshold,
 		1024,
@@ -3845,7 +3846,7 @@ struct config_int ConfigureNamesInt[] =
 		{"polar_virtual_pid", PGC_USERSET, POLAR_PROXY,
 			gettext_noop("Sets the process cancel key which connect to PolarDB proxy."),
 			NULL,
-			GUC_NO_SHOW_ALL | GUC_NO_RESET_ALL | GUC_NOT_IN_SAMPLE | GUC_DISALLOW_IN_FILE | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_UNCHANGEABLE
+			GUC_NO_RESET_ALL | GUC_NOT_IN_SAMPLE | GUC_DISALLOW_IN_FILE | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_UNCHANGEABLE
 		},
 		&polar_virtual_pid,
 		0, INT32_MIN, INT32_MAX,
@@ -3856,7 +3857,7 @@ struct config_int ConfigureNamesInt[] =
 		{"polar_cancel_key", PGC_USERSET, POLAR_PROXY,
 			gettext_noop("Sets the process cancel key which connect to PolarDB proxy."),
 			NULL,
-			GUC_NO_SHOW_ALL | GUC_NO_RESET_ALL | GUC_NOT_IN_SAMPLE | GUC_DISALLOW_IN_FILE | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_UNCHANGEABLE
+			GUC_NO_RESET_ALL | GUC_NOT_IN_SAMPLE | GUC_DISALLOW_IN_FILE | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_UNCHANGEABLE
 		},
 		&polar_cancel_key,
 		0, INT32_MIN, INT32_MAX,
@@ -3875,10 +3876,10 @@ struct config_int ConfigureNamesInt[] =
 	},
 
 	{
-		{"polar_write_logindex_active_table_delay", PGC_SIGHUP, UNGROUPED,
+		{"polar_write_logindex_active_table_delay", PGC_SIGHUP, WAL_SETTINGS,
 			gettext_noop("Time between walwriter write active logindex table."),
 			NULL,
-			GUC_UNIT_MS | GUC_NO_SHOW_ALL | GUC_NO_RESET_ALL | GUC_NOT_IN_SAMPLE | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_CHANGEABLE
+			GUC_UNIT_MS | GUC_NO_RESET_ALL | GUC_NOT_IN_SAMPLE | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_CHANGEABLE
 		},
 		&polar_write_logindex_active_table_delay,
 		500, 1, INT32_MAX,
@@ -3886,10 +3887,10 @@ struct config_int ConfigureNamesInt[] =
 	},
 
 	{
-		{"polar_fullpage_snapshot_min_modified_count", PGC_SIGHUP, UNGROUPED,
+		{"polar_fullpage_snapshot_min_modified_count", PGC_SIGHUP, WAL_SETTINGS,
 			gettext_noop("Sets the minimum modified count when log fullpage."),
 			NULL,
-			GUC_NO_SHOW_ALL | GUC_NO_RESET_ALL | GUC_NOT_IN_SAMPLE | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_CHANGEABLE
+			GUC_NO_RESET_ALL | GUC_NOT_IN_SAMPLE | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_CHANGEABLE
 		},
 		&polar_fullpage_snapshot_min_modified_count,
 		10, 0, INT32_MAX,
@@ -3897,10 +3898,10 @@ struct config_int ConfigureNamesInt[] =
 	},
 
 	{
-		{"polar_fullpage_snapshot_replay_delay_threshold", PGC_SIGHUP, UNGROUPED,
+		{"polar_fullpage_snapshot_replay_delay_threshold", PGC_SIGHUP, WAL_SETTINGS,
 			gettext_noop("Max diff lsn(MB) between page lsn and replay_lsn when log fullpage snapshot."),
 			NULL,
-			GUC_UNIT_MB | GUC_NO_SHOW_ALL | GUC_NO_RESET_ALL | GUC_NOT_IN_SAMPLE | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_CHANGEABLE
+			GUC_UNIT_MB | GUC_NO_RESET_ALL | GUC_NOT_IN_SAMPLE | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_CHANGEABLE
 		},
 		&polar_fullpage_snapshot_replay_delay_threshold,
 		16,
@@ -3909,10 +3910,10 @@ struct config_int ConfigureNamesInt[] =
 	},
 
 	{
-		{"polar_fullpage_snapshot_oldest_lsn_delay_threshold", PGC_SIGHUP, UNGROUPED,
+		{"polar_fullpage_snapshot_oldest_lsn_delay_threshold", PGC_SIGHUP, WAL_SETTINGS,
 			gettext_noop("Minimum diff lsn(MB) between insert lsn and oldest_lsn when log fullpage snapshot."),
 			NULL,
-			GUC_UNIT_MB | GUC_NO_SHOW_ALL | GUC_NO_RESET_ALL | GUC_NOT_IN_SAMPLE | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_CHANGEABLE
+			GUC_UNIT_MB | GUC_NO_RESET_ALL | GUC_NOT_IN_SAMPLE | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_CHANGEABLE
 		},
 		&polar_fullpage_snapshot_oldest_lsn_delay_threshold,
 		1024,
@@ -3921,10 +3922,10 @@ struct config_int ConfigureNamesInt[] =
 	},
 
 	{
-		{"polar_wait_old_version_page_timeout", PGC_USERSET, UNGROUPED,
+		{"polar_wait_old_version_page_timeout", PGC_USERSET, REPLICATION_STANDBY,
 			gettext_noop("Sets the maximum time to wait for old version page when reading a future page."),
 			NULL,
-			GUC_UNIT_MS | GUC_NO_SHOW_ALL | GUC_NO_RESET_ALL | GUC_NOT_IN_SAMPLE | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_CHANGEABLE
+			GUC_UNIT_MS | GUC_NO_RESET_ALL | GUC_NOT_IN_SAMPLE | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_CHANGEABLE
 		},
 		&polar_wait_old_version_page_timeout,
 		30 * 1000, 0, INT_MAX,
@@ -3932,10 +3933,10 @@ struct config_int ConfigureNamesInt[] =
 	},
 
 	{
-		{"polar_fullpage_keep_segments", PGC_SIGHUP, UNGROUPED,
+		{"polar_fullpage_keep_segments", PGC_SIGHUP, WAL_SETTINGS,
 			gettext_noop("Sets the number of FULLPAGE files held for replica."),
 			NULL,
-			GUC_NO_SHOW_ALL | GUC_NO_RESET_ALL | GUC_NOT_IN_SAMPLE | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_CHANGEABLE
+			GUC_NO_RESET_ALL | GUC_NOT_IN_SAMPLE | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_CHANGEABLE
 		},
 		&polar_fullpage_keep_segments,
 		16,
@@ -3944,7 +3945,7 @@ struct config_int ConfigureNamesInt[] =
 	},
 
 	{
-		{"polar_fullpage_max_segment_size", PGC_SIGHUP, UNGROUPED,
+		{"polar_fullpage_max_segment_size", PGC_SIGHUP, WAL_SETTINGS,
 			gettext_noop("Sets the max FULLPAGE size that stopping flushing future pages(avoid disk full)."),
 			NULL,
 			GUC_UNIT_MB | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_CHANGEABLE
@@ -4198,7 +4199,7 @@ struct config_int ConfigureNamesInt[] =
 	},
 
 	{
-		{"polar_csnlog_slot_size", PGC_POSTMASTER, UNGROUPED,
+		{"polar_csnlog_slot_size", PGC_POSTMASTER, POLAR_CSN,
 			gettext_noop("polar_csnlog_slot_size."),
 			NULL,
 			POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_CHANGABLE
@@ -4209,7 +4210,7 @@ struct config_int ConfigureNamesInt[] =
 	},
 
 	{
-		{"polar_csnlog_max_local_cache_segments", PGC_POSTMASTER, UNGROUPED,
+		{"polar_csnlog_max_local_cache_segments", PGC_POSTMASTER, RESOURCES_DISK,
 			gettext_noop("Set the maximum number of local segment file cache for csnlog"),
 			NULL,
 			POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_CHANGABLE
@@ -5865,7 +5866,7 @@ struct config_int ConfigureNamesInt[] =
 	},
 
 	{
-		{"polar_max_log_files", PGC_SIGHUP, UNGROUPED,
+		{"polar_max_log_files", PGC_SIGHUP, LOGGING_WHAT,
 			gettext_noop("A switch to control number of max pg log files."),
 			NULL,
 			GUC_NO_RESET_ALL | GUC_NOT_IN_SAMPLE | GUC_NOT_WHILE_SEC_REST | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_CHANGEABLE
@@ -5877,7 +5878,7 @@ struct config_int ConfigureNamesInt[] =
 	},
 
 	{
-		{"polar_max_auditlog_files", PGC_SIGHUP, UNGROUPED,
+		{"polar_max_auditlog_files", PGC_SIGHUP, LOGGING_WHAT,
 			gettext_noop("A switch to control number of max pg audit log files."),
 			NULL,
 			GUC_NO_RESET_ALL | GUC_NOT_IN_SAMPLE | GUC_NOT_WHILE_SEC_REST | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_CHANGEABLE
@@ -5889,7 +5890,7 @@ struct config_int ConfigureNamesInt[] =
 	},
 
 	{
-		{"polar_max_slowlog_files", PGC_SIGHUP, UNGROUPED,
+		{"polar_max_slowlog_files", PGC_SIGHUP, LOGGING_WHAT,
 			gettext_noop("A switch to control number of max pg slow log files."),
 			NULL,
 			GUC_NO_RESET_ALL | GUC_NOT_IN_SAMPLE | GUC_NOT_WHILE_SEC_REST | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_CHANGEABLE
@@ -6428,7 +6429,7 @@ struct config_string ConfigureNamesString[] =
 		{"polar_ignore_coredump_functions", PGC_USERSET, DEVELOPER_OPTIONS,
 			gettext_noop("Ignore coredump functions and addresses."),
 			NULL,
-			GUC_NO_SHOW_ALL | GUC_NOT_IN_SAMPLE | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_CHANGEABLE
+			GUC_NOT_IN_SAMPLE | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_CHANGEABLE
 		},
 		&polar_ignore_coredump_functions,
 		"",
@@ -6458,10 +6459,10 @@ struct config_string ConfigureNamesString[] =
 	},
 
 	{
-		{"polar_rename_wal_ready_file", PGC_SUSET, UNGROUPED,
+		{"polar_rename_wal_ready_file", PGC_SUSET, WAL_SETTINGS,
 			gettext_noop("rename file under /<shared_storage>/pg_wal/archive_status from .ready to .done."),
 			NULL,
-			GUC_SUPERUSER_ONLY | GUC_NO_SHOW_ALL | GUC_NO_RESET_ALL | GUC_NOT_IN_SAMPLE | GUC_DISALLOW_IN_FILE | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_CHANGEABLE
+			GUC_SUPERUSER_ONLY | GUC_NO_RESET_ALL | GUC_NOT_IN_SAMPLE | GUC_DISALLOW_IN_FILE | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_CHANGEABLE
 		},
 		&polar_rename_wal_ready_file,
 		"",
@@ -7281,7 +7282,7 @@ struct config_enum ConfigureNamesEnum[] =
 		{"polar_zero_extend_method", PGC_USERSET, POLAR_IO_MANAGEMENT,
 			gettext_noop("Selects the method of zero extend to use."),
 			NULL,
-			GUC_NOT_IN_SAMPLE | GUC_NO_SHOW_ALL | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_CHANGEABLE
+			GUC_NOT_IN_SAMPLE | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_CHANGEABLE
 		},
 		&polar_zero_extend_method,
 		POLAR_ZERO_EXTEND_BULKWRITE, polar_zero_extend_method_options,
@@ -7336,7 +7337,7 @@ struct config_enum ConfigureNamesEnum[] =
 		{"polar_ignore_coredump_level", PGC_USERSET, DEVELOPER_OPTIONS,
 			gettext_noop("Ignore coredump into error level."),
 			NULL,
-			GUC_NO_SHOW_ALL | GUC_NOT_IN_SAMPLE | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_CHANGEABLE
+			GUC_NOT_IN_SAMPLE | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_CHANGEABLE
 		},
 		&polar_ignore_coredump_level,
 		FATAL, polar_ignore_coredump_elevel_options,
@@ -7363,7 +7364,7 @@ struct config_enum ConfigureNamesEnum[] =
 			gettext_noop("Enables logging of logindex-related debugging information."),
 			gettext_noop("Each level includes all the levels that follow it. The later"
 						 " the level, the fewer messages are sent."),
-			GUC_NO_SHOW_ALL | GUC_NOT_IN_SAMPLE | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_UNCHANGEABLE
+			GUC_NOT_IN_SAMPLE | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_UNCHANGEABLE
 		},
 		&polar_trace_logindex_messages,
 		LOG, client_message_level_options,
