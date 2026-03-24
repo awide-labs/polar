@@ -4515,12 +4515,23 @@ sub polar_wait_for_startup
 	{
 		my ($stdout, $stderr) = ('', '');
 
-		$self->psql(
-			'postgres', qq[SELECT pg_is_in_recovery()],
-			stdout => \$stdout,
-			stderr => \$stderr,
-			on_error_die => 0,
-			on_error_stop => 0);
+		# Wrap in eval: during online promote the server kills all
+		# backends, so psql() may get a broken-pipe from IPC::Run
+		# which it re-throws as a die.  Catch and retry.
+		eval {
+			$self->psql(
+				'postgres', qq[SELECT pg_is_in_recovery()],
+				stdout => \$stdout,
+				stderr => \$stderr,
+				on_error_die => 0,
+				on_error_stop => 0);
+		};
+		if ($@)
+		{
+			print "psql connection attempt $i failed: $@";
+			sleep 1;
+			next;
+		}
 		print "stdout:$stdout, stderr:$stderr\n";
 
 		if ($stderr eq '')
