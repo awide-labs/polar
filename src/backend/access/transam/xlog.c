@@ -278,7 +278,7 @@ XLogRecPtr	XactLastCommitEnd = InvalidXLogRecPtr;
  * CHECKPOINT record).  We update this from the shared-memory copy,
  * XLogCtl->Insert.RedoRecPtr, whenever we can safely do so (ie, when we
  * hold an insertion lock).  See XLogInsertRecord for details.  We are also
- * allowed to update from XLogCtl->RedoRecPtr if we hold the info_lck;
+ * allowed to update from XLogCtl->RedoRecPtr via atomic read;
  * see GetRedoRecPtr.
  *
  * NB: Code that uses this variable must be prepared not only for the
@@ -553,7 +553,8 @@ typedef struct XLogCtlData
 
 	/* Protected by info_lck: */
 	XLogwrtRqst LogwrtRqst;
-	XLogRecPtr	RedoRecPtr;		/* a recent copy of Insert->RedoRecPtr */
+	pg_atomic_uint64 RedoRecPtr;	/* a recent copy of Insert->RedoRecPtr
+									 * (atomic, no lock needed) */
 	FullTransactionId ckptFullXid;	/* nextXid of latest checkpoint */
 	XLogRecPtr	asyncXactLSN;	/* LSN of newest async commit/abort */
 	XLogRecPtr	replicationSlotMinLSN;	/* oldest LSN needed by any slot */
@@ -5747,6 +5748,7 @@ XLOGShmemInit(void)
 		return;
 	}
 	memset(XLogCtl, 0, sizeof(XLogCtlData));
+	pg_atomic_init_u64(&XLogCtl->RedoRecPtr, InvalidXLogRecPtr);
 
 
 	/*
@@ -6506,7 +6508,9 @@ StartupXLOG(void)
 
 	lastFullPageWrites = checkPoint.fullPageWrites;
 
-	RedoRecPtr = XLogCtl->RedoRecPtr = XLogCtl->Insert.RedoRecPtr = checkPoint.redo;
+	RedoRecPtr = checkPoint.redo;
+	pg_atomic_write_u64(&XLogCtl->RedoRecPtr, checkPoint.redo);
+	XLogCtl->Insert.RedoRecPtr = checkPoint.redo;
 	doPageWrites = lastFullPageWrites;
 
 	/* REDO */
@@ -7443,9 +7447,7 @@ GetRedoRecPtr(void)
 	 * Insert->RedoRecPtr, someone might update it just after we've released
 	 * the lock.
 	 */
-	SpinLockAcquire(&XLogCtl->info_lck);
-	ptr = XLogCtl->RedoRecPtr;
-	SpinLockRelease(&XLogCtl->info_lck);
+	ptr = pg_atomic_read_u64(&XLogCtl->RedoRecPtr);
 
 	if (RedoRecPtr < ptr)
 		RedoRecPtr = ptr;
@@ -8070,10 +8072,8 @@ CreateCheckPoint(int flags)
 	 */
 	WALInsertLockRelease();
 
-	/* Update the info_lck-protected copy of RedoRecPtr as well */
-	SpinLockAcquire(&XLogCtl->info_lck);
-	XLogCtl->RedoRecPtr = checkPoint.redo;
-	SpinLockRelease(&XLogCtl->info_lck);
+	/* Update the atomic copy of RedoRecPtr as well */
+	pg_atomic_write_u64(&XLogCtl->RedoRecPtr, checkPoint.redo);
 
 	/*
 	 * If enabled, log checkpoint start.  We postpone this until now so as not
@@ -8746,10 +8746,8 @@ CreateRestartPoint(int flags)
 	RedoRecPtr = XLogCtl->Insert.RedoRecPtr = lastCheckPoint.redo;
 	WALInsertLockRelease();
 
-	/* Also update the info_lck-protected copy */
-	SpinLockAcquire(&XLogCtl->info_lck);
-	XLogCtl->RedoRecPtr = lastCheckPoint.redo;
-	SpinLockRelease(&XLogCtl->info_lck);
+	/* Also update the atomic copy */
+	pg_atomic_write_u64(&XLogCtl->RedoRecPtr, lastCheckPoint.redo);
 
 	/*
 	 * Prepare to accumulate statistics.

@@ -271,7 +271,7 @@ WalReceiverMain(void)
 	 * POLAR: Reset consistent lsn received from primary node while starting
 	 * up walreceiver.
 	 */
-	WalRcv->curr_primary_consistent_lsn = InvalidXLogRecPtr;
+	pg_atomic_write_u64(&WalRcv->curr_primary_consistent_lsn, InvalidXLogRecPtr);
 
 	SpinLockRelease(&walrcv->mutex);
 
@@ -1191,7 +1191,7 @@ XLogWalRcvFlush(bool dying, TimeLineID tli)
 			walrcv->receivedTLI = tli;
 
 			/* POLAR: set consistent lsn */
-			consistent_lsn = walrcv->curr_primary_consistent_lsn;
+			consistent_lsn = pg_atomic_read_u64(&walrcv->curr_primary_consistent_lsn);
 		}
 		SpinLockRelease(&walrcv->mutex);
 
@@ -1745,12 +1745,12 @@ pg_stat_get_wal_receiver(PG_FUNCTION_ARGS)
 void
 polar_set_primary_consistent_lsn(XLogRecPtr new_consistent_lsn)
 {
-	if (WalRcv->curr_primary_consistent_lsn < new_consistent_lsn)
-	{
-		SpinLockAcquire(&WalRcv->mutex);
-		WalRcv->curr_primary_consistent_lsn = new_consistent_lsn;
-		SpinLockRelease(&WalRcv->mutex);
-	}
+	/*
+	 * Called by the startup process once (at consistency) and then by the WAL
+	 * receiver; the two never overlap, so a plain atomic write is safe.
+	 */
+	if (pg_atomic_read_u64(&WalRcv->curr_primary_consistent_lsn) < new_consistent_lsn)
+		pg_atomic_write_u64(&WalRcv->curr_primary_consistent_lsn, new_consistent_lsn);
 }
 
 /*
@@ -1761,13 +1761,7 @@ polar_set_primary_consistent_lsn(XLogRecPtr new_consistent_lsn)
 XLogRecPtr
 polar_get_primary_consistent_lsn(void)
 {
-	XLogRecPtr	curr_primary_consistent_lsn = InvalidXLogRecPtr;
-
-	SpinLockAcquire(&WalRcv->mutex);
-	curr_primary_consistent_lsn = WalRcv->curr_primary_consistent_lsn;
-	SpinLockRelease(&WalRcv->mutex);
-
-	return curr_primary_consistent_lsn;
+	return pg_atomic_read_u64(&WalRcv->curr_primary_consistent_lsn);
 }
 
 /*

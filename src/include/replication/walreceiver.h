@@ -160,7 +160,7 @@ typedef struct
 	sig_atomic_t force_reply;	/* used as a bool */
 
 	/* POLAR: current consistent lsn of primary */
-	XLogRecPtr	curr_primary_consistent_lsn;
+	pg_atomic_uint64 curr_primary_consistent_lsn;
 	/* POLAR: set true when receive XLOG meta from xlog queue */
 	bool		polar_use_xlog_queue;
 } WalRcvData;

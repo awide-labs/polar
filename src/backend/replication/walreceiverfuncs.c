@@ -69,6 +69,7 @@ WalRcvShmemInit(void)
 		ConditionVariableInit(&WalRcv->walRcvStoppedCV);
 		SpinLockInit(&WalRcv->mutex);
 		pg_atomic_init_u64(&WalRcv->writtenUpto, 0);
+		pg_atomic_init_u64(&WalRcv->curr_primary_consistent_lsn, InvalidXLogRecPtr);
 		WalRcv->latch = NULL;
 
 		if (polar_logindex_redo_instance)

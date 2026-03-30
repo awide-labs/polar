@@ -16,6 +16,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `postgres --describe-config` so that Patroni can enumerate,
   validate, and track `pending_restart` for them (XCOM-124)
 
+### Performance
+
+- Replace spinlock-protected reads of `RedoRecPtr` and
+  `curr_primary_consistent_lsn` with lock-free `pg_atomic_uint64` ops,
+  eliminating two hot spinlocks (`info_lck`, `WalRcv->mutex`) from the
+  per-buffer-read path on replicas (XCOM-128)
+
 ### Fixed
 
 - Fixed deadlock when WAL exceeds xlog queue capacity by releasing WALInsertLock
