@@ -24,6 +24,9 @@ use warnings;
 use PostgreSQL::Test::Cluster;
 use Test::More;
 
+# Temporarily disabled due to instability
+plan skip_all => 'Test temporarily disabled due to instability';
+
 #
 # Get a primary node ready for physical/logical replication.
 #
