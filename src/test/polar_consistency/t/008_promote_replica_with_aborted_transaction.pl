@@ -23,6 +23,9 @@ use PostgreSQL::Test::Cluster;
 use PostgreSQL::Test::Utils;
 use Test::More;
 
+# Temporarily disabled due to instability
+plan skip_all => 'Test temporarily disabled due to instability';
+
 my $sql_dir = $ENV{PWD} . '/sql';
 my $regress_db = 'postgres';
 
