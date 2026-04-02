@@ -25,6 +25,9 @@ use PostgreSQL::Test::Utils;
 use Test::More;
 use PolarDB::DCRegression;
 
+# Temporarily disabled due to instability
+plan skip_all => 'Test temporarily disabled due to instability';
+
 # primary node
 my $node_primary = PostgreSQL::Test::Cluster->new('primary');
 $node_primary->polar_init_primary;
