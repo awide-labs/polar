@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Removed
 
+- The pg_partman extension has been temporarily removed due to broken regression
+  tests (XCOM-195)
 - The following third-party extensions have been removed (XCOM-195):
   - hll
   - ip4r
