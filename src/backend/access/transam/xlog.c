@@ -10286,7 +10286,7 @@ do_pg_backup_stop(BackupState *state, bool waitforarchive)
 
 	/* POLAR */
 	int			fd;
-	char	   *history_file;
+	char	   *history_file = NULL;
 
 	Assert(state != NULL);
 
@@ -10537,8 +10537,11 @@ do_pg_backup_stop(BackupState *state, bool waitforarchive)
 
 	if (!backup_stopped_in_recovery)
 	{
-		elog(LOG, "POLAR: finish pg_stop_backup, historyfile:\n%s", history_file);
-		pfree(history_file);
+		if (history_file != NULL)
+		{
+			elog(LOG, "POLAR: finish pg_stop_backup, historyfile:\n%s", history_file);
+			pfree(history_file);
+		}
 	}
 }
 
