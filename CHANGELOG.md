@@ -50,6 +50,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Performance
 
+- Replace spinlock-protected reads of `RedoRecPtr` and
+  `curr_primary_consistent_lsn` with lock-free `pg_atomic_uint64` ops,
+  eliminating two hot spinlocks (`info_lck`, `WalRcv->mutex`) from the
+  per-buffer-read path on replicas (XCOM-195)
 - Port CSN (Commit Sequence Number) feature from PolarDB 11 to improve MVCC
   scalability (XCOM-195)
 - Increase the number of WAL insertion locks (NUM_XLOGINSERT_LOCKS) from 8 to 64
