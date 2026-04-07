@@ -366,7 +366,7 @@ _PG_init(void)
 
 	DefineCustomStringVariable(
 							   "polar_resource_manager.cgroup_mem_prefix_path",
-							   gettext_noop("Database in which polar_resource_manager metadata is kept."),
+							   gettext_noop("Directory containing cgroup memory statistics files."),
 							   NULL,
 							   &cgroup_mem_prefix_path,
 							   detect_cgroup_mem_prefix(),
