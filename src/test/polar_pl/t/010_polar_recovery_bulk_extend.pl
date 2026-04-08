@@ -36,6 +36,7 @@ $node_standby->polar_init_standby($node_primary);
 # Close the parallel_replay and checkpoint
 $node_primary->append_conf('postgresql.conf', 'wal_sender_timeout=3600s');
 $node_primary->append_conf('postgresql.conf', 'checkpoint_timeout=3600');
+$node_primary->append_conf('postgresql.conf', 'wal_keep_size=1GB');
 $node_primary->append_conf('postgresql.conf',
 	'polar_enable_parallel_replay_standby_mode=false');
 $node_replica->append_conf('postgresql.conf', 'wal_receiver_timeout=3600s');
