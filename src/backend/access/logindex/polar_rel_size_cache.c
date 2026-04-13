@@ -54,7 +54,7 @@ polar_rel_size_shmem_size(int blocks)
 	if (blocks <= 0)
 		return size;
 
-	size = offsetof(polar_rel_size_cache_data_t, table_size);
+	size = offsetof(polar_rel_size_cache_data_t, table_data);
 
 	size = add_size(size, mul_size(POLAR_REL_CACHE_TABLE_SIZE, blocks));
 

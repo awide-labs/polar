@@ -76,7 +76,12 @@ typedef struct polar_rel_size_cache_data_t
 	uint32		active_mid;
 	uint32		min_tid;
 	uint32		table_size;
-	char		table_data[FLEXIBLE_ARRAY_MEMBER];
+
+	/*
+	 * REL_SIZE_CACHE_TABLE casts table_data to polar_rel_size_table_t (8-byte
+	 * fields).
+	 */
+	char		table_data[FLEXIBLE_ARRAY_MEMBER] pg_attribute_aligned(8);
 } polar_rel_size_cache_data_t;
 
 typedef polar_rel_size_cache_data_t *polar_rel_size_cache_t;
