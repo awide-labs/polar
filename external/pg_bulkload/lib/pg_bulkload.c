@@ -15,6 +15,7 @@
 
 #include "access/heapam.h"
 #include "access/reloptions.h"
+#include "c.h"
 #include "catalog/objectaddress.h"
 #if PG_VERSION_NUM >= 120000
 #include "catalog/pg_am.h"
@@ -41,6 +42,8 @@
 #include "pg_profile.h"
 #include "pg_strutil.h"
 #include "pgut/pgut-be.h"
+#include "pgut/pgut-ipc.h"
+#include "storage/proc.h"
 
 PG_MODULE_MAGIC;
 
@@ -485,6 +488,9 @@ ParseOptions(Datum options, Reader **rd, Writer **wt, time_t tm)
 	char		   *type = NULL;
 	char		   *writer = NULL;
 	bool			multi_process = false;
+	char			*infile = NULL;
+	bool			parallel_writer = false;
+	Queue			*queue = NULL;
 
 	Assert(*rd == NULL);
 	Assert(*wt == NULL);
@@ -505,6 +511,8 @@ ParseOptions(Datum options, Reader **rd, Writer **wt, time_t tm)
 		{
 			ASSERT_ONCE(type == NULL);
 			type = value;
+			if (!pg_strcasecmp(value, "TUPLE"))
+				parallel_writer = true;
 		}
 		else if (CompareKeyword(keyword, "WRITER") ||
 				 CompareKeyword(keyword, "LOADER"))
@@ -516,6 +524,11 @@ ParseOptions(Datum options, Reader **rd, Writer **wt, time_t tm)
 		{
 			multi_process = ParseBoolean(value);
 		}
+		else if (CompareKeyword(keyword, "INPUT"))
+		{
+			ASSERT_ONCE(infile == NULL);
+			infile = pstrdup(value);
+		}
 		else
 		{
 			rest_defs = lappend(rest_defs, opt);
@@ -523,8 +536,47 @@ ParseOptions(Datum options, Reader **rd, Writer **wt, time_t tm)
 		}
 	}
 
+	/*
+	 * When running as the writer backend of a MULTI_PROCESS load
+	 * (TYPE=TUPLE, INPUT=:), join the reader's lock group before
+	 * DirectWriterParam() acquires a lock via the RangeVarGetRelidExtended() call.
+	 * This is necessary for the lock group mechanism to work. The process must
+	 * join the lock group before the first table lock acquisition to prevent
+	 * conflicts with locks acquired on the table by other group members.
+	 */
+	if (parallel_writer)
+	{
+		unsigned		key;
+		char			junk[2];
+		void		   *leader_pgproc;
+		int				leader_pid;
+		Assert(infile);
+
+		if (sscanf(infile, ":%u%1s", &key, junk) != 1)
+			elog(ERROR, "invalid shmem key format: %s", infile);
+
+		queue = QueueOpen(key);
+		QueueGetLockGroupInfo(queue, &leader_pgproc, &leader_pid);
+		if (leader_pgproc != NULL && leader_pid != 0)
+		{
+			if (!BecomeLockGroupMember((PGPROC *) leader_pgproc, leader_pid))
+				ereport(ERROR,
+						(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+						 errmsg("could not join lock group of parallel writer leader (pid %d)",
+								leader_pid)));
+		}
+	}
+
 	*wt = WriterCreate(writer, multi_process);
 	*rd = ReaderCreate(type);
+
+	if (parallel_writer)
+	{
+		Assert(queue);
+		SetTupleParserQueue((*rd)->parser, queue);
+	}
+
+	(*rd)->infile = infile;
 
 	foreach (cell, rest_defs)
 	{
