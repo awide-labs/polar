@@ -20,6 +20,7 @@
 #include "miscadmin.h"
 #include "postmaster/postmaster.h"
 #include "storage/lmgr.h"
+#include "storage/proc.h"
 #include "utils/guc.h"
 #include "utils/memutils.h"
 #include "utils/rel.h"
@@ -90,6 +91,14 @@ ParallelWriterInit(ParallelWriter *self)
 
 	Assert(self->base.truncate == false);
 
+	/*
+	 * Become lock group leader before acquiring any relation locks.
+	 * The writer process will join this lock group, which allows its
+	 * AccessExclusiveLock to coexist with our AccessShareLock (and the
+	 * RowExclusiveLock held by COPY FROM, if applicable) without conflict.
+	 */
+	BecomeLockGroupLeader();
+
 	/* Initialize information needed to check tuples when reading. */
 	if (self->base.relid != InvalidOid)
 	{
@@ -142,22 +151,15 @@ ParallelWriterInit(ParallelWriter *self)
 	snprintf(queueName, lengthof(queueName), ":%u", queryKey);
 
 	/*
-	 * Connect to a new backend process that will actually perform the writes.
-	 * As the new process will take an AccessExclusiveLock on the target
-	 * relation, we must relinquish ours.  Note that we don't "close" the
-	 * relation though, because we will need to set up a Checker; see
-	 * CheckerInit().
-	 *
-	 * NB: This is quite a hack, because there is a window between our
-	 * releasing the lock here and the new process acquiring its own during
-	 * which the relation schema might change, but maybe that's something we
-	 * have to live with.  Note that that's always been the case, because
-	 * we never even took a lock in this process before supporting Postgres
-	 * 12.  Warn users through documentation that there is such risk when
-	 * using the MULTI_PROCESS=TRUE mode.
+	 * Store our lock group identity in the queue header so the writer can
+	 * join the same group before acquiring AccessExclusiveLock.  Because
+	 * both processes will belong to the same lock group, the writer's
+	 * AccessExclusiveLock will not conflict with our AccessShareLock (or
+	 * RowExclusiveLock held by COPY FROM).  This eliminates the window
+	 * that previously existed between releasing and re-acquiring the lock.
 	 */
-	if (rel)
-		UnlockRelation(rel, AccessShareLock);
+	QueueSetLockGroupInfo(self->queue, MyProc, MyProcPid);
+
 	self->conn = connect_to_localhost();
 
 	/* start transaction */
