@@ -451,6 +451,13 @@ is( proxy_psql($node_primary, $pid_sql, @client_addr, 200000000, $cancel_key),
 	0,
 	'set large proxy sid');
 ## fault injection
+# "set same proxy sid" asserts that the server rejects a connection that
+# tries to register an SID already held by another live backend.  The SID
+# used here ($proxy_session_id) was last held by the async pg_sleep(3) task
+# started in start_proxy_backend() above, but by the time we get here that
+# task has finished and the slot has been released.  Spawn a fresh async
+# backend so the SID is guaranteed to be in use when we probe it.
+start_proxy_backend($node_primary);
 is( proxy_psql($node_primary, undef, @client_addr, $proxy_session_id, $cancel_key),
 	2,
 	'set same proxy sid');
