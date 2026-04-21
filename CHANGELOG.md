@@ -23,6 +23,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   eliminating two hot spinlocks (`info_lck`, `WalRcv->mutex`) from the
   per-buffer-read path on replicas (XCOM-128)
 
+- Eliminate walsender spinlock contention on the primary, letting
+  walsenders keep up with the write load generating WAL (XCOM-137)
+
 ### Fixed
 
 - Fixed deadlock when WAL exceeds xlog queue capacity by releasing WALInsertLock
