@@ -308,16 +308,15 @@ static bool doPageWrites;
  *
  * LogwrtRqst indicates a byte position that we need to write and/or fsync
  * the log up to (all records before that point must be written or fsynced).
- * LogwrtResult indicates the byte positions we have already written/fsynced.
- * These structs are identical but are declared separately to indicate their
- * slightly different functions.
+ * The positions already written/fsynced are maintained in logWriteResult
+ * and logFlushResult.
  *
- * To read XLogCtl->LogwrtResult, you must hold either info_lck or
- * WALWriteLock.  To update it, you need to hold both locks.  The point of
- * this arrangement is that the value can be examined by code that already
- * holds WALWriteLock without needing to grab info_lck as well.  In addition
- * to the shared variable, each backend has a private copy of LogwrtResult,
- * which is updated when convenient.
+ * To read XLogCtl->logWriteResult or ->logFlushResult, you must hold either
+ * info_lck or WALWriteLock.  To update them, you need to hold both locks.
+ * The point of this arrangement is that the value can be examined by code
+ * that already holds WALWriteLock without needing to grab info_lck as well.
+ * In addition to the shared variable, each backend has a private copy of
+ * both in LogwrtResult, which is updated when convenient.
  *
  * The request bookkeeping is simpler: there is a shared XLogCtl->LogwrtRqst
  * (protected by info_lck), but we don't need to cache any copies of it.
@@ -573,7 +572,8 @@ typedef struct XLogCtlData
 	 * Protected by info_lck and WALWriteLock (you must hold either lock to
 	 * read it, but both to update)
 	 */
-	XLogwrtResult LogwrtResult;
+	XLogRecPtr	logWriteResult; /* last byte + 1 written out */
+	XLogRecPtr	logFlushResult; /* last byte + 1 flushed */
 
 	/*
 	 * Latest initialized page in the cache (last byte position + 1).
@@ -743,6 +743,15 @@ static int	UsableBytesInSegment;
  * See discussion above.
  */
 static XLogwrtResult LogwrtResult = {0, 0};
+
+/*
+ * Update local copy of shared XLogCtl->log{Write,Flush}Result
+ */
+#define RefreshXLogWriteResult(_target) \
+	do { \
+		_target.Write = XLogCtl->logWriteResult; \
+		_target.Flush = XLogCtl->logFlushResult; \
+	} while (0)
 
 /*
  * openLogFile is -1 or a kernel FD for an open log file segment.
@@ -1035,7 +1044,7 @@ polar_wal_pipeline_commit_wait(XLogRecPtr flush_lsn)
 		XLogCtl->LogwrtRqst.Write = flush_lsn;
 	if (XLogCtl->LogwrtRqst.Flush < flush_lsn)
 		XLogCtl->LogwrtRqst.Flush = flush_lsn;
-	LogwrtResult = XLogCtl->LogwrtResult;
+	RefreshXLogWriteResult(LogwrtResult);
 	SpinLockRelease(&XLogCtl->info_lck);
 
 	if (flush_lsn <= LogwrtResult.Flush)
@@ -1066,7 +1075,7 @@ polar_wal_pipeline_commit_wait(XLogRecPtr flush_lsn)
 		 * We must update LogwrtResult.Flush, because caller may use
 		 * LogwrtResult to recheck the while condition
 		 */
-		LogwrtResult.Flush = *(volatile XLogRecPtr *) (&XLogCtl->LogwrtResult.Flush);
+		LogwrtResult.Flush = *(volatile XLogRecPtr *) (&XLogCtl->logFlushResult);
 	}
 
 	/* Then wait */
@@ -1086,7 +1095,7 @@ polar_wal_pipeline_commit_wait(XLogRecPtr flush_lsn)
 			 * We must update LogwrtResult.Flush, because caller may use
 			 * LogwrtResult to recheck the while condition
 			 */
-			LogwrtResult.Flush = *(volatile XLogRecPtr *) (&XLogCtl->LogwrtResult.Flush);
+			LogwrtResult.Flush = *(volatile XLogRecPtr *) (&XLogCtl->logFlushResult);
 		}
 		pthread_mutex_unlock(&status.wait_obj->mutex);
 	}
@@ -1369,7 +1378,7 @@ polar_wal_pipeline_write(int ident)
 	write_rqst.Write = *(volatile XLogRecPtr *) (&XLogCtl->LogwrtRqst.Write);
 	write_rqst.Flush = *(volatile XLogRecPtr *) (&XLogCtl->LogwrtRqst.Flush);
 
-	LogwrtResult.Write = *(volatile XLogRecPtr *) (&XLogCtl->LogwrtResult.Write);
+	LogwrtResult.Write = *(volatile XLogRecPtr *) (&XLogCtl->logWriteResult);
 
 	ready_write_lsn = polar_wal_pipeline_get_ready_write_lsn();
 
@@ -1469,7 +1478,7 @@ polar_wal_pipeline_flush_internal(void)
 			issue_xlog_fsync(curr_del_file->fd, curr_del_file->seg_no, insertTLI);
 
 			SpinLockAcquire(&XLogCtl->info_lck);
-			XLogCtl->LogwrtResult.Flush = curr_del_file->end_lsn;
+			XLogCtl->logFlushResult = curr_del_file->end_lsn;
 			if (XLogCtl->LogwrtRqst.Flush < curr_del_file->end_lsn)
 				XLogCtl->LogwrtRqst.Flush = curr_del_file->end_lsn;
 			SpinLockRelease(&XLogCtl->info_lck);
@@ -1530,8 +1539,8 @@ polar_wal_pipeline_flush(int ident)
 
 	pg_atomic_fetch_add_u64(&XLogCtl->polar_wal_pipeline_stats.total_flush_callups, 1);
 
-	write_result.Write = *(volatile XLogRecPtr *) (&XLogCtl->LogwrtResult.Write);
-	write_result.Flush = *(volatile XLogRecPtr *) (&XLogCtl->LogwrtResult.Flush);
+	write_result.Write = *(volatile XLogRecPtr *) (&XLogCtl->logWriteResult);
+	write_result.Flush = *(volatile XLogRecPtr *) (&XLogCtl->logFlushResult);
 
 	if (write_result.Flush >= write_result.Write)
 		return false;
@@ -1557,7 +1566,7 @@ bool
 polar_wal_pipeline_notify(int ident)
 {
 	XLogRecPtr	start_lsn = XLogCtl->polar_wal_pipeline_last_notify_pos[ident].lsn;
-	XLogRecPtr	end_lsn = *(volatile XLogRecPtr *) (&XLogCtl->LogwrtResult.Flush);
+	XLogRecPtr	end_lsn = *(volatile XLogRecPtr *) (&XLogCtl->logFlushResult);
 	XLogRecPtr	aligned_end_lsn;
 	uint64		notified_users = 0;
 	uint64		total_notified_users;
@@ -1645,14 +1654,14 @@ polar_wal_pipeline_get_continuous_insert_lsn(void)
 XLogRecPtr
 polar_wal_pipeline_get_write_lsn(void)
 {
-	return XLogCtl->LogwrtResult.Write;
+	return XLogCtl->logWriteResult;
 }
 
 /* Max LSN already flushed to disk */
 XLogRecPtr
 polar_wal_pipeline_get_flush_lsn(void)
 {
-	return XLogCtl->LogwrtResult.Flush;
+	return XLogCtl->logFlushResult;
 }
 
 XLogRecPtr
@@ -1962,7 +1971,7 @@ XLogInsertRecord(XLogRecData *rdata,
 		if (XLogCtl->LogwrtRqst.Write < EndPos)
 			XLogCtl->LogwrtRqst.Write = EndPos;
 		/* update local result copy while I have the chance */
-		LogwrtResult = XLogCtl->LogwrtResult;
+		RefreshXLogWriteResult(LogwrtResult);
 		SpinLockRelease(&XLogCtl->info_lck);
 	}
 
@@ -2962,7 +2971,7 @@ AdvanceXLInsertBuffer(XLogRecPtr upto, TimeLineID tli, bool opportunistic)
 			SpinLockAcquire(&XLogCtl->info_lck);
 			if (XLogCtl->LogwrtRqst.Write < OldPageRqstPtr)
 				XLogCtl->LogwrtRqst.Write = OldPageRqstPtr;
-			LogwrtResult = XLogCtl->LogwrtResult;
+			RefreshXLogWriteResult(LogwrtResult);
 			SpinLockRelease(&XLogCtl->info_lck);
 
 			/*
@@ -2987,7 +2996,7 @@ AdvanceXLInsertBuffer(XLogRecPtr upto, TimeLineID tli, bool opportunistic)
 
 					LWLockAcquire(WALWriteLock, LW_EXCLUSIVE);
 
-					LogwrtResult = XLogCtl->LogwrtResult;
+					RefreshXLogWriteResult(LogwrtResult);
 					if (LogwrtResult.Write >= OldPageRqstPtr)
 					{
 						/* OK, someone wrote it already */
@@ -3236,7 +3245,7 @@ XLogWrite(XLogwrtRqst WriteRqst, TimeLineID tli, bool flexible)
 	 * Update local LogwrtResult (caller probably did this already, but...)
 	 */
 	if (!POLAR_WAL_PIPELINER_READY())
-		LogwrtResult = XLogCtl->LogwrtResult;
+		RefreshXLogWriteResult(LogwrtResult);
 
 	/*
 	 * Since successive pages in the xlog cache are consecutively allocated,
@@ -3525,8 +3534,9 @@ XLogWrite(XLogwrtRqst WriteRqst, TimeLineID tli, bool flexible)
 	if (!POLAR_WAL_PIPELINER_READY())
 	{
 		SpinLockAcquire(&XLogCtl->info_lck);
-		is_flush_ahead = (XLogCtl->LogwrtResult.Flush < LogwrtResult.Flush);
-		XLogCtl->LogwrtResult = LogwrtResult;
+		is_flush_ahead = (XLogCtl->logFlushResult < LogwrtResult.Flush);
+		XLogCtl->logWriteResult = LogwrtResult.Write;
+		XLogCtl->logFlushResult = LogwrtResult.Flush;
 		if (XLogCtl->LogwrtRqst.Write < LogwrtResult.Write)
 			XLogCtl->LogwrtRqst.Write = LogwrtResult.Write;
 		if (XLogCtl->LogwrtRqst.Flush < LogwrtResult.Flush)
@@ -3536,8 +3546,8 @@ XLogWrite(XLogwrtRqst WriteRqst, TimeLineID tli, bool flexible)
 	else
 	{
 		SpinLockAcquire(&XLogCtl->info_lck);
-		is_flush_ahead = (XLogCtl->LogwrtResult.Flush < LogwrtResult.Flush);
-		XLogCtl->LogwrtResult.Write = LogwrtResult.Write;
+		is_flush_ahead = (XLogCtl->logFlushResult < LogwrtResult.Flush);
+		XLogCtl->logWriteResult = LogwrtResult.Write;
 		if (XLogCtl->LogwrtRqst.Write < LogwrtResult.Write)
 			XLogCtl->LogwrtRqst.Write = LogwrtResult.Write;
 		SpinLockRelease(&XLogCtl->info_lck);
@@ -3563,7 +3573,7 @@ XLogSetAsyncXactLSN(XLogRecPtr asyncXactLSN)
 	bool		sleeping;
 
 	SpinLockAcquire(&XLogCtl->info_lck);
-	LogwrtResult = XLogCtl->LogwrtResult;
+	RefreshXLogWriteResult(LogwrtResult);
 	sleeping = XLogCtl->WalWriterSleeping;
 	if (XLogCtl->asyncXactLSN < asyncXactLSN)
 		XLogCtl->asyncXactLSN = asyncXactLSN;
@@ -3777,7 +3787,7 @@ XLogFlush(XLogRecPtr record)
 			SpinLockAcquire(&XLogCtl->info_lck);
 			if (WriteRqstPtr < XLogCtl->LogwrtRqst.Write)
 				WriteRqstPtr = XLogCtl->LogwrtRqst.Write;
-			LogwrtResult = XLogCtl->LogwrtResult;
+			RefreshXLogWriteResult(LogwrtResult);
 			SpinLockRelease(&XLogCtl->info_lck);
 
 			/* done already? */
@@ -3808,7 +3818,7 @@ XLogFlush(XLogRecPtr record)
 			}
 
 			/* Got the lock; recheck whether request is satisfied */
-			LogwrtResult = XLogCtl->LogwrtResult;
+			RefreshXLogWriteResult(LogwrtResult);
 			if (record <= LogwrtResult.Flush)
 			{
 				LWLockRelease(WALWriteLock);
@@ -3936,7 +3946,7 @@ XLogBackgroundFlush(void)
 
 	/* read LogwrtResult and update local state */
 	SpinLockAcquire(&XLogCtl->info_lck);
-	LogwrtResult = XLogCtl->LogwrtResult;
+	RefreshXLogWriteResult(LogwrtResult);
 	WriteRqst = XLogCtl->LogwrtRqst;
 	SpinLockRelease(&XLogCtl->info_lck);
 
@@ -4030,7 +4040,7 @@ XLogBackgroundFlush(void)
 		 */
 		WaitXLogInsertionsToFinish(WriteRqst.Write);
 		LWLockAcquire(WALWriteLock, LW_EXCLUSIVE);
-		LogwrtResult = XLogCtl->LogwrtResult;
+		RefreshXLogWriteResult(LogwrtResult);
 		if (WriteRqst.Write > LogwrtResult.Write ||
 			WriteRqst.Flush > LogwrtResult.Flush)
 		{
@@ -4120,7 +4130,7 @@ XLogNeedsFlush(XLogRecPtr record)
 
 	/* read LogwrtResult and update local state */
 	SpinLockAcquire(&XLogCtl->info_lck);
-	LogwrtResult = XLogCtl->LogwrtResult;
+	RefreshXLogWriteResult(LogwrtResult);
 	SpinLockRelease(&XLogCtl->info_lck);
 
 	/* check again */
@@ -6900,7 +6910,8 @@ StartupXLOG(void)
 
 	LogwrtResult.Write = LogwrtResult.Flush = EndOfLog;
 
-	XLogCtl->LogwrtResult = LogwrtResult;
+	XLogCtl->logWriteResult = LogwrtResult.Write;
+	XLogCtl->logFlushResult = LogwrtResult.Flush;
 
 	XLogCtl->LogwrtRqst.Write = EndOfLog;
 	XLogCtl->LogwrtRqst.Flush = EndOfLog;
@@ -6908,8 +6919,8 @@ StartupXLOG(void)
 	/* POLAR: make sure some important LSNs are expected. */
 	if (unlikely(pg_atomic_read_u64(&Insert->PrevBytePos) < XLogRecPtrToBytePos(endOfRecoveryInfo->lastRec) ||
 				 pg_atomic_read_u64(&Insert->CurrBytePos) <= XLogRecPtrToBytePos(endOfRecoveryInfo->lastRec) ||
-				 XLogCtl->LogwrtResult.Flush <= endOfRecoveryInfo->lastRec ||
-				 XLogCtl->LogwrtResult.Write <= endOfRecoveryInfo->lastRec ||
+				 XLogCtl->logFlushResult <= endOfRecoveryInfo->lastRec ||
+				 XLogCtl->logWriteResult <= endOfRecoveryInfo->lastRec ||
 				 XLogCtl->LogwrtRqst.Flush <= endOfRecoveryInfo->lastRec ||
 				 XLogCtl->LogwrtRqst.Write <= endOfRecoveryInfo->lastRec))
 		elog(PANIC, "Something wrong for these important LSNs: " \
@@ -6918,8 +6929,8 @@ StartupXLOG(void)
 			 "LogwrtRqst.Flush is %X/%X, LogwrtRqst.Write is %X/%X, " \
 			 "LastRec is %X/%X, last usable byte position is 0x%lX",
 			 pg_atomic_read_u64(&Insert->PrevBytePos), pg_atomic_read_u64(&Insert->CurrBytePos),
-			 LSN_FORMAT_ARGS(XLogCtl->LogwrtResult.Flush),
-			 LSN_FORMAT_ARGS(XLogCtl->LogwrtResult.Write), LSN_FORMAT_ARGS(XLogCtl->LogwrtRqst.Flush),
+			 LSN_FORMAT_ARGS(XLogCtl->logFlushResult),
+			 LSN_FORMAT_ARGS(XLogCtl->logWriteResult), LSN_FORMAT_ARGS(XLogCtl->LogwrtRqst.Flush),
 			 LSN_FORMAT_ARGS(XLogCtl->LogwrtRqst.Write), LSN_FORMAT_ARGS(endOfRecoveryInfo->lastRec),
 			 XLogRecPtrToBytePos(endOfRecoveryInfo->lastRec));
 
@@ -7502,7 +7513,7 @@ GetFlushRecPtr(TimeLineID *insertTLI)
 	Assert(XLogCtl->SharedRecoveryState == RECOVERY_STATE_DONE);
 
 	SpinLockAcquire(&XLogCtl->info_lck);
-	LogwrtResult = XLogCtl->LogwrtResult;
+	RefreshXLogWriteResult(LogwrtResult);
 	SpinLockRelease(&XLogCtl->info_lck);
 
 	/*
@@ -10837,7 +10848,7 @@ XLogRecPtr
 GetXLogWriteRecPtr(void)
 {
 	SpinLockAcquire(&XLogCtl->info_lck);
-	LogwrtResult = XLogCtl->LogwrtResult;
+	RefreshXLogWriteResult(LogwrtResult);
 	SpinLockRelease(&XLogCtl->info_lck);
 
 	return LogwrtResult.Write;
