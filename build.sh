@@ -170,6 +170,7 @@ port=$(random_unused_port)
 debug=on
 minimal=off
 compiler_flag="-g -Wall -fno-omit-frame-pointer"
+lto_flag=""
 # disable origin rpath config because of our own rpath config in LDFLAGS
 configure_flag="--enable-depend --with-uuid=e2fs --disable-rpath --with-segsize=128"
 make_flag=""
@@ -228,6 +229,11 @@ if [[ $debug == "on" ]]; then
   configure_flag+=" --enable-debug --enable-cassert --enable-tap-tests --enable-injection-points --enable-fault-injector"
 else
   compiler_flag+=" -O2"
+  cc_cmd=${CC:-gcc}
+  if [[ $($cc_cmd -dM -E - </dev/null 2>/dev/null) != *__clang__* &&
+        $($cc_cmd -dumpversion 2>/dev/null | cut -d. -f1) -ge 11 ]]; then
+    lto_flag="-flto=auto -ffat-lto-objects"
+  fi
 fi
 
 configure_flag+=" --with-linux-dist=$linux_dist"
@@ -259,9 +265,12 @@ export PG_COLOR=auto
 export LANG=en_US.UTF-8
 export LANGUAGE=en_US.UTF-8
 export LC_ALL=en_US.UTF-8
-export CFLAGS="$compiler_flag ${CFLAGS-}"
-export CXXFLAGS="$compiler_flag ${CXXFLAGS-}"
-export LDFLAGS="-Wl,-rpath,'\$\$ORIGIN/../lib:$base_dir/lib',--build-id=sha1 ${LDFLAGS-}"
+export CFLAGS="$compiler_flag${lto_flag:+ $lto_flag} ${CFLAGS-}"
+export CXXFLAGS="$compiler_flag${lto_flag:+ $lto_flag} ${CXXFLAGS-}"
+export LDFLAGS="-Wl,-rpath,'\$\$ORIGIN/../lib:$base_dir/lib',--build-id=sha1${lto_flag:+ $lto_flag} ${LDFLAGS-}"
+if [[ -n $lto_flag ]] && command -v gcc-ar >/dev/null 2>&1; then
+  export AR=gcc-ar RANLIB=gcc-ranlib NM=gcc-nm
+fi
 export PATH=$base_dir/bin:${PATH-}
 if [[ "${COPT-}" != *-Wno-error* ]]; then
   export COPT="-Werror ${COPT-}"
