@@ -202,6 +202,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Performance
 
+- Release builds are now linked with link-time optimization (LTO) enabled,
+  producing smaller and faster binaries (XCOM-198)
 - Fixed occasional slow commits on lightly loaded instances,
   because of lost wakeups of pipeline workers (XCOM-162)
 - Eliminate the per-I/O memory copy on shared storage: PolarDB now reads and
