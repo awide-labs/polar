@@ -7776,8 +7776,8 @@ StartupXLOG(void)
 	RefreshXLogWriteResult(LogwrtResult);
 	if (unlikely(pg_atomic_read_u64(&Insert->PrevBytePos) < XLogRecPtrToBytePos(endOfRecoveryInfo->lastRec) ||
 				 pg_atomic_read_u64(&Insert->CurrBytePos) <= XLogRecPtrToBytePos(endOfRecoveryInfo->lastRec) ||
-				 LogwrtResult.Flush <= endOfRecoveryInfo->lastRec ||
-				 LogwrtResult.Write <= endOfRecoveryInfo->lastRec ||
+				 pg_atomic_read_u64(&XLogCtl->logFlushResult) <= endOfRecoveryInfo->lastRec ||
+				 pg_atomic_read_u64(&XLogCtl->logWriteResult) <= endOfRecoveryInfo->lastRec ||
 				 XLogCtl->LogwrtRqst.Flush <= endOfRecoveryInfo->lastRec ||
 				 XLogCtl->LogwrtRqst.Write <= endOfRecoveryInfo->lastRec))
 		elog(PANIC, "Something wrong for these important LSNs: " \
@@ -7786,8 +7786,8 @@ StartupXLOG(void)
 			 "LogwrtRqst.Flush is %X/%X, LogwrtRqst.Write is %X/%X, " \
 			 "LastRec is %X/%X, last usable byte position is 0x%lX",
 			 pg_atomic_read_u64(&Insert->PrevBytePos), pg_atomic_read_u64(&Insert->CurrBytePos),
-			 LSN_FORMAT_ARGS(LogwrtResult.Flush),
-			 LSN_FORMAT_ARGS(LogwrtResult.Write), LSN_FORMAT_ARGS(XLogCtl->LogwrtRqst.Flush),
+			 LSN_FORMAT_ARGS(pg_atomic_read_u64(&XLogCtl->logFlushResult)),
+			 LSN_FORMAT_ARGS(pg_atomic_read_u64(&XLogCtl->logWriteResult)), LSN_FORMAT_ARGS(XLogCtl->LogwrtRqst.Flush),
 			 LSN_FORMAT_ARGS(XLogCtl->LogwrtRqst.Write), LSN_FORMAT_ARGS(endOfRecoveryInfo->lastRec),
 			 XLogRecPtrToBytePos(endOfRecoveryInfo->lastRec));
 
