@@ -52,6 +52,7 @@ typedef enum RecoveryPauseState
 extern PGDLLIMPORT bool recoveryTargetInclusive;
 extern PGDLLIMPORT int recoveryTargetAction;
 extern PGDLLIMPORT int recovery_min_apply_delay;
+extern PGDLLIMPORT int polar_recovery_bulk_read_size;
 extern PGDLLIMPORT char *PrimaryConnInfo;
 extern PGDLLIMPORT char *PrimarySlotName;
 extern PGDLLIMPORT char *recoveryRestoreCommand;

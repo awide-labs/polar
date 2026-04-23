@@ -98,6 +98,9 @@ const char *recoveryTargetName;
 XLogRecPtr	recoveryTargetLSN;
 int			recovery_min_apply_delay = 0;
 
+/* POLAR: number of WAL pages to read in one I/O during recovery */
+int			polar_recovery_bulk_read_size = 128;
+
 /* options formerly taken from recovery.conf for XLOG streaming */
 char	   *PrimaryConnInfo = NULL;
 char	   *PrimarySlotName = NULL;
@@ -3533,6 +3536,121 @@ ReadRecord(XLogPrefetcher *xlogprefetcher, int emode,
 }
 
 /*
+ * polar_recovery_read_xlog_page_bulk
+ *
+ * Read WAL pages in bulk during recovery, using the bulk_read_buffer in
+ * XLogReaderState as a read-ahead cache.  Modeled on walsender's
+ * polar_logical_read_xlog_page_bulk().
+ *
+ * Returns true if the requested page was served from the buffer (either a
+ * cache hit or a successful bulk read).  Returns false if bulk read is not
+ * applicable and the caller should fall through to the original single-page
+ * read path.
+ */
+static bool
+polar_recovery_read_xlog_page_bulk(XLogReaderState *xlogreader,
+								   XLogRecPtr targetPagePtr,
+								   char *readBuf)
+{
+	uint32		targetPageOff;
+	uint32		pages_avail;
+	uint32		bulk_pages;
+	uint32		bulk_bytes;
+	int			r;
+
+	/* Fast path: serve from existing buffer */
+	if (xlogreader->bulk_read_buffer &&
+		xlogreader->bulk_read_buffer_tli == curFileTLI &&
+		targetPagePtr >= xlogreader->bulk_read_buffer_start &&
+		targetPagePtr < xlogreader->bulk_read_buffer_start +
+		(uint64) xlogreader->bulk_read_buffer_len * XLOG_BLCKSZ)
+	{
+		memcpy(readBuf,
+			   xlogreader->bulk_read_buffer +
+			   (targetPagePtr - xlogreader->bulk_read_buffer_start),
+			   XLOG_BLCKSZ);
+		return true;
+	}
+
+	/* Bulk read disabled or size=1 means no benefit */
+	if (polar_recovery_bulk_read_size <= 1)
+		return false;
+
+	targetPageOff = XLogSegmentOffset(targetPagePtr, wal_segment_size);
+
+	/* How many pages remain in this segment from targetPagePtr? */
+	pages_avail = (wal_segment_size - targetPageOff) / XLOG_BLCKSZ;
+
+	/*
+	 * When flushedUpto is non-zero, WAL is arriving incrementally via
+	 * streaming (standby recovery on a replica).  Clamp to what's been
+	 * flushed to avoid reading unwritten pages beyond that point. During
+	 * crash recovery, flushedUpto is zero and all pages on disk are valid up
+	 * to the segment boundary.
+	 */
+	if (flushedUpto != 0)
+	{
+		uint32		stream_pages;
+
+		if (flushedUpto <= targetPagePtr + XLOG_BLCKSZ)
+			return false;		/* only one page available, no benefit */
+
+		stream_pages = (uint32) ((flushedUpto - targetPagePtr) / XLOG_BLCKSZ);
+		pages_avail = Min(pages_avail, stream_pages);
+	}
+
+	/* No benefit if only one page is available */
+	if (pages_avail <= 1)
+		return false;
+
+	/* Clamp to configured buffer size */
+	bulk_pages = Min(pages_avail, (uint32) polar_recovery_bulk_read_size);
+
+	/*
+	 * About to mutate bulk_read_buffer (realloc and/or pread).  Drop the
+	 * cached range now so an early return on failure can't leave stale
+	 * bookkeeping pointing into partially-written memory.
+	 */
+	xlogreader->bulk_read_buffer_len = 0;
+
+	/* Allocate or resize bulk buffer */
+	if (!xlogreader->bulk_read_buffer ||
+		xlogreader->bulk_read_buffer_size != (uint32) polar_recovery_bulk_read_size)
+	{
+		if (xlogreader->bulk_read_buffer)
+			pfree(xlogreader->bulk_read_buffer);
+
+		xlogreader->bulk_read_buffer_size = polar_recovery_bulk_read_size;
+		xlogreader->bulk_read_buffer =
+			palloc_aligned((Size) polar_recovery_bulk_read_size * XLOG_BLCKSZ,
+						   PG_IO_ALIGN_SIZE, MCXT_ALLOC_NO_OOM);
+
+		if (!xlogreader->bulk_read_buffer)
+			return false;		/* allocation failed, fall through */
+	}
+
+	/* Perform the bulk read */
+	bulk_bytes = bulk_pages * XLOG_BLCKSZ;
+
+	pgstat_report_wait_start(WAIT_EVENT_WAL_READ);
+	r = polar_xlog_page_read_internal(targetPagePtr, xlogreader->bulk_read_buffer,
+									  bulk_bytes);
+	pgstat_report_wait_end();
+
+	if (r != (int) bulk_bytes)
+		return false;			/* read failed or short, fall through to
+								 * original path */
+
+	xlogreader->bulk_read_buffer_start = targetPagePtr;
+	xlogreader->bulk_read_buffer_len = bulk_pages;
+	xlogreader->bulk_read_buffer_tli = curFileTLI;
+
+	/* Copy requested page out of the buffer */
+	memcpy(readBuf, xlogreader->bulk_read_buffer, XLOG_BLCKSZ);
+	return true;
+}
+
+/*
  * Read the XLOG page containing RecPtr into readBuf (if not read already).
  * Returns number of bytes read, if the page is read successfully, or
  * XLREAD_FAIL in case of errors.  When errors occur, they are ereport'ed, but
@@ -3596,6 +3714,9 @@ XLogPageRead(XLogReaderState *xlogreader, XLogRecPtr targetPagePtr, int reqLen,
 		polar_close(readFile);
 		readFile = -1;
 		readSource = XLOG_FROM_ANY;
+
+		/* POLAR: invalidate bulk read buffer on segment switch */
+		xlogreader->bulk_read_buffer_len = 0;
 	}
 
 	XLByteToSeg(targetPagePtr, readSegNo, wal_segment_size);
@@ -3623,6 +3744,13 @@ retry:
 			readSource == XLOG_FROM_STREAM &&
 			flushedUpto < targetPagePtr + reqLen)
 			return XLREAD_WOULDBLOCK;
+
+		/*
+		 * POLAR: invalidate bulk read buffer before switching sources.
+		 * WaitForWALToBecomeAvailable may open a different file or timeline,
+		 * making cached pages stale.
+		 */
+		xlogreader->bulk_read_buffer_len = 0;
 
 		switch (WaitForWALToBecomeAvailable(targetPagePtr + reqLen,
 											private->randAccess,
@@ -3672,31 +3800,35 @@ retry:
 	/* Read the requested page */
 	readOff = targetPageOff;
 
-	pgstat_report_wait_start(WAIT_EVENT_WAL_READ);
-	r = polar_xlog_page_read_internal(targetPagePtr, readBuf, XLOG_BLCKSZ);
-	if (r != XLOG_BLCKSZ)
+	/* POLAR: try bulk read first to reduce per-page I/O round-trips */
+	if (!polar_recovery_read_xlog_page_bulk(xlogreader, targetPagePtr, readBuf))
 	{
-		char		fname[MAXFNAMELEN];
-		int			save_errno = errno;
-
-		pgstat_report_wait_end();
-		XLogFileName(fname, curFileTLI, readSegNo, wal_segment_size);
-		if (r < 0)
+		pgstat_report_wait_start(WAIT_EVENT_WAL_READ);
+		r = polar_xlog_page_read_internal(targetPagePtr, readBuf, XLOG_BLCKSZ);
+		if (r != XLOG_BLCKSZ)
 		{
-			errno = save_errno;
-			ereport(emode_for_corrupt_record(emode, targetPagePtr + reqLen),
-					(errcode_for_file_access(),
-					 errmsg("could not read from log segment %s, offset %u: %m",
-							fname, readOff)));
+			char		fname[MAXFNAMELEN];
+			int			save_errno = errno;
+
+			pgstat_report_wait_end();
+			XLogFileName(fname, curFileTLI, readSegNo, wal_segment_size);
+			if (r < 0)
+			{
+				errno = save_errno;
+				ereport(emode_for_corrupt_record(emode, targetPagePtr + reqLen),
+						(errcode_for_file_access(),
+						 errmsg("could not read from log segment %s, offset %u: %m",
+								fname, readOff)));
+			}
+			else
+				ereport(emode_for_corrupt_record(emode, targetPagePtr + reqLen),
+						(errcode(ERRCODE_DATA_CORRUPTED),
+						 errmsg("could not read from log segment %s, offset %u: read %d of %zu",
+								fname, readOff, r, (Size) XLOG_BLCKSZ)));
+			goto next_record_is_invalid;
 		}
-		else
-			ereport(emode_for_corrupt_record(emode, targetPagePtr + reqLen),
-					(errcode(ERRCODE_DATA_CORRUPTED),
-					 errmsg("could not read from log segment %s, offset %u: read %d of %zu",
-							fname, readOff, r, (Size) XLOG_BLCKSZ)));
-		goto next_record_is_invalid;
+		pgstat_report_wait_end();
 	}
-	pgstat_report_wait_end();
 
 	Assert(targetSegNo == readSegNo);
 	Assert(targetPageOff == readOff);

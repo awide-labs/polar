@@ -193,6 +193,8 @@ XLogReaderFree(XLogReaderState *state)
 	pfree(state->errormsg_buf);
 	if (state->readRecordBuf)
 		pfree(state->readRecordBuf);
+	if (state->bulk_read_buffer)
+		pfree(state->bulk_read_buffer);
 	pfree(state->readBuf);
 	pfree(state);
 }

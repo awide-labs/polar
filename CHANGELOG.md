@@ -22,6 +22,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `curr_primary_consistent_lsn` with lock-free `pg_atomic_uint64` ops,
   eliminating two hot spinlocks (`info_lck`, `WalRcv->mutex`) from the
   per-buffer-read path on replicas (XCOM-128)
+- Speed up crash recovery replay by reading multiple WAL pages per I/O
+  (default 128, configurable via `polar_recovery_bulk_read_size`)
+  (XCOM-138)
 
 - Eliminate walsender spinlock contention on the primary, letting
   walsenders keep up with the write load generating WAL (XCOM-137)

@@ -3312,6 +3312,17 @@ static struct config_int ConfigureNamesInt[] =
 	},
 
 	{
+		{"polar_recovery_bulk_read_size", PGC_SIGHUP, WAL_RECOVERY,
+			gettext_noop("Number of WAL pages to read from storage in one I/O during recovery."),
+			NULL,
+			GUC_UNIT_BLOCKS | POLAR_GUC_IS_VISIBLE | POLAR_GUC_IS_CHANGABLE
+		},
+		&polar_recovery_bulk_read_size,
+		128, 1, 512,
+		NULL, NULL, NULL
+	},
+
+	{
 		{"polar_hostid", PGC_POSTMASTER, POLAR_STORAGE,
 			gettext_noop("Set hostid for pfsd."),
 			NULL,
