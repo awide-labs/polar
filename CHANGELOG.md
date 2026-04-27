@@ -57,6 +57,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Prevented replica startup with disabled logindex (`polar_logindex_mem_size=0`
+  or `polar_xlog_queue_buffers=0`) which would lead to crash during WAL replay (XCOM-193)
 - Corrected the wait event name for CSN log buffers in `pg_stat_activity`
   from "csnlog\_puffers" to "csnlog\_buffers" (XCOM-193)
 - Fixed xlog queue statistics reporting incorrect values on replicas: the
