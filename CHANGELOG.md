@@ -74,6 +74,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Prevented replica startup with disabled logindex (`polar_logindex_mem_size=0`
+  or `polar_xlog_queue_buffers=0`) which would lead to crash during WAL replay
+  (XCOM-195)
 - Introduced support for cgroup v2 to fetch memory statistics, removing the
   `Failed to get instance memory` error that previously spammed the logs (XCOM-195)
 - VACUUM FULL/CLUSTER/REINDEX/TRUNCATE of mapped system catalogs recreates

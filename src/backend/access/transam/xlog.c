@@ -11955,6 +11955,13 @@ polar_get_node_type(void)
 	if (!polar_enable_shared_storage_mode && polar_node_type == POLAR_REPLICA)
 		elog(FATAL, "replica mode is not possible because shared storage mode is disabled");
 
+	if (polar_node_type == POLAR_REPLICA &&
+		(polar_logindex_mem_size <= 0 || polar_xlog_queue_buffers <= 0))
+		ereport(FATAL,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("logindex is required for replica mode but disabled"),
+				 errdetail("polar_logindex_mem_size and polar_xlog_queue_buffers must both be non-zero on replica nodes.")));
+
 	return polar_node_type;
 }
 
