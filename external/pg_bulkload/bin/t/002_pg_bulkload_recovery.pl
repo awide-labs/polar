@@ -82,6 +82,7 @@ command_fails_like(
 
 $node_primary->safe_psql('postgres', "CREATE DATABASE test_bulkload;");
 $node_primary->safe_psql('test_bulkload', "CREATE EXTENSION pg_bulkload;");
+$node_primary->safe_psql('test_bulkload', "CREATE EXTENSION pageinspect;");
 
 # Install faultinjector extension if available (for crash simulation)
 my $has_faultinjector = 0;
@@ -209,6 +210,29 @@ EOF
 	ok($count_after_preload == 0,
 		"Table is accessible after postmaster bulkload recovery on node_pg_bulkload_preload ($count_after_preload rows)");
 
+	# Verify TruncateLoadedRange actually shrunk the relation back to its
+	# pre-load size.  Block 0 is WAL-logged by writer_direct (see
+	# flush_pages()) and therefore restored by crash recovery, so after
+	# recovery the relation must consist of exactly that one block (8192
+	# bytes) on a default-BLCKSZ build; everything past it - and there are
+	# >= 2*BLOCK_BUF_NUM = 2048 such blocks here - must be gone.
+	$node_pg_bulkload_preload->safe_psql('test_bulkload',
+		"CREATE EXTENSION IF NOT EXISTS pageinspect;");
+
+	my $relsize_preload = $node_pg_bulkload_preload->safe_psql(
+		'test_bulkload',
+		"SELECT pg_relation_size('test_recovery');");
+	is($relsize_preload, 8192,
+		"postmaster recovery truncated test_recovery back to 1 block (the WAL-restored block 0)");
+
+	# Block 0 must still be a real, content-bearing heap page after WAL
+	# replay; the loader's first page is preserved via log_newpage().
+	my $page0_items_preload = $node_pg_bulkload_preload->safe_psql(
+		'test_bulkload',
+		"SELECT count(*) FROM heap_page_items(get_raw_page('test_recovery', 0));");
+	cmp_ok($page0_items_preload, '>', 0,
+		"postmaster recovery preserved the WAL-logged block 0 contents ($page0_items_preload items)");
+
 	$node_pg_bulkload_preload->stop;
 
 	#############################################
@@ -231,6 +255,20 @@ EOF
 		'test_bulkload', 'SELECT COUNT(*) FROM test_recovery');
 	ok($count_after_offline == 0,
 		"Table is accessible after offline recovery on node_primary ($count_after_offline rows)");
+
+	# Same physical assertion as for postmaster recovery: TruncateLoadedRange
+	# must have shrunk the relation back to the single WAL-restored block.
+	my $relsize_offline = $node_primary->safe_psql(
+		'test_bulkload',
+		"SELECT pg_relation_size('test_recovery');");
+	is($relsize_offline, 8192,
+		"offline recovery truncated test_recovery back to 1 block (the WAL-restored block 0)");
+
+	my $page0_items_offline = $node_primary->safe_psql(
+		'test_bulkload',
+		"SELECT count(*) FROM heap_page_items(get_raw_page('test_recovery', 0));");
+	cmp_ok($page0_items_offline, '>', 0,
+		"offline recovery preserved the WAL-logged block 0 contents ($page0_items_offline items)");
 
 	#############################################
 	# 5.5 COPY FROM ... DIRECT, WAL_LOGGED (WRITER=BUFFERED): crash leaves no .loadstatus
