@@ -14,8 +14,9 @@
  * @brief Run pg_bulkload recovery over the given data directory.
  *
  * Scans for .loadstatus files(LSF) under data_dir/pg_bulkload/, and if the cluster
- * did not shut down cleanly, overwrites the corresponding relation ranges
- * with blank pages and removes the load status files.
+ * did not shut down cleanly, truncates the corresponding relation ranges off
+ * the affected segments (unlinking any later segments the loader created)
+ * and removes the load status files.
  *
  * Callable from both the pg_bulkload frontend (recovery process) and from
  * postmaster/backend when the pg_bulkload extension is loaded (e.g. at

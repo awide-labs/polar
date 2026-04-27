@@ -25,7 +25,6 @@
 #include "catalog/pg_control.h"
 #include "catalog/pg_tablespace.h"
 #include "nodes/pg_list.h"
-#include "storage/bufpage.h"
 
 /**
  * @brief length of ".loadstatus" file
@@ -39,15 +38,13 @@ static const char *recovery_data_dir = NULL;
 static List *GetLSFList(void);
 static DBState GetDBClusterState(const char *fname);
 static void GetLoadStatusInfo(const char *lsfpath, LoadStatus * ls);
-static void ClearLoadedPage(
+static void TruncateLoadedRange(
 #if PG_VERSION_NUM >= 160000
 			RelFileLocator rLocator,
 #else
 			RelFileNode rnode,
 #endif
 			BlockNumber blkbeg, BlockNumber blkend);
-static bool IsPageCreatedByLoader(Page page);
-static bool PageHeaderIsValid(Page page);
 static void GetSegmentPath(char path[MAXPGPATH],
 #if PG_VERSION_NUM >= 160000
 		RelFileLocator rLocator,
@@ -55,76 +52,6 @@ static void GetSegmentPath(char path[MAXPGPATH],
 		RelFileNode rnode,
 #endif
 		int segno);
-
-#ifdef FRONTEND
-/*------------------------------------------------------------------------
- *	 The following function is copied from PostgreSQL source code with no
- *   changes. This is necessary only for frontend version, backend version
- *   uses PostgreSQL code.
- *------------------------------------------------------------------------*/
-
-void
-PageInit(Page page, Size pageSize, Size specialSize)
-{
-	PageHeader	p = (PageHeader) page;
-
-	specialSize = MAXALIGN(specialSize);
-
-	Assert(pageSize == BLCKSZ);
-	Assert(pageSize > specialSize + SizeOfPageHeaderData);
-
-	/*
-	 * Make sure all fields of page are zero, as well as unused space
-	 */
-	MemSet(p, 0, pageSize);
-
-	p->pd_lower = SizeOfPageHeaderData;
-	p->pd_upper = pageSize - specialSize;
-	p->pd_special = pageSize - specialSize;
-	PageSetPageSizeAndVersion(page, pageSize, PG_PAGE_LAYOUT_VERSION);
-}
-#endif /* FRONTEND */
-
-/*------------------------------------------------------------------------
- *   PageHeaderIsValid() is no longer exists in PostreSQL 15, the following
- *   function is the short version of PageIsVerifiedExtended(), used both
- *   for frontend and backend versions.
- *------------------------------------------------------------------------*/
-bool
-PageHeaderIsValid(Page page)
-{
-	char	   *pagebytes;
-	int			i;
-	PageHeader phdr = (PageHeader) page;
-
-	/*
-	 * Check normal case
-	 */
-	if (PageGetPageSize(
-#if PG_VERSION_NUM >= 160000
-		page) == BLCKSZ && PageGetPageLayoutVersion(page
-#else
-		phdr) == BLCKSZ && PageGetPageLayoutVersion(phdr
-#endif
-	 	) == PG_PAGE_LAYOUT_VERSION &&
-		phdr->pd_lower >= SizeOfPageHeaderData &&
-		phdr->pd_lower <= phdr->pd_upper &&
-		phdr->pd_upper <= phdr->pd_special &&
-		phdr->pd_special <= BLCKSZ &&
-		phdr->pd_special == MAXALIGN(phdr->pd_special))
-		return true;
-
-	/*
-	 * Check all-zeroes case
-	 */
-	pagebytes = (char *) phdr;
-	for (i = 0; i < BLCKSZ; i++)
-	{
-		if (pagebytes[i] != 0)
-			return false;
-	}
-	return true;
-}
 
 static void
 GetSegmentPath(char path[MAXPGPATH],
@@ -294,22 +221,46 @@ GetLoadStatusInfo(const char *lsfpath, LoadStatus * ls)
 			 lsfpath);
 }
 
-static bool
-IsPageCreatedByLoader(Page page)
-{
-	PageHeader	targetBlock = (PageHeader) page;
-
-	if (!PageHeaderIsValid(page))
-		return true;
-
-	if (targetBlock->pd_lsn.xlogid == 0 && targetBlock->pd_lsn.xrecoff == 0)
-		return true;
-	else
-		return false;
-}
-
+/**
+ * @brief Discard a loader-extended block range by truncating the affected
+ *        segment files on disk.
+ *
+ * pg_bulkload's DIRECT writer extends a relation under AccessExclusiveLock
+ * and only WAL-logs the very first newly extended page (so that mdnblocks()
+ * can see the new EOF after replay).  All later loader-written pages are
+ * not WAL-logged.  After a crash before commit, those pages are physically
+ * present on disk but reference an aborted XID; they must be removed
+ * before the table is reachable again.
+ *
+ * @note Assumes blkbeg is at or before the pre-load EOF of its segment,
+ *       so that truncating that segment to <tt>(blkbeg % RELSEG_SIZE) *
+ *       BLCKSZ</tt> bytes preserves all pre-existing data.
+ * @note Must be called before the relation is attached to shared buffers;
+ *       StartLoaderRecovery() runs during startup, before WAL replay opens
+ *       the relation and before any backend can touch it.
+ * @note Idempotent across retries: a crash or a non-ENOENT polar_unlink()
+ *       failure leaves the LSF on disk, so the next StartLoaderRecovery()
+ *       run repeats the truncate (a no-op on an already-short segment) and
+ *       the unlink loop (already-removed segments come back as ENOENT,
+ *       which is tolerated explicitly).
+ *
+ * @warning The caller MUST keep the .loadstatus file on disk until this
+ *          function returns without error.  If the LSF is unlinked while
+ *          loader-created segments still exist on disk, those segments
+ *          become invisible orphans that a later mdextend() can adopt as
+ *          legitimate relation content, silently corrupting the table.
+ *          See StartLoaderRecovery() for the enforced ordering.
+ *
+ * @param rLocator [in] (PG >= 16) physical locator of the relation to recover.
+ * @param rnode    [in] (PG <  16) physical locator of the relation to recover.
+ * @param blkbeg   [in] First block of the loader-extended range (inclusive),
+ *                      typically <tt>ls.exist_cnt</tt>.
+ * @param blkend   [in] One past the last loader-extended block (exclusive),
+ *                      typically <tt>ls.exist_cnt + ls.create_cnt</tt>.
+ *                      If <tt>blkbeg >= blkend</tt> this is a no-op.
+ */
 static void
-ClearLoadedPage(
+TruncateLoadedRange(
 #if PG_VERSION_NUM >= 160000
 			RelFileLocator rLocator,
 #else
@@ -317,164 +268,67 @@ ClearLoadedPage(
 #endif
 			BlockNumber blkbeg, BlockNumber blkend)
 {
-	BlockNumber segno;				/* data file segment no */
-	char		segpath[MAXPGPATH];	/* data file name to open */
-	char	   *page;				/* area to read blocks */
-	Page		zeropage;			/* blank page */
-	BlockNumber	blknum;				/* block no currently procesing */
-	int			fd;					/* file descriptor */
-	off_t		seekpos;			/* position of block to recovery */
-	ssize_t		ret;				/* return value of read()  */
-	ssize_t		readlen;			/* size of data read by read()	*/
+	BlockNumber first_seg;
+	BlockNumber last_seg;
+	BlockNumber segno;
+	off_t		first_seg_len;
+	char		segpath[MAXPGPATH];
 
-	/* if no block is created by pg_bulkload, no work needed. */
-	if (blkbeg <= blkend)
+	/* Nothing to do if the loader did not extend the relation. */
+	if (blkbeg >= blkend)
 		return;
 
-	/*
-	 * Allocate buffer page and blank pages with malloc so that the buffers
-	 * will be well-aligned.
-	 */
-	page = palloc(BLCKSZ);
-	zeropage = (Page) palloc(BLCKSZ);
-	PageInit(zeropage, BLCKSZ, 0);
+	first_seg = blkbeg / RELSEG_SIZE;
+	last_seg = (blkend - 1) / RELSEG_SIZE;
+	first_seg_len = (off_t) (blkbeg % RELSEG_SIZE) * BLCKSZ;
 
 	/*
-	 * get file name of first file name from ls.
-	 *	   open the file.
-	 *	   if size of the file is over than 1 file segment size(default 1GB),
-	 *	   set	proper extension.
+	 * Truncate the first affected segment back to the pre-load EOF.  If the
+	 * loader started exactly on a segment boundary this trims it to zero
+	 * length, but we keep the file in place: md.c requires every segment
+	 * except the last to be exactly RELSEG_SIZE blocks, and the segment with
+	 * index first_seg is allowed to be the (only) last segment of the
+	 * relation after we are done.
 	 */
-	segno = blkbeg / RELSEG_SIZE;
 	GetSegmentPath(segpath,
 #if PG_VERSION_NUM >= 160000
 				   rLocator,
 #else
 				   rnode,
 #endif
-				   segno);
+				   first_seg);
+
+	if (polar_truncate(segpath, first_seg_len) != 0)
+		elog(ERROR,
+			 "could not truncate data file \"%s\" to %lld bytes: %m",
+			 segpath, (long long) first_seg_len);
+
+	elog(NOTICE,
+		 "truncated \"%s\" to %lld bytes (loader-extended range [%u, %u))",
+		 segpath, (long long) first_seg_len, blkbeg, blkend);
 
 	/*
-	 * TODO: consider to use truncate instead of zero-fill to end of file.
+	 * Unlink any later segments that the loader created.  These segments did
+	 * not exist before the load (otherwise blkbeg would be past them), so it
+	 * is safe to remove them entirely.
 	 */
-
-	fd = polar_open(segpath, O_RDWR | PG_BINARY, S_IRUSR | S_IWUSR);
-	if (fd == -1)
-		elog(ERROR,
-			 "could not open data file \"%s\": %m",
-			 segpath);
-
-	seekpos = polar_lseek(fd, (blkbeg % RELSEG_SIZE) * BLCKSZ, SEEK_SET);
-
-	if (seekpos == -1)
-		elog(ERROR,
-			 "could not seek the target position in the data file \"%s\": %m",
-			 segpath);
-
-	blknum = blkbeg;
-
-	/*
-	 * pages created by pg_bulklod, overwrite them by blank pages.
-	 */
-	for (;;)
+	for (segno = first_seg + 1; segno <= last_seg; segno++)
 	{
-		readlen = 0;
-		ret = 0;
-
-		/*
-		 * to judge the page is created by pg_bulkload or not,
-		 * read target blocks.
-		 */
-		do
-		{
-			ret = polar_read(fd, page + readlen, BLCKSZ - readlen);
-			if (ret == -1)
-			{
-				if (errno == EAGAIN || errno == EINTR)
-					continue;
-				else
-					elog(ERROR,
-						 "could not read data file \"%s\": %m",
-						 segpath);
-			}
-			else if (ret == 0)
-			{
-				/*
-				 * case of partially writing, refill 0.
-				 */
-				memset(page + readlen, 0, BLCKSZ - readlen);
-				ret = BLCKSZ - readlen;
-			}
-			readlen += ret;
-		}
-		while (readlen < BLCKSZ);
-
-
-		/*
-		 * if page is created by pg_bulkload, overwrite it by blank page.
-		 */
-		if (IsPageCreatedByLoader((Page) page))
-		{
-			seekpos = polar_lseek(fd, (blknum % RELSEG_SIZE) * BLCKSZ, SEEK_SET);
-
-			if (polar_write(fd, zeropage, BLCKSZ) == -1)
-				elog(ERROR,
-					 "could not write correct empty page: %m");
-		}
-
-		blknum++;
-
-		if (blknum >= blkend)
-			break;
-
-		/*
-		 * if current block reach to the end of file, and need to process continuously,
-		 * open next segment file.
-		 */
-		if (blknum % RELSEG_SIZE == 0)
-		{
-			if (polar_fsync(fd) != 0)
-				elog(ERROR,
-					 "could not sync data file \"%s\": %m",
-					 segpath);
-
-			if (polar_close(fd) == -1)
-				elog(ERROR,
-					 "could not close data file \"%s\": %m",
-					 segpath);
-
-			++segno;
-			GetSegmentPath(segpath,
+		GetSegmentPath(segpath,
 #if PG_VERSION_NUM >= 160000
-						   rLocator,
+					   rLocator,
 #else
-						   rnode,
+					   rnode,
 #endif
-						   segno);
+					   segno);
 
-			fd = polar_open(segpath, O_RDWR | PG_BINARY, S_IRUSR | S_IWUSR);
-			if (fd == -1)
-				elog(ERROR,
-					 "could not open data file \"%s\": %m",
-					 segpath);
-		}
+		if (polar_unlink(segpath) != 0 && errno != ENOENT)
+			elog(ERROR,
+				 "could not unlink loader-created segment \"%s\": %m",
+				 segpath);
+
+		elog(NOTICE, "removed loader-created segment \"%s\"", segpath);
 	}
-
-	/*
-	 * post process
-	 */
-	if (polar_fsync(fd) != 0)
-		elog(ERROR,
-			 "could not sync data file \"%s\": %m",
-			 segpath);
-
-	if (polar_close(fd) == -1)
-		elog(ERROR,
-			 "could not close data file \"%s\": %m",
-			 segpath);
-
-	pfree(page);
-	pfree(zeropage);
 }
 
 void
@@ -544,16 +398,18 @@ StartLoaderRecovery(const char *data_dir)
 				 lsfname);
 
 			/*
-			 * overwrite pages created by the loader by blank pages
+			 * Discard pages created by the loader by truncating the affected
+			 * segments back to their pre-load EOF and unlinking any segments
+			 * that the loader newly created.
 			 */
-			ClearLoadedPage(
+			TruncateLoadedRange(
 #if PG_VERSION_NUM >= 160000
-							ls.ls.rLocator,
+								ls.ls.rLocator,
 #else
-							ls.ls.rnode,
+								ls.ls.rnode,
 #endif
-							ls.ls.exist_cnt,
-							ls.ls.exist_cnt + ls.ls.create_cnt);
+								ls.ls.exist_cnt,
+								ls.ls.exist_cnt + ls.ls.create_cnt);
 
 			elog(NOTICE,
 				 "Ended pg_bulkload recovery for file \"%s\"",

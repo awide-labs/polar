@@ -74,6 +74,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Fixed `pg_bulkload` crash recovery so that disk space allocated by an
+  interrupted bulk load is reclaimed: after both automatic (postmaster)
+  and offline (`pg_bulkload -r`) recovery, the target relation returns to
+  its pre-load size. Previously the partially loaded blocks remained on
+  disk — the rows were invisible, but the space was never freed (XCOM-195)
 - Prevented replica startup with disabled logindex (`polar_logindex_mem_size=0`
   or `polar_xlog_queue_buffers=0`) which would lead to crash during WAL replay
   (XCOM-195)
