@@ -15,6 +15,10 @@ EXTRA_INSTALL += contrib/pg_stat_statements
 EXTRA_INSTALL += external/polar_monitor
 EXTRA_INSTALL += external/polar_worker
 
+ifeq ($(enable_fault_injector),yes)
+EXTRA_INSTALL += external/faultinjector
+endif
+
 ifeq ($(with_ssl),openssl)
 EXTRA_INSTALL += contrib/sslinfo
 endif

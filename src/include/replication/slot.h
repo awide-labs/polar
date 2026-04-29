@@ -324,6 +324,6 @@ extern XLogRecPtr polar_compute_physical_slots_restart_lsn(PolarNodeType node_ty
 extern void polar_replication_slot_set_node_type(PolarNodeType node_type);
 
 /* POLAR */
-extern void polar_compute_and_set_replica_lsn(void);
+extern void polar_compute_and_set_replica_lsn(bool skip_inactive);
 
 #endif							/* SLOT_H */

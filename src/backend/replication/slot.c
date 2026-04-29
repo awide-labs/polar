@@ -944,7 +944,7 @@ ReplicationSlotDropAcquired(void)
 	 * POLAR: compute the oldest apply lsn among all replication slots and set
 	 * it.
 	 */
-	polar_compute_and_set_replica_lsn();
+	polar_compute_and_set_replica_lsn(false);
 }
 
 /*
@@ -3078,14 +3078,41 @@ polar_reload_replication_slots_from_shared_storage(void)
 	ReplicationSlotsComputeRequiredXmin(false);
 	ReplicationSlotsComputeRequiredLSN();
 
-	polar_compute_and_set_replica_lsn();
+	polar_compute_and_set_replica_lsn(false);
 
 	elog(LOG, "Before online promote oldest_apply_lsn=%lX", polar_get_oldest_apply_lsn());
 }
 
-/* POLAR: Compute the oldest apply/lock lsn among all replicas. */
+/*
+ * POLAR: Compute the oldest apply/lock lsn among all replicas and publish
+ * it via polar_set_oldest_replica_lsn().
+ *
+ * Iterates every in-use physical replication slot, takes the minimum of
+ * polar_replica_apply_lsn (= XLogCtl->oldest_apply_lsn) and of
+ * polar_replica_lock_lsn (= XLogCtl->oldest_lock_lsn). These two LSNs gate
+ * primary-side buffer flushing (polar_buffer_can_be_flushed) and checkpoint
+ * progress (polar_is_checkpoint_legal): a buffer can be flushed to shared
+ * storage only when its latest LSN <= oldest_apply_lsn, otherwise replicas
+ * could read "future" pages they have not replayed WAL for.
+ *
+ * @param skip_inactive  When true, slots whose walsender has already exited
+ *                       (active_pid == 0) are excluded from the reduction.
+ *                       The polar_replica_apply_lsn of a disconnected slot is
+ *                       not being updated by anyone and otherwise indefinitely
+ *                       pins oldest_apply_lsn at a stale value, blocking
+ *                       buffer flushing and the checkpoint redo => consistent
+ *                       advance. This is the shutdown-checkpoint code path:
+ *                       replica walsenders exit before the primary's shutdown
+ *                       checkpoint runs, so their stale apply_lsn must be
+ *                       ignored or the shutdown checkpoint hangs forever.
+ *                       The replica re-syncs from shared storage on next
+ *                       startup, so dropping the value is safe.
+ *                       Pass false on the normal/online code paths to
+ *                       preserve flush-protection for idle but still-
+ *                       attached replicas.
+ */
 void
-polar_compute_and_set_replica_lsn(void)
+polar_compute_and_set_replica_lsn(bool skip_inactive)
 {
 	uint32		slotno = 0;
 	XLogRecPtr	oldest_apply_lsn = InvalidXLogRecPtr;
@@ -3097,6 +3124,7 @@ polar_compute_and_set_replica_lsn(void)
 		ReplicationSlot *s = &ReplicationSlotCtl->replication_slots[slotno];
 		XLogRecPtr	apply_lsn;
 		XLogRecPtr	lock_lsn;
+		int			active_pid;
 
 		if (!s->in_use)
 			continue;
@@ -3104,7 +3132,11 @@ polar_compute_and_set_replica_lsn(void)
 		SpinLockAcquire(&s->mutex);
 		apply_lsn = s->data.polar_replica_apply_lsn;
 		lock_lsn = s->polar_replica_lock_lsn;
+		active_pid = s->active_pid;
 		SpinLockRelease(&s->mutex);
+
+		if (skip_inactive && active_pid == 0)
+			continue;
 
 		if (!XLogRecPtrIsInvalid(apply_lsn) &&
 			(XLogRecPtrIsInvalid(oldest_apply_lsn) || oldest_apply_lsn > apply_lsn))

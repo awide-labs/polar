@@ -74,6 +74,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Fixed primary hanging during shutdown when replicas were already stopped,
+  repeatedly logging "Checkpoint blocked" warnings until killed (XCOM-195)
 - Fixed `pg_bulkload` crash recovery so that disk space allocated by an
   interrupted bulk load is reclaimed: after both automatic (postmaster)
   and offline (`pg_bulkload -r`) recovery, the target relation returns to
