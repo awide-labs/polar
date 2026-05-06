@@ -69,11 +69,21 @@ $node_primary->safe_psql('postgres',
 $node_primary->wait_for_catchup($node_replica);
 $node_primary->wait_for_catchup($node_standby);
 
+# Verify polar_xlog_queue_stat_detail() returns sensible values for a queue
+# that has been used. We deliberately do NOT check `total_written > total_read`:
+# in TP17 those are the ring buffer's pwrite/pread positions (not cumulative
+# byte counters as in TP15), so the comparison only holds while packets are
+# in flight and is racy. After wait_for_catchup the replica's queue is fully
+# drained (pwrite == pread) and stays so unless the primary keeps writing WAL,
+# making the check unreliable on a quiescent system. `total_written > 0` is
+# monotonic until polar_ringbuf_reset (only called on promote, after which the
+# test always issues another insert), so it remains a meaningful check that
+# the queue was used at all.
 sub wait_for_mon_stat
 {
 	my ($node) = @_;
 	my $sql =
-"select free_up_cnt >= 0, total_written > total_read, recv_phys_io_cnt >= 0, evict_ref_cnt >= 0 from polar_xlog_queue_stat_detail();";
+"select free_up_cnt >= 0, total_written > 0, recv_phys_io_cnt >= 0, evict_ref_cnt >= 0 from polar_xlog_queue_stat_detail();";
 
 	for (1 .. 30)
 	{
