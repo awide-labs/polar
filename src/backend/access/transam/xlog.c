@@ -824,12 +824,12 @@ static void CopyXLogRecordToWAL(int write_len, bool isLogSwitch,
 								XLogRecData *rdata,
 								XLogRecPtr StartPos, XLogRecPtr EndPos,
 								TimeLineID tli);
-static bool ReserveXLogInsertLocation(int size, XLogRecPtr *StartPos,
+static void ReserveXLogInsertLocation(int size, XLogRecPtr *StartPos,
 									  XLogRecPtr *EndPos, XLogRecPtr *PrevPtr,
 									  uint32 polar_rbuf_len, size_t *polar_rbuf_pos);
 static bool ReserveXLogSwitch(XLogRecPtr *StartPos, XLogRecPtr *EndPos,
 							  XLogRecPtr *PrevPtr, uint32 polar_rbuf_len,
-							  size_t *polar_rbuf_pos, bool *need_retry);
+							  size_t *polar_rbuf_pos);
 static XLogRecPtr WaitXLogInsertionsToFinish(XLogRecPtr upto);
 static char *GetXLogBuffer(XLogRecPtr ptr, TimeLineID tli);
 static XLogRecPtr XLogBytePosToRecPtr(uint64 bytepos);
@@ -1770,7 +1770,6 @@ XLogInsertRecord(XLogRecData *rdata,
 	XLogRecPtr	EndPos;
 	bool		prevDoPageWrites = doPageWrites;
 	TimeLineID	insertTLI;
-	bool		need_retry = false;
 
 	/* POLAR: The reserved start point and length of ring buffer */
 	size_t		polar_rbuf_pos = 0;
@@ -1874,24 +1873,12 @@ XLogInsertRecord(XLogRecData *rdata,
 	 */
 	if (isLogSwitch)
 		inserted = ReserveXLogSwitch(&StartPos, &EndPos, &rechdr->xl_prev,
-									 polar_rbuf_len, &polar_rbuf_pos, &need_retry);
+									 polar_rbuf_len, &polar_rbuf_pos);
 	else
 	{
-		inserted = ReserveXLogInsertLocation(rechdr->xl_tot_len, &StartPos, &EndPos,
-											 &rechdr->xl_prev, polar_rbuf_len, &polar_rbuf_pos);
-		if (!inserted)
-			need_retry = true;
-	}
-
-	if (need_retry)
-	{
-		/*
-		 * Xlog queue is full and cannot make progress. Return
-		 * InvalidXLogRecPtr to let caller retry.
-		 */
-		WALInsertLockRelease();
-		END_CRIT_SECTION();
-		return InvalidXLogRecPtr;
+		ReserveXLogInsertLocation(rechdr->xl_tot_len, &StartPos, &EndPos,
+								  &rechdr->xl_prev, polar_rbuf_len, &polar_rbuf_pos);
+		inserted = true;
 	}
 
 	if (inserted)
@@ -1939,11 +1926,22 @@ XLogInsertRecord(XLogRecData *rdata,
 	WALInsertLockRelease();
 
 	/*
-	 * POLAR: must be inside CRIT_SECTION. Hold off signal to avoid mess up
-	 * queue data.
+	 * POLAR: must run inside CRIT_SECTION so signals/aborts can't interrupt
+	 * us mid-publish and leave the queue with an unwritten slot.
+	 *
+	 * Wait for our reserved queue region to be free (readers may not have
+	 * consumed it yet), then write the packet header and data.  No insert
+	 * locks are held during the wait, so walwriter and the logindex saver can
+	 * make progress — no deadlock with walwriter+logindex writer.
 	 */
 	if (inserted && polar_logindex_redo_instance)
 	{
+		polar_ringbuf_wait_for_space(polar_logindex_redo_instance->xlog_queue,
+									 polar_rbuf_pos,
+									 POLAR_XLOG_PKT_SIZE(polar_rbuf_len));
+		POLAR_XLOG_QUEUE_SET_PKT_LEN(polar_logindex_redo_instance->xlog_queue,
+									 polar_rbuf_pos, polar_rbuf_len);
+
 		if (polar_xlog_send_queue_push(polar_logindex_redo_instance->xlog_queue,
 									   polar_rbuf_pos, rdata, polar_rbuf_len,
 									   EndPos, EndPos - StartPos))
@@ -2109,14 +2107,17 @@ XLogInsertRecord(XLogRecData *rdata,
  * NB: The space calculation here must match the code in CopyXLogRecordToWAL,
  * where we actually copy the record to the reserved space.
  */
-static bool
+static void
 ReserveXLogInsertLocation(int size, XLogRecPtr *StartPos, XLogRecPtr *EndPos,
 						  XLogRecPtr *PrevPtr, uint32 polar_rbuf_len, size_t *polar_rbuf_pos)
 {
 	XLogCtlInsert *Insert = &XLogCtl->Insert;
+	polar_ringbuf_t xlog_queue = NULL;
 	uint64		startbytepos;
 	uint64		endbytepos;
 	uint64		prevbytepos;
+	uint64		idx = 0;
+	size_t		pkt_size = 0;
 
 	size = MAXALIGN(size);
 
@@ -2132,47 +2133,41 @@ ReserveXLogInsertLocation(int size, XLogRecPtr *StartPos, XLogRecPtr *EndPos,
 	 * positions (XLogRecPtrs) can be done outside the locked region, and
 	 * because the usable byte position doesn't include any headers, reserving
 	 * X bytes from WAL is almost as simple as "CurrBytePos += X".
+	 *
+	 * The xlog queue reservation is optimistic: inside the spinlock we only
+	 * advance pwrite (and CurrBytePos/PrevBytePos), without checking whether
+	 * the queue actually has free space.  pread is not read inside the lock,
+	 * so there is no cross-cache-line contention with readers.  pwrite may
+	 * temporarily run ahead of what readers have consumed; backpressure is
+	 * applied later by polar_ringbuf_wait_for_space() in XLogInsertRecord,
+	 * after all WAL insert locks are released.  Because that wait holds no
+	 * insert locks, walwriter and the logindex saver can make progress and
+	 * the queue can drain — no deadlock with walwriter+logindex writer.
 	 */
-	for (;;)
+	if (likely(polar_logindex_redo_instance))
 	{
-		SpinLockAcquire(&Insert->insertpos_lck);
-
-		if (likely(polar_logindex_redo_instance))
-		{
-			ssize_t		idx =
-				POLAR_XLOG_QUEUE_CHECK_SIZE_AND_RESERVE(polar_logindex_redo_instance->xlog_queue,
-														polar_rbuf_len);
-
-			if (idx < 0)
-			{
-				SpinLockRelease(&Insert->insertpos_lck);
-
-				/*
-				 * Try to free up space. If no progress can be made, return
-				 * false to let caller retry.
-				 */
-				if (!polar_ringbuf_try_free_up(polar_logindex_redo_instance->xlog_queue,
-											   POLAR_XLOG_PKT_SIZE(polar_rbuf_len)))
-					return false;
-
-				continue;
-			}
-			*polar_rbuf_pos = idx;
-		}
-
-		startbytepos = pg_atomic_read_u64(&Insert->CurrBytePos);
-		endbytepos = startbytepos + size;
-		prevbytepos = pg_atomic_read_u64(&Insert->PrevBytePos);
-		pg_atomic_write_u64(&Insert->CurrBytePos, endbytepos);
-		pg_atomic_write_u64(&Insert->PrevBytePos, startbytepos);
-
-		SpinLockRelease(&Insert->insertpos_lck);
-		break;
+		xlog_queue = polar_logindex_redo_instance->xlog_queue;
+		pkt_size = POLAR_XLOG_PKT_SIZE(polar_rbuf_len);
 	}
 
-	if (likely(polar_logindex_redo_instance))
-		POLAR_XLOG_QUEUE_SET_PKT_LEN(polar_logindex_redo_instance->xlog_queue,
-									 *polar_rbuf_pos, polar_rbuf_len);
+	SpinLockAcquire(&Insert->insertpos_lck);
+
+	if (likely(xlog_queue))
+	{
+		/* Reserve queue space: just advance pwrite, no free-space check */
+		idx = polar_ringbuf_pkt_reserve(xlog_queue, pkt_size);
+	}
+
+	startbytepos = pg_atomic_read_u64(&Insert->CurrBytePos);
+	endbytepos = startbytepos + size;
+	prevbytepos = pg_atomic_read_u64(&Insert->PrevBytePos);
+	pg_atomic_write_u64(&Insert->CurrBytePos, endbytepos);
+	pg_atomic_write_u64(&Insert->PrevBytePos, startbytepos);
+
+	SpinLockRelease(&Insert->insertpos_lck);
+
+	if (likely(xlog_queue))
+		*polar_rbuf_pos = idx;
 
 	*StartPos = XLogBytePosToRecPtr(startbytepos);
 	*EndPos = XLogBytePosToEndRecPtr(endbytepos);
@@ -2185,8 +2180,6 @@ ReserveXLogInsertLocation(int size, XLogRecPtr *StartPos, XLogRecPtr *EndPos,
 	Assert(XLogRecPtrToBytePos(*StartPos) == startbytepos);
 	Assert(XLogRecPtrToBytePos(*EndPos) == endbytepos);
 	Assert(XLogRecPtrToBytePos(*PrevPtr) == prevbytepos);
-
-	return true;
 }
 
 /*
@@ -2200,17 +2193,24 @@ ReserveXLogInsertLocation(int size, XLogRecPtr *StartPos, XLogRecPtr *EndPos,
 */
 static bool
 ReserveXLogSwitch(XLogRecPtr *StartPos, XLogRecPtr *EndPos, XLogRecPtr *PrevPtr,
-				  uint32 polar_rbuf_len, size_t *polar_rbuf_pos, bool *need_retry)
+				  uint32 polar_rbuf_len, size_t *polar_rbuf_pos)
 {
 	XLogCtlInsert *Insert = &XLogCtl->Insert;
+	polar_ringbuf_t xlog_queue = NULL;
 	uint64		startbytepos;
 	uint64		endbytepos;
 	uint64		prevbytepos;
 	uint32		size = MAXALIGN(SizeOfXLogRecord);
 	XLogRecPtr	ptr;
 	uint32		segleft;
+	uint64		idx = 0;
+	size_t		pkt_size = 0;
 
-	*need_retry = false;
+	if (likely(polar_logindex_redo_instance))
+	{
+		xlog_queue = polar_logindex_redo_instance->xlog_queue;
+		pkt_size = POLAR_XLOG_PKT_SIZE(polar_rbuf_len);
+	}
 
 	/*
 	 * These calculations are a bit heavy-weight to be done while holding a
@@ -2218,69 +2218,43 @@ ReserveXLogSwitch(XLogRecPtr *StartPos, XLogRecPtr *EndPos, XLogRecPtr *PrevPtr,
 	 * are no other inserters competing for it. GetXLogInsertRecPtr() does
 	 * compete for it, but that's not called very frequently.
 	 */
-	for (;;)
+	SpinLockAcquire(&Insert->insertpos_lck);
+
+	startbytepos = pg_atomic_read_u64(&Insert->CurrBytePos);
+
+	ptr = XLogBytePosToEndRecPtr(startbytepos);
+	if (XLogSegmentOffset(ptr, wal_segment_size) == 0)
 	{
-		SpinLockAcquire(&Insert->insertpos_lck);
-
-		startbytepos = pg_atomic_read_u64(&Insert->CurrBytePos);
-
-		ptr = XLogBytePosToEndRecPtr(startbytepos);
-		if (XLogSegmentOffset(ptr, wal_segment_size) == 0)
-		{
-			SpinLockRelease(&Insert->insertpos_lck);
-			*EndPos = *StartPos = ptr;
-			return false;
-		}
-
-		if (likely(polar_logindex_redo_instance))
-		{
-			ssize_t		idx =
-				POLAR_XLOG_QUEUE_CHECK_SIZE_AND_RESERVE(polar_logindex_redo_instance->xlog_queue,
-														polar_rbuf_len);
-
-			if (idx < 0)
-			{
-				SpinLockRelease(&Insert->insertpos_lck);
-
-				/*
-				 * Try to free up space. If no progress can be made, return
-				 * false to let caller retry.
-				 */
-				if (!polar_ringbuf_try_free_up(polar_logindex_redo_instance->xlog_queue,
-											   POLAR_XLOG_PKT_SIZE(polar_rbuf_len)))
-				{
-					*need_retry = true;
-					return false;
-				}
-
-				continue;
-			}
-			*polar_rbuf_pos = idx;
-		}
-
-		endbytepos = startbytepos + size;
-		prevbytepos = pg_atomic_read_u64(&Insert->PrevBytePos);
-
-		*StartPos = XLogBytePosToRecPtr(startbytepos);
-		*EndPos = XLogBytePosToEndRecPtr(endbytepos);
-
-		segleft = wal_segment_size - XLogSegmentOffset(*EndPos, wal_segment_size);
-		if (segleft != wal_segment_size)
-		{
-			/* consume the rest of the segment */
-			*EndPos += segleft;
-			endbytepos = XLogRecPtrToBytePos(*EndPos);
-		}
-		pg_atomic_write_u64(&Insert->CurrBytePos, endbytepos);
-		pg_atomic_write_u64(&Insert->PrevBytePos, startbytepos);
-
 		SpinLockRelease(&Insert->insertpos_lck);
-		break;
+		*EndPos = *StartPos = ptr;
+		return false;
 	}
 
-	if (likely(polar_logindex_redo_instance))
-		POLAR_XLOG_QUEUE_SET_PKT_LEN(polar_logindex_redo_instance->xlog_queue,
-									 *polar_rbuf_pos, polar_rbuf_len);
+	if (likely(xlog_queue))
+	{
+		idx = polar_ringbuf_pkt_reserve(xlog_queue, pkt_size);
+	}
+
+	endbytepos = startbytepos + size;
+	prevbytepos = pg_atomic_read_u64(&Insert->PrevBytePos);
+
+	*StartPos = XLogBytePosToRecPtr(startbytepos);
+	*EndPos = XLogBytePosToEndRecPtr(endbytepos);
+
+	segleft = wal_segment_size - XLogSegmentOffset(*EndPos, wal_segment_size);
+	if (segleft != wal_segment_size)
+	{
+		/* consume the rest of the segment */
+		*EndPos += segleft;
+		endbytepos = XLogRecPtrToBytePos(*EndPos);
+	}
+	pg_atomic_write_u64(&Insert->CurrBytePos, endbytepos);
+	pg_atomic_write_u64(&Insert->PrevBytePos, startbytepos);
+
+	SpinLockRelease(&Insert->insertpos_lck);
+
+	if (likely(xlog_queue))
+		*polar_rbuf_pos = idx;
 
 	*PrevPtr = XLogBytePosToRecPtr(prevbytepos);
 

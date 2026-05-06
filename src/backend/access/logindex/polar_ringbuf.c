@@ -264,8 +264,9 @@ polar_ringbuf_read_next_pkt(polar_ringbuf_ref_t *ref,
 	size_t		todo;
 	size_t		split;
 	size_t		pktlen;
+	size_t		phys;
 	polar_ringbuf_t rbuf = ref->rbuf;
-	size_t		idx = rbuf->slot[ref->slot].pread;
+	uint64		idx = rbuf->slot[ref->slot].pread;
 
 	pktlen = polar_ringbuf_pkt_len(rbuf, idx);
 
@@ -275,19 +276,19 @@ polar_ringbuf_read_next_pkt(polar_ringbuf_ref_t *ref,
 	if ((offset + len) > pktlen)
 		len = pktlen - offset;
 
-	idx = (idx + POLAR_RINGBUF_PKTHDRSIZE + offset) % rbuf->size;
+	phys = POLAR_RINGBUF_IDX(rbuf, idx + POLAR_RINGBUF_PKTHDRSIZE + offset);
 	todo = len;
-	split = ((idx + len) > rbuf->size) ? rbuf->size - idx : 0;
+	split = ((phys + len) > rbuf->size) ? rbuf->size - phys : 0;
 
 	if (unlikely(split > 0))
 	{
-		memcpy(buf, rbuf->data + idx, split);
+		memcpy(buf, rbuf->data + phys, split);
 		buf += split;
 		todo -= split;
-		idx = 0;
+		phys = 0;
 	}
 
-	memcpy(buf, rbuf->data + idx, todo);
+	memcpy(buf, rbuf->data + phys, todo);
 
 	return len;
 }
@@ -297,28 +298,29 @@ polar_ringbuf_read_next_pkt(polar_ringbuf_ref_t *ref,
  * Support write from the offset of packet.
  */
 ssize_t
-polar_ringbuf_pkt_write(polar_ringbuf_t rbuf, size_t idx, int offset, uint8 *buf, size_t len)
+polar_ringbuf_pkt_write(polar_ringbuf_t rbuf, uint64 idx, int offset, uint8 *buf, size_t len)
 {
 	size_t		todo;
 	size_t		split;
+	size_t		phys;
 	size_t		pktlen = polar_ringbuf_pkt_len(rbuf, idx);
 
 	if (offset >= pktlen || (offset + len) > pktlen)
 		return -1;
 
-	idx = (idx + POLAR_RINGBUF_PKTHDRSIZE + offset) % rbuf->size;
-	split = (idx + len > rbuf->size) ? rbuf->size - idx : 0;
+	phys = POLAR_RINGBUF_IDX(rbuf, idx + POLAR_RINGBUF_PKTHDRSIZE + offset);
+	split = (phys + len > rbuf->size) ? rbuf->size - phys : 0;
 	todo = len;
 
 	if (split > 0)
 	{
-		memcpy(rbuf->data + idx, buf, split);
+		memcpy(rbuf->data + phys, buf, split);
 		buf += split;
 		todo -= split;
-		idx = 0;
+		phys = 0;
 	}
 
-	memcpy(rbuf->data + idx, buf, todo);
+	memcpy(rbuf->data + phys, buf, todo);
 
 	return len;
 }
@@ -354,25 +356,40 @@ polar_ringbuf_update_pread(polar_ringbuf_t rbuf)
 	{
 		uint64		pre_pread = pg_atomic_read_u64(&rbuf->pread);
 		uint64		new_pread = rbuf->slot[min_slot].pread;
+		uint64		bytes_to_free = new_pread - last_pread;
 
 		rbuf->min_visit = min_visit;
-		if (last_pread <= new_pread)
+
+		/*
+		 * Clear freed region in the physical data array.  With monotonic
+		 * counters, new_pread >= last_pread always, but the physical region
+		 * may wrap around the buffer boundary.
+		 */
+		if (bytes_to_free > 0)
 		{
-			MemSet(&rbuf->data[last_pread], POLAR_RINGBUF_PKT_FREE, new_pread - last_pread);
+			size_t		phys_start = POLAR_RINGBUF_IDX(rbuf, last_pread);
+			size_t		phys_end = POLAR_RINGBUF_IDX(rbuf, new_pread);
+
+			if (phys_start < phys_end)
+			{
+				MemSet(&rbuf->data[phys_start], POLAR_RINGBUF_PKT_FREE,
+					   phys_end - phys_start);
+			}
+			else
+			{
+				/* Wraps around the buffer boundary */
+				MemSet(&rbuf->data[phys_start], POLAR_RINGBUF_PKT_FREE,
+					   rbuf->size - phys_start);
+				if (phys_end > 0)
+					MemSet(&rbuf->data[0], POLAR_RINGBUF_PKT_FREE, phys_end);
+			}
 		}
-		else
-		{
-			MemSet(&rbuf->data[last_pread], POLAR_RINGBUF_PKT_FREE, rbuf->size - last_pread);
-			MemSet(&rbuf->data[0], POLAR_RINGBUF_PKT_FREE, new_pread);
-		}
+
 		pg_write_barrier();
 		pg_atomic_write_u64(&rbuf->pread, new_pread);
 		updated = true;
 
-		if (rbuf->slot[min_slot].pread <= pre_pread)
-			pg_atomic_fetch_add_u64(&rbuf->prs.total_read, (uint64) (rbuf->size - (pre_pread - rbuf->slot[min_slot].pread)));
-		else
-			pg_atomic_fetch_add_u64(&rbuf->prs.total_read, (uint64) (rbuf->slot[min_slot].pread - pre_pread));
+		pg_atomic_fetch_add_u64(&rbuf->prs.total_read, new_pread - pre_pread);
 	}
 
 	return updated;
@@ -385,11 +402,11 @@ void
 polar_ringbuf_update_ref(polar_ringbuf_ref_t *ref)
 {
 	polar_ringbuf_t rbuf = ref->rbuf;
-	size_t		idx = rbuf->slot[ref->slot].pread;
-	size_t		pktlen = polar_ringbuf_pkt_len(rbuf, idx);
+	uint64		idx = rbuf->slot[ref->slot].pread;
+	uint32		pktlen = polar_ringbuf_pkt_len(rbuf, idx);
 
 	LWLockAcquire(&rbuf->lock, LW_SHARED);
-	rbuf->slot[ref->slot].pread = (idx + POLAR_RINGBUF_PKTHDRSIZE + pktlen) % rbuf->size;
+	rbuf->slot[ref->slot].pread = idx + POLAR_RINGBUF_PKTHDRSIZE + pktlen;
 	rbuf->slot[ref->slot].visit++;
 	LWLockRelease(&rbuf->lock);
 }
@@ -446,42 +463,48 @@ polar_ringbuf_update_keep_data(polar_ringbuf_t rbuf)
 }
 
 /*
- * Attempt to ensure there's enough free space in a ring buffer
- * for a write operation of size len.
+ * Wait until a previously reserved region [idx, idx+len) is safe to write.
  *
- * When space is not immediately available, it tries to reclaim some
- * free space by:
+ * With monotonic pwrite, a reservation can advance pwrite past what pread
+ * allows (optimistic reservation).  This function blocks until readers
+ * have consumed enough data that the physical region no longer overlaps
+ * unconsumed data, i.e. pread >= idx + len - (size - 1).
  *
- * - releasing space that has been processed by readers
- * - trying to evict some of weak references
- *
- * Unlike polar_ringbuf_free_up() this function exits immediately
- * instead of waiting indefinitely. This is used to avoid deadlock
- * when holding WALInsertLock while waiting for xlog queue space to
- * become available.
- *
- * Returns true if either:
- *   - Space became available
- *   - Progress was made (update_pread or evict_ref succeeded)
- * Returns false if no progress could be made.
+ * Locking: must be called with NO WAL insert locks held.  Holding them
+ * here would re-create the walwriter+logindex-writer deadlock (walwriter
+ * blocks on WaitXLogInsertionsToFinish, the logindex writer can't drain,
+ * the queue stays full).
  */
-bool
-polar_ringbuf_try_free_up(polar_ringbuf_t rbuf, size_t len)
+void
+polar_ringbuf_wait_for_space(polar_ringbuf_t rbuf, uint64 idx, size_t len)
 {
-	bool		progress,
-				is_free;
+	uint64		end = idx + len;
 
-	LWLockAcquire(&rbuf->lock, LW_EXCLUSIVE);
-	is_free = (polar_ringbuf_free_size(rbuf) > len);
+	/*
+	 * Fast path: our region is already free.  This is the common case when
+	 * the queue is large relative to the write rate.
+	 */
+	if ((ssize_t) (end - pg_atomic_read_u64(&rbuf->pread)) <= (ssize_t) (rbuf->size - 1))
+		return;
 
-	if (is_free)
-		progress = true;
-	else
-		progress = (polar_ringbuf_update_pread(rbuf) ||
-					polar_ringbuf_evict_ref(rbuf));
+	pgstat_report_wait_start(WAIT_EVENT_LOGINDEX_QUEUE_SPACE);
+	pg_atomic_fetch_add_u64(&rbuf->prs.free_up_cnt, 1);
 
-	LWLockRelease(&rbuf->lock);
-	return progress;
+	while ((ssize_t) (end - pg_atomic_read_u64(&rbuf->pread)) > (ssize_t) (rbuf->size - 1))
+	{
+		LWLockAcquire(&rbuf->lock, LW_EXCLUSIVE);
+		if (!polar_ringbuf_update_pread(rbuf) &&
+			!polar_ringbuf_evict_ref(rbuf))
+		{
+			LWLockRelease(&rbuf->lock);
+			CHECK_FOR_INTERRUPTS();
+			pg_usleep(10);
+			continue;
+		}
+		LWLockRelease(&rbuf->lock);
+	}
+
+	pgstat_report_wait_end();
 }
 
 /*

@@ -165,28 +165,36 @@ typedef struct polar_ringbuf_data_t
 														 * position */
 #define POLAR_RINGBUF_PKT_TYPE_MASK             (0xF0)	/* The packet type mask */
 
-/* Get the packet data size and idx is the start position of the packet */
+/*
+ * Map a monotonic position to a physical offset in the data array.
+ * pread, pwrite, and slot[].pread grow monotonically (never wrap);
+ * all rbuf->data[] access must go through this macro.
+ */
+#define POLAR_RINGBUF_IDX(rbuf, pos) ((size_t)((pos) % (rbuf)->size))
+
+/* Get the packet data size; idx is the monotonic start position of the packet */
 static inline uint32
-polar_ringbuf_pkt_len(polar_ringbuf_t rbuf, size_t idx)
+polar_ringbuf_pkt_len(polar_ringbuf_t rbuf, uint64 idx)
 {
 	uint32		len;
 	uint8	   *buf = (uint8 *) &len;
-	size_t		split,
+	size_t		phys,
+				split,
 				todo = sizeof(len);
 
 	/* packet len is saved from idx+1 */
-	idx = (idx + 1) % rbuf->size;
-	split = ((idx + todo) > rbuf->size) ? rbuf->size - idx : 0;
+	phys = POLAR_RINGBUF_IDX(rbuf, idx + 1);
+	split = ((phys + todo) > rbuf->size) ? rbuf->size - phys : 0;
 
 	if (unlikely(split > 0))
 	{
-		memcpy(buf, rbuf->data + idx, split);
+		memcpy(buf, rbuf->data + phys, split);
 		buf += split;
 		todo -= split;
-		idx = 0;
+		phys = 0;
 	}
 
-	memcpy(buf, rbuf->data + idx, todo);
+	memcpy(buf, rbuf->data + phys, todo);
 
 	return len;
 }
@@ -198,12 +206,12 @@ extern bool polar_ringbuf_get_ref(polar_ringbuf_ref_t *ref);
 extern bool polar_ringbuf_clear_ref(polar_ringbuf_ref_t *ref);
 extern void polar_ringbuf_update_ref(polar_ringbuf_ref_t *ref);
 
-extern ssize_t polar_ringbuf_pkt_write(polar_ringbuf_t rbuf, size_t idx, int offset, uint8 *buf, size_t len);
+extern ssize_t polar_ringbuf_pkt_write(polar_ringbuf_t rbuf, uint64 idx, int offset, uint8 *buf, size_t len);
 extern ssize_t polar_ringbuf_read_next_pkt(polar_ringbuf_ref_t *ref,
 										   int offset, uint8 *buf, size_t len);
 extern void polar_ringbuf_update_keep_data(polar_ringbuf_t rbuf);
 extern void polar_ringbuf_free_up(polar_ringbuf_t rbuf, size_t len, polar_interrupt_callback callback);
-extern bool polar_ringbuf_try_free_up(polar_ringbuf_t rbuf, size_t len);
+extern void polar_ringbuf_wait_for_space(polar_ringbuf_t rbuf, uint64 idx, size_t len);
 extern void polar_ringbuf_auto_release_ref(polar_ringbuf_ref_t *ref);
 extern bool polar_ringbuf_valid_ref(polar_ringbuf_ref_t *ref);
 
@@ -211,93 +219,80 @@ extern void polar_ringbuf_ref_keep_data(polar_ringbuf_ref_t *ref, float ratio);
 extern void polar_ringbuf_reset(polar_ringbuf_t rbuf);
 
 /*
- * get the free size of the ring buffer
+ * Get the free size of the ring buffer.
+ *
+ * With monotonic counters: used = pwrite - pread, free = size - 1 - used.
+ * Clamped to 0 when the queue is fully claimed (or over-claimed by an
+ * optimistic reservation), so observability paths never see a negative
+ * value.
  */
 static inline ssize_t
 polar_ringbuf_free_size(polar_ringbuf_t rbuf)
 {
-	ssize_t		free_bytes;
+	uint64		pwrite = pg_atomic_read_u64(&rbuf->pwrite);
+	uint64		pread = pg_atomic_read_u64(&rbuf->pread);
+	uint64		used = pwrite - pread;
 
-	free_bytes = pg_atomic_read_u64(&rbuf->pread);
-	free_bytes -= pg_atomic_read_u64(&rbuf->pwrite);
-
-	if (free_bytes <= 0)
-		free_bytes += rbuf->size;
-
-	return free_bytes - 1;
+	if (used >= rbuf->size - 1)
+		return 0;
+	return (ssize_t) (rbuf->size - 1 - used);
 }
 
 /*
- * The data that is available or reserved for read
+ * The data that is available or reserved for read.
+ * With monotonic counters: avail = pwrite - slot_pread (always >= 0).
  */
 static inline ssize_t
 polar_ringbuf_avail(polar_ringbuf_ref_t *ref)
 {
-	ssize_t		avail;
 	polar_ringbuf_t rbuf = ref->rbuf;
 
-	avail = pg_atomic_read_u64(&rbuf->pwrite);
-	avail -= rbuf->slot[ref->slot].pread;
-
-	if (avail < 0)
-		avail += rbuf->size;
-
-	return avail;
+	return (ssize_t) (pg_atomic_read_u64(&rbuf->pwrite) -
+					  rbuf->slot[ref->slot].pread);
 }
 
 /*
- * Reserve space from ring buffer for future write
- * This function should be protected by exclusive lock
+ * Reserve space from the ring buffer for a future write.
+ *
+ * Advances pwrite by len unconditionally — there is NO free-space check.
+ * pwrite is therefore a "claim" marker, not a publish marker: callers may
+ * over-reserve when the queue is full and must call
+ * polar_ringbuf_wait_for_space() before writing into the returned region.
+ *
+ * Returns the monotonic position; use POLAR_RINGBUF_IDX() when accessing
+ * rbuf->data[].
+ *
+ * Concurrent callers must serialize on an exclusive lock (e.g. the caller's
+ * own spinlock, as XLogInsertRecord uses insertpos_lck).  Future work: the
+ * read+write pair can be replaced with pg_atomic_fetch_add_u64() to make
+ * reservation lock-free, once the surrounding critical section (e.g. the
+ * paired CurrBytePos/PrevBytePos update in ReserveXLogInsertLocation) no
+ * longer needs the spinlock.
  */
-static inline size_t
+static inline uint64
 polar_ringbuf_pkt_reserve(polar_ringbuf_t rbuf, size_t len)
 {
-	size_t		idx = pg_atomic_read_u64(&rbuf->pwrite);
+	uint64		idx = pg_atomic_read_u64(&rbuf->pwrite);
 
-	pg_atomic_write_u64(&rbuf->pwrite,
-						(idx + len) % rbuf->size);
+	pg_atomic_write_u64(&rbuf->pwrite, idx + len);
 
 	return idx;
 }
 
 /*
- * Reserve space from ring buffer for future write
- * This function should be protected by exclusive lock
- */
-static inline ssize_t
-polar_ringbuf_pkt_check_size_and_reserve(polar_ringbuf_t rbuf, size_t len)
-{
-	ssize_t		pread = pg_atomic_read_u64(&rbuf->pread);
-	ssize_t		pwrite = pg_atomic_read_u64(&rbuf->pwrite);
-	ssize_t		free_bytes = pread - pwrite;
-
-	if (free_bytes < 0)
-		free_bytes += rbuf->size;
-
-	--free_bytes;
-
-	if (free_bytes < len)
-	{
-		return -1;
-	}
-
-	pg_atomic_write_u64(&rbuf->pwrite, (pwrite + len) % rbuf->size);
-	return pwrite;
-}
-
-/*
- * Check whether the next packet for this reference is ready
- * And return packet length when data is ready for read
+ * Check whether the next packet for this reference is ready.
+ * And return packet length when data is ready for read.
  */
 static inline uint8
 polar_ringbuf_next_ready_pkt(polar_ringbuf_ref_t *ref, uint32 *pktlen)
 {
 	polar_ringbuf_t rbuf = ref->rbuf;
-	size_t		idx = rbuf->slot[ref->slot].pread;
+	uint64		idx = rbuf->slot[ref->slot].pread;
+	size_t		phys = POLAR_RINGBUF_IDX(rbuf, idx);
 
 	*pktlen = 0;
 
-	if ((rbuf->data[idx] & POLAR_RINGBUF_PKT_STATE_MASK) != POLAR_RINGBUF_PKT_READY)
+	if ((rbuf->data[phys] & POLAR_RINGBUF_PKT_STATE_MASK) != POLAR_RINGBUF_PKT_READY)
 		return POLAR_RINGBUF_PKT_INVALID_TYPE;
 
 	/* Make sure we don't see the packet flag value before get packet length */
@@ -305,48 +300,50 @@ polar_ringbuf_next_ready_pkt(polar_ringbuf_ref_t *ref, uint32 *pktlen)
 
 	*pktlen = polar_ringbuf_pkt_len(rbuf, idx);
 
-	return rbuf->data[idx] & POLAR_RINGBUF_PKT_TYPE_MASK;
+	return rbuf->data[phys] & POLAR_RINGBUF_PKT_TYPE_MASK;
 }
 
 /*
  * Set packet data length.
- * The param idx is the start point of this packet
+ * The param idx is the monotonic start position of this packet.
  */
 static inline void
-polar_ringbuf_set_pkt_length(polar_ringbuf_t rbuf, size_t idx, uint32 len)
+polar_ringbuf_set_pkt_length(polar_ringbuf_t rbuf, uint64 idx, uint32 len)
 {
-	size_t		split,
+	size_t		phys,
+				split,
 				todo = sizeof(len);
 	uint8	   *buf = (uint8 *) &len;
 
 	/* The first byte is flag and packet length is saved in next 4 bytes */
-	idx = (idx + 1) % rbuf->size;
+	phys = POLAR_RINGBUF_IDX(rbuf, idx + 1);
 
-	split = ((idx + todo) > rbuf->size) ? rbuf->size - idx : 0;
+	split = ((phys + todo) > rbuf->size) ? rbuf->size - phys : 0;
 
 	if (split > 0)
 	{
-		memcpy(rbuf->data + idx, buf, split);
+		memcpy(rbuf->data + phys, buf, split);
 		buf += split;
 		todo -= split;
-		idx = 0;
+		phys = 0;
 	}
 
-	memcpy(rbuf->data + idx, buf, todo);
+	memcpy(rbuf->data + phys, buf, todo);
 
 	pg_atomic_fetch_add_u64(&rbuf->prs.push_cnt, 1);
 	pg_atomic_fetch_add_u64(&rbuf->prs.total_written, len);
 }
 
 /*
- * Set packet flag which it's saved in idx position
+ * Set packet flag which it's saved in idx position.
+ * idx is a monotonic position.
  */
 static inline void
-polar_ringbuf_set_pkt_flag(polar_ringbuf_t rbuf, size_t idx, uint8 flag)
+polar_ringbuf_set_pkt_flag(polar_ringbuf_t rbuf, uint64 idx, uint8 flag)
 {
 	/* ensure all previous writes are visible before follower continues. */
 	pg_write_barrier();
-	rbuf->data[idx] = flag;
+	rbuf->data[POLAR_RINGBUF_IDX(rbuf, idx)] = flag;
 }
 
 extern polar_ringbuf_slot_t *polar_get_min_visit_slot_except_keep(polar_ringbuf_t rbuf, int keep_slot);

@@ -11,29 +11,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Add pg_bulkload v3.1.23, a high-speed bulk data loading utility,
   as an in-tree extension with full PolarDB shared storage support
   (XCOM-99)
-
 - Expose 69 PolarDB-specific GUCs in `pg_settings` and
   `postgres --describe-config` so that Patroni can enumerate,
   validate, and track `pending_restart` for them (XCOM-124)
-
-### Performance
-
-- Replace spinlock-protected reads of `RedoRecPtr` and
-  `curr_primary_consistent_lsn` with lock-free `pg_atomic_uint64` ops,
-  eliminating two hot spinlocks (`info_lck`, `WalRcv->mutex`) from the
-  per-buffer-read path on replicas (XCOM-128)
-- Speed up crash recovery replay by reading multiple WAL pages per I/O
-  (default 128, configurable via `polar_recovery_bulk_read_size`)
-  (XCOM-138)
-
-- Eliminate walsender spinlock contention on the primary, letting
-  walsenders keep up with the write load generating WAL (XCOM-137)
 
 ### Fixed
 
 - Fixed deadlock when WAL exceeds xlog queue capacity by releasing WALInsertLock
   when the queue is full, allowing walwriter to flush WAL so logindex saver can
-  consume the queue (XCOM-94)
+  consume the queue (XCOM-141)
 - Fixed `pg_ctl logrotate` functionality by restoring the missing check for the
   `logrotate` file in the data directory upon receiving SIGUSR1 (XCOM-87)
 - Fixed replica promotion failure (FATAL: "WAL segment has already been removed")
@@ -75,5 +61,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   to improve WAL insertion scalability (XCOM-59)
 - Port CSN (Commit Sequence Number) feature from PolarDB 11 to improve MVCC
   scalability (XCOM-100)
+- Replace spinlock-protected reads of `RedoRecPtr` and
+  `curr_primary_consistent_lsn` with lock-free `pg_atomic_uint64` ops,
+  eliminating two hot spinlocks (`info_lck`, `WalRcv->mutex`) from the
+  per-buffer-read path on replicas (XCOM-128)
+- Speed up crash recovery replay by reading multiple WAL pages per I/O
+  (default 128, configurable via `polar_recovery_bulk_read_size`)
+  (XCOM-138)
+- Eliminate walsender spinlock contention on the primary, letting
+  walsenders keep up with the write load generating WAL (XCOM-137)
+- Reduce `insertpos_lck` cache-line contention by reserving xlog queue
+  space optimistically outside the spinlock (XCOM-141)
 
 [unreleased]: https://github.com/awide-labs/polar/compare/6fcfdc2993a..POLARDB_15_STABLE

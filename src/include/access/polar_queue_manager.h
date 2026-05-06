@@ -54,9 +54,6 @@ extern int	polar_xlog_queue_buffers;
 #define POLAR_XLOG_QUEUE_RESERVE(queue, size) \
 	polar_ringbuf_pkt_reserve((queue), POLAR_XLOG_PKT_SIZE(size))
 
-#define POLAR_XLOG_QUEUE_CHECK_SIZE_AND_RESERVE(queue, size) \
-  polar_ringbuf_pkt_check_size_and_reserve((queue), POLAR_XLOG_PKT_SIZE(size))
-
 #define POLAR_XLOG_QUEUE_DATA_KEEP_RATIO (0.6)
 
 #define POLAR_COPY_QUEUE_CONTENT(ref, offset, _dst, _size) \

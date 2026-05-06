@@ -318,9 +318,6 @@ polar_xlog_queue_init(const char *name, int tranche_id, int size_MB)
 		XLogRecData *main_data = polar_get_main_data_head(); \
 		uint8 *data = (uint8 *)(main_data->data); \
 		main_data_len_t data_len = dlen; \
-		if (rbuf_pos < 0 || rbuf_pos >= queue->size) \
-			ereport(PANIC, (errmsg("rbuf_pos=%lu is incorrect for xlog queue, queue size is %lu", \
-								   rbuf_pos, queue->size))); \
 		len = polar_ringbuf_pkt_write(queue, rbuf_pos, \
 									  offset, (uint8 *)(&block_id), sizeof(block_id_t)); \
 		len += polar_ringbuf_pkt_write(queue, rbuf_pos, \
@@ -431,10 +428,6 @@ polar_push_main_data(polar_ringbuf_t queue, size_t rbuf_pos, int offset)
 	const		main_data_len_t data_len = polar_reserve_main_data_size();
 	uint8		block_id = XLR_BLOCK_ID_POLAR_EXTRA;
 	XLogRecData *rdata = polar_get_main_data_head();
-
-	if (rbuf_pos >= queue->size)
-		ereport(PANIC, (errmsg("rbuf_pos=%ld is incorrect for xlog queue, xlog_queue_size=%ld",
-							   rbuf_pos, queue->size)));
 
 	len = polar_ringbuf_pkt_write(queue, rbuf_pos,
 								  offset, (uint8 *) (&block_id), sizeof(block_id));
@@ -561,10 +554,6 @@ polar_xlog_send_queue_push(polar_ringbuf_t queue, size_t rbuf_pos, XLogRecData *
 	int			offset = 0;
 	Size		data_size = polar_reserve_data_size(record);
 	XLogRecData *rdata = record;
-
-	if (rbuf_pos >= queue->size)
-		ereport(PANIC, (errmsg("rbuf_pos=%ld is incorrect for xlog queue, xlog_queu_size=%ld",
-							   rbuf_pos, queue->size)));
 
 	offset += polar_ringbuf_pkt_write(queue, rbuf_pos,
 									  offset, (uint8 *) &end_lsn, sizeof(end_lsn));
@@ -1389,12 +1378,6 @@ polar_xlog_recv_queue_push(polar_ringbuf_t queue, char *buf, size_t len, polar_i
 			polar_ringbuf_free_up(queue, POLAR_RINGBUF_PKT_SIZE(pktlen), callback);
 
 		idx = polar_ringbuf_pkt_reserve(queue, POLAR_RINGBUF_PKT_SIZE(pktlen));
-
-		if (idx >= queue->size)
-		{
-			ereport(PANIC, (errmsg("Failed to reserve space from xlog recv queue, idx=%ld, queue size=%ld",
-								   idx, queue->size)));
-		}
 
 		polar_ringbuf_set_pkt_length(queue, idx, pktlen);
 
