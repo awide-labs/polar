@@ -55,7 +55,7 @@ docker exec polardb_${CONTAINER_IMAGE} bash -c \
    for rule in ${RULES}; do \
      echo \"=== Running \$rule ===\" && \
      export PG_TEST_INITDB_EXTRA_OPTS=--wal-segsize=16 &&
-     eatmydata make \$rule -j\$JOBS || (echo \"=== \$rule FAILED ===\" && exit 1); \
+     eatmydata make \$rule -j\$JOBS -Otarget || (echo \"=== \$rule FAILED ===\" && exit 1); \
    done"
 
 # Clean up container if requested (useful when multiple containers run in same VM)
