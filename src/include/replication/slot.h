@@ -242,7 +242,7 @@ extern void CheckSlotRequirements(void);
 extern void CheckSlotPermissions(void);
 
 /* POLAR */
-extern void polar_compute_and_set_replica_lsn(void);
+extern void polar_compute_and_set_replica_lsn(bool skip_inactive);
 
 /* POLAR GUCs */
 extern bool polar_enable_persisted_logical_slot;

@@ -17,6 +17,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Fixed primary hanging during shutdown when replicas were already stopped,
+  repeatedly logging "Checkpoint blocked" warnings until killed (XCOM-153)
 - Fixed deadlock when WAL exceeds xlog queue capacity by releasing WALInsertLock
   when the queue is full, allowing walwriter to flush WAL so logindex saver can
   consume the queue (XCOM-141)

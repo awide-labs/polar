@@ -10996,8 +10996,11 @@ polar_set_oldest_replica_lsn(XLogRecPtr oldest_apply_lsn, XLogRecPtr oldest_lock
 	if (!polar_enable_shared_storage_mode)
 		return;
 
-	if (unlikely(XLogRecPtrIsInvalid(oldest_apply_lsn)))
-		POLAR_LOG_BACKTRACE();
+	/*
+	 * POLAR: Passing InvalidXLogRecPtr here is legitimate, not an anomaly: it
+	 * means "no replica apply position is constraining buffer flushing right
+	 * now" (the flush gate is open).
+	 */
 
 	SpinLockAcquire(&XLogCtl->info_lck);
 
@@ -11169,6 +11172,26 @@ polar_flush_buffer_for_shutdown(XLogRecPtr redo, int flags)
 	WritebackContextInit(&wb_context, &backend_flush_after);
 
 	/*
+	 * POLAR: Recompute oldest_apply_lsn excluding slots whose walsender has
+	 * already exited (active_pid == 0). During a fast/smart shutdown, replica
+	 * walsenders are stopped before the shutdown checkpoint runs; their slots
+	 * remain in_use with a stale polar_replica_apply_lsn that nobody updates.
+	 * Without this, the stale apply_lsn keeps oldest_apply_lsn frozen, the
+	 * fullpage-snapshot path is disabled during shutdown checkpoint, and the
+	 * checkpoint can hang forever waiting for consistent_lsn to advance past
+	 * checkpoint.redo. The replica re-syncs from shared storage on next
+	 * startup, so dropping the stale value here is safe.
+	 *
+	 * Note that this single call is not sufficient on its own: the postmaster
+	 * keeps walsenders running through PM_SHUTDOWN and only signals them at
+	 * PM_SHUTDOWN_2 (after this checkpoint completes), so a slot's walsender
+	 * may exit *during* the flush-wait loop below, leaving active_pid == 0
+	 * with a frozen polar_replica_apply_lsn that the value computed here no
+	 * longer reflects. We therefore recompute again on every loop iteration.
+	 */
+	polar_compute_and_set_replica_lsn(true);
+
+	/*
 	 * The wal writer process has been terminated, we should flush wal records
 	 * before redo lsn that still in the wal buffer.
 	 *
@@ -11181,6 +11204,29 @@ polar_flush_buffer_for_shutdown(XLogRecPtr redo, int flags)
 
 	while (!polar_is_checkpoint_legal(redo))
 	{
+		/*
+		 * POLAR: Test hook. This point is reached only from inside the
+		 * flush-wait loop, i.e. after the entry-point
+		 * polar_compute_and_set_replica_lsn(true) call above has already run.
+		 * A TAP test can enable this fault and wait for the log line below to
+		 * know, deterministically, that the loop is spinning before it
+		 * perturbs replication slot state -- no timing heuristics needed.
+		 */
+#ifdef FAULT_INJECTOR
+		if (SIMPLE_FAULT_INJECTOR("polar_shutdown_flush_loop") == FaultInjectorTypeEnable)
+			elog(LOG, "POLAR fault: polar_shutdown_flush_loop reached");
+#endif
+
+		/*
+		 * POLAR: Re-evaluate oldest_apply_lsn so that walsenders which exit
+		 * mid-loop (because the postmaster does not stop them until
+		 * PM_SHUTDOWN_2) are dropped on the very next iteration. Otherwise
+		 * polar_buffer_can_be_flushed() would keep gating future-page buffers
+		 * on a now-stale apply_lsn and the loop would spin until pg_ctl times
+		 * out.
+		 */
+		polar_compute_and_set_replica_lsn(true);
+
 		/* wake bgwriter */
 		polar_bg_buffer_sync(&wb_context, flags);
 		polar_accept_signal_for_checkpoint(flags);

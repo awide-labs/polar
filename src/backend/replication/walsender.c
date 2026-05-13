@@ -4228,7 +4228,7 @@ polar_record_replica_lsn(XLogRecPtr apply_lsn, XLogRecPtr lock_lsn)
 	if (changed)
 	{
 		ReplicationSlotMarkDirty();
-		polar_compute_and_set_replica_lsn();
+		polar_compute_and_set_replica_lsn(false);
 
 		if (set_valid)
 			elog(LOG, "set slot:\"%s\" apply lsn to %X/%X", NameStr(slot->data.name), LSN_FORMAT_ARGS(apply_lsn));

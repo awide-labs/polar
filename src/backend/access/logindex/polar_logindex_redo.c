@@ -2573,7 +2573,7 @@ polar_reset_bg_replayed_lsn(polar_logindex_redo_ctl_t instance, XLogRecPtr oldes
 	 * The oldest_applied_lsn should be InvalidXLogRecPtr when there's no used
 	 * slot.
 	 */
-	polar_compute_and_set_replica_lsn();
+	polar_compute_and_set_replica_lsn(false);
 	oldest_apply_lsn = polar_get_oldest_apply_lsn();
 	if (!XLogRecPtrIsInvalid(oldest_apply_lsn) && oldest_apply_lsn < old_consist_lsn)
 		polar_set_oldest_replica_lsn(old_consist_lsn, InvalidXLogRecPtr);
