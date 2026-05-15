@@ -51,21 +51,14 @@ AutoReqProv: none
 BuildRequires: polarfs
 
 Requires: audit-libs
-Requires: boost-filesystem
-Requires: boost-regex
 Requires: cyrus-sasl-lib
-Requires: double-conversion
-Requires: fmt
-Requires: gflags
 Requires: glibc
-Requires: glog
 Requires: keyutils-libs
 Requires: krb5-libs
 Requires: libcap-ng
 Requires: libcom_err
 Requires: libeconf
 Requires: libedit
-Requires: libevent
 Requires: libffi
 Requires: libgcc
 Requires: libicu
