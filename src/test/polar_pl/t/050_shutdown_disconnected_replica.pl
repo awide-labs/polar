@@ -484,12 +484,16 @@ subtest 'paused walreceiver: replica refuses to serve future pages after primary
 	my $primary = new_primary("${tag}_primary");
 	my $replica = new_replica("${tag}_replica", $primary);
 
-	# Keep wal_sender_timeout small so the primary's walsender exits
-	# promptly during shutdown -- with a paused walreceiver TCP send
-	# blocks, and the walsender only releases its slot (active_pid = 0)
-	# after this timeout fires. Without this the test would race the
-	# default 60s walsender timeout against PGCTLTIMEOUT.
-	$primary->append_conf('postgresql.conf', q[wal_sender_timeout = 1s]);
+	# Keep wal_sender_timeout below PGCTLTIMEOUT so shutdown finishes
+	# promptly: with a paused walreceiver TCP send blocks, and the
+	# walsender only releases its slot (active_pid = 0) after this
+	# timeout fires.
+	#
+	# It must still exceed the worst-case time stop_child() spends
+	# SIGSTOPping the walreceiver and running pstack (multi-second); if
+	# it is too small, the walsender times out and clears the slot
+	# before we assert the slot is still active.
+	$primary->append_conf('postgresql.conf', q[wal_sender_timeout = 15s]);
 
 	# Make the future-page detection fail fast on the replica side so
 	# we don't sit in the retry loop for the full default 5s. This is
