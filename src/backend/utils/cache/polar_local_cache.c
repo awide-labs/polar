@@ -949,6 +949,7 @@ bool
 polar_local_cache_remove(polar_local_cache cache, uint64 segno, polar_cache_io_error * io_error)
 {
 	polar_io_seg_entry *entry;
+	polar_io_segment *io_seg = NULL;
 
 	POLAR_ASSERT_PANIC(cache->io_permission & (POLAR_CACHE_LOCAL_FILE_WRITE | POLAR_CACHE_LOCAL_FILE_READ));
 
@@ -959,64 +960,114 @@ polar_local_cache_remove(polar_local_cache cache, uint64 segno, polar_cache_io_e
 		LWLockAcquire(POLAR_LOCAL_CACHE_LOCK(cache), LW_EXCLUSIVE);
 		entry = hash_search(cache->hash_io_seg, (void *) &segno, HASH_FIND, NULL);
 
-		if (entry)
+		if (entry == NULL)
 		{
-			polar_io_segment *io_seg = &cache->io_seg_items[entry->index];
-
-			/* wait when io in progress */
-			if (POLAR_CACHE_IO_IN_PROGRESS(io_seg))
-			{
-				LWLockRelease(POLAR_LOCAL_CACHE_LOCK(cache));
-				continue;
-			}
-
-			/* Protect io_seg data which in shared memory */
-			HOLD_INTERRUPTS();
-
-			/* flush to shared storage when segment is dirty */
-			if (!POLAR_CACHE_IS_CLEAN_SEGMENT(io_seg) &&
-				(cache->io_permission & POLAR_CACHE_SHARED_FILE_WRITE))
-			{
-				bool		flushed;
-
-				io_seg->status |= POLAR_CACHE_SEG_WRITE_IN_PROGRESS;
-				LWLockRelease(POLAR_LOCAL_CACHE_LOCK(cache));
-
-				flushed = polar_shared_file_flush(cache, io_seg, io_error);
-				LWLockAcquire(POLAR_LOCAL_CACHE_LOCK(cache), LW_EXCLUSIVE);
-
-				if (flushed)
-					io_seg->status &= ~(POLAR_CACHE_SEG_WRITE_IN_PROGRESS | POLAR_CACHE_SEG_DIRTY);
-				else
-				{
-					io_seg->status &= ~POLAR_CACHE_SEG_WRITE_IN_PROGRESS;
-					LWLockRelease(POLAR_LOCAL_CACHE_LOCK(cache));
-
-					RESUME_INTERRUPTS();
-					return false;
-				}
-			}
-
-			cache->io_seg_items[entry->index].status = 0;
-			polar_successor_list_push(cache->free_items_list, entry->index);
-
-			if (hash_search(cache->hash_io_seg, (void *) &segno, HASH_REMOVE, NULL) == NULL)
-				elog(FATAL, "The local cache hash table for %s is corrupted", cache->dir_name);
-
-			RESUME_INTERRUPTS();
+			LWLockRelease(POLAR_LOCAL_CACHE_LOCK(cache));
+			break;
 		}
 
+		io_seg = &cache->io_seg_items[entry->index];
+
+		/* wait when io in progress */
+		if (POLAR_CACHE_IO_IN_PROGRESS(io_seg))
+		{
+			LWLockRelease(POLAR_LOCAL_CACHE_LOCK(cache));
+			continue;
+		}
+
+		/* Protect io_seg data which in shared memory */
+		HOLD_INTERRUPTS();
+
+		/*
+		 * Mark write-in-progress while we still hold the lock. This prevents
+		 * any other process from starting I/O on this segment (reads
+		 * spin-wait on WRITE_IN_PROGRESS). We keep the entry in the hash
+		 * table so that concurrent lookups find it and wait rather than
+		 * creating a new entry for the same segno.
+		 */
+		io_seg->status |= POLAR_CACHE_SEG_WRITE_IN_PROGRESS;
+
+		/* flush to shared storage when segment is dirty */
+		if (!POLAR_CACHE_IS_CLEAN_SEGMENT(io_seg) &&
+			(cache->io_permission & POLAR_CACHE_SHARED_FILE_WRITE))
+		{
+			bool		flushed;
+
+			LWLockRelease(POLAR_LOCAL_CACHE_LOCK(cache));
+
+			flushed = polar_shared_file_flush(cache, io_seg, io_error);
+			LWLockAcquire(POLAR_LOCAL_CACHE_LOCK(cache), LW_EXCLUSIVE);
+
+			if (flushed)
+				io_seg->status &= ~POLAR_CACHE_SEG_DIRTY;
+			else
+			{
+				io_seg->status &= ~POLAR_CACHE_SEG_WRITE_IN_PROGRESS;
+				LWLockRelease(POLAR_LOCAL_CACHE_LOCK(cache));
+
+				RESUME_INTERRUPTS();
+				return false;
+			}
+		}
+
+		/*
+		 * Release lock but keep the entry in the hash with WRITE_IN_PROGRESS
+		 * set: no other process can reuse this slot while we unlink files.
+		 */
 		LWLockRelease(POLAR_LOCAL_CACHE_LOCK(cache));
+
 		break;
 	}
 
+	/*
+	 * Unlink files outside the lock.
+	 */
 	if ((cache->io_permission & POLAR_CACHE_SHARED_FILE_WRITE)
 		&& !polar_cache_file_unlink(cache, POLAR_SHARED_STORAGE_FILE, segno, io_error))
+	{
+		if (entry)
+		{
+			LWLockAcquire(POLAR_LOCAL_CACHE_LOCK(cache), LW_EXCLUSIVE);
+			io_seg->status &= ~POLAR_CACHE_SEG_WRITE_IN_PROGRESS;
+			LWLockRelease(POLAR_LOCAL_CACHE_LOCK(cache));
+
+			RESUME_INTERRUPTS();
+		}
 		return false;
+	}
 
 	POLAR_ASSERT_PANIC(cache->io_permission & POLAR_CACHE_LOCAL_FILE_WRITE);
 
-	return polar_cache_file_unlink(cache, POLAR_LOCAL_CACHE_FILE, segno, io_error);
+	if (!polar_cache_file_unlink(cache, POLAR_LOCAL_CACHE_FILE, segno, io_error))
+	{
+		if (entry)
+		{
+			LWLockAcquire(POLAR_LOCAL_CACHE_LOCK(cache), LW_EXCLUSIVE);
+			io_seg->status &= ~POLAR_CACHE_SEG_WRITE_IN_PROGRESS;
+			LWLockRelease(POLAR_LOCAL_CACHE_LOCK(cache));
+
+			RESUME_INTERRUPTS();
+		}
+		return false;
+	}
+
+	/* Remove hash entry now */
+	if (entry)
+	{
+		LWLockAcquire(POLAR_LOCAL_CACHE_LOCK(cache), LW_EXCLUSIVE);
+
+		io_seg->status = 0;
+		polar_successor_list_push(cache->free_items_list, entry->index);
+
+		if (hash_search(cache->hash_io_seg, (void *) &segno, HASH_REMOVE, NULL) == NULL)
+			elog(FATAL, "The local cache hash table for %s is corrupted", cache->dir_name);
+
+		LWLockRelease(POLAR_LOCAL_CACHE_LOCK(cache));
+
+		RESUME_INTERRUPTS();
+	}
+
+	return true;
 }
 
 void
