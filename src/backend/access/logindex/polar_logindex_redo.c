@@ -893,6 +893,8 @@ polar_promote_mark_buf_dirty(polar_logindex_redo_ctl_t instance, Buffer buffer, 
 			   state != POLAR_BG_PARALLEL_REPLAYING))
 		return;
 
+	pg_read_barrier();
+
 	page = BufferGetPage(buffer);
 	page_lsn = PageGetLSN(page);
 
