@@ -76,6 +76,7 @@ typedef struct test_local_cache_meta
 	uint64		del_seg;
 	polar_local_cache cache;
 	uint64		reader_active_page[NUM_READ_WORKERS];
+	uint64		writer_active_page[NUM_WRITE_WORKERS];
 }			test_local_cache_meta;
 
 
@@ -522,6 +523,10 @@ test_local_cache_write_worker(Datum main_arg)
 	char		buf[BLOCK_SIZE];
 	test_local_cache_meta *test_meta;
 	bool		found;
+	int			writer_idx;
+
+	/* Get my writer index */
+	writer_idx = DatumGetInt32(main_arg);
 
 	test_meta = (test_local_cache_meta *) ShmemInitStruct("test_local_cache_meta", sizeof(test_local_cache_meta), &found);
 	Assert(found == true);
@@ -542,6 +547,9 @@ test_local_cache_write_worker(Datum main_arg)
 		polar_cache_io_error io_error;
 
 		SpinLockAcquire(&test_meta->lock);
+
+		/* Mark ourselves as idle so remover won't wait for us */
+		test_meta->writer_active_page[writer_idx] = PG_UINT64_MAX;
 		status = test_meta->status;
 
 		if (status == LOCAL_CACHE_STAT_START)
@@ -560,6 +568,8 @@ test_local_cache_write_worker(Datum main_arg)
 			{
 				write_page = test_meta->curr_page;
 				test_meta->curr_page++;
+				/* Publish before releasing lock so remover sees it */
+				test_meta->writer_active_page[writer_idx] = write_page;
 			}
 		}
 
@@ -754,8 +764,8 @@ test_local_cache_remove_worker(Datum main_arg)
 					segno = test_meta->min_page / BLOCK_PER_SEGMENT;
 
 					/*
-					 * Safe to remove only if no reader has an in-flight read
-					 * from this segment.
+					 * Safe to remove only if no reader or writer has an
+					 * in-flight operation on this segment.
 					 */
 					need_remove = true;
 					for (int r = 0; r < NUM_READ_WORKERS; r++)
@@ -764,6 +774,17 @@ test_local_cache_remove_worker(Datum main_arg)
 						{
 							need_remove = false;
 							break;
+						}
+					}
+					if (need_remove)
+					{
+						for (int w = 0; w < NUM_WRITE_WORKERS; w++)
+						{
+							if (test_meta->writer_active_page[w] < (segno + 1) * BLOCK_PER_SEGMENT)
+							{
+								need_remove = false;
+								break;
+							}
 						}
 					}
 				}
@@ -849,19 +870,21 @@ test_local_cache_bgworker(polar_local_cache cache)
 
 	SpinLockInit(&test_meta->lock);
 
-	/* PG_UINT64_MAX means "not reading" — won't block remover */
+	/* PG_UINT64_MAX means "not active" — won't block remover */
 	for (i = 0; i < NUM_READ_WORKERS; i++)
 		test_meta->reader_active_page[i] = PG_UINT64_MAX;
+	for (i = 0; i < NUM_WRITE_WORKERS; i++)
+		test_meta->writer_active_page[i] = PG_UINT64_MAX;
 
 	/* Launch read workers with unique indices for active page tracking */
 	for (i = 0; i < NUM_READ_WORKERS; i++)
 		handler[i] = test_local_cache_launch_worker(&worker[i], back_read_func,
 													i);
 
-	/* Launch write workers */
+	/* Launch write workers with unique indices for active page tracking */
 	for (i = NUM_READ_WORKERS; i < NUM_READ_WORKERS + NUM_WRITE_WORKERS; i++)
 		handler[i] = test_local_cache_launch_worker(&worker[i], back_write_func,
-													-1);
+													i - NUM_READ_WORKERS);
 
 	/* Launch other workers */
 	for (i = NUM_READ_WORKERS + NUM_WRITE_WORKERS; i < MAX_BACK_PROCESS; i++)
