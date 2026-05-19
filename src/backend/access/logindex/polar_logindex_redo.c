@@ -887,34 +887,48 @@ polar_promote_mark_buf_dirty(polar_logindex_redo_ctl_t instance, Buffer buffer, 
 {
 	Page		page;
 	XLogRecPtr	page_lsn;
+	uint32		state = polar_get_bg_redo_state(instance);
 
-	if (likely(!polar_bg_redo_state_is_parallel(instance)))
+	if (likely(state != POLAR_BG_ONLINE_PROMOTE &&
+			   state != POLAR_BG_PARALLEL_REPLAYING))
 		return;
 
 	page = BufferGetPage(buffer);
 	page_lsn = PageGetLSN(page);
 
 	/*
-	 * If page lsn is larger than the last replayed xlog lsn, then this buffer
-	 * was modified after online promote and we don't need to mark it dirty
-	 * again。
+	 * Skip mark-dirty when page_lsn is past lastReplayedEndRecPtr. The
+	 * condition is reached on three indistinguishable paths (see the
+	 * commit log for full reasoning):
 	 *
-	 * However, if standby is running with enabled parallel replaying, there
-	 * is a situation when a wal is parsed, dispatched, replayed and the page
-	 * lsn is updated but lastReplayedEndRecPtr has not been updated, so that
-	 * the new page won't be marked as dirty, which is wrong.
+	 *   1. POLAR_BG_ONLINE_PROMOTE: page already modified by post-promote
+	 *      RW traffic; the modifying path marked it dirty.
 	 *
-	 * lastReplayedEndRecPtr won't be changed during online promote.
+	 *   2. POLAR_BG_PARALLEL_REPLAYING: a concurrent backend doing
+	 *      mini-trans logindex catch-up replayed to
+	 *      GetCurrentReplayRecPtr() of an in-flight record, which is
+	 *      strictly greater than lastReplayedEndRecPtr until startup
+	 *      publishes the record end; the redo path that advanced the
+	 *      page marked it dirty.
+	 *
+	 *   3. Stale on-disk page whose LSN points past the durable WAL tail
+	 *      (truncated WAL after crash, fsync=off, storage that does not
+	 *      honour fsync, external WAL modification). Marking it dirty
+	 *      would make the next checkpoint try to XLogFlush() beyond the
+	 *      durable WAL and fail with "xlog flush request ... is not
+	 *      satisfied".
+	 *
+	 * In (1) and (2) the skip is a no-op. In (3) it keeps the cluster
+	 * shutdown-capable; the page stays clean and is re-read from storage
+	 * on next access.
 	 */
-	if (polar_get_bg_redo_state(instance) == POLAR_BG_ONLINE_PROMOTE &&
-		page_lsn > polar_get_xlog_replay_recptr_nolock())
+	if (page_lsn > polar_get_xlog_replay_recptr_nolock())
 		return;
 
 	/*
-	 * During online promote the start_lsn is the background process replayed
-	 * lsn which used as the lower limit to create logindex iterator. If page
-	 * lsn is smaller or equal to start_lsn, then we have no xlog record to
-	 * replay when visist this buffer, so we don't need to mark it dirty
+	 * page_lsn <= start_lsn means there is no logindex-driven xlog record
+	 * left to replay for this buffer, so the secondary mark-dirty is not
+	 * required.
 	 */
 	if (page_lsn <= start_lsn)
 		return;
