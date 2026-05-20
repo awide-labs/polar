@@ -57,6 +57,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Fixed a race condition in consistent LSN calculation across flush-list
+  partitions that caused the primary to crash with "Current consistent
+  lsn X is great than next consistent lsn Y" PANIC under concurrent
+  buffer writes (XCOM-193)
 - Fixed `pg_bulkload` crash recovery so that disk space allocated by an
   interrupted bulk load is reclaimed: after both automatic (postmaster)
   and offline (`pg_bulkload -r`) recovery, the target relation returns to
