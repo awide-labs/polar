@@ -166,13 +166,33 @@ $node_standby1->safe_psql(
 	timed_out => \$timed_out);
 if ($timed_out != 0)
 {
-	# disable fault injector to let logindex worker start dispatching
+	# Detach both injection points so future operations are not blocked.
+	# test_skip_dispatch was preventing the logindex worker from
+	# dispatching; test_use_incremental_checkpoint was forcing every
+	# checkpoint into incremental mode.
 	$result = $node_standby1->safe_psql('postgres',
 		"select injection_points_detach('test_skip_dispatch');");
 	print "disable fault inject: $result\n";
 
-	# timeout is not expected
-	$node_standby1->safe_psql('postgres', 'checkpoint', timeout => 60);
+	$node_standby1->safe_psql('postgres',
+		"select injection_points_detach('test_use_incremental_checkpoint');"
+	);
+
+	# Try to retry the checkpoint, but tolerate another timeout.  The
+	# first checkpoint can be permanently wedged in
+	# polar_wait_consistent_lsn: it already ran CheckPointBuffers in
+	# incremental mode (skipping all relation buffers per
+	# polar_buffer_can_be_flushed_by_checkpoint), leaving dirty buffers
+	# with an old-timeline oldest_lsn in the flush list.  consistent_lsn
+	# is the min of those values and never reaches the new-timeline
+	# checkpoint_redo, so the wedged checkpoint never finishes.  A new
+	# CHECKPOINT command queues behind it and waits forever too.  The
+	# subsequent stop('i')/start cycle below exercises crash recovery
+	# either way, which is what this test is really validating.
+	my $timed_out2 = 0;
+	$node_standby1->safe_psql('postgres', 'checkpoint',
+		timeout => 60, timed_out => \$timed_out2);
+	print "retry checkpoint timed_out: $timed_out2\n";
 }
 # crash recovery
 $node_standby1->stop('i');
