@@ -4598,7 +4598,10 @@ sub psql_connect
 	# see comments from interactive_psql
 	$ENV{PSQL_HISTORY} = '/dev/null';
 	$ENV{INPUTRC} = '/dev/null';
-	# delete $ENV{TERM};
+	# Use a dumb terminal to prevent libedit from emitting terminal escape
+	# sequences (e.g. \e[?2004l for bracketed paste mode) that would break
+	# the /\n$banner/ readiness check below.
+	$ENV{TERM} = 'dumb';
 	delete $ENV{LS_COLORS};
 
 	# build output file and truncate it
