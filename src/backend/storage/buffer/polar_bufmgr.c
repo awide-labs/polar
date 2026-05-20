@@ -115,6 +115,20 @@ polar_bg_buffer_sync(WritebackContext *wb_context, int flags)
 	return res;
 }
 
+static inline void
+polar_acquire_all_flushlist_locks(void)
+{
+	for (int i = 0; i < POLAR_FLUSHLIST_PARTITIONS; i++)
+		SpinLockAcquire(&polar_flush_ctl->lists[i].flushlist_lock);
+}
+
+static inline void
+polar_release_all_flushlist_locks(void)
+{
+	for (int i = POLAR_FLUSHLIST_PARTITIONS - 1; i >= 0; i--)
+		SpinLockRelease(&polar_flush_ctl->lists[i].flushlist_lock);
+}
+
 /*
  * Calculate current consistent lsn, it is the minimum between first buffer of
  * flush list and all copy buffers. If oldest lsn of all buffers are invalid,
@@ -142,11 +156,30 @@ polar_cal_cur_consistent_lsn(void)
 	all_flush_lists_empty = true;
 	min_flush_list_lsn = InvalidXLogRecPtr;
 
+	/*
+	 * Hold every partition's spinlock for the full duration of the scan.
+	 * Releasing each lock before moving to the next partition would create a
+	 * window in which a backend could insert a buffer with a small LSN into
+	 * an already-scanned partition, causing us to publish a consistent_lsn
+	 * greater than that buffer's LSN and later trip the regression check.
+	 *
+	 * The empty-flush-list branch also reads polar_max_valid_lsn() (and the
+	 * logindex equivalents) while still holding the locks: otherwise a
+	 * concurrent polar_set_buffer_fake_oldest_lsn() that observes a smaller
+	 * GetXLogInsertRecPtr could insert a buffer into a now-empty list with an
+	 * LSN below the value we are about to return.
+	 *
+	 * polar_cal_cur_consistent_lsn runs infrequently (flush coordinator
+	 * only), so the cost of taking all 64 spinlocks is negligible.  All other
+	 * sites hold at most one partition spinlock at a time, so no deadlock is
+	 * possible.
+	 */
+	polar_acquire_all_flushlist_locks();
+
 	for (i = 0; i < POLAR_FLUSHLIST_PARTITIONS; i++)
 	{
 		FlushList  *list = &polar_flush_ctl->lists[i];
 
-		SpinLockAcquire(&list->flushlist_lock);
 		if (!polar_flush_list_is_empty(list))
 		{
 			all_flush_lists_empty = false;
@@ -159,7 +192,6 @@ polar_cal_cur_consistent_lsn(void)
 			if (min_flush_list_lsn == InvalidXLogRecPtr || lsn < min_flush_list_lsn)
 				min_flush_list_lsn = lsn;
 		}
-		SpinLockRelease(&list->flushlist_lock);
 	}
 
 	if (all_flush_lists_empty)
@@ -169,6 +201,8 @@ polar_cal_cur_consistent_lsn(void)
 		else
 			lsn = polar_max_valid_lsn();
 
+		polar_release_all_flushlist_locks();
+
 		if (unlikely(polar_enable_debug))
 			elog(DEBUG1,
 				 "The flush list is empty, so use current insert lsn %X/%X as consistent lsn.",
@@ -176,6 +210,8 @@ polar_cal_cur_consistent_lsn(void)
 
 		return lsn;
 	}
+
+	polar_release_all_flushlist_locks();
 
 	clsn = polar_copy_buffers_get_oldest_lsn();
 	if (!XLogRecPtrIsInvalid(clsn))
