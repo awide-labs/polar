@@ -24,12 +24,19 @@ use PostgreSQL::Test::Cluster;
 use PostgreSQL::Test::Utils;
 use Test::More;
 
-# Temporarily disabled due to instability
-plan skip_all => 'Test temporarily disabled due to instability';
-
 if ($ENV{enable_injection_points} eq 'no')
 {
 	plan skip_all => 'Fault injector not supported by this build';
+}
+
+# Cluster::init() appends PG_TEST_INITDB_EXTRA_OPTS after ->extra, so a
+# global --wal-segsize=16 would override the --wal-segsize=1 the second
+# part of this test relies on. Re-append our value so it wins.
+local $ENV{PG_TEST_INITDB_EXTRA_OPTS} = $ENV{PG_TEST_INITDB_EXTRA_OPTS};
+if (defined $ENV{PG_TEST_INITDB_EXTRA_OPTS}
+	&& $ENV{PG_TEST_INITDB_EXTRA_OPTS} =~ m/wal-segsize=/)
+{
+	$ENV{PG_TEST_INITDB_EXTRA_OPTS} .= " --wal-segsize=1";
 }
 
 my $db = 'postgres';
