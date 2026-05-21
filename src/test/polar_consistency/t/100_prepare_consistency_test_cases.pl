@@ -32,7 +32,6 @@ my $pwd = $ENV{'PWD'};
 my $regress_dir = "$pwd/../regress/";
 my $regress_sql_dir = "$regress_dir/sql/";
 my $local_sql_dir = "./sql/";
-my $prepare_check_file = "$pwd/prepare_check.log";
 my $schedule_list = "dccheck_schedule_list";
 
 # skip data consistency check
@@ -68,105 +67,100 @@ sub exclude_some_cases
 	return $all;
 }
 
-sub handle_prepare_check_result
+# Parse a regress schedule file directly and produce a filtered schedule
+# for DCRegression. This replaces the old approach of running pg_regress
+# with --polar-prepare-sql just to capture its log output.
+sub parse_schedule_file
 {
-	my ($file) = @_;
-	open my $INPUT, '<', $file or die "Failed to open $file: $!";
-	my @all_lines = <$INPUT>;
-	close $INPUT;
-	my $schedule_pattern =
-	  qr/PATH=.* .*\/src\/test\/regress\/pg_regress .* --polar-prepare-sql .* --schedule=.*\/([^\s]+)/i;
-	my $ora_mode_pattern = qr/\s+--compatibility_mode=ora\s+/i;
-	my $parallel_group_pattern =
-	  qr/^parallel group \([0-9]+ tests\):\s+(.*)\s*/i;
-	my $prepare_env_pattern = qr/^\s*prepare env\s*(.+)\s*=\s*(.+)\s*/i;
-	my $single_test_pattern = qr/^test\s+(\S+)\s+\.\.\.\s+/i;
-	my $guc_set_pattern = qr/^\s*polar_guc:\s*([^\s]+)\s*=\s*(.+)\s*/i;
-	my @result = ();
-	my $OUTPUT = undef;
+	my ($source_schedule, $output_schedule) = @_;
+	open my $INPUT, '<', $source_schedule
+	  or die "Failed to open $source_schedule: $!";
+	open my $OUTPUT, '>', $output_schedule
+	  or die "Failed to open $output_schedule: $!";
 
-	for my $line (@all_lines)
+	my $polar_dir = '';
+	my $wrote_any = 0;
+
+	while (my $line = <$INPUT>)
 	{
-		if ($line =~ $prepare_env_pattern)
-		{
-			print "found $1=$2\n";
-			push @result, [ $1, $2, "env" ];
-		}
-		elsif ($line =~ $schedule_pattern)
-		{
-			my $schedule_file = $1;
+		chomp $line;
 
-			if ($line =~ $ora_mode_pattern)
-			{
-				push @result, [ $schedule_file, $local_sql_dir, "ora" ];
-			}
-			else
-			{
-				push @result, [ $schedule_file, $local_sql_dir, "pg" ];
-			}
-
-			if (defined $OUTPUT)
-			{
-				close $OUTPUT;
-				$OUTPUT = undef;
-			}
-			open $OUTPUT, '>', $schedule_file
-			  or die "Failed to open $schedule_file: $!";
-		}
-		elsif ($line =~ $parallel_group_pattern
-			|| $line =~ $single_test_pattern)
+		# Handle polar_dir directive: prefix test names with this directory
+		if ($line =~ /^polar_dir:\s*(\S+)/)
 		{
-			my $test_cases = exclude_some_cases($1);
-			if ($test_cases eq '')
-			{
-				next;
-			}
-			if (!defined $OUTPUT)
-			{
-				die "No opened schedule file!\n";
-			}
-			print $OUTPUT "test:$test_cases\n";
+			$polar_dir = "$1/";
+			next;
 		}
-		elsif ($line =~ $guc_set_pattern)
+
+		# Pass through polar_guc directives
+		if ($line =~ /^\s*polar_guc:\s*/)
 		{
 			$line =~ s/^\s+|\s+$//g;
 			print $OUTPUT "$line\n";
+			next;
+		}
+
+		# Skip comments, empty lines, ignore directives
+		next if ($line =~ /^\s*#/ || $line =~ /^\s*$/ || $line =~ /^ignore:/);
+
+		# Handle test lines
+		if ($line =~ /^test:\s*(.+)/)
+		{
+			my @tests = split(/\s+/, $1);
+
+			# Add polar_dir prefix if set
+			if ($polar_dir ne '')
+			{
+				@tests = map { "$polar_dir$_" } @tests;
+			}
+
+			# Apply exclusions
+			my $test_line = exclude_some_cases(join(' ', @tests));
+			next if $test_line eq '';
+
+			print $OUTPUT "test: $test_line\n";
+			$wrote_any = 1;
 		}
 	}
-	if (defined $OUTPUT)
-	{
-		close $OUTPUT;
-	}
-	return @result;
+
+	close $INPUT;
+	close $OUTPUT;
+	return $wrote_any;
 }
 
 my $start_time = time();
-my $regress_clean_cmd = "make clean -C $regress_dir";
-my @all_prepare_modes = ("prepare-dccheck");
-# POLAR_TODO ora
-# my @all_prepare_modes = ("prepare-dccheck", "prepare-ora-dccheck");
-srand();
-my $random_prepare_mod = @all_prepare_modes[ int(rand(@all_prepare_modes)) ];
-my $prepare_cmd =
-  "make $random_prepare_mod -C $regress_dir > $prepare_check_file";
-PostgreSQL::Test::Utils::system_or_bail($regress_clean_cmd);
-PostgreSQL::Test::Utils::system_or_bail("rm", "-f", "$prepare_check_file");
-PostgreSQL::Test::Utils::system_or_bail($prepare_cmd);
+
+# Copy SQL files directly from regress source directory instead of running
+# pg_regress with --polar-prepare-sql. The old approach launched a full
+# PostgreSQL instance and executed every regression test just to capture the
+# test list from pg_regress log output -- an expensive operation that added
+# several minutes of wall time (especially under DCCHECK_ALL=1 builds).
 PostgreSQL::Test::Utils::system_or_bail("rm", "-rf", "$local_sql_dir");
 PostgreSQL::Test::Utils::system_or_bail("cp", "-frp", "$regress_sql_dir",
 	"$local_sql_dir");
 
-my @prepare_results = handle_prepare_check_result($prepare_check_file);
+# Parse schedule files directly to build the test list. This replaces
+# the old handle_prepare_check_result() which parsed pg_regress log output.
+my @source_schedules = (
+	["$regress_dir/parallel_schedule", "parallel_schedule", "pg"],
+	["$regress_dir/polar_check_schedule", "polar_check_schedule", "pg"],
+);
+
+my @prepare_results = ();
+foreach my $sched (@source_schedules)
+{
+	my ($source, $output, $mode) = @{$sched};
+	if (parse_schedule_file($source, $output))
+	{
+		push @prepare_results, [ $output, $local_sql_dir, $mode ];
+	}
+}
 ok(@prepare_results > 0, "PolarDB regression prepare sqls.");
 
-# create dccheck env file
+# create dccheck env file (empty -- the env variables previously captured
+# from pg_regress output are not referenced by DCRegression)
 open my $fd, '>', $ENV{DCCheckEnvFile}
   or die "Failed to open $ENV{DCCheckEnvFile}: $!";
-foreach my $res (@prepare_results)
-{
-	my ($env_name, $env_value, $mode) = @{$res};
-	print $fd "$env_name=$env_value\n" if ($mode eq "env");
-}
 close $fd;
 
 my $cost_time = time() - $start_time;
@@ -184,8 +178,6 @@ foreach my $res (@prepare_results)
 	## prepared test case phase one
 	my $node_primary = PostgreSQL::Test::Cluster->new('primary1');
 	$node_primary->polar_init_primary;
-	# POLAR_TODO ora
-	# $node_primary->polar_init(1, extra => ["--compatibility_mode=$mode"]);
 	$node_primary->start;
 	my @replicas = ();
 	my $regress = DCRegression->create_new_test($node_primary);
@@ -210,8 +202,6 @@ foreach my $res (@prepare_results)
 	## prepared test case phase two
 	my $node_primary2 = PostgreSQL::Test::Cluster->new('primary2');
 	$node_primary2->polar_init_primary;
-	# POLAR_TODO ora
-	# $node_primary2->polar_init(1, extra => ["--compatibility_mode=$mode"]);
 
 	my $node_replica1 = PostgreSQL::Test::Cluster->new('replica1');
 	$node_replica1->polar_init_replica($node_primary2);
