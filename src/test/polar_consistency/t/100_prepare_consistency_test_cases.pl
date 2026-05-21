@@ -23,6 +23,8 @@ use PostgreSQL::Test::Cluster;
 use PostgreSQL::Test::Utils;
 use Test::More;
 use PolarDB::DCRegression;
+use POSIX qw(ceil);
+use IO::Pipe;
 
 # No need to use pgbench while preparing sql files
 $ENV{with_pgbench} = 0;
@@ -166,89 +168,272 @@ close $fd;
 my $cost_time = time() - $start_time;
 note "Test cost time $cost_time for prepare sqls\n";
 
+# --- Parallel worker execution ---
+# Split large schedule files into chunks and process them with separate
+# PG clusters in parallel, each handling both preparation phases.
+# This significantly reduces wall time when one schedule dominates.
+
+my $num_workers = int($ENV{DCCHECK_WORKERS} || 4);
+my $worker_start_time = time();
+
+# Build work items: keep small schedules as-is, split large ones into chunks
+my @work_items = ();
+
 foreach my $res (@prepare_results)
 {
 	my ($schedule_file, $sql_dir, $mode) = @{$res};
 	next if ($mode eq "env");
 
-	my $failed;
-	$start_time = time();
-
-	print "prepare sqls for [@{$res}]\n";
-	## prepared test case phase one
-	my $node_primary = PostgreSQL::Test::Cluster->new('primary1');
-	$node_primary->polar_init_primary;
-	$node_primary->start;
-	my @replicas = ();
-	my $regress = DCRegression->create_new_test($node_primary);
-	$regress->set_test_mode("prepare_testcase_phase_1");
-	$failed = $regress->test($schedule_file, $sql_dir, \@replicas);
-	ok( $failed == 0,
-		"PolarDB regression prepare test cases phase one for schedule [@{$res}]\n"
-	);
-
-	if ($failed)
+	# Read parsed schedule preserving order of polar_guc / test directives.
+	# Each polar_guc applies to all subsequent tests until overridden by
+	# another polar_guc with the same key, so chunking must reconstruct the
+	# active GUC state at the start of each chunk.
+	open my $fh, '<', $schedule_file
+	  or die "Failed to read $schedule_file: $!";
+	my @items;    # ordered: { type => 'test'|'guc', line => ..., key => ... }
+	my $total_tests = 0;
+	while (my $line = <$fh>)
 	{
-		if (-e `printf polar_dump_core`)
+		chomp $line;
+		if ($line =~ /^\s*polar_guc:\s*([^\s=]+)/)
 		{
-			print `ps -ef | grep postgres: | xargs -n 1 -P 0 gcore`;
+			push @items, { type => 'guc', line => $line, key => $1 };
 		}
-		die "Failed to prepare test cases phase one for schedule [@{$res}]\n";
+		elsif ($line =~ /^test:/)
+		{
+			push @items, { type => 'test', line => $line };
+			$total_tests++;
+		}
+	}
+	close $fh;
+
+	# Small schedules: process as a single work item without splitting
+	if ($total_tests <= $num_workers)
+	{
+		push @work_items, $res;
+		next;
 	}
 
-	$node_primary->stop;
-	$node_primary->clean_node();
-
-	## prepared test case phase two
-	my $node_primary2 = PostgreSQL::Test::Cluster->new('primary2');
-	$node_primary2->polar_init_primary;
-
-	my $node_replica1 = PostgreSQL::Test::Cluster->new('replica1');
-	$node_replica1->polar_init_replica($node_primary2);
-
-	$node_primary2->append_conf('postgresql.conf',
-		"synchronous_standby_names='" . $node_replica1->name . "'");
-
-	$node_primary2->start;
-	$node_primary2->polar_create_slot($node_replica1->name);
-	$node_replica1->start;
-
-	@replicas = ($node_replica1);
-	$regress = DCRegression->create_new_test($node_primary2);
-	$regress->set_test_mode("prepare_testcase_phase_2");
-	$failed = $regress->test($schedule_file, $sql_dir, \@replicas);
-
-	ok( $failed == 0,
-		"PolarDB regression prepare test cases phase two for schedule [@{$res}]\n"
-	);
-
-	if ($failed)
+	# Large schedules: split into $num_workers chunks by test count
+	my $chunk_size = ceil($total_tests / $num_workers);
+	for (my $i = 0; $i < $num_workers; $i++)
 	{
-		if (-e `printf polar_dump_core`)
+		my $start_test = $i * $chunk_size;
+		last if $start_test >= $total_tests;
+		my $end_test = $start_test + $chunk_size - 1;
+		$end_test = $total_tests - 1 if $end_test >= $total_tests;
+
+		my $chunk_file = "${schedule_file}_chunk_${i}";
+		open my $out, '>', $chunk_file
+		  or die "Failed to create $chunk_file: $!";
+
+		# Walk the schedule and emit only the slice belonging to this chunk.
+		# polar_guc lines set BEFORE the chunk start are accumulated into a
+		# preamble (latest value per key wins) and emitted once before the
+		# first in-range test. polar_guc lines WITHIN the chunk are emitted
+		# in place to preserve ordering with subsequent tests.
+		my %preamble;            # key -> latest guc line
+		my @preamble_order;      # keys in order of first appearance
+		my $seen = 0;            # number of test: lines processed so far
+		my $preamble_emitted = 0;
+
+		foreach my $it (@items)
 		{
-			print `ps -ef | grep postgres: | xargs -n 1 -P 0 gcore`;
+			if ($it->{type} eq 'test')
+			{
+				if ($seen >= $start_test && $seen <= $end_test)
+				{
+					if (!$preamble_emitted)
+					{
+						print $out "$preamble{$_}\n" for @preamble_order;
+						$preamble_emitted = 1;
+					}
+					print $out "$it->{line}\n";
+				}
+				$seen++;
+			}
+			else
+			{
+				# polar_guc applies to tests at indices >= $seen
+				next if $seen > $end_test;
+
+				if ($seen <= $start_test)
+				{
+					push @preamble_order, $it->{key}
+					  unless exists $preamble{$it->{key}};
+					$preamble{$it->{key}} = $it->{line};
+				}
+				else
+				{
+					print $out "$it->{line}\n";
+				}
+			}
 		}
-		die "Failed to prepare test cases phase two for schedule [@{$res}]\n";
+
+		close $out;
+		push @work_items, [$chunk_file, $sql_dir, $mode];
 	}
-
-	my @nodes = ($node_primary2, $node_replica1);
-	$regress->shutdown_all_nodes(\@nodes);
-	$node_primary2->clean_node();
-	$node_replica1->clean_node();
-
-	$cost_time = time() - $start_time;
-	note "Test cost time $cost_time for schedule [@{$res}]\n";
 }
+
+note "Spawning " . scalar(@work_items)
+  . " parallel workers (DCCHECK_WORKERS=$num_workers,"
+  . " max_live_children=$DCRegression::max_live_children)";
+
+# Fork a worker process for each work item
+my @workers;
+
+for (my $wi = 0; $wi < scalar @work_items; $wi++)
+{
+	my $pipe = IO::Pipe->new();
+	my $pid = fork();
+	die "fork() failed: $!" unless defined $pid;
+
+	if ($pid == 0)
+	{
+		# ---- Child process ----
+		$pipe->writer();
+		$pipe->autoflush(1);
+
+		# Redirect stdout/stderr to per-worker log to avoid TAP interference
+		open(STDOUT, '>', "worker_${wi}.log")
+		  or die "Cannot redirect STDOUT: $!";
+		open(STDERR, '>&', \*STDOUT)
+		  or die "Cannot redirect STDERR: $!";
+
+		my ($schedule_file, $sql_dir, $mode) = @{$work_items[$wi]};
+		my $failed = 0;
+
+		eval {
+			## Phase 1: single primary, no replicas
+			print "Worker $wi: phase 1 for $schedule_file\n";
+
+			my $node_p1 =
+			  PostgreSQL::Test::Cluster->new("primary1_w${wi}");
+			$node_p1->polar_init_primary;
+			$node_p1->start;
+
+			my @replicas = ();
+			my $regress = DCRegression->create_new_test($node_p1);
+			$regress->set_test_mode("prepare_testcase_phase_1");
+
+			$failed =
+			  $regress->test($schedule_file, $sql_dir, \@replicas);
+
+			$node_p1->stop;
+			$node_p1->clean_node();
+
+			if ($failed)
+			{
+				if (-e `printf polar_dump_core`)
+				{
+					print
+					  `ps -ef | grep postgres: | xargs -n 1 -P 0 gcore`;
+				}
+				die "phase 1 failed ($failed)";
+			}
+
+			## Phase 2: primary + synchronous replica
+			print "Worker $wi: phase 2 for $schedule_file\n";
+
+			my $node_p2 =
+			  PostgreSQL::Test::Cluster->new("primary2_w${wi}");
+			$node_p2->polar_init_primary;
+			my $node_r1 =
+			  PostgreSQL::Test::Cluster->new("replica1_w${wi}");
+			$node_r1->polar_init_replica($node_p2);
+			$node_p2->append_conf('postgresql.conf',
+				"synchronous_standby_names='"
+				  . $node_r1->name . "'");
+
+			$node_p2->start;
+			$node_p2->polar_create_slot($node_r1->name);
+			$node_r1->start;
+
+			@replicas = ($node_r1);
+			$regress = DCRegression->create_new_test($node_p2);
+			$regress->set_test_mode("prepare_testcase_phase_2");
+
+			$failed =
+			  $regress->test($schedule_file, $sql_dir, \@replicas);
+
+			if ($failed)
+			{
+				if (-e `printf polar_dump_core`)
+				{
+					print
+					  `ps -ef | grep postgres: | xargs -n 1 -P 0 gcore`;
+				}
+			}
+
+			my @nodes = ($node_p2, $node_r1);
+			$regress->shutdown_all_nodes(\@nodes);
+			$node_p2->clean_node();
+			$node_r1->clean_node();
+		};
+
+		if ($@)
+		{
+			print $pipe "FAIL:$@\n";
+			POSIX::_exit(1);
+		}
+
+		print $pipe ($failed ? "FAIL:phase2:$failed" : "OK") . "\n";
+		POSIX::_exit($failed ? 1 : 0);
+	}
+
+	# ---- Parent process ----
+	$pipe->reader();
+	push @workers,
+	  {
+		pid  => $pid,
+		pipe => $pipe,
+		item => $work_items[$wi],
+		idx  => $wi
+	  };
+}
+
+# Wait for all workers and verify results
+my $any_failed = 0;
+foreach my $w (@workers)
+{
+	waitpid($w->{pid}, 0);
+	my $exit_code = $? >> 8;
+	my $result = readline($w->{pipe}) // "NO_RESPONSE";
+	chomp $result;
+
+	my ($sched) = @{$w->{item}};
+	my $worker_ok = ($exit_code == 0 && $result eq "OK");
+
+	ok($worker_ok, "Worker $w->{idx}: prepare test cases for $sched");
+
+	if (!$worker_ok)
+	{
+		$any_failed = 1;
+		diag
+		  "Worker $w->{idx} FAILED for $sched (exit=$exit_code, result=$result)";
+		diag "See worker_$w->{idx}.log for details";
+	}
+}
+
+$cost_time = time() - $worker_start_time;
+note "All workers completed in ${cost_time}s";
+
+if ($any_failed)
+{
+	diag "Worker logs preserved: worker_*.log";
+	die "Some workers failed, aborting";
+}
+
+# Clean up worker logs on success
+unlink glob "worker_*.log";
 
 # save schedule file list to dccheck_schedule_list
 PostgreSQL::Test::Utils::system_or_bail("rm", "-f", "$schedule_list");
 open my $dccheck_schedule, '>', $schedule_list
   or die "Failed to open $schedule_list: $!";
-foreach my $schedule (@prepare_results)
+foreach my $item (@work_items)
 {
-	my ($schedule_file, $sql_dir, $mode) = @{$schedule};
-	next if ($mode eq "env");
-
+	my ($schedule_file, $sql_dir, $mode) = @{$item};
 	print $dccheck_schedule "$schedule_file,$sql_dir,$mode\n";
 }
 close $dccheck_schedule;

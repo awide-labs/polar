@@ -5,3 +5,6 @@
 /dccheck_schedule_list
 /polar_check_schedule
 /dccheck_env
+/parallel_schedule_chunk_*
+/polar_check_schedule_chunk_*
+/worker_*.log
