@@ -68,8 +68,11 @@ sub exclude_some_cases
 		'encoding', 'euc_kr');
 	foreach my $case (@excluded_test_cases)
 	{
-		$all =~ s/[^\s]*$case//g;
+		# \b ensures we match exact name, not a suffix (e.g. polar_tablespace)
+		$all =~ s/\b$case\b//g;
 	}
+	# collapse double spaces left after removals
+	$all =~ s/\s{2,}/ /g;
 	$all =~ s/^\s+|\s+$//g;
 	return $all;
 }
@@ -86,8 +89,7 @@ sub handle_prepare_check_result
 	my $parallel_group_pattern =
 	  qr/^\# parallel group \([0-9]+ tests\):\s+(.*)\s*/i;
 	my $prepare_env_pattern = qr/^\s*prepare env\s*(.+)\s*=\s*(.+)\s*/i;
-	my $single_test_pattern =
-	  qr/^[^\s]+\s+[0-9]+\s+\-\s+([^\s]+)\s+[0-9]+\s+ms/i;
+	my $single_test_pattern = qr/^test\s+(\S+)\s+\.\.\.\s+/i;
 	my $guc_set_pattern = qr/^\s*polar_guc:\s*([^\s]+)\s*=\s*(.+)\s*/i;
 	my @result = ();
 	my $OUTPUT = undef;
