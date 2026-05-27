@@ -129,6 +129,7 @@ struct SMgrRelationData;
 extern BlockNumber smgrnblocks_real(struct SMgrRelationData *reln, ForkNumber forknum);
 extern BlockNumber polar_rsc_search_by_ref(struct SMgrRelationData *reln, ForkNumber forknum);
 extern BlockNumber polar_rsc_search_by_mapping(struct SMgrRelationData *reln, ForkNumber forknum);
+extern BlockNumber polar_rsc_search_cached_entry(struct SMgrRelationData *reln, ForkNumber forknum);
 extern BlockNumber polar_rsc_search_entry(struct SMgrRelationData *reln, ForkNumber forknum,
 										  polar_rsc_search_mode_t mode);
 extern BlockNumber polar_rsc_update_entry(struct SMgrRelationData *reln,
@@ -155,6 +156,8 @@ extern void polar_rsc_stat_drop_buffer(bool full_scan);
 extern void polar_rsc_global_stat_fetch(Datum *values, int len,
 										polar_rsc_stat_version_t version);
 extern void polar_rsc_global_stat_reset(void);
+extern void polar_rsc_nblocks_lookup_stat_reset(void);
+extern uint64 polar_rsc_nblocks_lookup_stat_hits(void);
 
 /*
  * RSC on replica.

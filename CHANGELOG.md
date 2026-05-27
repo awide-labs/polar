@@ -104,6 +104,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Performance
 
+- Avoid unconditional full scan of shared_buffers in the buffer-pool
+  invalidation path when RSC is enabled.  This speeds up every
+  command that drops or truncates relation storage, including
+  DROP TABLE/INDEX/MATERIALIZED VIEW, TRUNCATE, VACUUM/autovacuum
+  tail truncation, CLUSTER, VACUUM FULL, REFRESH MATERIALIZED VIEW,
+  REINDEX, and rewriting forms of ALTER TABLE, as well as replay of
+  smgr truncate records on replicas (XCOM-195)
 - Replace spinlock-protected reads of `RedoRecPtr` and
   `curr_primary_consistent_lsn` with lock-free `pg_atomic_uint64` ops,
   eliminating two hot spinlocks (`info_lck`, `WalRcv->mutex`) from the

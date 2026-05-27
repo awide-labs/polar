@@ -7,7 +7,8 @@ SELECT in_cache, main_cache
     WHERE rel_node = (SELECT relfilenode FROM pg_class WHERE relname = 'test_rsc');
  in_cache | main_cache 
 ----------+------------
-(0 rows)
+ t        |          0
+(1 row)
 
 -- cache loaded
 SELECT * FROM test_rsc;
@@ -62,7 +63,8 @@ SELECT in_cache, main_cache
     WHERE rel_node = (SELECT relfilenode FROM pg_class WHERE relname = 'test_rsc') AND in_cache = true;
  in_cache | main_cache 
 ----------+------------
-(0 rows)
+ t        |          0
+(1 row)
 
 -- cache miss by searching ref
 SELECT test_polar_rsc_search_by_ref(relfilenode)
@@ -77,7 +79,7 @@ SELECT test_polar_rsc_search_by_mapping(relfilenode)
     FROM pg_class WHERE relname = 'test_rsc';
  test_polar_rsc_search_by_mapping 
 ----------------------------------
-                               -1
+                                0
 (1 row)
 
 -- reload cache

@@ -654,18 +654,16 @@ rsc_nblocks_update:
 }
 
 /*
- * polar_rsc_search_entry
+ * polar_rsc_search_cached_entry
  *
- * Search and update nblocks values inside RSC based on the mode.
+ * Pure shared-memory lookup: try the per-backend cached pointer first, then
+ * the hash mapping.  Returns InvalidBlockNumber on miss without touching the
+ * file system or evicting an entry.
  */
 BlockNumber
-polar_rsc_search_entry(SMgrRelation reln, ForkNumber forknum,
-					   polar_rsc_search_mode_t mode)
+polar_rsc_search_cached_entry(SMgrRelation reln, ForkNumber forknum)
 {
 	BlockNumber result;
-
-	if (mode == POLAR_RSC_SEARCH_NEVER)
-		return InvalidBlockNumber;
 
 	result = polar_rsc_search_by_ref(reln, forknum);
 	if (result != InvalidBlockNumber)
@@ -681,7 +679,28 @@ polar_rsc_search_entry(SMgrRelation reln, ForkNumber forknum,
 		return result;
 	}
 
-	Assert(result == InvalidBlockNumber);
+	pg_atomic_add_fetch_u64(RSC_GLOBAL_STAT(nblocks_mapping_miss), 1);
+
+	return InvalidBlockNumber;
+}
+
+/*
+ * polar_rsc_search_entry
+ *
+ * Search and update nblocks values inside RSC based on the mode.
+ */
+BlockNumber
+polar_rsc_search_entry(SMgrRelation reln, ForkNumber forknum,
+					   polar_rsc_search_mode_t mode)
+{
+	BlockNumber result;
+
+	if (mode == POLAR_RSC_SEARCH_NEVER)
+		return InvalidBlockNumber;
+
+	result = polar_rsc_search_cached_entry(reln, forknum);
+	if (result != InvalidBlockNumber)
+		return result;
 
 	switch (mode)
 	{
@@ -702,8 +721,6 @@ polar_rsc_search_entry(SMgrRelation reln, ForkNumber forknum,
 		default:
 			elog(PANIC, "unexpected RSC search mode: %d", mode);
 	}
-
-	pg_atomic_add_fetch_u64(RSC_GLOBAL_STAT(nblocks_mapping_miss), 1);
 
 	return result;
 }
@@ -1107,4 +1124,19 @@ polar_rsc_global_stat_reset(void)
 	pg_atomic_write_u64(RSC_GLOBAL_STAT(mapping_update_invalidate), 0LL);
 	pg_atomic_write_u64(RSC_GLOBAL_STAT(drop_buffer_full_scan), 0LL);
 	pg_atomic_write_u64(RSC_GLOBAL_STAT(drop_buffer_hash_search), 0LL);
+}
+
+void
+polar_rsc_nblocks_lookup_stat_reset(void)
+{
+	pg_atomic_write_u64(RSC_GLOBAL_STAT(nblocks_pointer_hit), 0);
+	pg_atomic_write_u64(RSC_GLOBAL_STAT(nblocks_mapping_hit), 0);
+	pg_atomic_write_u64(RSC_GLOBAL_STAT(nblocks_mapping_miss), 0);
+}
+
+uint64
+polar_rsc_nblocks_lookup_stat_hits(void)
+{
+	return pg_atomic_read_u64(RSC_GLOBAL_STAT(nblocks_pointer_hit)) +
+		pg_atomic_read_u64(RSC_GLOBAL_STAT(nblocks_mapping_hit));
 }
