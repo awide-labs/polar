@@ -442,6 +442,21 @@ void
 smgrcreate(SMgrRelation reln, ForkNumber forknum, bool isRedo)
 {
 	smgrsw[reln->smgr_which].smgr_create(reln, forknum, isRedo);
+
+	/*
+	 * POLAR RSC: Register the fork with 0 blocks so that
+	 * DropRelFileNodesAllBuffers can find it in RSC instead of falling
+	 * through to a full NBuffers scan.
+	 *
+	 * Skip this during recovery: XLogReadBufferExtended calls smgrcreate(...,
+	 * isRedo=true) defensively for every block reference, including
+	 * pre-existing relations whose real size is far from 0.  Stamping 0 +
+	 * dirty here would make smgrnblocks return 0 and trip "unexpected data
+	 * beyond EOF".
+	 */
+	if (!isRedo && POLAR_RSC_SHOULD_UPDATE(reln, forknum))
+		polar_rsc_update_entry(reln, forknum, 0);
+	/* POLAR end */
 }
 
 /*

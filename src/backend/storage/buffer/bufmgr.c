@@ -69,6 +69,7 @@
 #include "storage/polar_bufmgr.h"
 #include "storage/polar_copybuf.h"
 #include "storage/polar_fd.h"
+#include "storage/polar_rsc.h"
 #include "storage/polar_flush.h"
 #include "utils/guc.h"
 /* POLAR end */
@@ -3493,6 +3494,12 @@ DropRelFileNodeBuffers(SMgrRelation smgr_reln, ForkNumber *forkNum,
 		/* Get the number of blocks for a relation's fork */
 		nForkBlock[i] = smgrnblocks_cached(smgr_reln, forkNum[i]);
 
+		/* POLAR RSC: Try RSC lookup. */
+		if (nForkBlock[i] == InvalidBlockNumber && IsUnderPostmaster &&
+			POLAR_RSC_ENABLED())
+			nForkBlock[i] = polar_rsc_search_cached_entry(smgr_reln, forkNum[i]);
+		/* POLAR end */
+
 		if (nForkBlock[i] == InvalidBlockNumber)
 		{
 			nBlocksToInvalidate = InvalidBlockNumber;
@@ -3623,6 +3630,12 @@ DropRelFileNodesAllBuffers(SMgrRelation *smgr_reln, int nnodes)
 		{
 			/* Get the number of blocks for a relation's fork. */
 			block[i][j] = smgrnblocks_cached(rels[i], j);
+
+			/* POLAR RSC: Try RSC lookup. */
+			if (block[i][j] == InvalidBlockNumber && IsUnderPostmaster &&
+				POLAR_RSC_ENABLED())
+				block[i][j] = polar_rsc_search_cached_entry(rels[i], j);
+			/* POLAR end */
 
 			/* We need to only consider the relation forks that exists. */
 			if (block[i][j] == InvalidBlockNumber)

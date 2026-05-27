@@ -74,5 +74,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   walsenders keep up with the write load generating WAL (XCOM-137)
 - Reduce `insertpos_lck` cache-line contention by reserving xlog queue
   space optimistically outside the spinlock (XCOM-141)
+- Avoid unconditional full scan of shared_buffers in the buffer-pool
+  invalidation path when RSC is enabled.  This speeds up every
+  command that drops or truncates relation storage, including
+  DROP TABLE/INDEX/MATERIALIZED VIEW, TRUNCATE, VACUUM/autovacuum
+  tail truncation, CLUSTER, VACUUM FULL, REFRESH MATERIALIZED VIEW,
+  REINDEX, and rewriting forms of ALTER TABLE, as well as replay of
+  smgr truncate records on replicas (XCOM-159)
 
 [unreleased]: https://github.com/awide-labs/polar/compare/6fcfdc2993a..POLARDB_15_STABLE

@@ -527,8 +527,13 @@ rsc_evict:
 	return nblocks;
 }
 
+/*
+ * Pure shared-memory lookup: try the per-backend cached pointer first, then
+ * the hash mapping.  Returns InvalidBlockNumber on miss without touching the
+ * file system or evicting an entry.
+ */
 BlockNumber
-polar_rsc_search_entry(SMgrRelation reln, ForkNumber forknum, bool evict)
+polar_rsc_search_cached_entry(SMgrRelation reln, ForkNumber forknum)
 {
 	BlockNumber result;
 
@@ -546,6 +551,20 @@ polar_rsc_search_entry(SMgrRelation reln, ForkNumber forknum, bool evict)
 		return result;
 	}
 
+	pg_atomic_add_fetch_u64(&polar_rsc_global_stat->nblocks_mapping_miss, 1);
+
+	return InvalidBlockNumber;
+}
+
+BlockNumber
+polar_rsc_search_entry(SMgrRelation reln, ForkNumber forknum, bool evict)
+{
+	BlockNumber result;
+
+	result = polar_rsc_search_cached_entry(reln, forknum);
+	if (result != InvalidBlockNumber)
+		return result;
+
 	if (evict)
 		result = polar_rsc_update_entry(reln, forknum, InvalidBlockNumber);
 	else
@@ -553,8 +572,6 @@ polar_rsc_search_entry(SMgrRelation reln, ForkNumber forknum, bool evict)
 		elog(WARNING, "RSC miss but no need to evict, fallback to real file system call");
 		result = smgrnblocks_real(reln, forknum);
 	}
-
-	pg_atomic_add_fetch_u64(&polar_rsc_global_stat->nblocks_mapping_miss, 1);
 
 	return result;
 }
