@@ -109,3 +109,34 @@ test_polar_rsc_update_entry(PG_FUNCTION_ARGS)
 
 	PG_RETURN_UINT32(nblocks);
 }
+
+/*
+ * Reset the nblocks lookup counters so a test can measure how many RSC
+ * lookups a subsequent operation performs.
+ */
+PG_FUNCTION_INFO_V1(test_polar_rsc_reset_nblocks_stat);
+Datum
+test_polar_rsc_reset_nblocks_stat(PG_FUNCTION_ARGS)
+{
+	pg_atomic_write_u64(&polar_rsc_global_stat->nblocks_pointer_hit, 0);
+	pg_atomic_write_u64(&polar_rsc_global_stat->nblocks_mapping_hit, 0);
+	pg_atomic_write_u64(&polar_rsc_global_stat->nblocks_mapping_miss, 0);
+
+	PG_RETURN_VOID();
+}
+
+/*
+ * Return the total number of successful RSC nblocks lookups (per-backend
+ * pointer hits plus shared mapping hits) since the last reset.
+ */
+PG_FUNCTION_INFO_V1(test_polar_rsc_nblocks_hits);
+Datum
+test_polar_rsc_nblocks_hits(PG_FUNCTION_ARGS)
+{
+	uint64		hits;
+
+	hits = pg_atomic_read_u64(&polar_rsc_global_stat->nblocks_pointer_hit) +
+		pg_atomic_read_u64(&polar_rsc_global_stat->nblocks_mapping_hit);
+
+	PG_RETURN_INT64((int64) hits);
+}
