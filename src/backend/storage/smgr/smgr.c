@@ -452,8 +452,10 @@ smgrcreate(SMgrRelation reln, ForkNumber forknum, bool isRedo)
 	 * dirty here would make smgrnblocks return 0 and trip "unexpected data
 	 * beyond EOF".
 	 */
-	if (!isRedo && POLAR_RSC_SHOULD_UPDATE(reln, forknum))
-		polar_rsc_update_entry(reln, forknum, 0);
+	if (!isRedo && POLAR_RSC_AVAILABLE(reln, forknum) &&
+		polar_rsc_optimize_drop_buffers)
+		polar_rsc_update_entry(reln, forknum, 0,
+							   POLAR_RSC_SEARCH_AND_EVICT);
 	/* POLAR end */
 }
 
