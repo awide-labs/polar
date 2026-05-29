@@ -1241,6 +1241,18 @@ polar_local_cache_move_trash(const char *dir_name)
 bool
 polar_local_cache_empty_trash(void)
 {
+	DIR		   *dir = polar_opendir(POLAR_CACHE_TRASH_DIR);
+
+	if (dir == NULL)
+	{
+		if (errno == ENOENT)
+			return true;
+	}
+	else
+	{
+		polar_closedir(dir);
+	}
+
 	return rmtree(POLAR_CACHE_TRASH_DIR, false);
 }
 
