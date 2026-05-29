@@ -57,6 +57,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Stopped spurious `could not open directory "polar_cache_trash"` and
+  `Failed to empty trash dir for local cache` WARNINGs that flooded the
+  log during initdb and startup when the local cache trash directory did
+  not yet exist (XCOM-193)
 - Fixed a race condition in consistent LSN calculation across flush-list
   partitions that caused the primary to crash with "Current consistent
   lsn X is great than next consistent lsn Y" PANIC under concurrent
