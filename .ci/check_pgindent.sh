@@ -49,7 +49,7 @@ trap "rm -f '$STDERR_FILE'" EXIT
 # Run pgindent, capturing stderr to check for errors
 # pgindent returns 0 even when it makes changes or reports errors
 echo "Running pgindent..."
-if ! "$REPO_ROOT/src/tools/pgindent/pgindent" 2> "$STDERR_FILE"; then
+if ! "$REPO_ROOT/src/tools/pgindent/pgindent" . 2> "$STDERR_FILE"; then
     log_error "pgindent exited with non-zero status"
     cat "$STDERR_FILE"
     exit 1
