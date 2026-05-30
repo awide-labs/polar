@@ -36,27 +36,39 @@
 #include "port/atomics.h"
 #include "c.h"
 
-typedef struct {
+typedef struct
+{
 	pg_atomic_uint64 seq;
 } pg_seqlock;
 
-static inline void pg_seqlock_init(pg_seqlock *lock) {
+static inline void
+pg_seqlock_init(pg_seqlock *lock)
+{
 	pg_atomic_init_u64(&lock->seq, 0);
 }
 
-static inline void pg_seqlock_write_begin(pg_seqlock *lock) {
+static inline void
+pg_seqlock_write_begin(pg_seqlock *lock)
+{
 	pg_atomic_fetch_add_u64(&lock->seq, 1);
 }
 
-static inline void pg_seqlock_write_end(pg_seqlock *lock) {
+static inline void
+pg_seqlock_write_end(pg_seqlock *lock)
+{
 	pg_atomic_fetch_add_u64(&lock->seq, 1);
 }
 
-static inline uint64 pg_seqlock_read_begin(pg_seqlock *lock) {
-	uint64 seq;
-	for (;;) {
+static inline uint64
+pg_seqlock_read_begin(pg_seqlock *lock)
+{
+	uint64		seq;
+
+	for (;;)
+	{
 		seq = pg_atomic_read_u64(&lock->seq);
-		if ((seq & 1) == 0) {
+		if ((seq & 1) == 0)
+		{
 			pg_read_barrier();
 			return seq;
 		}
@@ -65,7 +77,9 @@ static inline uint64 pg_seqlock_read_begin(pg_seqlock *lock) {
 	}
 }
 
-static inline bool pg_seqlock_read_retry(pg_seqlock *lock, uint64 startseq) {
+static inline bool
+pg_seqlock_read_retry(pg_seqlock *lock, uint64 startseq)
+{
 	pg_read_barrier();
 	return (startseq != pg_atomic_read_u64(&lock->seq)) || (startseq & 1);
 }

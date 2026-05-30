@@ -906,29 +906,27 @@ polar_promote_mark_buf_dirty(polar_logindex_redo_ctl_t instance, Buffer buffer, 
 
 	/*
 	 * Skip mark-dirty when page_lsn is past lastReplayedEndRecPtr. The
-	 * condition is reached on three indistinguishable paths (see the
-	 * commit log for full reasoning):
+	 * condition is reached on three indistinguishable paths (see the commit
+	 * log for full reasoning):
 	 *
-	 *   1. POLAR_BG_ONLINE_PROMOTE: page already modified by post-promote
-	 *      RW traffic; the modifying path marked it dirty.
+	 * 1. POLAR_BG_ONLINE_PROMOTE: page already modified by post-promote RW
+	 * traffic; the modifying path marked it dirty.
 	 *
-	 *   2. POLAR_BG_PARALLEL_REPLAYING: a concurrent backend doing
-	 *      mini-trans logindex catch-up replayed to
-	 *      GetCurrentReplayRecPtr() of an in-flight record, which is
-	 *      strictly greater than lastReplayedEndRecPtr until startup
-	 *      publishes the record end; the redo path that advanced the
-	 *      page marked it dirty.
+	 * 2. POLAR_BG_PARALLEL_REPLAYING: a concurrent backend doing mini-trans
+	 * logindex catch-up replayed to GetCurrentReplayRecPtr() of an in-flight
+	 * record, which is strictly greater than lastReplayedEndRecPtr until
+	 * startup publishes the record end; the redo path that advanced the page
+	 * marked it dirty.
 	 *
-	 *   3. Stale on-disk page whose LSN points past the durable WAL tail
-	 *      (truncated WAL after crash, fsync=off, storage that does not
-	 *      honour fsync, external WAL modification). Marking it dirty
-	 *      would make the next checkpoint try to XLogFlush() beyond the
-	 *      durable WAL and fail with "xlog flush request ... is not
-	 *      satisfied".
+	 * 3. Stale on-disk page whose LSN points past the durable WAL tail
+	 * (truncated WAL after crash, fsync=off, storage that does not honour
+	 * fsync, external WAL modification). Marking it dirty would make the next
+	 * checkpoint try to XLogFlush() beyond the durable WAL and fail with
+	 * "xlog flush request ... is not satisfied".
 	 *
 	 * In (1) and (2) the skip is a no-op. In (3) it keeps the cluster
-	 * shutdown-capable; the page stays clean and is re-read from storage
-	 * on next access.
+	 * shutdown-capable; the page stays clean and is re-read from storage on
+	 * next access.
 	 */
 	if (page_lsn > polar_get_xlog_replay_recptr_nolock())
 		return;
