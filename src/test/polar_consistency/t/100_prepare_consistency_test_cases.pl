@@ -159,8 +159,11 @@ foreach my $sched (@source_schedules)
 }
 ok(@prepare_results > 0, "PolarDB regression prepare sqls.");
 
-# create dccheck env file (empty -- the env variables previously captured
-# from pg_regress output are not referenced by DCRegression)
+# Create an empty dccheck_env file.  Downstream tests open this file
+# via DCRegression->new(), which dies if the file is missing.  The old
+# workflow wrote "NAME=VALUE" lines captured from pg_regress log output,
+# but parallel_schedule and polar_check_schedule never emitted any such
+# lines, so the file has always been empty in practice.
 open my $fd, '>', $ENV{DCCheckEnvFile}
   or die "Failed to open $ENV{DCCheckEnvFile}: $!";
 close $fd;
@@ -276,153 +279,165 @@ foreach my $res (@prepare_results)
 }
 
 note "Spawning " . scalar(@work_items)
-  . " parallel workers (DCCHECK_WORKERS=$num_workers,"
-  . " max_live_children=$DCRegression::max_live_children)";
+  . " workers in batches of $num_workers"
+  . " (max_live_children=$DCRegression::max_live_children)";
 
-# Fork a worker process for each work item
-my @workers;
+# Fork workers in batches of $num_workers to cap the number of
+# simultaneously live PG cluster sets.  Each worker owns up to 2 PG
+# instances (phase-1 primary; phase-2 primary + replica), so the peak
+# concurrent instance count is 2 * $num_workers.
+my $any_failed = 0;
 
-for (my $wi = 0; $wi < scalar @work_items; $wi++)
+for (
+	my $batch_start = 0;
+	$batch_start < scalar @work_items;
+	$batch_start += $num_workers)
 {
-	my $pipe = IO::Pipe->new();
-	my $pid = fork();
-	die "fork() failed: $!" unless defined $pid;
+	my $batch_end = $batch_start + $num_workers - 1;
+	$batch_end = $#work_items if $batch_end > $#work_items;
 
-	if ($pid == 0)
+	my @batch_workers;
+
+	for (my $wi = $batch_start; $wi <= $batch_end; $wi++)
 	{
-		# ---- Child process ----
-		$pipe->writer();
-		$pipe->autoflush(1);
+		my $pipe = IO::Pipe->new();
+		my $pid = fork();
+		die "fork() failed: $!" unless defined $pid;
 
-		# Redirect stdout/stderr to per-worker log to avoid TAP interference
-		open(STDOUT, '>', "worker_${wi}.log")
-		  or die "Cannot redirect STDOUT: $!";
-		open(STDERR, '>&', \*STDOUT)
-		  or die "Cannot redirect STDERR: $!";
-
-		my ($schedule_file, $sql_dir, $mode) = @{$work_items[$wi]};
-		my $failed = 0;
-
-		eval {
-			## Phase 1: single primary, no replicas
-			print "Worker $wi: phase 1 for $schedule_file\n";
-
-			my $node_p1 =
-			  PostgreSQL::Test::Cluster->new("primary1_w${wi}");
-			$node_p1->polar_init_primary;
-			$node_p1->start;
-
-			my @replicas = ();
-			my $regress = DCRegression->create_new_test($node_p1);
-			$regress->set_test_mode("prepare_testcase_phase_1");
-
-			$failed =
-			  $regress->test($schedule_file, $sql_dir, \@replicas);
-
-			$node_p1->stop;
-			$node_p1->clean_node();
-
-			if ($failed)
-			{
-				if (-e `printf polar_dump_core`)
-				{
-					print
-					  `ps -ef | grep postgres: | xargs -n 1 -P 0 gcore`;
-				}
-				die "phase 1 failed ($failed)";
-			}
-
-			## Phase 2: primary + synchronous replica
-			print "Worker $wi: phase 2 for $schedule_file\n";
-
-			my $node_p2 =
-			  PostgreSQL::Test::Cluster->new("primary2_w${wi}");
-			$node_p2->polar_init_primary;
-			my $node_r1 =
-			  PostgreSQL::Test::Cluster->new("replica1_w${wi}");
-			$node_r1->polar_init_replica($node_p2);
-			$node_p2->append_conf('postgresql.conf',
-				"synchronous_standby_names='"
-				  . $node_r1->name . "'");
-
-			$node_p2->start;
-			$node_p2->polar_create_slot($node_r1->name);
-			$node_r1->start;
-
-			@replicas = ($node_r1);
-			$regress = DCRegression->create_new_test($node_p2);
-			$regress->set_test_mode("prepare_testcase_phase_2");
-
-			$failed =
-			  $regress->test($schedule_file, $sql_dir, \@replicas);
-
-			if ($failed)
-			{
-				if (-e `printf polar_dump_core`)
-				{
-					print
-					  `ps -ef | grep postgres: | xargs -n 1 -P 0 gcore`;
-				}
-			}
-
-			my @nodes = ($node_p2, $node_r1);
-			$regress->shutdown_all_nodes(\@nodes);
-			$node_p2->clean_node();
-			$node_r1->clean_node();
-		};
-
-		if ($@)
+		if ($pid == 0)
 		{
-			print $pipe "FAIL:$@\n";
-			POSIX::_exit(1);
+			# ---- Child process ----
+			$pipe->writer();
+			$pipe->autoflush(1);
+
+			# Redirect stdout/stderr to per-worker log to avoid TAP interference
+			open(STDOUT, '>', "worker_${wi}.log")
+			  or die "Cannot redirect STDOUT: $!";
+			open(STDERR, '>&', \*STDOUT)
+			  or die "Cannot redirect STDERR: $!";
+
+			my ($schedule_file, $sql_dir, $mode) = @{$work_items[$wi]};
+			my $failed = 0;
+
+			eval {
+				## Phase 1: single primary, no replicas
+				print "Worker $wi: phase 1 for $schedule_file\n";
+
+				my $node_p1 =
+				  PostgreSQL::Test::Cluster->new("primary1_w${wi}");
+				$node_p1->polar_init_primary;
+				$node_p1->start;
+
+				my @replicas = ();
+				my $regress = DCRegression->create_new_test($node_p1);
+				$regress->set_test_mode("prepare_testcase_phase_1");
+
+				$failed =
+				  $regress->test($schedule_file, $sql_dir, \@replicas);
+
+				$node_p1->stop;
+				$node_p1->clean_node();
+
+				if ($failed)
+				{
+					if (-e `printf polar_dump_core`)
+					{
+						print
+						  `ps -ef | grep postgres: | xargs -n 1 -P 0 gcore`;
+					}
+					die "phase 1 failed ($failed)";
+				}
+
+				## Phase 2: primary + synchronous replica
+				print "Worker $wi: phase 2 for $schedule_file\n";
+
+				my $node_p2 =
+				  PostgreSQL::Test::Cluster->new("primary2_w${wi}");
+				$node_p2->polar_init_primary;
+				my $node_r1 =
+				  PostgreSQL::Test::Cluster->new("replica1_w${wi}");
+				$node_r1->polar_init_replica($node_p2);
+				$node_p2->append_conf('postgresql.conf',
+					"synchronous_standby_names='"
+					  . $node_r1->name . "'");
+
+				$node_p2->start;
+				$node_p2->polar_create_slot($node_r1->name);
+				$node_r1->start;
+
+				@replicas = ($node_r1);
+				$regress = DCRegression->create_new_test($node_p2);
+				$regress->set_test_mode("prepare_testcase_phase_2");
+
+				$failed =
+				  $regress->test($schedule_file, $sql_dir, \@replicas);
+
+				if ($failed)
+				{
+					if (-e `printf polar_dump_core`)
+					{
+						print
+						  `ps -ef | grep postgres: | xargs -n 1 -P 0 gcore`;
+					}
+				}
+
+				my @nodes = ($node_p2, $node_r1);
+				$regress->shutdown_all_nodes(\@nodes);
+				$node_p2->clean_node();
+				$node_r1->clean_node();
+			};
+
+			if ($@)
+			{
+				print $pipe "FAIL:$@\n";
+				POSIX::_exit(1);
+			}
+
+			print $pipe ($failed ? "FAIL:phase2:$failed" : "OK") . "\n";
+			POSIX::_exit($failed ? 1 : 0);
 		}
 
-		print $pipe ($failed ? "FAIL:phase2:$failed" : "OK") . "\n";
-		POSIX::_exit($failed ? 1 : 0);
+		# ---- Parent ----
+		$pipe->reader();
+		push @batch_workers,
+		  {
+			pid  => $pid,
+			pipe => $pipe,
+			item => $work_items[$wi],
+			idx  => $wi
+		  };
 	}
 
-	# ---- Parent process ----
-	$pipe->reader();
-	push @workers,
-	  {
-		pid  => $pid,
-		pipe => $pipe,
-		item => $work_items[$wi],
-		idx  => $wi
-	  };
-}
-
-# Wait for all workers and verify results
-my $any_failed = 0;
-foreach my $w (@workers)
-{
-	waitpid($w->{pid}, 0);
-	my $exit_code = $? >> 8;
-	my $result = readline($w->{pipe}) // "NO_RESPONSE";
-	chomp $result;
-
-	my ($sched) = @{$w->{item}};
-	my $worker_ok = ($exit_code == 0 && $result eq "OK");
-
-	ok($worker_ok, "Worker $w->{idx}: prepare test cases for $sched");
-
-	if (!$worker_ok)
+	foreach my $w (@batch_workers)
 	{
-		$any_failed = 1;
-		diag
-		  "Worker $w->{idx} FAILED for $sched (exit=$exit_code, result=$result)";
-		diag "See worker_$w->{idx}.log for details";
+		waitpid($w->{pid}, 0);
+		my $exit_code = $? >> 8;
+		my $result = readline($w->{pipe}) // "NO_RESPONSE";
+		chomp $result;
+
+		my ($sched) = @{$w->{item}};
+		my $worker_ok = ($exit_code == 0 && $result eq "OK");
+
+		ok($worker_ok, "Worker $w->{idx}: prepare test cases for $sched");
+
+		if (!$worker_ok)
+		{
+			$any_failed = 1;
+			diag "Worker $w->{idx} FAILED for $sched"
+			  . " (exit=$exit_code, result=$result)";
+			diag "See worker_$w->{idx}.log for details";
+		}
+	}
+
+	if ($any_failed)
+	{
+		diag "Worker logs preserved: worker_*.log";
+		BAIL_OUT("Some workers failed");
 	}
 }
 
 $cost_time = time() - $worker_start_time;
 note "All workers completed in ${cost_time}s";
-
-if ($any_failed)
-{
-	diag "Worker logs preserved: worker_*.log";
-	die "Some workers failed, aborting";
-}
 
 # Clean up worker logs on success
 unlink glob "worker_*.log";
