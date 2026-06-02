@@ -110,6 +110,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Performance
 
+- Speed up statements that must wait for WAL to reach disk (synchronous
+  commits, DDL, and similar durable writes) when `polar_wal_pipeline_mode`
+  is 3 or 5, cutting idle-system latency from ~100ms to single-digit
+  milliseconds (XCOM-195)
 - Avoid unconditional full scan of shared_buffers in the buffer-pool
   invalidation path when RSC is enabled.  This speeds up every
   command that drops or truncates relation storage, including

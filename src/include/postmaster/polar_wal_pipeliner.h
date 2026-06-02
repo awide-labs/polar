@@ -108,6 +108,8 @@ typedef struct polar_wal_pipeline_stats_t
 
 extern void polar_wal_pipeliner_main(char *startup_data, size_t startup_data_len) pg_attribute_noreturn();
 extern void polar_wal_pipeliner_wakeup(void);
+extern void polar_wal_pipeline_wakeup_writer(void);
+extern void polar_wal_pipeline_wakeup_flusher(void);
 extern void polar_wal_pipeline_wakeup_notifier(void);
 extern bool polar_check_wal_pipeline_flush_event_array_size(int *newval, void **extra, GucSource source);
 extern bool polar_check_wal_pipeline_flush_event_slot_size(int *newval, void **extra, GucSource source);
