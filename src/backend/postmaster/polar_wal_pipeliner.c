@@ -464,27 +464,71 @@ polar_wal_pipeliner_worker(void *arg)
 	}
 }
 
+/*
+ * Wake a single pipeline worker that is waiting in polar_perform_spin_delay_mt.
+ */
+static void
+polar_wal_pipeline_signal_worker(int thread_no)
+{
+	polar_wait_object_t *wait_obj = polar_wal_pipeline_get_worker_wait_obj(thread_no);
+
+	pthread_cond_signal(&wait_obj->cond);
+}
+
 void
 polar_wal_pipeliner_wakeup(void)
 {
-	polar_wait_object_t *flush_worker_wait_obj;
-
 	switch (polar_wal_pipeline_mode)
 	{
 		case 1:
 		case 2:
+			polar_wal_pipeline_signal_worker(WRITE_WORKER_THREAD_NO);
+			break;
 		case 3:
-			flush_worker_wait_obj = polar_wal_pipeline_get_worker_wait_obj(WRITE_WORKER_THREAD_NO);
+
+			/*
+			 * Two cases. If the request is beyond ready_write_lsn, only the
+			 * advance worker can unblock progress; it wakes the write worker
+			 * once it has moved ready_write_lsn (see
+			 * polar_wal_pipeline_advance). If the request is already within
+			 * ready_write_lsn, advance no-ops and won't wake anyone, so we
+			 * must signal the write worker directly. Signal both to cover
+			 * both cases.
+			 */
+			polar_wal_pipeline_signal_worker(ADVANCE_WORKER_THREAD_NO);
+			polar_wal_pipeline_signal_worker(WRITE_WORKER_THREAD_NO);
 			break;
 		case 4:
+			polar_wal_pipeline_signal_worker(FLUSH_WORKER_THREAD_NO);
+			break;
 		case 5:
-			flush_worker_wait_obj = polar_wal_pipeline_get_worker_wait_obj(FLUSH_WORKER_THREAD_NO);
+			/* advance worker gates the write worker, see case 3 */
+			polar_wal_pipeline_signal_worker(ADVANCE_WORKER_THREAD_NO);
+			polar_wal_pipeline_signal_worker(FLUSH_WORKER_THREAD_NO);
 			break;
 		default:
 			elog(ERROR, "polar wal pipeline in wrong mode %d", polar_wal_pipeline_mode);
 	}
+}
 
-	pthread_cond_signal(&flush_worker_wait_obj->cond);
+/*
+ * Wake the write worker (the pipeliner main thread).  Called by the advance
+ * worker after it has moved ready_write_lsn forward.
+ */
+void
+polar_wal_pipeline_wakeup_writer(void)
+{
+	polar_wal_pipeline_signal_worker(WRITE_WORKER_THREAD_NO);
+}
+
+/*
+ * Wake the flush worker (modes 4/5).  Called by the write worker after it has
+ * written WAL, so the flush worker issues the fsync now.
+ */
+void
+polar_wal_pipeline_wakeup_flusher(void)
+{
+	polar_wal_pipeline_signal_worker(FLUSH_WORKER_THREAD_NO);
 }
 
 void
@@ -502,11 +546,7 @@ polar_wal_pipeline_wakeup_notifier(void)
 	}
 
 	for (i = 0; i < polar_wal_pipeline_notify_worker_num; i++)
-	{
-		polar_wait_object_t *notify_worker_wait_obj = polar_wal_pipeline_get_worker_wait_obj(NOTIFY_WORKER_THREAD_NO + i);
-
-		pthread_cond_signal(&notify_worker_wait_obj->cond);
-	}
+		polar_wal_pipeline_signal_worker(NOTIFY_WORKER_THREAD_NO + i);
 }
 
 /* POLAR wal pipeline END */

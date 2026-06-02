@@ -1346,6 +1346,16 @@ polar_wal_pipeline_advance(int ident)
 
 	pg_atomic_fetch_add_u64(&XLogCtl->polar_wal_pipeline_stats.total_advances, 1);
 
+	/*
+	 * In modes 3 and 5 the advance worker is a separate thread from the write
+	 * worker, which gates on ready_write_lsn.  Now that we have moved it
+	 * forward, wake the write worker so it acts immediately instead of
+	 * waiting out its poll timer.  In other modes advance runs inline in the
+	 * write worker thread, so no wakeup is needed.
+	 */
+	if (polar_wal_pipeline_mode == 3 || polar_wal_pipeline_mode == 5)
+		polar_wal_pipeline_wakeup_writer();
+
 	return true;
 }
 
@@ -1405,6 +1415,15 @@ polar_wal_pipeline_write(int ident)
 	{
 		polar_wal_pipeline_wakeup_notifier();
 		WalSndWakeupProcessRequests();
+	}
+	else
+	{
+		/*
+		 * For modes 4/5 a dedicated flush worker does the fsync: XLogWrite
+		 * above only wrote the WAL, it did not flush it.  Kick the flush
+		 * worker so it issues the flush now.
+		 */
+		polar_wal_pipeline_wakeup_flusher();
 	}
 
 	return true;

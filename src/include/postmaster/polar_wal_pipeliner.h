@@ -107,6 +107,8 @@ typedef struct polar_wal_pipeline_stats_t
 
 extern void polar_wal_pipeliner_main(void);
 extern void polar_wal_pipeliner_wakeup(void);
+extern void polar_wal_pipeline_wakeup_writer(void);
+extern void polar_wal_pipeline_wakeup_flusher(void);
 extern void polar_wal_pipeline_wakeup_notifier(void);
 
 #endif

@@ -81,5 +81,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   tail truncation, CLUSTER, VACUUM FULL, REFRESH MATERIALIZED VIEW,
   REINDEX, and rewriting forms of ALTER TABLE, as well as replay of
   smgr truncate records on replicas (XCOM-159)
+- Speed up statements that must wait for WAL to reach disk (synchronous
+  commits, DDL, and similar durable writes) when `polar_wal_pipeline_mode`
+  is 3 or 5, cutting idle-system latency from ~100ms to single-digit
+  milliseconds (XCOM-160)
 
 [unreleased]: https://github.com/awide-labs/polar/compare/6fcfdc2993a..POLARDB_15_STABLE
