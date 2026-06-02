@@ -1579,9 +1579,11 @@ sub prepare_one_case_phase_1
 	my $cur_trans_sqlstate = "";
 	my $src_sql_array_index = 0;
 	my @dst_sql_array;
-	# create psql session in single step mode for primary node
+	# create psql session in single step mode for primary node.
+	# Use $global_timeout per step (same as phase 2) so that slow
+	# test cases (e.g. in sanitizer builds) do not trip the timer.
 	$node_primary->psql_connect(
-		$regress_db, 20,
+		$regress_db, $global_timeout,
 		extra_params => [ '-f', $sql_rewrite ],
 		single_step_mode => 1);
 
