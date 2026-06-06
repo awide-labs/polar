@@ -1,0 +1,36 @@
+-- polar_node_metrics
+--
+-- Smoke test for polar_stat_node_metrics() (the single-call snapshot
+-- proxies use for routing) and regression coverage for
+-- polar_stat_proxy_info_rt() (previously NULL-derefed in the primary
+-- backend until the shmem allocation was restored).
+
+CREATE EXTENSION IF NOT EXISTS polar_monitor;
+
+-- View returns exactly one row.
+SELECT count(*) = 1 AS ok FROM polar_stat_node_metrics();
+
+-- All 11 documented columns are exposed by the view.
+SELECT count(*) = 11 AS ok
+FROM information_schema.columns
+WHERE table_schema = 'public'
+  AND table_name = 'polar_stat_node_metrics';
+
+-- Sanity bounds: every numeric column is in its expected range.
+-- cpu_psi_some_avg10 is -1.0 when cgroup PSI is unavailable, otherwise >= 0.
+SELECT
+  active_backends         >= 0    AS active_ok,
+  wait_io_read            >= 0    AS read_ok,
+  wait_io_write           >= 0    AS write_ok,
+  wait_lock               >= 0    AS lock_ok,
+  wait_other              >= 0    AS other_ok,
+  applier_records_parsed  >= 0    AS apr_ok,
+  applier_stall_spins     >= 0    AS spins_ok,
+  applier_stall_records   >= 0    AS srec_ok,
+  num_cpus                >= 1    AS cpu_ok,
+  cpu_psi_some_avg10      >= -1.0 AS psi_ok
+FROM polar_stat_node_metrics();
+
+-- Regression: polar_stat_proxy_info_rt previously NULL-derefed because
+-- the shmem allocation was missing. It must now run to completion.
+SELECT count(*) >= 0 AS ok FROM polar_stat_proxy_info_rt;

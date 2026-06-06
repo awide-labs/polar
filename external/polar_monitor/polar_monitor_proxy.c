@@ -131,3 +131,60 @@ polar_stat_get_sid(PG_FUNCTION_ARGS)
 			 pid, POLAR_SHARED_SERVER_RUNNING() ? "" : ", should between (0, 10^7)");
 	PG_RETURN_INT32(polar_proxy_get_sid(pid, NULL));
 }
+
+/*
+ * POLAR: return combined node metrics for ProxySQL monitoring.
+ *
+ * Thin SQL wrapper around polar_pgstat_get_node_metrics() which does the
+ * actual shared-memory scan in backend_status.c.  Returns a single row with:
+ *
+ *   DB-PSI per-domain:  active_backends, wait_io_read/write, wait_lock, wait_other
+ *   LogIndex applier:   records_parsed, stall_spins, stall_records
+ *   CPU/PSI:            num_cpus, cpu_usage_usec, cpu_psi_some_avg10
+ *
+ * Works on both primary (applier fields = 0) and replica.
+ * ProxySQL calls this in one query to get all routing signals.
+ */
+PG_FUNCTION_INFO_V1(polar_stat_node_metrics);
+Datum
+polar_stat_node_metrics(PG_FUNCTION_ARGS)
+{
+#define NUM_NODE_METRICS 11
+	TupleDesc	tupdesc;
+	Datum		values[NUM_NODE_METRICS];
+	bool		nulls[NUM_NODE_METRICS];
+	HeapTuple	tuple;
+	PolarNodeMetrics m;
+
+	polar_pgstat_get_node_metrics(&m);
+
+	MemSet(nulls, 0, sizeof(nulls));
+
+	tupdesc = CreateTemplateTupleDesc(NUM_NODE_METRICS);
+	TupleDescInitEntry(tupdesc, (AttrNumber) 1, "active_backends", INT4OID, -1, 0);
+	TupleDescInitEntry(tupdesc, (AttrNumber) 2, "wait_io_read", INT4OID, -1, 0);
+	TupleDescInitEntry(tupdesc, (AttrNumber) 3, "wait_io_write", INT4OID, -1, 0);
+	TupleDescInitEntry(tupdesc, (AttrNumber) 4, "wait_lock", INT4OID, -1, 0);
+	TupleDescInitEntry(tupdesc, (AttrNumber) 5, "wait_other", INT4OID, -1, 0);
+	TupleDescInitEntry(tupdesc, (AttrNumber) 6, "applier_records_parsed", INT8OID, -1, 0);
+	TupleDescInitEntry(tupdesc, (AttrNumber) 7, "applier_stall_spins", INT8OID, -1, 0);
+	TupleDescInitEntry(tupdesc, (AttrNumber) 8, "applier_stall_records", INT8OID, -1, 0);
+	TupleDescInitEntry(tupdesc, (AttrNumber) 9, "num_cpus", INT4OID, -1, 0);
+	TupleDescInitEntry(tupdesc, (AttrNumber) 10, "cpu_usage_usec", INT8OID, -1, 0);
+	TupleDescInitEntry(tupdesc, (AttrNumber) 11, "cpu_psi_some_avg10", FLOAT8OID, -1, 0);
+
+	values[0] = Int32GetDatum(m.active_backends);
+	values[1] = Int32GetDatum(m.wait_io_read);
+	values[2] = Int32GetDatum(m.wait_io_write);
+	values[3] = Int32GetDatum(m.wait_lock);
+	values[4] = Int32GetDatum(m.wait_other);
+	values[5] = Int64GetDatum(m.applier_records_parsed);
+	values[6] = Int64GetDatum(m.applier_stall_spins);
+	values[7] = Int64GetDatum(m.applier_stall_records);
+	values[8] = Int32GetDatum(m.num_cpus);
+	values[9] = Int64GetDatum(m.cpu_usage_usec);
+	values[10] = Float8GetDatum(m.cpu_psi_some_avg10);
+
+	tuple = heap_form_tuple(BlessTupleDesc(tupdesc), values, nulls);
+	PG_RETURN_DATUM(HeapTupleGetDatum(tuple));
+}

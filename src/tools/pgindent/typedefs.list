@@ -2115,6 +2115,7 @@ PolarDispatcherSISeg
 PolarHookActionType
 PolarName
 PolarNames
+PolarNodeMetrics
 PolarNodeType
 PolarProcIOStat
 PolarProcStatm
@@ -2128,6 +2129,7 @@ PolarSessionSuperUser
 PolarSettingAction
 PolarSettingWalHeader
 PolarStatSqlCollector
+PolarStat_LogindexApplier
 PolarStat_Proxy
 PolarTBlockState
 PolarUniqueFeatureUtils

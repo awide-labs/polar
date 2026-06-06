@@ -12,9 +12,9 @@ OBJS += polar_monitor_shared_server.o
 OBJS += polar_monitor_dsa.o
 
 EXTENSION = polar_monitor
-DATA = polar_monitor--1.0.sql
+DATA = polar_monitor--1.0--1.1.sql polar_monitor--1.1.sql
 PGFILEDESC = "polar_monitor - monitoring of PolarDB information in real-time"
-REGRESS = polar_monitor
+REGRESS = polar_monitor polar_node_metrics
 REGRESS_OPTS = --temp-config polar_monitor.conf
 
 ifdef USE_PGXS

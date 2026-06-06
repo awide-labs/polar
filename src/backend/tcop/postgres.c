@@ -5052,6 +5052,9 @@ PostgresMain(const char *dbname, const char *username)
 				{
 					const char *query_string;
 
+					if (MyProcPort && MyProcPort->polar_proxy)
+						polar_stat_need_update_proxy_info = true;
+
 					/* Set statement_timestamp() */
 					SetCurrentStatementStartTimestamp();
 
@@ -5076,6 +5079,9 @@ PostgresMain(const char *dbname, const char *username)
 					const char *query_string;
 					int			numParams;
 					Oid		   *paramTypes = NULL;
+
+					if (MyProcPort && MyProcPort->polar_proxy)
+						polar_stat_need_update_proxy_info = true;
 
 					forbidden_in_wal_sender(firstchar);
 

@@ -8,6 +8,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Add `polar_stat_node_metrics()` view in `polar_monitor` (1.0 → 1.1)
+  exposing DB-PSI signals, LogIndex applier stats, and cgroup-v2 CPU
+  metrics for proxy routing (XCOM-193)
 - Report `transaction_isolation` and `default_transaction_isolation`
   to clients via GUC_REPORT so connection proxies can read the
   current isolation level via the libpq ParameterStatus stream (XCOM-193)
@@ -66,6 +69,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Fix NULL-deref in `polar_stat_proxy_info_rt()` and stuck-zero
+  counters in `polar_stat_proxy` by restoring shmem allocation and
+  writer-side flag flips (XCOM-193)
+- Fix `CREATEENUM` proxy events mis-attributed to the `combocid`
+  counter (XCOM-193)
 - Fixed a DataMax node crash (or silent memory corruption in non-assert
   builds) that could occur when its WAL receiver shut down with WAL
   still unflushed, e.g. after the primary dropped the connection to

@@ -37,6 +37,7 @@
 #include "access/xlogrecord.h"
 #include "miscadmin.h"
 #include "storage/buf_internals.h"
+#include "utils/backend_status.h"
 #include "utils/polar_bitpos.h"
 #include "utils/polar_log.h"
 
@@ -421,6 +422,7 @@ polar_logindex_mini_trans_end(mini_trans_t trans, XLogRecPtr lsn)
 	mini_trans_info_t *info = trans->info;
 	uint64_t	occupied;
 	bool		unlock_all;
+	int			spins = 0;
 	int			pos;
 
 	LWLockAcquire(MINI_TRANSACTION_LOCK(trans), LW_EXCLUSIVE);
@@ -437,6 +439,7 @@ polar_logindex_mini_trans_end(mini_trans_t trans, XLogRecPtr lsn)
 
 	do
 	{
+		spins++;
 		unlock_all = true;
 
 		LWLockAcquire(MINI_TRANSACTION_LOCK(trans), LW_SHARED);
@@ -461,6 +464,13 @@ polar_logindex_mini_trans_end(mini_trans_t trans, XLogRecPtr lsn)
 		LWLockRelease(MINI_TRANSACTION_LOCK(trans));
 	}
 	while (!unlock_all);
+
+	/* POLAR: update applier stall stats */
+	if (spins > 1)
+	{
+		polar_stat_logindex_applier->stall_spins += spins - 1;
+		polar_stat_logindex_applier->stall_records++;
+	}
 
 	/* Clear all occupied lock */
 	while (trans->occupied)

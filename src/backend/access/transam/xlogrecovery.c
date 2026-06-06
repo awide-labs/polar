@@ -59,6 +59,7 @@
 #include "storage/procarray.h"
 #include "storage/seqlock.h"
 #include "storage/spin.h"
+#include "utils/backend_status.h"
 #include "utils/builtins.h"
 #include "utils/guc.h"
 #include "utils/ps_status.h"
@@ -2244,6 +2245,9 @@ ApplyWalRecord(XLogReaderState *xlogreader, XLogRecord *record,
 	 */
 	if (logindex_mini_trans_lsn != InvalidXLogRecPtr)
 		polar_logindex_mini_trans_end(polar_logindex_redo_instance->mini_trans, logindex_mini_trans_lsn);
+
+	/* POLAR: update applier stats */
+	polar_stat_logindex_applier->records_parsed++;
 
 	/*
 	 * If rm_redo called XLogRequestWalReceiverReply, then we wake up the
