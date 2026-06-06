@@ -49,6 +49,7 @@ extern int	polar_rel_size_cache_blocks;
 extern bool polar_force_change_checkpoint;
 extern bool polar_enable_fullpage_snapshot;
 extern int	polar_startup_replay_delay_size;
+extern int	polar_replay_min_lag_size;
 extern int	polar_logindex_replay_delay_threshold;
 extern bool polar_enable_standby_instant_recovery;
 

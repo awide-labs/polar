@@ -69,6 +69,7 @@ int			polar_write_logindex_active_table_delay = 200;
 int			polar_wait_old_version_page_timeout = 30 * 1000;
 int			polar_bg_replay_batch_size;
 int			polar_startup_replay_delay_size = 0;
+int			polar_replay_min_lag_size = 0;
 int			polar_logindex_replay_delay_threshold = 0;
 bool		polar_enable_resolve_conflict = false;
 int			polar_logindex_mem_size = 0;

@@ -243,6 +243,9 @@ static char *polar_get_errmsg_params(ParamListInfo params);
 static void polar_audit_log_flush_callback(int code, Datum arg);
 extern bool polar_audit_log_buffer_is_null(void);
 
+/* POLAR: simulated SELECT delay on primary for benchmarking (defined in guc.c) */
+extern int	polar_query_delay_us;
+
 /* POLAR: handle cancel query interrupt during client read/write */
 static void polar_process_client_readwrite_cancel_interrupt(void);
 
@@ -1116,6 +1119,15 @@ exec_simple_query(const char *query_string)
 		set_ps_display(GetCommandTagName(commandTag));
 
 		BeginCommand(commandTag, dest);
+
+		/*
+		 * POLAR: inject configurable delay for SELECT on primary
+		 * (benchmarking)
+		 */
+		if (unlikely(polar_query_delay_us > 0) &&
+			!RecoveryInProgress() &&
+			IsA(parsetree->stmt, SelectStmt))
+			pg_usleep(polar_query_delay_us);
 
 		/*
 		 * If we are in an aborted transaction, reject all commands except

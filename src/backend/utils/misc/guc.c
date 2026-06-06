@@ -279,6 +279,9 @@ static char *polar_rename_wal_ready_file;
 double		polar_instance_spec_cpu = 0;
 int			polar_instance_spec_mem = 0;
 
+/* POLAR: simulated SELECT delay on primary for benchmarking */
+int			polar_query_delay_us = 0;
+
 /* POLAR */
 bool		polar_csn_enable;
 bool		polar_csn_elog_panic_enable;
@@ -3853,11 +3856,22 @@ static struct config_int ConfigureNamesInt[] =
 
 	{
 		{"polar_startup_replay_delay_size", PGC_SIGHUP, DEVELOPER_OPTIONS,
-			gettext_noop("Manual startup replay delay wal size(MB), just for test!."),
+			gettext_noop("Manual startup replay delay wal size, just for test!"),
 			NULL,
-			GUC_UNIT_MB | GUC_NO_RESET_ALL | GUC_NOT_IN_SAMPLE | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_UNCHANGABLE
+			GUC_UNIT_BYTE | GUC_NO_RESET_ALL | GUC_NO_SHOW_ALL | GUC_NOT_IN_SAMPLE | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_UNCHANGABLE
 		},
 		&polar_startup_replay_delay_size,
+		0, 0, INT_MAX,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"polar_replay_min_lag_size", PGC_SIGHUP, REPLICATION_STANDBY,
+			gettext_noop("Minimum lag in bytes between WAL received and replayed."),
+			gettext_noop("Creates steady-state lag for testing session consistency."),
+			GUC_UNIT_BYTE | GUC_NO_RESET_ALL | GUC_NO_SHOW_ALL | GUC_NOT_IN_SAMPLE | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_CHANGABLE
+		},
+		&polar_replay_min_lag_size,
 		0, 0, INT_MAX,
 		NULL, NULL, NULL
 	},
@@ -6166,6 +6180,19 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&polar_proxy_wait_max_delay_us,
 		100, 10, 10000,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"polar_query_delay_us", PGC_USERSET, POLAR_PROXY,
+			gettext_noop("Adds artificial delay in microseconds for SELECT queries on primary."),
+			gettext_noop("Used to simulate primary load and benchmark read offloading to replicas. "
+						 "Only affects SELECT queries when running on the primary (not in recovery). "
+						 "A value of 0 disables the delay."),
+			GUC_NO_RESET_ALL | GUC_NO_SHOW_ALL | GUC_NOT_IN_SAMPLE | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_CHANGABLE
+		},
+		&polar_query_delay_us,
+		0, 0, INT_MAX,
 		NULL, NULL, NULL
 	},
 	/* POLAR int GUCs end */
