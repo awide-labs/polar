@@ -46,6 +46,7 @@ extern PGDLLIMPORT int polar_logindex_bloom_blocks;
 extern PGDLLIMPORT int polar_rel_size_cache_blocks;
 extern PGDLLIMPORT bool polar_force_change_checkpoint;
 extern PGDLLIMPORT int polar_startup_replay_delay_size;
+extern PGDLLIMPORT int polar_replay_min_lag_size;
 extern PGDLLIMPORT int polar_logindex_replay_delay_threshold;
 extern PGDLLIMPORT bool polar_enable_standby_instant_recovery;
 extern PGDLLIMPORT bool polar_wake_logindex_saver;

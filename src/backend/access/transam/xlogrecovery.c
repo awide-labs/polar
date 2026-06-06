@@ -6099,11 +6099,29 @@ polar_logindex_delay_replay_if_need(void)
 		logindex_cur_parsed_lsn = polar_get_xlog_replay_recptr_nolock();
 
 		while (GetWalRcvFlushRecPtr(NULL, NULL) <
-			   logindex_cur_parsed_lsn + polar_startup_replay_delay_size * 1024 * 1024L)
+			   logindex_cur_parsed_lsn + polar_startup_replay_delay_size)
 		{
 			pg_usleep(100L);	/* 0.1ms */
 			/* Handle interrupt signals of startup process */
 			HandleStartupProcInterrupts();
+		}
+	}
+
+	/*
+	 * POLAR: maintain minimum lag for testing session consistency. Unlike
+	 * startup_delay which waits for WAL to arrive, this keeps a minimum gap
+	 * between received and replayed WAL.
+	 */
+	if (unlikely(polar_replay_min_lag_size > 0))
+	{
+		XLogRecPtr	cur = GetXLogReplayRecPtr(NULL);
+		XLogRecPtr	received = GetWalRcvFlushRecPtr(NULL, NULL);
+
+		while (received < cur + polar_replay_min_lag_size)
+		{
+			HandleStartupProcInterrupts();
+			pg_usleep(1000L);	/* 1ms */
+			received = GetWalRcvFlushRecPtr(NULL, NULL);
 		}
 	}
 

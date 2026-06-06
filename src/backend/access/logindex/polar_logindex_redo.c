@@ -64,6 +64,7 @@ int			polar_parallel_replay_task_queue_depth = 0;
 int			polar_parallel_replay_proc_num = 16;
 int			polar_bg_replay_batch_size;
 int			polar_startup_replay_delay_size = 0;
+int			polar_replay_min_lag_size = 0;
 int			polar_logindex_replay_delay_threshold = 0;
 bool		polar_enable_ro_resolve_conflict = false;
 int			polar_logindex_mem_size = 0;

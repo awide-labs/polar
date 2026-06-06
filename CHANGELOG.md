@@ -8,6 +8,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Add `polar_query_delay_us` and `polar_replay_min_lag_size` GUCs for
+  end-to-end testing of the proxy session-consistency wait.
+  (XCOM-195)
 - Add `polar_stat_node_metrics()` view in `polar_monitor` (1.3 → 1.4)
   exposing DB-PSI signals, LogIndex applier stats, and cgroup-v2 CPU
   metrics for proxy routing (XCOM-195)
