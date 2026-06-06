@@ -8,6 +8,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Add `polar_stat_node_metrics()` view in `polar_monitor` (1.3 → 1.4)
+  exposing DB-PSI signals, LogIndex applier stats, and cgroup-v2 CPU
+  metrics for proxy routing (XCOM-195)
 - Report `transaction_isolation` and `default_transaction_isolation`
   to clients via GUC_REPORT so connection proxies can read the
   current isolation level via the libpq ParameterStatus stream
@@ -85,6 +88,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Fix `CREATEENUM` proxy events mis-attributed to the `combocid`
+  counter (XCOM-195)
 - Fixed a race in pg_bulkload's asynchronous input reader (used in
   MULTI_PROCESS mode) that could make a load occasionally read zero rows
   from the input file, finishing with nothing loaded and no parse errors

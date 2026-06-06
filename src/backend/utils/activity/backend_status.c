@@ -20,11 +20,12 @@
 #include "port/atomics.h"		/* for memory barriers */
 #include "storage/ipc.h"
 #include "storage/proc.h"		/* for MyProc */
-#include "storage/procarray.h"
+#include "storage/procarray.h"	/* for BackendPidGetProc */
 #include "storage/sinvaladt.h"
 #include "utils/ascii.h"
 #include "utils/guc.h"			/* for application_name */
 #include "utils/memutils.h"
+#include "utils/wait_event.h"	/* for PG_WAIT_IO etc. */
 
 /* POLAR */
 #include "access/parallel.h"
@@ -57,6 +58,9 @@ int			polar_session_id_display_method;
 /* stats for proxy */
 PolarStat_Proxy *polar_stat_proxy = NULL;
 bool		polar_stat_need_update_proxy_info;
+
+/* POLAR: stats for logindex applier (startup process writes, SQL reads) */
+PolarStat_LogindexApplier *polar_stat_logindex_applier = NULL;
 
 /* exposed so that backend_progress.c can access it */
 PgBackendStatus *MyBEEntry = NULL;
@@ -118,6 +122,8 @@ BackendStatusShmemSize(void)
 	size = add_size(size,
 					mul_size(sizeof(PgBackendGSSStatus), NumBackendStatSlots));
 #endif
+	size = add_size(size, sizeof(PolarStat_Proxy));
+	size = add_size(size, sizeof(PolarStat_LogindexApplier));
 	return size;
 }
 
@@ -254,6 +260,14 @@ CreateSharedBackendStatus(void)
 
 	if (!found)
 		MemSet(polar_stat_proxy, 0, size);
+
+	/* POLAR: logindex applier stats (written by startup process, read by SQL) */
+	size = sizeof(PolarStat_LogindexApplier);
+	polar_stat_logindex_applier = (PolarStat_LogindexApplier *)
+		ShmemInitStruct("LogIndex Applier Stats Buffer", size, &found);
+
+	if (!found)
+		MemSet(polar_stat_logindex_applier, 0, size);
 }
 
 /*
@@ -1212,6 +1226,223 @@ pgstat_fetch_stat_numbackends(void)
 	pgstat_read_current_status();
 
 	return localNumBackends;
+}
+
+/* ----------
+ * polar_pgstat_get_node_metrics() -
+ *
+ *	Fill PolarNodeMetrics with per-domain DB-PSI counts and LogIndex
+ *	applier stats.  Single pass over BackendStatusArray; classifies
+ *	each STATE_RUNNING client backend by wait-event domain.
+ *
+ *	Designed for external monitors (ProxySQL autobalance) that need
+ *	all node health signals in one cheap call.
+ * ----------
+ */
+#define UINT32_ACCESS_ONCE(var)		((uint32) (*((volatile uint32 *) &(var))))
+
+/*
+ * Detect cgroup v2 path from /proc/self/cgroup.
+ * Returns pointer to static buffer, or NULL if unavailable.
+ * Cached after first call (stable for process lifetime).
+ */
+static const char *
+polar_get_cgroup_path(void)
+{
+	static char cgroup_path[MAXPGPATH];
+	static bool detected = false;
+	static bool available = false;
+
+	if (detected)
+		return available ? cgroup_path : NULL;
+
+	detected = true;
+
+	{
+		FILE	   *fp;
+		char		line[1024];
+
+		fp = fopen("/proc/self/cgroup", "r");
+		if (fp == NULL)
+			return NULL;
+
+		while (fgets(line, sizeof(line), fp) != NULL)
+		{
+			/* cgroup v2 line: "0::<path>\n" */
+			if (strncmp(line, "0::", 3) == 0)
+			{
+				char	   *nl;
+
+				strlcpy(cgroup_path, line + 3, sizeof(cgroup_path));
+				nl = strchr(cgroup_path, '\n');
+				if (nl)
+					*nl = '\0';
+				available = true;
+				break;
+			}
+		}
+		fclose(fp);
+	}
+
+	return available ? cgroup_path : NULL;
+}
+
+/*
+ * Read cpu_usage_usec from cgroup cpu.stat.
+ * Returns usage_usec value, or -1 if unavailable.
+ */
+static int64
+polar_read_cgroup_cpu_usage(const char *cgroup_path)
+{
+	char		path[MAXPGPATH];
+	FILE	   *fp;
+	char		line[256];
+	int64		result = -1;
+
+	snprintf(path, sizeof(path), "/sys/fs/cgroup%s/cpu.stat", cgroup_path);
+
+	fp = fopen(path, "r");
+	if (fp == NULL)
+		return -1;
+
+	while (fgets(line, sizeof(line), fp) != NULL)
+	{
+		int64		val;
+
+		if (sscanf(line, "usage_usec " INT64_FORMAT, &val) == 1)
+		{
+			result = val;
+			break;
+		}
+	}
+	fclose(fp);
+
+	return result;
+}
+
+/*
+ * Read PSI some avg10 from cgroup cpu.pressure.
+ * Returns avg10 value, or -1.0 if unavailable (file missing = PSI disabled).
+ */
+static float8
+polar_read_cgroup_cpu_psi(const char *cgroup_path)
+{
+	char		path[MAXPGPATH];
+	FILE	   *fp;
+	char		line[256];
+	float8		result = -1.0;
+
+	snprintf(path, sizeof(path), "/sys/fs/cgroup%s/cpu.pressure", cgroup_path);
+
+	fp = fopen(path, "r");
+	if (fp == NULL)
+		return -1.0;
+
+	while (fgets(line, sizeof(line), fp) != NULL)
+	{
+		double		avg10;
+
+		if (strncmp(line, "some ", 5) == 0 &&
+			sscanf(line, "some avg10=%lf", &avg10) == 1)
+		{
+			result = avg10;
+			break;
+		}
+	}
+	fclose(fp);
+
+	return result;
+}
+
+void
+polar_pgstat_get_node_metrics(PolarNodeMetrics *out)
+{
+	static int	cached_num_cpus = 0;
+	int			num_backends;
+	int			i;
+	const char *cgpath;
+
+	MemSet(out, 0, sizeof(PolarNodeMetrics));
+
+	pgstat_read_current_status();
+	num_backends = localNumBackends;
+
+	for (i = 1; i <= num_backends; i++)
+	{
+		LocalPgBackendStatus *local_beentry = pgstat_get_local_beentry_by_index(i);
+		PgBackendStatus *beentry;
+		PGPROC	   *proc;
+		uint32		wei;
+
+		if (local_beentry == NULL)
+			continue;
+
+		beentry = &local_beentry->backendStatus;
+
+		if (beentry->st_backendType != B_BACKEND)
+			continue;
+		if (beentry->st_state != STATE_RUNNING)
+			continue;
+
+		out->active_backends++;
+
+		proc = BackendPidGetProc(beentry->st_procpid);
+		if (proc == NULL)
+			continue;
+
+		wei = UINT32_ACCESS_ONCE(proc->wait_event_info);
+		if (wei == 0)
+			continue;			/* on CPU — no stall */
+
+		switch (wei & 0xFF000000U)
+		{
+			case PG_WAIT_IO:
+				switch ((WaitEventIO) wei)
+				{
+					case WAIT_EVENT_DATA_FILE_READ:
+					case WAIT_EVENT_DATA_FILE_PREFETCH:
+					case WAIT_EVENT_BUFFILE_READ:
+					case WAIT_EVENT_SLRU_READ:
+					case WAIT_EVENT_WAL_READ:
+						out->wait_io_read++;
+						break;
+					default:
+						/* writes, syncs, extends, WAL flushes */
+						out->wait_io_write++;
+						break;
+				}
+				break;
+			case PG_WAIT_LOCK:
+			case PG_WAIT_LWLOCK:
+				out->wait_lock++;
+				break;
+			default:
+				out->wait_other++;
+				break;
+		}
+	}
+
+	/* Applier stats: plain reads from shared memory (zeros on primary) */
+	out->applier_records_parsed = (int64) polar_stat_logindex_applier->records_parsed;
+	out->applier_stall_spins = (int64) polar_stat_logindex_applier->stall_spins;
+	out->applier_stall_records = (int64) polar_stat_logindex_applier->stall_records;
+
+	/* OS-level CPU metrics */
+	if (cached_num_cpus == 0)
+		cached_num_cpus = sysconf(_SC_NPROCESSORS_ONLN);
+	out->num_cpus = cached_num_cpus;
+
+	cgpath = polar_get_cgroup_path();
+	if (cgpath != NULL)
+	{
+		out->cpu_usage_usec = polar_read_cgroup_cpu_usage(cgpath);
+		out->cpu_psi_some_avg10 = polar_read_cgroup_cpu_psi(cgpath);
+	}
+	else
+	{
+		out->cpu_usage_usec = -1;
+		out->cpu_psi_some_avg10 = -1.0;
+	}
 }
 
 /*

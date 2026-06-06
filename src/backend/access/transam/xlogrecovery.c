@@ -63,6 +63,9 @@
 #include "utils/fmgrprotos.h"
 #include "utils/guc_hooks.h"
 #include "utils/pg_lsn.h"
+#include "utils/backend_status.h"
+#include "utils/builtins.h"
+#include "utils/guc.h"
 #include "utils/ps_status.h"
 #include "utils/pg_rusage.h"
 
@@ -2404,6 +2407,9 @@ ApplyWalRecord(XLogReaderState *xlogreader, XLogRecord *record,
 	 */
 	if (AllowCascadeReplication())
 		WalSndWakeup(switchedTLI, true);
+
+	/* POLAR: update applier stats */
+	polar_stat_logindex_applier->records_parsed++;
 
 	/*
 	 * If rm_redo called XLogRequestWalReceiverReply, then we wake up the

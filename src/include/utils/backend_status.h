@@ -426,4 +426,43 @@ extern PGDLLIMPORT int polar_session_id_display_method;
 extern void polar_assign_virtual_pid(const int newval, void *extra);
 extern void polar_assign_cancel_key(const int newval, void *extra);
 
+/*
+ * LogIndex applier stats — written by startup process (single writer,
+ * plain stores every record/stall), read by SQL function for monitoring.
+ * No atomics needed.
+ */
+typedef struct PolarStat_LogindexApplier
+{
+	uint64		records_parsed; /* total WAL records parsed */
+	uint64		stall_spins;	/* spin iterations in mini_trans_end() waiting
+								 * for backends */
+	uint64		stall_records;	/* records that hit backend contention (spins
+								 * > 1) */
+} PolarStat_LogindexApplier;
+
+extern PolarStat_LogindexApplier *polar_stat_logindex_applier;
+
+/* POLAR: combined node metrics for external monitoring (e.g. ProxySQL) */
+typedef struct PolarNodeMetrics
+{
+	/* DB-PSI: per-domain stall counts (denominator = active_backends) */
+	int			active_backends;	/* STATE_RUNNING client backends */
+	int			wait_io_read;	/* data/buf file reads, prefetch (offloadable) */
+	int			wait_io_write;	/* data/WAL writes, syncs, extends (fixed) */
+	int			wait_lock;		/* PG_WAIT_LOCK + PG_WAIT_LWLOCK */
+	int			wait_other;		/* BufferPin + IPC + everything else */
+	/* LogIndex applier (zeros on primary) */
+	int64		applier_records_parsed;
+	int64		applier_stall_spins;
+	int64		applier_stall_records;
+	/* OS-level CPU metrics (cgroup v2 + sysconf) */
+	int			num_cpus;		/* online CPUs (sysconf, cached) */
+	int64		cpu_usage_usec; /* cgroup cpu.stat usage_usec (-1 if
+								 * unavailable) */
+	float8		cpu_psi_some_avg10; /* cgroup cpu.pressure some avg10 (-1.0 if
+									 * unavailable) */
+} PolarNodeMetrics;
+
+extern void polar_pgstat_get_node_metrics(PolarNodeMetrics *out);
+
 #endif							/* BACKEND_STATUS_H */

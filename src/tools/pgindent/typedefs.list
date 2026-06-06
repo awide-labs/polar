@@ -2216,8 +2216,10 @@ PolarProcIOStat
 POLAR_PROC_GLOBAL_IO_READ
 POLAR_PROC_IO
 PolarVFSKind
+PolarNodeMetrics
 PolarSettingAction
 PolarSettingWalHeader
+PolarStat_LogindexApplier
 PolarStat_Proxy
 PolarTBlockState
 PolarUniqueFeatureUtils

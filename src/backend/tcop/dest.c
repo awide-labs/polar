@@ -355,7 +355,7 @@ polar_send_proxy_info(StringInfo buf)
 				polar_stat_update_proxy_info(polar_stat_proxy->proxy_combocid);
 				break;
 			case POLAR_UNSPLITTABLE_FOR_CREATEENUM:
-				polar_stat_update_proxy_info(polar_stat_proxy->proxy_combocid);
+				polar_stat_update_proxy_info(polar_stat_proxy->proxy_createenum);
 				break;
 			case POLAR_UNSPLITTABLE_FOR_AUTOXACT:
 				polar_stat_update_proxy_info(polar_stat_proxy->proxy_autoxact);
