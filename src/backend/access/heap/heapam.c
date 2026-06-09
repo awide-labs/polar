@@ -6049,10 +6049,12 @@ heap_finish_speculative(Relation relation, ItemPointer tid)
 	page = (Page) BufferGetPage(buffer);
 
 	offnum = ItemPointerGetOffsetNumber(tid);
-	if (PageGetMaxOffsetNumber(page) >= offnum)
-		lp = PageGetItemId(page, offnum);
+	if (offnum < 1 || offnum > PageGetMaxOffsetNumber(page))
+		elog(PANIC, "offnum out of range");
 
-	if (PageGetMaxOffsetNumber(page) < offnum || !ItemIdIsNormal(lp))
+	lp = PageGetItemId(page, offnum);
+
+	if (!ItemIdIsNormal(lp))
 		elog(ERROR, "invalid lp");
 
 	htup = (HeapTupleHeader) PageGetItem(page, lp);
@@ -6615,10 +6617,12 @@ heap_inplace_update(Relation relation, HeapTuple tuple)
 	page = (Page) BufferGetPage(buffer);
 
 	offnum = ItemPointerGetOffsetNumber(&(tuple->t_self));
-	if (PageGetMaxOffsetNumber(page) >= offnum)
-		lp = PageGetItemId(page, offnum);
+	if (offnum < 1 || offnum > PageGetMaxOffsetNumber(page))
+		elog(PANIC, "offnum out of range");
 
-	if (PageGetMaxOffsetNumber(page) < offnum || !ItemIdIsNormal(lp))
+	lp = PageGetItemId(page, offnum);
+
+	if (!ItemIdIsNormal(lp))
 		elog(ERROR, "invalid lp");
 
 	htup = (HeapTupleHeader) PageGetItem(page, lp);
@@ -9630,10 +9634,12 @@ heap_xlog_delete(XLogReaderState *record)
 	{
 		page = BufferGetPage(buffer);
 
-		if (PageGetMaxOffsetNumber(page) >= xlrec->offnum)
-			lp = PageGetItemId(page, xlrec->offnum);
+		if (xlrec->offnum < 1 || xlrec->offnum > PageGetMaxOffsetNumber(page))
+			elog(PANIC, "offnum out of range");
 
-		if (PageGetMaxOffsetNumber(page) < xlrec->offnum || !ItemIdIsNormal(lp))
+		lp = PageGetItemId(page, xlrec->offnum);
+
+		if (!ItemIdIsNormal(lp))
 			elog(PANIC, "invalid lp");
 
 		htup = (HeapTupleHeader) PageGetItem(page, lp);
@@ -10010,10 +10016,12 @@ heap_xlog_update(XLogReaderState *record, bool hot_update)
 	{
 		page = BufferGetPage(obuffer);
 		offnum = xlrec->old_offnum;
-		if (PageGetMaxOffsetNumber(page) >= offnum)
-			lp = PageGetItemId(page, offnum);
+		if (offnum < 1 || offnum > PageGetMaxOffsetNumber(page))
+			elog(PANIC, "offnum out of range");
 
-		if (PageGetMaxOffsetNumber(page) < offnum || !ItemIdIsNormal(lp))
+		lp = PageGetItemId(page, offnum);
+
+		if (!ItemIdIsNormal(lp))
 			elog(PANIC, "invalid lp");
 
 		htup = (HeapTupleHeader) PageGetItem(page, lp);
@@ -10221,10 +10229,12 @@ heap_xlog_confirm(XLogReaderState *record)
 		page = BufferGetPage(buffer);
 
 		offnum = xlrec->offnum;
-		if (PageGetMaxOffsetNumber(page) >= offnum)
-			lp = PageGetItemId(page, offnum);
+		if (offnum < 1 || offnum > PageGetMaxOffsetNumber(page))
+			elog(PANIC, "offnum out of range");
 
-		if (PageGetMaxOffsetNumber(page) < offnum || !ItemIdIsNormal(lp))
+		lp = PageGetItemId(page, offnum);
+
+		if (!ItemIdIsNormal(lp))
 			elog(PANIC, "invalid lp");
 
 		htup = (HeapTupleHeader) PageGetItem(page, lp);
@@ -10278,10 +10288,12 @@ heap_xlog_lock(XLogReaderState *record)
 		page = (Page) BufferGetPage(buffer);
 
 		offnum = xlrec->offnum;
-		if (PageGetMaxOffsetNumber(page) >= offnum)
-			lp = PageGetItemId(page, offnum);
+		if (offnum < 1 || offnum > PageGetMaxOffsetNumber(page))
+			elog(PANIC, "offnum out of range");
 
-		if (PageGetMaxOffsetNumber(page) < offnum || !ItemIdIsNormal(lp))
+		lp = PageGetItemId(page, offnum);
+
+		if (!ItemIdIsNormal(lp))
 			elog(PANIC, "invalid lp");
 
 		htup = (HeapTupleHeader) PageGetItem(page, lp);
@@ -10351,10 +10363,12 @@ heap_xlog_lock_updated(XLogReaderState *record)
 		page = BufferGetPage(buffer);
 
 		offnum = xlrec->offnum;
-		if (PageGetMaxOffsetNumber(page) >= offnum)
-			lp = PageGetItemId(page, offnum);
+		if (offnum < 1 || offnum > PageGetMaxOffsetNumber(page))
+			elog(PANIC, "offnum out of range");
 
-		if (PageGetMaxOffsetNumber(page) < offnum || !ItemIdIsNormal(lp))
+		lp = PageGetItemId(page, offnum);
+
+		if (!ItemIdIsNormal(lp))
 			elog(PANIC, "invalid lp");
 
 		htup = (HeapTupleHeader) PageGetItem(page, lp);
@@ -10392,10 +10406,12 @@ heap_xlog_inplace(XLogReaderState *record)
 		page = BufferGetPage(buffer);
 
 		offnum = xlrec->offnum;
-		if (PageGetMaxOffsetNumber(page) >= offnum)
-			lp = PageGetItemId(page, offnum);
+		if (offnum < 1 || offnum > PageGetMaxOffsetNumber(page))
+			elog(PANIC, "offnum out of range");
 
-		if (PageGetMaxOffsetNumber(page) < offnum || !ItemIdIsNormal(lp))
+		lp = PageGetItemId(page, offnum);
+
+		if (!ItemIdIsNormal(lp))
 			elog(PANIC, "invalid lp");
 
 		htup = (HeapTupleHeader) PageGetItem(page, lp);
