@@ -275,7 +275,6 @@ polar_copy_file(char *fromfile, char *tofile, bool skiperr)
 	int			srcfd;
 	int			dstfd;
 	int			nbytes;
-	off_t		offset;
 	int			res = 0;
 
 #define COPY_BUF_SIZE (8 * BLCKSZ)
@@ -315,7 +314,7 @@ polar_copy_file(char *fromfile, char *tofile, bool skiperr)
 					 errmsg("could not create file \"%s\": %m", tofile)));
 	}
 
-	for (offset = 0;; offset += nbytes)
+	for (;;)
 	{
 		CHECK_FOR_INTERRUPTS();
 
