@@ -1330,10 +1330,10 @@ polar_heap_xlog_confirm(XLogReaderState *record, BufferTag *tag, Buffer *buffer)
 
 		offnum = xlrec->offnum;
 
-		if (PageGetMaxOffsetNumber(page) >= offnum)
+		if (0 < offnum && offnum <= PageGetMaxOffsetNumber(page))
 			lp = PageGetItemId(page, offnum);
 
-		if (PageGetMaxOffsetNumber(page) < offnum || !ItemIdIsNormal(lp))
+		if (!lp || !ItemIdIsNormal(lp))
 		{
 			POLAR_LOG_REDO_INFO(page, record);
 			elog(PANIC, "invalid lp: page_max_off=%d, offnum=%d, lp=%d",
@@ -1457,10 +1457,10 @@ polar_heap_xlog_inplace(XLogReaderState *record, BufferTag *tag, Buffer *buffer)
 
 		offnum = xlrec->offnum;
 
-		if (PageGetMaxOffsetNumber(page) >= offnum)
+		if (0 < offnum && offnum <= PageGetMaxOffsetNumber(page))
 			lp = PageGetItemId(page, offnum);
 
-		if (PageGetMaxOffsetNumber(page) < offnum || !ItemIdIsNormal(lp))
+		if (!lp || !ItemIdIsNormal(lp))
 		{
 			POLAR_LOG_REDO_INFO(page, record);
 			elog(PANIC, "invalid lp: page_max_off=%d, offnum=%d, lp=%d",
