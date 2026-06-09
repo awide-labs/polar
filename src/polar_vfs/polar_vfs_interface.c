@@ -646,8 +646,6 @@ vfs_pwritev(int file, const struct iovec *iov, int iovcnt, off_t offset)
 {
 	vfs_vfd    *vfdP = NULL;
 	ssize_t		res = -1;
-	size_t		len = 0;
-	int			i;
 	int			save_errno;
 
 	CHECK_FD_REENTRANT_BEGIN();
@@ -662,9 +660,6 @@ vfs_pwritev(int file, const struct iovec *iov, int iovcnt, off_t offset)
 
 	if (polar_vfs_io_after_hook)
 		polar_vfs_io_after_hook(vfdP, res, VFS_PWRITEV);
-
-	for (i = 0; i < iovcnt; i++)
-		len += iov[i].iov_len;
 
 	CHECK_FD_REENTRANT_END();
 	errno = save_errno;

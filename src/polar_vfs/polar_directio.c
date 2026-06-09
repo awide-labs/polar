@@ -295,7 +295,6 @@ polar_directio_preadv(int fd, const struct iovec *iov, int iovcnt, off_t offset)
 {
 	int			i;
 	bool		aligned = true;
-	size_t		bytes = 0;
 	size_t		part = 0;
 	ssize_t		bytes_read = 0;
 
@@ -305,8 +304,6 @@ polar_directio_preadv(int fd, const struct iovec *iov, int iovcnt, off_t offset)
 						!POLAR_DIRECTIO_IS_ALIGNED(iov[i].iov_len) ||
 						!POLAR_DIRECTIO_IS_ALIGNED(offset)))
 			aligned = false;
-
-		bytes += iov[i].iov_len;
 	}
 
 	if (aligned)
@@ -469,7 +466,6 @@ polar_directio_pwritev(int fd, const struct iovec *iov, int iovcnt, off_t offset
 {
 	int			i;
 	bool		aligned = true;
-	size_t		bytes = 0;
 	ssize_t		ret = 0;
 	ssize_t		part = 0;
 
@@ -479,8 +475,6 @@ polar_directio_pwritev(int fd, const struct iovec *iov, int iovcnt, off_t offset
 						!POLAR_DIRECTIO_IS_ALIGNED(iov[i].iov_len) ||
 						!POLAR_DIRECTIO_IS_ALIGNED(offset)))
 			aligned = false;
-
-		bytes += iov[i].iov_len;
 	}
 
 	if (aligned)
