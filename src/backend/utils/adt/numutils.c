@@ -1046,6 +1046,24 @@ pg_itoa(int16 i, char *a)
 	return pg_ltoa((int32) i, a);
 }
 
+/* GCC 13.3 emits -Wstringop-overflow warning in pg_ultoa_n and pg_ulltoa_n
+ * functions. Disable this warning via pragma to avoid compilation error.
+ *
+ * Same bugs exist in GCC 14.2, so disable for it too.
+ */
+
+#if (defined(__GNUC__) && !defined(__clang__) && \
+	((__GNUC__ == 13 && __GNUC_MINOR__ < 4) || \
+	 (__GNUC__ == 14 && __GNUC_MINOR__ < 3)		\
+    ))
+#define STRINGOP_WARNING_BUGGY
+#endif
+
+#ifdef STRINGOP_WARNING_BUGGY
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wstringop-overflow"
+#endif
+
 /*
  * pg_ultoa_n: converts an unsigned 32-bit integer to its string representation,
  * not NUL-terminated, and returns the length of that string representation
@@ -1217,6 +1235,10 @@ pg_ulltoa_n(uint64 value, char *a)
 
 	return olength;
 }
+
+#ifdef STRINGOP_WARNING_BUGGY
+#pragma GCC diagnostic pop
+#endif
 
 /*
  * pg_lltoa: converts a signed 64-bit integer to its string representation and
