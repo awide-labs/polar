@@ -93,64 +93,40 @@ count
 
 step s3_abort: ABORT;
 
-starting permutation: tsto s3_begin checker_sleep s3_check
+starting permutation: tsto s3_begin s3_gone
 step tsto: SET statement_timeout = '1s'; SET polar_transaction_timeout = '10ms';
 step s3_begin: BEGIN ISOLATION LEVEL READ COMMITTED;
-step checker_sleep: SELECT pg_sleep(0.1);
-pg_sleep
---------
-        
-(1 row)
-
-step s3_check: SELECT count(*) FROM pg_stat_activity WHERE application_name = 'isolation/timeouts/s3';
+step s3_gone: SELECT wait_gone('isolation/timeouts/s3') AS count;
 count
 -----
     0
 (1 row)
 
 
-starting permutation: itto s4_begin checker_sleep s4_check
+starting permutation: itto s4_begin s4_gone
 step itto: SET idle_in_transaction_session_timeout = '10ms'; SET polar_transaction_timeout = '1s';
 step s4_begin: BEGIN ISOLATION LEVEL READ COMMITTED;
-step checker_sleep: SELECT pg_sleep(0.1);
-pg_sleep
---------
-        
-(1 row)
-
-step s4_check: SELECT count(*) FROM pg_stat_activity WHERE application_name = 'isolation/timeouts/s4';
+step s4_gone: SELECT wait_gone('isolation/timeouts/s4') AS count;
 count
 -----
     0
 (1 row)
 
 
-starting permutation: tito s5_begin checker_sleep s5_check
+starting permutation: tito s5_begin s5_gone
 step tito: SET idle_in_transaction_session_timeout = '1s'; SET polar_transaction_timeout = '10ms';
 step s5_begin: BEGIN ISOLATION LEVEL READ COMMITTED;
-step checker_sleep: SELECT pg_sleep(0.1);
-pg_sleep
---------
-        
-(1 row)
-
-step s5_check: SELECT count(*) FROM pg_stat_activity WHERE application_name = 'isolation/timeouts/s5';
+step s5_gone: SELECT wait_gone('isolation/timeouts/s5') AS count;
 count
 -----
     0
 (1 row)
 
 
-starting permutation: s6_begin s6_tt checker_sleep s6_check
+starting permutation: s6_begin s6_tt s6_gone
 step s6_begin: BEGIN ISOLATION LEVEL READ COMMITTED;
 step s6_tt: SET statement_timeout = '1s'; SET polar_transaction_timeout = '10ms';
-step checker_sleep: SELECT pg_sleep(0.1);
-pg_sleep
---------
-        
-(1 row)
-
-step s6_check: SELECT count(*) FROM pg_stat_activity WHERE application_name = 'isolation/timeouts/s6';
+step s6_gone: SELECT wait_gone('isolation/timeouts/s6') AS count;
 count
 -----
     0

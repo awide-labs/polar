@@ -4,10 +4,26 @@ setup
 {
  CREATE TABLE accounts (accountid text PRIMARY KEY, balance numeric not null);
  INSERT INTO accounts VALUES ('checking', 600), ('savings', 600);
+
+ CREATE FUNCTION wait_gone(appname text) RETURNS int AS $$
+ DECLARE
+   c int;
+ BEGIN
+   FOR i IN 1..300 LOOP -- up to ~30s, well under PGISOLATIONTIMEOUT (300s)
+     PERFORM pg_stat_clear_snapshot(); -- clear per-transaction pg_stat_activity cache
+     SELECT count(*) INTO c FROM pg_stat_activity
+       WHERE application_name = appname;
+     EXIT WHEN c = 0;
+     PERFORM pg_sleep(0.1);
+   END LOOP;
+   RETURN c;
+ END;
+ $$ LANGUAGE plpgsql;
 }
 
 teardown
 {
+ DROP FUNCTION wait_gone(text);
  DROP TABLE accounts;
 }
 
@@ -47,11 +63,11 @@ step s6_begin	{ BEGIN ISOLATION LEVEL READ COMMITTED; }
 step s6_tt	{ SET statement_timeout = '1s'; SET polar_transaction_timeout = '10ms'; }
 
 session checker
-step checker_sleep	{ SELECT pg_sleep(0.1); }
 step s3_check	{ SELECT count(*) FROM pg_stat_activity WHERE application_name = 'isolation/timeouts/s3'; }
-step s4_check	{ SELECT count(*) FROM pg_stat_activity WHERE application_name = 'isolation/timeouts/s4'; }
-step s5_check	{ SELECT count(*) FROM pg_stat_activity WHERE application_name = 'isolation/timeouts/s5'; }
-step s6_check	{ SELECT count(*) FROM pg_stat_activity WHERE application_name = 'isolation/timeouts/s6'; }
+step s3_gone	{ SELECT wait_gone('isolation/timeouts/s3') AS count; }
+step s4_gone	{ SELECT wait_gone('isolation/timeouts/s4') AS count; }
+step s5_gone	{ SELECT wait_gone('isolation/timeouts/s5') AS count; }
+step s6_gone	{ SELECT wait_gone('isolation/timeouts/s6') AS count; }
 
 
 # It's possible that the isolation tester will not observe the final
@@ -78,10 +94,10 @@ permutation wrtbl slto update(*)
 # statement timeout expires first
 permutation stto s3_begin s3_sleep s3_check s3_abort
 # transaction timeout expires first, session s3 FATAL-out
-permutation tsto s3_begin checker_sleep s3_check
+permutation tsto s3_begin s3_gone
 # idle in transaction timeout expires first, session s4 FATAL-out
-permutation itto s4_begin checker_sleep s4_check
+permutation itto s4_begin s4_gone
 # transaction timeout expires first, session s5 FATAL-out
-permutation tito s5_begin checker_sleep s5_check
+permutation tito s5_begin s5_gone
 # transaction timeout can be schedule amid transaction, session s6 FATAL-out
-permutation s6_begin s6_tt checker_sleep s6_check
+permutation s6_begin s6_tt s6_gone
