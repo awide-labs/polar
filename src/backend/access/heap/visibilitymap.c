@@ -584,6 +584,21 @@ visibilitymap_prepare_truncate(Relation rel, BlockNumber nheapblocks)
 }
 
 /*
+ *	visibilitymap_truncation_length -
+ *			compute truncation length for visibility map
+ *
+ * Given a proposed truncation length for the main fork, compute the
+ * correct truncation length for the visibility map. Should return the
+ * same answer as visibilitymap_prepare_truncate(), but without modifying
+ * anything.
+ */
+BlockNumber
+visibilitymap_truncation_length(BlockNumber nheapblocks)
+{
+	return HEAPBLK_TO_MAPBLOCK_LIMIT(nheapblocks);
+}
+
+/*
  * Read a visibility map page.
  *
  * If the page doesn't exist, InvalidBuffer is returned, or if 'extend' is

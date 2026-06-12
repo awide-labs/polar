@@ -626,6 +626,7 @@ DisableTimeoutParams
 DiscardMode
 DiscardStmt
 DistanceValue
+DistinctColInfo
 DistinctExpr
 DoState
 DoStmt

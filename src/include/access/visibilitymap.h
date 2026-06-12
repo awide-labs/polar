@@ -55,6 +55,7 @@ extern uint8 visibilitymap_get_status(Relation rel, BlockNumber heapBlk, Buffer 
 extern void visibilitymap_count(Relation rel, BlockNumber *all_visible, BlockNumber *all_frozen);
 extern BlockNumber visibilitymap_prepare_truncate(Relation rel,
 												  BlockNumber nheapblocks);
+extern BlockNumber visibilitymap_truncation_length(BlockNumber nheapblocks);
 
 /* POLAR */
 /*
@@ -72,6 +73,8 @@ extern BlockNumber visibilitymap_prepare_truncate(Relation rel,
 
 /* Mapping from heap block number to the right bit in the visibility map */
 #define HEAPBLK_TO_MAPBLOCK(x) ((x) / HEAPBLOCKS_PER_PAGE)
+#define HEAPBLK_TO_MAPBLOCK_LIMIT(x) \
+	(((x) + HEAPBLOCKS_PER_PAGE - 1) / HEAPBLOCKS_PER_PAGE)
 #define HEAPBLK_TO_MAPBYTE(x) (((x) % HEAPBLOCKS_PER_PAGE) / HEAPBLOCKS_PER_BYTE)
 #define HEAPBLK_TO_OFFSET(x) (((x) % HEAPBLOCKS_PER_BYTE) * BITS_PER_HEAPBLOCK)
 

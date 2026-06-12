@@ -571,7 +571,7 @@ retry:
 		{
 			int			elevel;
 
-			if (rc == EINTR)
+			if (errno == EINTR)
 				goto retry;
 
 			/*

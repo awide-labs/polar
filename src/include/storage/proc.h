@@ -488,6 +488,8 @@ extern PGDLLIMPORT PGPROC *PreparedXactProcs;
  */
 #define NUM_AUXILIARY_PROCS		11
 
+#define FIRST_PREPARED_XACT_PROC_NUMBER	(MaxBackends + NUM_AUXILIARY_PROCS)
+
 /* configurable options */
 extern PGDLLIMPORT int DeadlockTimeout;
 extern PGDLLIMPORT int StatementTimeout;
