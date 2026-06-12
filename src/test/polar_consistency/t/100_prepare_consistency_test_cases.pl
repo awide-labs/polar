@@ -56,6 +56,7 @@ sub exclude_some_cases
 							   # skip following core tests due to their need
 							   # for special locales, collations or encodings
 							   'collate.icu.utf8', 'collate.linux.utf8',
+							   'encoding', 'euc_kr',
 							   'json_encoding', 'jsonpath_encoding',
 							   'unicode');
 	foreach my $case (@excluded_test_cases)
