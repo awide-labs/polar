@@ -1037,20 +1037,33 @@ read_local_xlog_page_guts(XLogReaderState *state, XLogRecPtr targetPagePtr,
 		 */
 		if (!RecoveryInProgress())
 			read_upto = GetFlushRecPtr(&currTLI);
-
-		/*
-		 * POLAR: If call logindex parse we read upto replayEndRecPtr instead
-		 * of lastReplayedEndRecPtr. Because we may read xlog during logindex
-		 * parse but lastReplayedEndRecPtr is set after logindex parsed. If we
-		 * read data block and replay replayEndRecPtr XLOG in startup or
-		 * backend process, but read_upto is set to lastReplayedEndRecPtr,
-		 * because lastReplayedEndRecPtr is less than replayEndRecPtr, then
-		 * replayEndRecPtr XLOG will never be read.
-		 */
-		else if (POLAR_ENABLE_LOGINDEX_PARSE())
-			read_upto = GetCurrentReplayRecPtr(&currTLI);
 		else
-			read_upto = GetXLogReplayRecPtr(&currTLI);
+		{
+			TimeLineID	insertTLI;
+
+			/*
+			 * POLAR: If call logindex parse we read upto replayEndRecPtr
+			 * instead of lastReplayedEndRecPtr. Because we may read xlog
+			 * during logindex parse but lastReplayedEndRecPtr is set after
+			 * logindex parsed. If we read data block and replay
+			 * replayEndRecPtr XLOG in startup or backend process, but
+			 * read_upto is set to lastReplayedEndRecPtr, because
+			 * lastReplayedEndRecPtr is less than replayEndRecPtr, then
+			 * replayEndRecPtr XLOG will never be read.
+			 */
+			if (POLAR_ENABLE_LOGINDEX_PARSE())
+				read_upto = GetCurrentReplayRecPtr(&currTLI);
+			else
+				read_upto = GetXLogReplayRecPtr(&currTLI);
+
+			/*
+			 * If the insertion timeline has already been set, use it. See
+			 * logical_read_xlog_page() for details.
+			 */
+			insertTLI = GetWALInsertionTimeLineIfSet();
+			if (insertTLI != 0)
+				currTLI = insertTLI;
+		}
 		tli = currTLI;
 
 		/*
