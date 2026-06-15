@@ -1,0 +1,149 @@
+Parsed test spec with 8 sessions
+
+starting permutation: t0_begin w0 t0_abort t1 xmin_begin t3 t4_begin w4 t5_begin w5 t6_begin w6 snap t4_commit t5_abort t2 show_xids check_0 check_1 check_2 check_3 check_4 check_5 check_6 t6_abort xmin_end
+step t0_begin: BEGIN; INSERT INTO dummy VALUES (pg_current_xact_id());
+step w0: INSERT INTO xid_table VALUES ('0 lt_xmin_aborted', (pg_current_xact_id()::text::integer - 1)::text::xid8);
+step t0_abort: ROLLBACK;
+step t1: INSERT INTO xid_table VALUES ('1 lt_xmin', pg_current_xact_id());
+step xmin_begin: BEGIN; INSERT INTO dummy VALUES (pg_current_xact_id());
+step t3: INSERT INTO xid_table VALUES ('3 range_committed_before_snap', pg_current_xact_id());
+step t4_begin: BEGIN; INSERT INTO dummy VALUES (pg_current_xact_id());
+step w4: INSERT INTO xid_table VALUES ('4 range_committed_after_snap', (pg_current_xact_id()::text::integer - 1)::text::xid8);
+step t5_begin: BEGIN; INSERT INTO dummy VALUES (pg_current_xact_id());
+step w5: INSERT INTO xid_table VALUES ('5 range_aborted', (pg_current_xact_id()::text::integer - 1)::text::xid8);
+step t6_begin: BEGIN; INSERT INTO dummy VALUES (pg_current_xact_id());
+step w6: INSERT INTO xid_table VALUES ('6 range_in_progress', (pg_current_xact_id()::text::integer - 1)::text::xid8);
+step snap: INSERT INTO snap_table SELECT pg_current_snapshot();
+step t4_commit: COMMIT;
+step t5_abort: ROLLBACK;
+step t2: INSERT INTO xid_table VALUES ('2 ge_xmax', pg_current_xact_id());
+step show_xids: SELECT descr FROM xid_table ORDER BY id;
+descr                        
+-----------------------------
+0 lt_xmin_aborted            
+1 lt_xmin                    
+3 range_committed_before_snap
+4 range_committed_after_snap 
+5 range_aborted              
+6 range_in_progress          
+2 ge_xmax                    
+(7 rows)
+
+step check_0: SELECT pg_visible_in_snapshot((SELECT id FROM xid_table WHERE descr LIKE '0 %'), (SELECT snap FROM snap_table));
+pg_visible_in_snapshot
+----------------------
+t                     
+(1 row)
+
+step check_1: SELECT pg_visible_in_snapshot((SELECT id FROM xid_table WHERE descr LIKE '1 %'), (SELECT snap FROM snap_table));
+pg_visible_in_snapshot
+----------------------
+t                     
+(1 row)
+
+step check_2: SELECT pg_visible_in_snapshot((SELECT id FROM xid_table WHERE descr LIKE '2 %'), (SELECT snap FROM snap_table));
+pg_visible_in_snapshot
+----------------------
+f                     
+(1 row)
+
+step check_3: SELECT pg_visible_in_snapshot((SELECT id FROM xid_table WHERE descr LIKE '3 %'), (SELECT snap FROM snap_table));
+pg_visible_in_snapshot
+----------------------
+t                     
+(1 row)
+
+step check_4: SELECT pg_visible_in_snapshot((SELECT id FROM xid_table WHERE descr LIKE '4 %'), (SELECT snap FROM snap_table));
+pg_visible_in_snapshot
+----------------------
+f                     
+(1 row)
+
+step check_5: SELECT pg_visible_in_snapshot((SELECT id FROM xid_table WHERE descr LIKE '5 %'), (SELECT snap FROM snap_table));
+pg_visible_in_snapshot
+----------------------
+f                     
+(1 row)
+
+step check_6: SELECT pg_visible_in_snapshot((SELECT id FROM xid_table WHERE descr LIKE '6 %'), (SELECT snap FROM snap_table));
+pg_visible_in_snapshot
+----------------------
+f                     
+(1 row)
+
+step t6_abort: ROLLBACK;
+step xmin_end: COMMIT;
+
+starting permutation: t0_begin w0 t0_abort t1 xmin_begin t3 t4_begin w4 t5_begin w5 t6_begin w6 snap t4_commit t5_abort t2 xmin_end show_xids check_0 check_1 check_2 check_3_quirk check_4_quirk check_5_quirk check_6 t6_abort
+step t0_begin: BEGIN; INSERT INTO dummy VALUES (pg_current_xact_id());
+step w0: INSERT INTO xid_table VALUES ('0 lt_xmin_aborted', (pg_current_xact_id()::text::integer - 1)::text::xid8);
+step t0_abort: ROLLBACK;
+step t1: INSERT INTO xid_table VALUES ('1 lt_xmin', pg_current_xact_id());
+step xmin_begin: BEGIN; INSERT INTO dummy VALUES (pg_current_xact_id());
+step t3: INSERT INTO xid_table VALUES ('3 range_committed_before_snap', pg_current_xact_id());
+step t4_begin: BEGIN; INSERT INTO dummy VALUES (pg_current_xact_id());
+step w4: INSERT INTO xid_table VALUES ('4 range_committed_after_snap', (pg_current_xact_id()::text::integer - 1)::text::xid8);
+step t5_begin: BEGIN; INSERT INTO dummy VALUES (pg_current_xact_id());
+step w5: INSERT INTO xid_table VALUES ('5 range_aborted', (pg_current_xact_id()::text::integer - 1)::text::xid8);
+step t6_begin: BEGIN; INSERT INTO dummy VALUES (pg_current_xact_id());
+step w6: INSERT INTO xid_table VALUES ('6 range_in_progress', (pg_current_xact_id()::text::integer - 1)::text::xid8);
+step snap: INSERT INTO snap_table SELECT pg_current_snapshot();
+step t4_commit: COMMIT;
+step t5_abort: ROLLBACK;
+step t2: INSERT INTO xid_table VALUES ('2 ge_xmax', pg_current_xact_id());
+step xmin_end: COMMIT;
+step show_xids: SELECT descr FROM xid_table ORDER BY id;
+descr                        
+-----------------------------
+0 lt_xmin_aborted            
+1 lt_xmin                    
+3 range_committed_before_snap
+4 range_committed_after_snap 
+5 range_aborted              
+6 range_in_progress          
+2 ge_xmax                    
+(7 rows)
+
+step check_0: SELECT pg_visible_in_snapshot((SELECT id FROM xid_table WHERE descr LIKE '0 %'), (SELECT snap FROM snap_table));
+pg_visible_in_snapshot
+----------------------
+t                     
+(1 row)
+
+step check_1: SELECT pg_visible_in_snapshot((SELECT id FROM xid_table WHERE descr LIKE '1 %'), (SELECT snap FROM snap_table));
+pg_visible_in_snapshot
+----------------------
+t                     
+(1 row)
+
+step check_2: SELECT pg_visible_in_snapshot((SELECT id FROM xid_table WHERE descr LIKE '2 %'), (SELECT snap FROM snap_table));
+pg_visible_in_snapshot
+----------------------
+f                     
+(1 row)
+
+step check_3_quirk: SELECT test_csn_quirk('3 %', true);
+test_csn_quirk
+--------------
+t             
+(1 row)
+
+step check_4_quirk: SELECT test_csn_quirk('4 %', false);
+test_csn_quirk
+--------------
+t             
+(1 row)
+
+step check_5_quirk: SELECT test_csn_quirk('5 %', false);
+test_csn_quirk
+--------------
+t             
+(1 row)
+
+step check_6: SELECT pg_visible_in_snapshot((SELECT id FROM xid_table WHERE descr LIKE '6 %'), (SELECT snap FROM snap_table));
+pg_visible_in_snapshot
+----------------------
+f                     
+(1 row)
+
+step t6_abort: ROLLBACK;
