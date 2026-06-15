@@ -27,6 +27,7 @@
 #include "postgres.h"
 
 #include "access/clog.h"
+#include "access/heapam.h"
 #include "access/transam.h"
 #include "access/xact.h"
 #include "access/xlog.h"
@@ -421,19 +422,37 @@ txid_snapshot_get_csn(const pg_snapshot *snap)
 static bool
 is_visible_fxid_csn(FullTransactionId value, const pg_snapshot *snap)
 {
-	if (U64FromFullTransactionId(value) < U64FromFullTransactionId(snap->xmin))
+	if (FullTransactionIdPrecedes(value, snap->xmin))
 		return true;
-	else if (U64FromFullTransactionId(value) >= U64FromFullTransactionId(snap->xmax))
+	else if (!FullTransactionIdPrecedes(value, snap->xmax))
 		return false;
-	else
+	else if (TransactionIdFollowsOrEquals(XidFromFullTransactionId(value), TransactionXmin))
 	{
 		SnapshotData snap_data;
+		XidCommitStatus hint;	/* write-only */
 
 		snap_data.xmin = XidFromFullTransactionId(snap->xmin);
 		snap_data.xmax = XidFromFullTransactionId(snap->xmax);
+		snap_data.polar_csn_xid_snapshot = false;
 		snap_data.polar_snapshot_csn = txid_snapshot_get_csn(snap);
 
-		return XidInMVCCSnapshot(XidFromFullTransactionId(value), &snap_data);
+		/* We don't init other fields to catch bugs via UBSan */
+		return XidVisibleInSnapshotCSN(XidFromFullTransactionId(value), &snap_data, &hint);
+	}
+	else
+	{
+		/*
+		 * We have likely truncated CSN information for transactions older
+		 * than TransactionXmin, so the information in the snapshot is
+		 * insufficient.
+		 *
+		 * Return an error to the user.
+		 */
+
+		ereport(ERROR,
+				(errcode(ERRCODE_SNAPSHOT_TOO_OLD),
+				 errmsg("snapshot too old for CSN visibility check"))
+			);
 	}
 }
 
