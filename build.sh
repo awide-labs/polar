@@ -261,7 +261,7 @@ if [[ $init == "on" ]] || [[ $clean == "on" ]]; then
     $base_dir/bin/pg_ctl -D $dir stop -mi || true
   done
   rm -rf $pg_primary_dir $pg_data_dir $pg_standby_dir_prefix* $pg_standby_data_dir_prefix* $pg_replica_dir_prefix*
-  ipcrm -a
+  ipcrm -a || echo "WARN: ipcrm -a failed (IPC owned by another user?)"
 fi
 
 if [[ $compile == "on" ]] || [[ $clean == "on" ]]; then
