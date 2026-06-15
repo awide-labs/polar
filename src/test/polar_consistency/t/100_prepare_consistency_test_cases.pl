@@ -62,9 +62,10 @@ sub exclude_some_cases
 		'polar_check_partitioned_cols_consistency',
 		# skip following core tests due to their need
 		# for special locales, collations or encodings
-		'collate.icu.utf8', 'collate.linux.utf8',
+		'collate.utf8', 'collate.icu.utf8', 'collate.linux.utf8',
 		'json_encoding', 'jsonpath_encoding',
-		'unicode');
+		'unicode',
+		'encoding', 'euc_kr');
 	foreach my $case (@excluded_test_cases)
 	{
 		$all =~ s/[^\s]*$case//g;
