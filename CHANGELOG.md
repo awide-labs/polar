@@ -74,6 +74,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- pg_visible_in_snapshot() may now raise "snapshot too old for CSN visibility
+  check" when asked about a transaction in an old CSN snapshot whose
+  commit-order (CSN) data has been truncated. Previously it returned
+  unreliable transaction status from CLOG. (XCOM-195)
+- Fix inverted/erroneous logic in pg_visible_in_snapshot() for CSN snapshots.
+  It was producing inverted results for transactions in the [xmin, xmax] range.
+  (XCOM-195)
 - Fix 32-bit truncation of 64-bit CSN value in pg_current_snapshot()
   function. (XCOM-195)
 - Stopped spurious `could not open directory "polar_cache_trash"` and
