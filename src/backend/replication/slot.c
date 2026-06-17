@@ -42,6 +42,7 @@
 
 #include "access/transam.h"
 #include "access/xlog_internal.h"
+#include "access/xlogrecovery.h"
 #include "common/string.h"
 #include "miscadmin.h"
 #include "pgstat.h"
@@ -868,6 +869,17 @@ ReplicationSlotDropPtr(ReplicationSlot *slot)
 	 */
 	if (!polar_release_ddl_waiters())
 		elog(DEBUG2, "No replica replication slot exists, so we wake all backend.");
+
+	/*
+	 * POLAR: On a standby, the startup process may be blocked in
+	 * polar_wait_ddl_lock_on_standby() waiting for this cascading replica
+	 * slot to advance (or to go away). Dropping the slot removes it as a
+	 * reader, so wake recovery to re-check promptly instead of relying on its
+	 * 10 ms poll.
+	 */
+	if (polar_is_standby() && polar_enable_shared_storage_mode
+		&& polar_enable_cascading_sync_ddl)
+		WakeupRecovery();
 }
 
 /*

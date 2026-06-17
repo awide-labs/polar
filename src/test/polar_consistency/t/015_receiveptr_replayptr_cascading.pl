@@ -30,7 +30,8 @@ $node_standby1->polar_drop_all_slots;
 
 my $node_replica2 = PostgreSQL::Test::Cluster->new('replica2');
 $node_replica2->polar_init_replica($node_standby1);
-$node_replica2->append_conf('postgresql.conf', "shared_buffers = '2MB'\n");
+$node_replica2->append_conf('postgresql.conf',
+	"shared_buffers = '2MB'\nwal_receiver_status_interval = '100ms'\n");
 $node_standby1->polar_create_slot($node_replica2->name);
 $node_replica2->start;
 

@@ -88,7 +88,6 @@
 #include "utils/ps_status.h"
 
 /* POLAR */
-#include "access/subtrans.h"
 #include "access/xlog.h"
 #include "access/xlogrecovery.h"
 #include "access/xlogutils.h"
@@ -1413,12 +1412,17 @@ polar_wait_ddl_lock(void)
  * replica must reach before the standby is allowed to delete or truncate
  * shared-storage files on behalf of this transaction.
  *
- * xid may be a sub-transaction id (DDL run inside a SAVEPOINT). We always
- * resolve it to the top-level xid via SubTransGetTopmostTransaction() so that
- * the map is keyed uniformly by top-level xid.
+ * The map is keyed by the raw xid carried in the lock record, which may be a
+ * sub-transaction id (DDL run inside a SAVEPOINT). We deliberately do NOT
+ * resolve it to the top-level xid here: during replay the sub-xid -> parent
+ * mapping is generally not yet in pg_subtrans (the primary emits
+ * XLOG_XACT_ASSIGNMENT lazily), so SubTransGetTopmostTransaction() would just
+ * return the sub-xid unchanged and the entry would later be missed at commit.
+ * Instead, commit/abort look the entry up under every xid of the transaction
+ * tree (top xid plus parsed->subxacts), which the completion record lists
+ * authoritatively.
  *
- * If multiple XLOG_STANDBY_LOCK records map to the same top-level xid (e.g.
- * several DDLs in one transaction or across savepoints), WAL ordering
+ * If multiple XLOG_STANDBY_LOCK records map to the same xid, WAL ordering
  * guarantees each successive record has a higher LSN, so we unconditionally
  * overwrite with the latest value.
  */
@@ -1426,13 +1430,9 @@ void
 polar_cascading_ddl_record_lock(TransactionId xid, XLogRecPtr lsn)
 {
 	XidLsnEntry *entry;
-	TransactionId top_xid;
 
 	if (!TransactionIdIsValid(xid) || XLogRecPtrIsInvalid(lsn))
 		return;
-
-	/* Normalise to top-level xid so commit/abort can find the entry easily */
-	top_xid = SubTransGetTopmostTransaction(xid);
 
 	if (polar_ddl_xid_lsn_map == NULL)
 	{
@@ -1446,10 +1446,32 @@ polar_cascading_ddl_record_lock(TransactionId xid, XLogRecPtr lsn)
 											HASH_ELEM | HASH_BLOBS);
 	}
 
-	entry = hash_search(polar_ddl_xid_lsn_map, &top_xid, HASH_ENTER, NULL);
+	entry = hash_search(polar_ddl_xid_lsn_map, &xid, HASH_ENTER, NULL);
 
 	/* WAL is ordered: unconditionally overwrite with the latest LSN. */
 	entry->lsn = lsn;
+}
+
+/*
+ * Remove the barrier-LSN entry recorded for xid and return its LSN, or
+ * InvalidXLogRecPtr if there was none. Caller must hold polar_ddl_xid_lsn_map.
+ */
+static XLogRecPtr
+polar_cascading_ddl_take(TransactionId xid)
+{
+	XidLsnEntry *entry;
+	XLogRecPtr	lsn;
+
+	if (!TransactionIdIsValid(xid))
+		return InvalidXLogRecPtr;
+
+	entry = hash_search(polar_ddl_xid_lsn_map, &xid, HASH_FIND, NULL);
+	if (entry == NULL)
+		return InvalidXLogRecPtr;
+
+	lsn = entry->lsn;
+	hash_search(polar_ddl_xid_lsn_map, &xid, HASH_REMOVE, NULL);
+	return lsn;
 }
 
 /*
@@ -1459,41 +1481,63 @@ polar_cascading_ddl_record_lock(TransactionId xid, XLogRecPtr lsn)
  * (before smgrtruncate2) to wait for cascading replicas to acknowledge the
  * barrier LSN recorded for this transaction, then remove the map entry.
  *
- * Returns immediately if the map is empty or no entry exists for this xid
- * (e.g. already consumed by an earlier smgr_redo call).
+ * The lock may have been recorded under the top-level xid or under any
+ * sub-transaction xid, so we consume the entries for the whole transaction
+ * tree (xid plus the nsubxacts listed in the completion record) and wait once
+ * for the highest barrier LSN among them. smgr_redo, which has no subxact
+ * list, passes nsubxacts = 0.
+ *
+ * Returns immediately if the map is empty or no entry exists for this
+ * transaction (e.g. already consumed by an earlier smgr_redo call).
  */
 void
-polar_cascading_ddl_wait_and_clear(TransactionId xid)
+polar_cascading_ddl_wait_and_clear(TransactionId xid, int nsubxacts,
+								   TransactionId *subxacts)
 {
-	XidLsnEntry *entry;
+	XLogRecPtr	barrier_lsn;
+	int			i;
 
-	if (!TransactionIdIsValid(xid) || !polar_ddl_xid_lsn_map)
+	if (!polar_ddl_xid_lsn_map ||
+		hash_get_num_entries(polar_ddl_xid_lsn_map) == 0)
 		return;
 
-	entry = hash_search(polar_ddl_xid_lsn_map, &xid, HASH_FIND, NULL);
-	if (entry == NULL)
-		return;
+	barrier_lsn = polar_cascading_ddl_take(xid);
+	for (i = 0; i < nsubxacts; i++)
+	{
+		XLogRecPtr	sub_lsn = polar_cascading_ddl_take(subxacts[i]);
 
-	polar_wait_ddl_lock_on_standby(entry->lsn);
+		if (sub_lsn > barrier_lsn)
+			barrier_lsn = sub_lsn;
+	}
 
-	hash_search(polar_ddl_xid_lsn_map, &xid, HASH_REMOVE, NULL);
+	if (!XLogRecPtrIsInvalid(barrier_lsn))
+		polar_wait_ddl_lock_on_standby(barrier_lsn);
 }
 
 /*
  * POLAR: polar_cascading_ddl_discard
  *
- * Called from xact_redo_abort() to discard the barrier-LSN entry for an
- * aborted transaction without waiting. Files in parsed->nrels on abort were
- * created within the transaction and never committed, so cascading replicas
- * hold no buffer references to them.
+ * Called from xact_redo_abort(), and unconditionally from xact_redo_commit()
+ * after the drop, to discard the barrier-LSN entries for the transaction tree
+ * without waiting. On abort the files in parsed->nrels were created within the
+ * transaction and never committed, so cascading replicas hold no buffer
+ * references to them; on commit this just reclaims any entry not consumed by
+ * the wait above (e.g. a LOCK TABLE that dropped no files). Like
+ * wait_and_clear, it covers the top xid plus every listed subxact.
  */
 void
-polar_cascading_ddl_discard(TransactionId xid)
+polar_cascading_ddl_discard(TransactionId xid, int nsubxacts,
+							TransactionId *subxacts)
 {
-	if (!TransactionIdIsValid(xid) || !polar_ddl_xid_lsn_map)
+	int			i;
+
+	if (!polar_ddl_xid_lsn_map ||
+		hash_get_num_entries(polar_ddl_xid_lsn_map) == 0)
 		return;
 
-	hash_search(polar_ddl_xid_lsn_map, &xid, HASH_REMOVE, NULL);
+	polar_cascading_ddl_take(xid);
+	for (i = 0; i < nsubxacts; i++)
+		polar_cascading_ddl_take(subxacts[i]);
 }
 
 void
@@ -1530,8 +1574,15 @@ polar_wait_ddl_lock_for_pending_deletes(void)
  * after each polar_record_replica_lsn() update so the startup process is
  * woken promptly.
  *
- * If no cascading replica slots are present, or the barrier LSN is already
- * satisfied, the function returns immediately.
+ * If no cascading replica slots are present, the function returns immediately.
+ * Otherwise it waits until every cascading replica slot is active AND the
+ * oldest reported lock LSN has reached barrier_lsn -- mirroring the primary's
+ * polar_release_ddl_waiters(), which likewise refuses to advance while any
+ * replica slot is inactive: a registered-but-disconnected replica may still be
+ * reading the files about to be removed, and its last-reported position cannot
+ * be trusted as current (a crashed replica rewinds to a restartpoint on
+ * restart). An inactive slot therefore blocks until the replica reconnects and
+ * re-reports, or the operator drops the slot.
  */
 void
 polar_wait_ddl_lock_on_standby(XLogRecPtr barrier_lsn)
@@ -1546,11 +1597,17 @@ polar_wait_ddl_lock_on_standby(XLogRecPtr barrier_lsn)
 
 		ResetLatch(GetRecoveryWakeupLatch());
 
-		/* All cascading replicas disconnected */
+		/* No cascading replica slots exist — nothing to protect. */
 		if (!polar_get_ddl_applyptr(&min_lsn, &all_active))
 			break;
 
-		if (!XLogRecPtrIsInvalid(min_lsn) && min_lsn >= barrier_lsn)
+		/*
+		 * Only proceed once every cascading replica slot is active and the
+		 * oldest acknowledged lock LSN has reached the barrier. While any
+		 * slot is inactive we keep waiting regardless of min_lsn, just as the
+		 * primary path does.
+		 */
+		if (all_active && !XLogRecPtrIsInvalid(min_lsn) && min_lsn >= barrier_lsn)
 			break;
 
 		WaitLatch(GetRecoveryWakeupLatch(),

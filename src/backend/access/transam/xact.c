@@ -6212,7 +6212,8 @@ xact_redo_commit(xl_xact_parsed_commit *parsed,
 		 */
 		if (polar_is_standby() && polar_enable_shared_storage_mode
 			&& polar_enable_cascading_sync_ddl)
-			polar_cascading_ddl_wait_and_clear(xid);
+			polar_cascading_ddl_wait_and_clear(xid, parsed->nsubxacts,
+											   parsed->subxacts);
 
 		/* Make sure files supposed to be dropped are dropped */
 		DropRelationFiles(parsed->xnodes, parsed->nrels, true);
@@ -6224,12 +6225,12 @@ xact_redo_commit(xl_xact_parsed_commit *parsed,
 	 * files at commit (e.g. LOCK TABLE, non-rewriting ALTER TABLE). Such
 	 * entries are never consumed by the nrels > 0 path above, so clear them
 	 * unconditionally here to avoid leaking entries in the startup process.
-	 * This is a no-op when the entry was already removed by the wait above
-	 * or by an earlier smgr_redo().
+	 * This is a no-op when the entry was already removed by the wait above or
+	 * by an earlier smgr_redo().
 	 */
 	if (polar_is_standby() && polar_enable_shared_storage_mode
 		&& polar_enable_cascading_sync_ddl)
-		polar_cascading_ddl_discard(xid);
+		polar_cascading_ddl_discard(xid, parsed->nsubxacts, parsed->subxacts);
 
 	if (parsed->nstats > 0)
 	{
@@ -6352,7 +6353,7 @@ xact_redo_abort(xl_xact_parsed_abort *parsed, TransactionId xid,
 	 */
 	if (polar_is_standby() && polar_enable_shared_storage_mode
 		&& polar_enable_cascading_sync_ddl)
-		polar_cascading_ddl_discard(xid);
+		polar_cascading_ddl_discard(xid, parsed->nsubxacts, parsed->subxacts);
 
 	if (parsed->nstats > 0)
 	{
