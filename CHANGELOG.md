@@ -57,6 +57,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Fixed desync between MyProc->xmin and TransactionXmin in SnapshotResetXmin
+  when polar_csn_enable is on. This could lead to incorrect CSNLOG requests. (XCOM-193)
 - Fix (enable) parsing of CSN snapshots from their text representation. (XCOM-193)
 - pg_visible_in_snapshot() may now raise "snapshot too old for CSN visibility
   check" when asked about a transaction in an old CSN snapshot whose

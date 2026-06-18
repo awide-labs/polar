@@ -953,10 +953,7 @@ SnapshotResetXmin(void)
 
 	if (pairingheap_is_empty(&RegisteredSnapshots))
 	{
-		if (polar_csn_enable)
-			ProcArrayResetXminCSN(MyProc, InvalidTransactionId);
-		else
-			MyProc->xmin = TransactionXmin = InvalidTransactionId;
+		MyProc->xmin = TransactionXmin = InvalidTransactionId;
 
 		return;
 	}
@@ -966,10 +963,7 @@ SnapshotResetXmin(void)
 
 	if (TransactionIdPrecedes(MyProc->xmin, minSnapshot->xmin))
 	{
-		if (polar_csn_enable)
-			ProcArrayResetXminCSN(MyProc, minSnapshot->xmin);
-		else
-			MyProc->xmin = TransactionXmin = minSnapshot->xmin;
+		MyProc->xmin = TransactionXmin = minSnapshot->xmin;
 	}
 }
 

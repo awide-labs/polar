@@ -1004,18 +1004,6 @@ ProcArrayEndTransactionCSN(PGPROC *proc)
 	AdvanceOldestActiveXidCSN(myXid);
 }
 
-void
-ProcArrayResetXminCSN(PGPROC *proc, TransactionId new_xmin)
-{
-	PGPROC	   *pgproc = &allProcs[proc->pgprocno];
-
-	/*
-	 * Note we can do this without locking because we assume that storing an
-	 * Xid is atomic.
-	 */
-	pgproc->xmin = new_xmin;
-}
-
 /*
  * ProcArrayGroupClearXid -- group XID clearing
  *
