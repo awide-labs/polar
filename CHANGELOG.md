@@ -57,6 +57,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Fix 32-bit truncation of 64-bit CSN value in pg_current_snapshot()
+  function. (XCOM-193)
 - Stopped spurious `could not open directory "polar_cache_trash"` and
   `Failed to empty trash dir for local cache` WARNINGs that flooded the
   log during initdb and startup when the local cache trash directory did
