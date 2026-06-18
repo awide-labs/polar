@@ -1259,6 +1259,40 @@ sub stop
 	}
 
 	$self->_update_pid(0);
+
+	# POLAR: A clean shutdown ('fast'/'smart') of a primary must leave the
+	# cluster in DB_SHUTDOWNED.
+	if ($mode !~ /^i/ && ($self->polar_get_node_type // '') eq 'primary')
+	{
+		my $state = $self->polar_get_cluster_state;
+		if ($state && $state ne 'shut down')
+		{
+			my $diag =
+			  "node \"$name\" did not shut down cleanly: cluster state is "
+			  . "\"$state\" after \"pg_ctl stop -m $mode\" "
+			  . "(the shutdown checkpoint likely failed, e.g. out of disk "
+			  . "space on the shared storage)";
+
+			# Pull the abnormal-shutdown / PANIC lines from the server log to
+			# show why the checkpoint failed.  Search both the pg_ctl log file
+			# and the in-datadir log/ directory (used when logging_collector is
+			# on, as in the promote consistency tests).
+			my @logs = grep { defined && -e } ($self->logfile);
+			my $logdir = $self->data_dir . '/log';
+			push @logs, glob("'$logdir'/*") if -d $logdir;
+			if (@logs)
+			{
+				my $files = join(' ', map { "'$_'" } @logs);
+				my $tail = readpipe(
+					"grep -hE 'PANIC|abnormal database system shutdown|"
+					  . "No space left on device' $files 2>/dev/null | tail -n 5"
+				);
+				$diag .= "\nserver log:\n$tail" if $tail;
+			}
+			BAIL_OUT($diag);
+		}
+	}
+
 	return 1;
 }
 
@@ -4294,6 +4328,29 @@ sub polar_get_redo_location
 	chomp($redoptr);
 	$redoptr =~ s/^\s+|\s+$//g;
 	return $redoptr;
+}
+
+=pod
+=item $node->polar_get_cluster_state($datadir)
+
+Return the "Database cluster state" string reported by pg_controldata for the
+given data directory (defaults to the node's data dir).  In shared-storage mode
+pg_controldata resolves to the shared polar_datadir control file, so this
+reflects the state of the shared cluster (e.g. "shut down", "shutting down",
+"in production").
+
+=cut
+
+sub polar_get_cluster_state
+{
+	my ($self, $datadir) = @_;
+	$datadir = $self->data_dir unless defined $datadir;
+	my $state = readpipe(
+		"pg_controldata -D $datadir | grep 'Database cluster state' | cut -d ':' -f 2"
+	);
+	chomp($state);
+	$state =~ s/^\s+|\s+$//g;
+	return $state;
 }
 
 =pod

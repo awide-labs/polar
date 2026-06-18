@@ -23,9 +23,6 @@ use PostgreSQL::Test::Cluster;
 use PostgreSQL::Test::Utils;
 use Test::More;
 
-# Temporarily disabled due to instability
-plan skip_all => 'Test temporarily disabled due to instability';
-
 my $sql_file = $ENV{PWD} . '/t/003_uncommit_trans.sql';
 my $db = 'postgres';
 my $timeout = 120;
