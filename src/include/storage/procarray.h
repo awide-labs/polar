@@ -126,7 +126,6 @@ extern XLogRecPtr polar_get_read_min_lsn(XLogRecPtr primary_consist_ptr);
 /* POLAR end */
 
 /* POLAR csn */
-extern void ProcArrayResetXminCSN(PGPROC *proc, TransactionId new_xmin);
 extern void AdvanceOldestActiveXidCSNWrapper(TransactionId myXid);
 extern void polar_set_latestObservedXid(TransactionId latest_observed_xid);
 extern TransactionId polar_get_latestObservedXid(void);
