@@ -427,7 +427,7 @@ pg_current_snapshot(PG_FUNCTION_ARGS)
 	if (polar_csn_enable)
 	{
 		snap->xip[0] = InvalidFullTransactionId;
-		snap->xip[1] = FullTransactionIdFromEpochAndXid(0, cur->polar_snapshot_csn);
+		snap->xip[1] = FullTransactionIdFromU64(cur->polar_snapshot_csn);
 	}
 	else
 	{
