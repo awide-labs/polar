@@ -8,6 +8,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Report `transaction_isolation` and `default_transaction_isolation`
+  to clients via GUC_REPORT so connection proxies can read the
+  current isolation level via the libpq ParameterStatus stream (XCOM-193)
 - Add LSN-based session-consistency wait for connection proxies:
   replicas block at snapshot acquisition until WAL replay reaches a
   target LSN, with configurable timeout and best-effort/strict modes (XCOM-193)
