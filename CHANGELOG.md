@@ -8,6 +8,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Add `'w'` back-pressure marker in ReadyForQuery and switch the
+  proxy LSN from the global WAL tip to per-session
+  `XactLastRecEnd`/`XactLastCommitEnd`, so the proxy never asks a
+  replica to wait for WAL the primary has not yet flushed (XCOM-193)
 - Add `polar_stat_node_metrics()` view in `polar_monitor` (1.0 → 1.1)
   exposing DB-PSI signals, LogIndex applier stats, and cgroup-v2 CPU
   metrics for proxy routing (XCOM-193)
