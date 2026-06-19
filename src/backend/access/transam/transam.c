@@ -490,18 +490,25 @@ polar_xact_get_csn(TransactionId transactionId, CommitSeqNo snapCSN,
 	 * If the XID is older than TransactionXmin, check the clog. Otherwise
 	 * check the csnlog.
 	 */
-	Assert(TransactionIdIsValid(TransactionXmin));
-	if (TransactionIdPrecedes(transactionId, TransactionXmin))
+	if (!TransactionIdIsValid(TransactionXmin) ||
+		TransactionIdPrecedes(transactionId, TransactionXmin))
 	{
-		if (TransactionIdGetStatus(transactionId, &lsn) == TRANSACTION_STATUS_COMMITTED)
-			csn = POLAR_CSN_FROZEN;
-		else
-			csn = POLAR_CSN_ABORTED;
+		XidStatus	status = TransactionIdGetStatus(transactionId, &lsn);
 
-		polar_cached_csn_xid = transactionId;
-		polar_cached_csn = csn;
-		cachedFetchXid = transactionId;
-		cachedCommitLSN = lsn;
+		if (status == TRANSACTION_STATUS_COMMITTED)
+			csn = POLAR_CSN_FROZEN;
+		else if (status == TRANSACTION_STATUS_ABORTED)
+			csn = POLAR_CSN_ABORTED;
+		else
+			csn = POLAR_CSN_INPROGRESS;
+
+		if (csn != POLAR_CSN_INPROGRESS)
+		{
+			polar_cached_csn_xid = transactionId;
+			polar_cached_csn = csn;
+			cachedFetchXid = transactionId;
+			cachedCommitLSN = lsn;
+		}
 	}
 	else
 	{
