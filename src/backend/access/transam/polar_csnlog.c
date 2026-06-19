@@ -646,7 +646,7 @@ polar_csnlog_get_next_active_xid(TransactionId xid,
 	SlruCtl		csnlog_ctl = polar_csnlog_get_ctl();
 	LWLock	   *held_lock = NULL;
 
-	Assert(TransactionIdIsValid(TransactionXmin));
+	Assert(TransactionIdIsValid(xid));
 
 	for (;;)
 	{
