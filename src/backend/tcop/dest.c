@@ -296,17 +296,116 @@ ReadyForQuery(CommandDest dest)
 	}
 }
 
+/*----------
+ * Transient per-statement split state, re-evaluated on every ReadyForQuery.
+ *
+ *   POLAR_RFQ_SPLITTABLE       ('x')  xids follow; the proxy may route the
+ *                                     next read to a replica using the LSN
+ *                                     we just shipped on this 'Z' message.
+ *
+ *   POLAR_RFQ_UNSPLITTABLE_WAL ('w')  xids follow; the proxy should keep
+ *                                     the next statement on the primary
+ *                                     for now and cache the xids. The
+ *                                     transaction's own WAL is not yet
+ *                                     flushed to shared storage, so the
+ *                                     walsender has not shipped it and
+ *                                     the replica cannot replay it. The
+ *                                     state usually clears by the next
+ *                                     ReadyForQuery as walwriter or a
+ *                                     peer's group-commit catches up.
+ *
+ *   POLAR_RFQ_UNSPLITTABLE_HARD (no marker)
+ *                                     sticky for the whole transaction —
+ *                                     error, lock, combocid, createenum,
+ *                                     autoxact. Pin everything to primary.
+ *
+ * The 'w' tier is the back-pressure signal that prevents handing the proxy
+ * an LSN target the replica cannot possibly reach yet. Without it the
+ * primary would still send 'x' when this session's own LSN (see
+ * polar_rfq_session_lsn) is ahead of GetFlushRecPtr(), the proxy would set
+ * polar_xact_split_wait_lsn on the replica, and the snapshot wait would
+ * either time out or return stale data while walsender is still waiting
+ * for the flush.
+ *----------
+ */
+typedef enum
+{
+	POLAR_RFQ_SPLITTABLE,		/* fully splittable */
+	POLAR_RFQ_UNSPLITTABLE_WAL, /* soft: WAL not flushed yet */
+	POLAR_RFQ_UNSPLITTABLE_HARD /* sticky: error/lock/combocid/etc */
+} PolarRfqSplitState;
+
+/*
+ * The LSN this session most recently produced: XactLastRecEnd while a
+ * write xact is still in flight, else XactLastCommitEnd left behind by
+ * the xact that just committed. Invalid if this session hasn't written
+ * anything yet.
+ */
+static inline XLogRecPtr
+polar_rfq_session_lsn(void)
+{
+	XLogRecPtr	lsn = XactLastRecEnd;
+
+	if (XLogRecPtrIsInvalid(lsn))
+		lsn = XactLastCommitEnd;
+
+	return lsn;
+}
+
+/*
+ * Caller has already computed xids via polar_xact_split_xact_info().
+ * A NULL means a sticky hard blocker fired earlier in the transaction
+ * (no xids harvested).
+ */
+static inline PolarRfqSplitState
+polar_rfq_split_state(const char *xids)
+{
+	XLogRecPtr	session_lsn;
+
+	if (xids == NULL)
+		return POLAR_RFQ_UNSPLITTABLE_HARD;
+
+	session_lsn = polar_rfq_session_lsn();
+
+	if (XLogRecPtrIsInvalid(session_lsn))
+		return POLAR_RFQ_SPLITTABLE;
+
+	if (GetFlushRecPtr(NULL) < session_lsn)
+		return POLAR_RFQ_UNSPLITTABLE_WAL;
+
+	return POLAR_RFQ_SPLITTABLE;
+}
+
 /* POLAR: send proxy info, including lsn and xact split info, also collects stats */
 static void
 polar_send_proxy_info(StringInfo buf)
 {
-	/* POLAR: send lsn to maxscale if needed */
+	/*
+	 * POLAR: send a per-session LSN to the proxy, not the global WAL tip.
+	 *
+	 * On primary, XactLastRecEnd is non-zero during an in-flight write xact
+	 * and is the proxy's correct wait target; after COMMIT it falls back to
+	 * XactLastCommitEnd (set in CommitTransaction()). For sessions that did
+	 * write, this avoids forcing the replica to replay unrelated WAL from
+	 * other backends, which is what GetXLogInsertRecPtr() would have made it
+	 * do.
+	 *
+	 * For a session that has done no writes yet, neither is set; fall back to
+	 * the global WAL tip so the proxy still receives a well-formed
+	 * cluster-state value rather than 0/0.
+	 */
 	if (MyProcPort->polar_proxy_send_lsn)
 	{
 		if (RecoveryInProgress())
 			pq_sendint64(buf, (uint64) GetXLogReplayRecPtr(NULL));
 		else
-			pq_sendint64(buf, (uint64) GetXLogInsertRecPtr());
+		{
+			XLogRecPtr	session_lsn = polar_rfq_session_lsn();
+
+			if (XLogRecPtrIsInvalid(session_lsn))
+				session_lsn = GetXLogInsertRecPtr();
+			pq_sendint64(buf, (uint64) session_lsn);
+		}
 	}
 
 	if (unlikely(polar_enable_xact_split_debug) && !RecoveryInProgress())
@@ -328,20 +427,22 @@ polar_send_proxy_info(StringInfo buf)
 		!RecoveryInProgress())
 	{
 		char	   *xids = polar_xact_split_xact_info();
+		PolarRfqSplitState split_state = polar_rfq_split_state(xids);
 
-		if (xids)
+		if (split_state != POLAR_RFQ_UNSPLITTABLE_HARD)
 		{
-			if (strlen(xids) != 0)
-			{
-				/* POLAR: send xids info */
-				pq_sendbyte(buf, 'x');
-				pq_sendstring(buf, xids);
-			}
-			pfree(xids);
+			/* See PolarRfqSplitState above for what 'x' vs 'w' means. */
+			char		marker = (split_state == POLAR_RFQ_SPLITTABLE) ? 'x' : 'w';
+
+			pq_sendbyte(buf, marker);
+			pq_sendstring(buf, xids);
 			polar_stat_update_proxy_info(polar_stat_proxy->proxy_splittable);
 		}
 		else
 			polar_stat_update_proxy_info(polar_stat_proxy->proxy_unsplittable);
+
+		if (xids)
+			pfree(xids);
 
 		switch (polar_unsplittable_reason)
 		{

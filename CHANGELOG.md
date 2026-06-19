@@ -8,6 +8,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Add `'w'` back-pressure marker in ReadyForQuery and switch the
+  proxy LSN from the global WAL tip to per-session
+  `XactLastRecEnd`/`XactLastCommitEnd`, so the proxy never asks a
+  replica to wait for WAL the primary has not yet flushed
+  (XCOM-195)
 - Add `polar_query_delay_us` and `polar_replay_min_lag_size` GUCs for
   end-to-end testing of the proxy session-consistency wait.
   (XCOM-195)
