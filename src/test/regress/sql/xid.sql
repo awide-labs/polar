@@ -68,6 +68,9 @@ select '0:1:'::pg_snapshot;
 select '12:13:0'::pg_snapshot;
 select '12:16:14,13'::pg_snapshot;
 
+-- check parsing into/from string
+select pg_current_snapshot()::text::pg_snapshot::text = pg_current_snapshot()::text;
+
 create temp table snapshot_test (
 	nr	integer,
 	snap	pg_snapshot

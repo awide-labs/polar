@@ -349,14 +349,17 @@ parse_snapshot(const char *str)
 		if (polar_csn_enable && first_val && !FullTransactionIdIsValid(val))
 		{
 			buf_add_txid(buf, val);
-			if (*str == ',')
-				str++;
-			else if (*str != '\0')
+			if (*str != ',')
+				goto bad_format;
+			str++;
+			if (*str == '\0')
 				goto bad_format;
 			buf_add_txid(buf, FullTransactionIdFromU64(strtou64(str, &endp, 10)));
 			str = endp;
 			if (*str != '\0')
 				goto bad_format;
+
+			break;
 		}
 
 		/* require the input to be in order */

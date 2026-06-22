@@ -181,6 +181,13 @@ select '12:16:14,13'::pg_snapshot;
 ERROR:  invalid input syntax for type pg_snapshot: "12:16:14,13"
 LINE 1: select '12:16:14,13'::pg_snapshot;
                ^
+-- check parsing into/from string
+select pg_current_snapshot()::text::pg_snapshot::text = pg_current_snapshot()::text;
+ ?column? 
+----------
+ t
+(1 row)
+
 create temp table snapshot_test (
 	nr	integer,
 	snap	pg_snapshot
