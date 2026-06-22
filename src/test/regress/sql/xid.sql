@@ -83,6 +83,9 @@ select * from pg_input_error_info('31:12:', 'pg_snapshot');
 select pg_input_is_valid('12:16:14,13', 'pg_snapshot');
 select * from pg_input_error_info('12:16:14,13', 'pg_snapshot');
 
+-- check parsing into/from string
+select pg_current_snapshot()::text::pg_snapshot::text = pg_current_snapshot()::text;
+
 create temp table snapshot_test (
 	nr	integer,
 	snap	pg_snapshot
