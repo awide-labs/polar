@@ -100,7 +100,8 @@ $node_replica1->start;
 $node_primary->safe_psql("postgres",
 	"create table t(t1 int primary key, t2 int);insert into t values (1, 1),(2, 3),(3, 3);select * from t;"
 );
-$node_replica1->safe_psql("postgres", "select pg_sleep(1);select * from t;");
+$node_primary->wait_for_catchup($node_replica1);
+$node_replica1->safe_psql("postgres", "select * from t;");
 
 $node_primary->stop;
 $node_replica1->stop;
