@@ -1829,21 +1829,53 @@ END
 				&& -e `printf $datadir`
 				&& $node->{_enable_data_checksums})
 			{
-				# Capture output from pg_checksums to diagnose failures
-				# Note: test should have already called stop() before END block
-				my ($stdout, $stderr);
-				my $result = IPC::Run::run [ 'pg_checksums', '-D', $datadir ],
-					'>', \$stdout, '2>', \$stderr;
-				my $checksum_exit = $?;
-				my $exit_code = ($checksum_exit >> 8);
-				
-				if (!$result || $exit_code != 0)
+				if (!defined $node->{_pid})
 				{
-					# Build diagnostic message including stdout and stderr
-					my $diag = "command \"pg_checksums -D $datadir\" exited with value $exit_code";
-					$diag .= "\nstdout: $stdout" if $stdout;
-					$diag .= "\nstderr: $stderr" if $stderr;
-					BAIL_OUT($diag);
+					# Node was stopped cleanly: run the real corruption
+					# check. Capture pg_checksums output to diagnose it.
+					my ($stdout, $stderr);
+					my $result = IPC::Run::run [ 'pg_checksums', '-D', $datadir ],
+						'>', \$stdout, '2>', \$stderr;
+					my $checksum_exit = $?;
+					my $exit_code = ($checksum_exit >> 8);
+
+					if (!$result || $exit_code != 0)
+					{
+						# Build diagnostic message including stdout and stderr
+						my $diag = "command \"pg_checksums -D $datadir\" exited with value $exit_code";
+						$diag .= "\nstdout: $stdout" if $stdout;
+						$diag .= "\nstderr: $stderr" if $stderr;
+						BAIL_OUT($diag);
+					}
+				}
+				elsif ($exit_code != 0)
+				{
+					# Node still running on a failed test: it died before
+					# stopping the node (or the node crashed).  Skip the
+					# sweep - pg_checksums refuses a cluster that is not
+					# shut down, so it would BAIL_OUT and mask the real
+					# failure.  Just emit a hint pointing at the logs.
+					my $node_name = $node->name;
+					my $diag = "Node $node_name wasn't stopped gracefully. Check the logs.";
+				
+					my @logs = grep { defined && -e } ($node->logfile);
+					my $logdir = $node->data_dir . '/log';
+		
+					push @logs, glob("'$logdir'/*") if -d $logdir;
+					push @logs, $PostgreSQL::Test::Utils::test_logfile
+						if defined $PostgreSQL::Test::Utils::test_logfile;
+						
+					if (@logs)
+					{
+						my $files = join(' ', map { "'$_'" } @logs);
+						my $tail = readpipe(
+								"grep -hE 'ERROR|PANIC|abnormal database system shutdown|"
+									. "No space left on device' $files 2>/dev/null | tail -n 5"
+						);        
+						$diag .= " Tail of server/test error logs: $tail" if $tail;
+					}
+				
+					diag($diag);
 				}
 			}
 			next;
