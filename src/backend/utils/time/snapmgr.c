@@ -2353,7 +2353,8 @@ XidInMVCCSnapshot(TransactionId xid, Snapshot snapshot)
 		XidCommitStatus xidstatus;
 
 		/* no cover line */
-		return !XidVisibleInSnapshotCSN(xid, snapshot, &xidstatus);
+		return !XidVisibleInSnapshotCSN(xid, snapshot, &xidstatus) &&
+			xidstatus != XID_ABORTED;
 	}
 
 	/*

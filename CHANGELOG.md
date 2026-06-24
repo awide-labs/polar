@@ -63,6 +63,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Fixed LISTEN sessions silently stalling on the async-notify queue when CSN
+  snapshots are enabled. A transaction that aborted after enqueuing a
+  notification was treated as still in progress, so any session reading the
+  NOTIFY queue would pin its read position at that notification and never
+  deliver notifications enqueued afterward on that channel. (XCOM-193)
 - Fixed spurious "invalid timeline 0" replication errors logged at
   startup by a DataMax node that streams WAL from another DataMax node.
   If the upstream had not yet established its own timeline (still
