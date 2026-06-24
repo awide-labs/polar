@@ -32,6 +32,7 @@ extern bool PgArchCanRestart(void);
 extern void PgArchiverMain(void) pg_attribute_noreturn();
 extern void PgArchWakeup(void);
 extern void PgArchForceDirScan(void);
+extern void polar_datamax_ArchiverCopyLoop(void);
 
 /*
  * The value of the archive_library GUC.

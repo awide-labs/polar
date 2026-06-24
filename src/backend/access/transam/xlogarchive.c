@@ -24,6 +24,7 @@
 #include "access/xlogarchive.h"
 #include "common/archive.h"
 #include "miscadmin.h"
+#include "polar_datamax/polar_datamax.h"
 #include "pgstat.h"
 #include "postmaster/startup.h"
 #include "postmaster/pgarch.h"
@@ -534,7 +535,8 @@ XLogArchiveNotify(const char *xlog)
 		PgArchForceDirScan();
 
 	/* Notify archiver that it's got something to do */
-	if (IsUnderPostmaster)
+	/* POLAR: No need to notify archiver in datamax mode */
+	if (IsUnderPostmaster && !polar_is_datamax_mode)
 		PgArchWakeup();
 }
 

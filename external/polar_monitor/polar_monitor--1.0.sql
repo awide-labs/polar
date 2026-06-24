@@ -757,3 +757,24 @@ CREATE FUNCTION polar_csnlog(OUT all_fetches int8,
 RETURNS record
 AS 'MODULE_PATHNAME', 'polar_csnlog'
 LANGUAGE C PARALLEL SAFE;
+
+-- DataMax monitoring
+CREATE FUNCTION polar_get_datamax_info(
+	OUT min_received_timeline int4,
+	OUT min_received_lsn pg_lsn,
+	OUT last_received_timeline int4,
+	OUT last_received_lsn pg_lsn,
+	OUT last_valid_received_lsn pg_lsn,
+	OUT clean_reserved_lsn pg_lsn,
+	OUT force_clean bool)
+RETURNS record
+AS 'MODULE_PATHNAME', 'polar_get_datamax_info'
+LANGUAGE C PARALLEL SAFE;
+
+CREATE FUNCTION polar_set_datamax_reserved_lsn(IN reserved_lsn pg_lsn, IN force bool)
+RETURNS bool
+AS 'MODULE_PATHNAME', 'polar_set_datamax_reserved_lsn'
+LANGUAGE C PARALLEL SAFE;
+
+REVOKE ALL ON FUNCTION polar_get_datamax_info() FROM PUBLIC;
+REVOKE ALL ON FUNCTION polar_set_datamax_reserved_lsn(pg_lsn, bool) FROM PUBLIC;

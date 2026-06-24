@@ -3631,6 +3631,7 @@ polar_copy_direction
 polar_csn_mvcc_var_cache
 polar_csnlog_ub_stat
 polar_database_state_t
+polar_datamax_valid_lsn_list
 polar_db_state_t
 polar_flush_work_t
 polar_io_cache_errcause

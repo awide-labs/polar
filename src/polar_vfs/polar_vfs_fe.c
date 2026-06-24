@@ -60,6 +60,7 @@ int			polar_hostid = PG_TOOL_HOSTID;
 int			polar_vfs_switch = POLAR_VFS_SWITCH_LOCAL;
 int			max_safe_fds = 32;	/* default if not changed */
 bool		polar_enable_shared_storage_mode = false;
+bool		polar_is_datamax_mode = false;
 
 /*
  * Record the initial node type, it is initialized by postmaster, inherited by

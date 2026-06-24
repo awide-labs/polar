@@ -8,6 +8,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Add DataMax standalone mode, a dedicated log-storage node that streams
+  WAL from an upstream primary and durably retains and archives it
+  without applying it, so it holds no primary data (XCOM-193)
 - Wrapped the `pgbulkload` extension call with the native `COPY FROM`
   command:
   - Added the following new `COPY FROM` options:

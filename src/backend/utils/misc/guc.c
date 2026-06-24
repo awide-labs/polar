@@ -216,6 +216,12 @@ int			polar_check_checkpoint_interval;
 
 bool		polar_enable_simply_redo_error_log = false;
 
+/*
+ * POLAR: when on, a standby/datamax will not finish promote until it has
+ * received all WAL the upstream holds, unless the operator forces promote.
+ */
+bool		polar_enable_promote_wait_for_walreceive_done = false;
+
 /* POLAR: buffer manager end */
 
 /* POLAR :audit */
@@ -466,6 +472,12 @@ static const struct config_enum_entry polar_save_stack_info_level_options[] = {
 	{"fatal", FATAL, false},
 	{"panic", PANIC, false},
 	{"none", 0, false},
+	{NULL, 0, false}
+};
+
+static const struct config_enum_entry polar_datamax_mode_options[] = {
+	{"off", POLAR_DATAMAX_OFF, false},
+	{"standalone", POLAR_DATAMAX_STANDALONE, false},
 	{NULL, 0, false}
 };
 
@@ -1291,6 +1303,16 @@ static struct config_bool ConfigureNamesBool[] =
 		},
 		&polar_enable_persisted_logical_slot,
 		true,
+		NULL, NULL, NULL
+	},
+	{
+		{"polar_enable_promote_wait_for_walreceive_done", PGC_POSTMASTER, UNGROUPED,
+			gettext_noop("Standby/datamax waits for all received WAL before promote."),
+			NULL,
+			GUC_NO_SHOW_ALL | GUC_NO_RESET_ALL | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_UNCHANGABLE
+		},
+		&polar_enable_promote_wait_for_walreceive_done,
+		false,
 		NULL, NULL, NULL
 	},
 	{
@@ -5786,6 +5808,66 @@ static struct config_int ConfigureNamesInt[] =
 		0, MAX_KILOBYTES,
 		NULL, NULL, NULL
 	},
+
+	{
+		{"polar_datamax_remove_archivedone_wal_timeout", PGC_SIGHUP, UNGROUPED,
+			gettext_noop("Time between remove archive done wal in datamax mode."),
+			gettext_noop("0 disables removal."),
+			GUC_UNIT_MS | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_CHANGABLE
+		},
+		&polar_datamax_remove_archivedone_wal_timeout,
+		60000,
+		0, INT_MAX,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"polar_datamax_archive_timeout", PGC_SIGHUP, UNGROUPED,
+			gettext_noop("Time between archive wal in datamax mode."),
+			gettext_noop("0 disables datamax archiving."),
+			GUC_UNIT_MS | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_CHANGABLE
+		},
+		&polar_datamax_archive_timeout,
+		60000,
+		0, INT_MAX,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"polar_datamax_save_replication_slots_timeout", PGC_SIGHUP, UNGROUPED,
+			gettext_noop("Time between saving replication slots in datamax mode."),
+			gettext_noop("0 disables periodic slot save."),
+			GUC_UNIT_MS | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_CHANGABLE
+		},
+		&polar_datamax_save_replication_slots_timeout,
+		300000,
+		0, INT_MAX,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"polar_datamax_prealloc_walfile_timeout", PGC_SIGHUP, UNGROUPED,
+			gettext_noop("Time between WAL file preallocation in datamax mode."),
+			gettext_noop("0 disables preallocation."),
+			GUC_UNIT_MS | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_CHANGABLE
+		},
+		&polar_datamax_prealloc_walfile_timeout,
+		30000,
+		0, INT_MAX,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"polar_datamax_prealloc_walfile_num", PGC_SIGHUP, UNGROUPED,
+			gettext_noop("Number of WAL files to preallocate per cycle in datamax mode."),
+			NULL,
+			GUC_NO_SHOW_ALL | GUC_NO_RESET_ALL | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_CHANGABLE
+		},
+		&polar_datamax_prealloc_walfile_num,
+		2,
+		1, INT_MAX / 1000,
+		NULL, NULL, NULL
+	},
 	/* POLAR int GUCs end */
 
 	/* End-of-list marker */
@@ -7100,6 +7182,18 @@ static struct config_enum ConfigureNamesEnum[] =
 		},
 		&polar_zero_extend_method,
 		POLAR_ZERO_EXTEND_FALLOCATE, polar_zero_extend_method_options,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"polar_datamax_mode", PGC_POSTMASTER, REPLICATION_STANDBY,
+			gettext_noop("Selects the datamax operating mode."),
+			gettext_noop("\"off\" disables datamax. \"standalone\" turns the node into a "
+						 "WAL-only datamax node when a standby.signal file is present."),
+			POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_UNCHANGABLE
+		},
+		&polar_datamax_mode,
+		POLAR_DATAMAX_OFF, polar_datamax_mode_options,
 		NULL, NULL, NULL
 	},
 

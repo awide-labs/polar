@@ -66,6 +66,17 @@ typedef uint32 TimeLineID;
 typedef uint16 RepOriginId;
 
 /*
+ * POLAR: A datamax node streams WAL from the primary into its own directory
+ * tree rather than pg_wal.  These names live here, next to the basic xlog
+ * definitions, so the core WAL path helpers in xlog_internal.h can reference
+ * the same constant the datamax module uses without core having to include
+ * the datamax feature headers.  xlogdefs.h is the lowest-level header included
+ * by both, and it is frontend-safe.
+ */
+#define POLAR_DATAMAX_DIR		"polar_datamax"
+#define POLAR_DATAMAX_WAL_DIR	POLAR_DATAMAX_DIR "/pg_wal"
+
+/*
  * This chunk of hackery attempts to determine which file sync methods
  * are available on the current platform, and to choose an appropriate
  * default method.  We assume that fsync() is always available, and that

@@ -618,6 +618,16 @@ sub init
 	mkdir $self->backup_dir;
 	mkdir $self->archive_dir;
 
+	# POLAR: a node that must adopt a specific system identifier (a datamax
+	# matching its upstream) has to run a real initdb -i; the cached initdb
+	# template carries a different system identifier, so force the initdb
+	# path by seeding $params{extra} with the -i option.
+	if (defined $params{system_identifier})
+	{
+		$params{extra} = [] unless defined $params{extra};
+		push @{ $params{extra} }, '-i', $params{system_identifier};
+	}
+
 	if (defined $ENV{INITDB_TEMPLATE} && !defined $params{extra})
 	{
 		my $template_dir = $ENV{INITDB_TEMPLATE} . "-pg";
@@ -1188,6 +1198,42 @@ sub promote
 	$self->polar_set_node_type('primary');
 	$self->polar_set_root_node($self);
 	return;
+}
+
+=pod
+
+=item $node->promote_constraint(force)
+
+POLAR: helper used by the datamax TAP suite. Wraps
+"pg_ctl promote" (or "pg_ctl promote -f" when force is non-zero) and
+returns the pg_ctl exit code so callers can assert promote was allowed
+or rejected by the polar_enable_promote_wait_for_walreceive_done
+constraint. Force promote (-f) requires the PolarDB force-promote
+subsystem in pg_ctl and the backend; absent that, promote_constraint(1)
+will fail with an unrecognized-option error.
+
+=cut
+
+sub promote_constraint
+{
+	my ($self, $force) = @_;
+	my $pgdata  = $self->data_dir;
+	my $logfile = $self->logfile;
+	my $name    = $self->name;
+
+	local %ENV = $self->_get_env();
+
+	print "### Promoting node \"$name\"" . ($force ? " (force)" : "") . "\n";
+	my @cmd = ('pg_ctl', '-D', $pgdata, '-l', $logfile, 'promote');
+	push @cmd, '-f' if $force;
+	my $ret = system(@cmd);
+
+	if ($ret == 0)
+	{
+		$self->polar_set_node_type('primary');
+		$self->polar_set_root_node($self);
+	}
+	return $ret;
 }
 
 =pod
@@ -3064,7 +3110,15 @@ This is not a test. It die()s on failure.
 
 sub wait_for_catchup
 {
-	my ($self, $standby_name, $mode, $target_lsn, $timeout) = @_;
+	my ($self, $standby_name, $mode, $target_lsn, $timeout, $return_failed,
+		$expected_res)
+	  = @_;
+	# POLAR: return_failed lets a caller request "return 0 on timeout"
+	# instead of croaking so it can assert on the result; expected_res
+	# overrides the expected poll result. The function returns 1 on
+	# success / 0 on a tolerated timeout.
+	$return_failed = defined($return_failed) ? $return_failed : 0;
+	$expected_res  = defined($expected_res)  ? $expected_res  : 't';
 	$mode = defined($mode) ? $mode : 'replay';
 	my %valid_modes =
 	  ('sent' => 1, 'write' => 1, 'flush' => 1, 'replay' => 1);
@@ -3093,8 +3147,15 @@ sub wait_for_catchup
 	my $query = qq[SELECT '$target_lsn' <= ${mode}_lsn AND state = 'streaming'
          FROM pg_catalog.pg_stat_replication
          WHERE application_name IN ('$standby_name', 'walreceiver')];
-	if (!$self->poll_query_until('postgres', $query, 't', $timeout))
+	if (!$self->poll_query_until('postgres', $query, $expected_res, $timeout))
 	{
+		# POLAR: callers that pass return_failed want a soft failure so they
+		# can assert on the result themselves rather than aborting the test.
+		if ($return_failed)
+		{
+			print "timed out waiting for catchup\n";
+			return 0;
+		}
 		if (PostgreSQL::Test::Utils::has_wal_read_bug)
 		{
 			# Mimic having skipped the test file.  If >0 tests have run, the
@@ -3111,7 +3172,7 @@ sub wait_for_catchup
 		}
 	}
 	print "done\n";
-	return;
+	return 1;
 }
 
 =pod
@@ -3938,6 +3999,121 @@ sub polar_init_replica
 
 =pod
 
+=item $node->polar_init_standby_no_recovery()
+
+Lay down a fresh standby cluster without attaching it to any upstream:
+set the node type to "standby" and run init(). The caller wires recovery
+afterwards via polar_standby_set_recovery() (and polar_standby_build_data()),
+which lets a standby stream from a node other than its storage root - e.g.
+through a datamax. For the common case where the standby streams directly
+from its root, use polar_init_standby() instead.
+
+=cut
+
+sub polar_init_standby_no_recovery
+{
+	my ($self, %params) = @_;
+
+	$self->polar_set_node_type('standby');
+	$self->init(
+		allows_streaming => 1,
+		init_polar_node => 1,
+		%params);
+	return;
+}
+
+=pod
+
+=item $node->polar_init_datamax(primary_system_identifier)
+
+Initialise a fresh datamax node: lay down an empty data dir whose
+pg_control carries the upstream's system identifier, write a
+standby.signal file and set polar_datamax_mode = standalone.
+polar_datamax_set_recovery() is expected to be called afterwards to
+plug in primary_conninfo / primary_slot_name.
+
+=cut
+
+sub polar_init_datamax
+{
+	my ($self, $primary_system_identifier) = @_;
+
+	my $pgdata = $self->data_dir;
+	my $polar_datadir = $self->polar_get_datadir;
+
+	$self->polar_set_node_type('primary');
+	$self->init(
+		allows_streaming => 1,
+		init_polar_node => 1,
+		system_identifier => $primary_system_identifier);
+
+	# Datamax never replays WAL into its data pages, so the END-of-script
+	# pg_checksums sanity sweep would never find a meaningfully-checksummed
+	# page anyway and would just complain that the cluster's pg_control
+	# state is not SHUTDOWNED. Skip it.
+	$self->{_enable_data_checksums} = 0;
+
+	mkdir $polar_datadir, 0700
+	  or BAIL_OUT("could not create polar data directory $polar_datadir");
+	PostgreSQL::Test::Utils::system_or_bail(
+		'polar-initdb.sh', "$pgdata/", "$polar_datadir/", 'primary',
+		'localfs');
+
+	# Datamax activation (polar_datamax_mode + standby.signal) is deferred
+	# to polar_datamax_set_recovery() so the operator workflow
+	#   initdb -> start writable -> CREATE EXTENSION ... -> stop ->
+	#   set recovery -> start in datamax mode
+	# still works, where DDL is rejected
+	# the moment the node enters PM_DATAMAX.
+	return;
+}
+
+=pod
+
+=item $node->polar_datamax_set_recovery(root_node)
+
+Plug in upstream connectivity for a datamax node and flip the
+polar_datamax_mode GUC to "standalone", which activates datamax mode
+on the next start. polar_init_datamax() intentionally does not do
+this so operator setup commands (CREATE EXTENSION, slot creation)
+can run against a writable cluster first.
+
+=cut
+
+sub polar_datamax_set_recovery
+{
+	my ($self, $root_node) = @_;
+	my $pgdata = $self->data_dir;
+	my $root_host = $root_node->host;
+	my $root_port = $root_node->port;
+
+	$self->polar_set_node_type('standby');
+	$self->polar_set_root_node($root_node);
+
+	# The datamax data directory already carries the upstream's system
+	# identifier (polar_init_datamax ran "initdb -i <sysid>"), so no copy of
+	# the upstream is needed: just plug in the upstream connectivity and flip
+	# polar_datamax_mode. On the next start the node enters datamax mode,
+	# streams from the upstream's smallest available WAL (invalid startpoint),
+	# and adopts the upstream's current timeline via IDENTIFY_SYSTEM.
+	$self->append_conf('postgresql.conf',
+		"primary_conninfo='host=$root_host port=$root_port dbname=postgres application_name="
+		  . $self->name
+		  . "'");
+	$self->append_conf('postgresql.conf',
+		"recovery_target_timeline='latest'");
+	$self->append_conf('postgresql.conf',
+		"primary_slot_name='" . $self->name . "'");
+	$self->append_conf('postgresql.conf',
+		"polar_datamax_mode = standalone");
+
+	open my $sig, '>', "$pgdata/standby.signal"
+	  or BAIL_OUT("could not touch $pgdata/standby.signal: $!");
+	close $sig;
+}
+
+=pod
+
 =item $node->polar_init_standby(...)
 
 Initialize a new cluster for polar standby node.
@@ -3948,15 +4124,7 @@ sub polar_init_standby
 {
 	my ($self, $root_node, %params) = @_;
 
-	my $pgdata = $self->data_dir;
-	my $polar_datadir = $self->polar_get_datadir;
-
-	$self->polar_set_node_type('standby');
-	$self->init(
-		allows_streaming => 1,
-		init_polar_node => 1,
-		%params);
-
+	$self->polar_init_standby_no_recovery(%params);
 	$self->polar_standby_set_recovery($root_node);
 	$self->polar_standby_build_data();
 	return;

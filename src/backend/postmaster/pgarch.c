@@ -34,6 +34,7 @@
 #include "lib/binaryheap.h"
 #include "libpq/pqsignal.h"
 #include "pgstat.h"
+#include "polar_datamax/polar_datamax.h"
 #include "postmaster/interrupt.h"
 #include "postmaster/pgarch.h"
 #include "storage/fd.h"
@@ -523,7 +524,14 @@ pgarch_archiveXlog(char *xlog)
 	bool		ret;
 	const char *real_pathname;
 
-	polar_make_file_path_level3(pathname, XLOGDIR, xlog);
+	/*
+	 * POLAR: datamax stores its xlog in POLAR_DATAMAX_WAL_DIR, resolved here
+	 * via polar_wal_dir().  That helper reads the polar_is_datamax_mode
+	 * global directly rather than calling polar_is_datamax(): the archiver
+	 * has detached shared memory, so it must not touch XLogCtl, which
+	 * polar_is_datamax() does.
+	 */
+	polar_make_file_path_level3(pathname, polar_wal_dir(), xlog);
 	real_pathname = polar_path_remove_protocol(pathname);
 
 	/* Report archive activity in PS display */
@@ -617,8 +625,16 @@ pgarch_readyXlog(char *xlog)
 	/*
 	 * Open the archive status directory and read through the list of files
 	 * with the .ready suffix, looking for the earliest files.
+	 *
+	 * POLAR: datamax stores archive_status under
+	 * POLAR_DATAMAX_WAL_DIR/archive_status, resolved here via
+	 * polar_wal_dir(). That helper reads the polar_is_datamax_mode global
+	 * directly rather than calling polar_is_datamax(): the archiver has
+	 * detached shared memory, so it must not touch XLogCtl, which
+	 * polar_is_datamax() does.
 	 */
-	snprintf(XLogArchiveStatusDir, MAXPGPATH, XLOGDIR "/archive_status");
+	snprintf(XLogArchiveStatusDir, MAXPGPATH, "%s/archive_status",
+			 polar_wal_dir());
 	polar_make_file_path_level2(polar_path, XLogArchiveStatusDir);
 
 	rldir = AllocateDir(polar_path);
@@ -864,3 +880,40 @@ pgarch_call_module_shutdown_cb(int code, Datum arg)
 	if (ArchiveContext.shutdown_cb != NULL)
 		ArchiveContext.shutdown_cb();
 }
+
+/* POLAR: datamax archive */
+void
+polar_datamax_ArchiverCopyLoop(void)
+{
+	if (!polar_is_datamax_mode)
+		return;
+
+	/*
+	 * POLAR: the datamax daemon (startup process) drives WAL archiving itself
+	 * rather than through the dedicated archiver process, so the per-process
+	 * workspace that PgArchiverMain() builds before pgarch_ArchiverCopyLoop()
+	 * does not exist here. Create it lazily on first use: the
+	 * pgarch_readyXlog() scan buffer and priority heap, plus the archive
+	 * callback module that the copy loop invokes. Allocate in
+	 * TopMemoryContext so it survives across daemon-loop iterations. Without
+	 * this arch_files is NULL (segfault in pgarch_ArchiverCopyLoop) and
+	 * ArchiveContext has no archive_file_cb registered. PgArch shared state
+	 * is mapped by every process, so it needs no init here.
+	 */
+	if (arch_files == NULL)
+	{
+		MemoryContext oldcontext = MemoryContextSwitchTo(TopMemoryContext);
+
+		arch_files = palloc(sizeof(struct arch_files_state));
+		arch_files->arch_files_size = 0;
+		arch_files->arch_heap = binaryheap_allocate(NUM_FILES_PER_DIRECTORY_SCAN,
+													ready_file_comparator, NULL);
+		LoadArchiveLibrary();
+
+		MemoryContextSwitchTo(oldcontext);
+	}
+
+	pgarch_ArchiverCopyLoop();
+}
+
+/* POLAR end */

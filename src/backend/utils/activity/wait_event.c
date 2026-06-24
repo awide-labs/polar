@@ -259,6 +259,10 @@ pgstat_get_wait_activity(WaitEventActivity w)
 		case WAIT_EVENT_ASYNC_LOCK_REPLAY_MAIN:
 			event_name = "AsyncLockReplayMain";
 			break;
+			/* POLAR datamax */
+		case WAIT_EVENT_DATAMAX_MAIN:
+			event_name = "DataMaxMain";
+			break;
 			/* POLAR end */
 			/* no default case, so that compiler will warn */
 	}

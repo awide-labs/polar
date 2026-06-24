@@ -40,6 +40,7 @@
 #include "access/xlogarchive.h"
 #include "access/xlogdefs.h"
 #include "pgstat.h"
+#include "polar_datamax/polar_datamax.h"
 #include "storage/fd.h"
 
 /* POLAR */
@@ -97,7 +98,13 @@ readTimeLineHistory(TimeLineID targetTLI)
 		return list_make1(entry);
 	}
 
-	if (ArchiveRecoveryRequested)
+	/*
+	 * POLAR: we need to test whether it's DataMax now to skip some restore
+	 * operation which DataMax doesn't need to care. See detail in comments of
+	 * existsTimeLineHistory.
+	 */
+	if (ArchiveRecoveryRequested && !polar_is_datamax())
+		/* POLAR end */
 	{
 		TLHistoryFileName(histfname, targetTLI);
 		fromArchive =
@@ -218,7 +225,14 @@ existsTimeLineHistory(TimeLineID probeTLI)
 	if (probeTLI == 1)
 		return false;
 
-	if (ArchiveRecoveryRequested)
+	/*
+	 * POLAR: In DataMax mode, we reuse startup as main process and it may do
+	 * something what startup do, so we don't want to change global variable.
+	 * As a result, we need to test whether it's DataMax now to skip some
+	 * restore operation which DataMax doesn't need to care.
+	 */
+	if (ArchiveRecoveryRequested && !polar_is_datamax())
+		/* POLAR end */
 	{
 		TLHistoryFileName(histfname, probeTLI);
 		RestoreArchivedFile(path, histfname, "RECOVERYHISTORY", 0, false);
@@ -322,7 +336,14 @@ writeTimeLineHistory(TimeLineID newTLI, TimeLineID parentTLI,
 	/*
 	 * If a history file exists for the parent, copy it verbatim
 	 */
-	if (ArchiveRecoveryRequested)
+
+	/*
+	 * POLAR: we need to test whether it's DataMax now to skip some restore
+	 * operation which DataMax doesn't need to care. See detail in comments of
+	 * existsTimeLineHistory.
+	 */
+	if (ArchiveRecoveryRequested && !polar_is_datamax())
+		/* POLAR end */
 	{
 		TLHistoryFileName(histfname, parentTLI);
 		RestoreArchivedFile(path, histfname, "RECOVERYHISTORY", 0, false);

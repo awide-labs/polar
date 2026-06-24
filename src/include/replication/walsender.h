@@ -30,6 +30,7 @@ typedef enum polar_repl_mode_t
 	POLAR_REPL_DEFAULT,			/* Default mode, as original one */
 	POLAR_REPL_REPLICA,			/* Replica mode */
 	POLAR_REPL_STANDBY,			/* Standby mode */
+	POLAR_REPL_SA_DATAMAX,		/* Standalone datamax mode */
 } polar_repl_mode_t;
 
 /* POLAR end */

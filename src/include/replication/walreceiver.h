@@ -39,6 +39,37 @@ extern PGDLLIMPORT bool hot_standby_feedback;
 /* Can we allow the standby to accept replication connection from another standby? */
 #define AllowCascadeReplication() (EnableHotStandby && max_wal_senders > 0)
 
+/* POLAR: promote-wait subsystem */
+/* values and corresponding operation of WalRcv->polar_promote_trigger_state */
+#define POLAR_PROMOTE_TRIGGER_INITIAL_STATE		0x00
+#define POLAR_RECEIVE_PROMOTE_TRIGGER			0x01
+#define POLAR_RECEIVE_PROMOTE_REPLY				0x02
+
+#define POLAR_RESET_PROMOTE_TRIGGER_STATE() (pg_atomic_write_u32(&WalRcv->polar_promote_trigger_state, POLAR_PROMOTE_TRIGGER_INITIAL_STATE))
+#define POLAR_SET_RECEIVE_PROMOTE_TRIGGER() (pg_atomic_write_u32(&WalRcv->polar_promote_trigger_state, POLAR_RECEIVE_PROMOTE_TRIGGER))
+#define POLAR_SET_RECEIVE_PROMOTE_REPLY() (pg_atomic_write_u32(&WalRcv->polar_promote_trigger_state, POLAR_RECEIVE_PROMOTE_REPLY))
+
+#define POLAR_PROMOTE_IS_TRIGGERED() (pg_atomic_read_u32(&WalRcv->polar_promote_trigger_state) == POLAR_RECEIVE_PROMOTE_TRIGGER)
+#define POLAR_PROMOTE_REPLY_IS_RECEIVED() (pg_atomic_read_u32(&WalRcv->polar_promote_trigger_state) == POLAR_RECEIVE_PROMOTE_REPLY)
+
+/* values and corresponding operation of WalRcv->polar_is_promote_allowed */
+#define POLAR_PROMOTE_ALLOWED_INITIAL_STATE		0x00
+#define POLAR_PROMOTE_ALLOWED					0x01
+#define POLAR_PROMOTE_NOT_ALLOWED				0x02
+
+#define POLAR_RESET_PROMOTE_ALLOWED_STATE() (pg_atomic_write_u32(&WalRcv->polar_is_promote_allowed, POLAR_PROMOTE_ALLOWED_INITIAL_STATE))
+#define POLAR_SET_PROMOTE_ALLOWED() (pg_atomic_write_u32(&WalRcv->polar_is_promote_allowed, POLAR_PROMOTE_ALLOWED))
+#define POLAR_SET_PROMOTE_NOT_ALLOWED() (pg_atomic_write_u32(&WalRcv->polar_is_promote_allowed, POLAR_PROMOTE_NOT_ALLOWED))
+
+#define POLAR_IS_PROMOTE_ALLOWED() (pg_atomic_read_u32(&WalRcv->polar_is_promote_allowed) == POLAR_PROMOTE_ALLOWED)
+#define POLAR_IS_PROMOTE_NOT_ALLOWED() (pg_atomic_read_u32(&WalRcv->polar_is_promote_allowed) == POLAR_PROMOTE_NOT_ALLOWED)
+
+/* corresponding operation of WalRcv->polar_end_lsn */
+#define POLAR_SET_END_LSN_INVALID() (pg_atomic_write_u64(&WalRcv->polar_end_lsn, InvalidXLogRecPtr))
+#define POLAR_SET_END_LSN(end_lsn) (pg_atomic_write_u64(&WalRcv->polar_end_lsn, end_lsn))
+#define POLAR_IS_END_LSN_INVALID() (pg_atomic_read_u64(&WalRcv->polar_end_lsn) == InvalidXLogRecPtr)
+/* POLAR end */
+
 /*
  * Values for WalRcv->walRcvState.
  */
@@ -163,6 +194,21 @@ typedef struct
 	pg_atomic_uint64 curr_primary_consistent_lsn;
 	/* POLAR: set true when receive XLOG meta from xlog queue */
 	bool		polar_use_xlog_queue;
+
+	/*
+	 * POLAR: promote-wait subsystem state.
+	 *
+	 * polar_promote_trigger_state: 0x00 initial, 0x01 received promote
+	 * trigger, 0x02 received promote reply. polar_is_promote_allowed: 0x00
+	 * initial, 0x01 promote allowed, 0x02 promote not allowed. polar_end_lsn:
+	 * end LSN of the upstream stream; when received LSN reaches it, promote
+	 * is allowed to be executed. polar_latest_flush_lsn: latest flush LSN of
+	 * this node.
+	 */
+	pg_atomic_uint32 polar_promote_trigger_state;
+	pg_atomic_uint32 polar_is_promote_allowed;
+	pg_atomic_uint64 polar_end_lsn;
+	pg_atomic_uint64 polar_latest_flush_lsn;
 } WalRcvData;
 
 extern PGDLLIMPORT WalRcvData *WalRcv;
@@ -482,5 +528,15 @@ extern void WalRcvForceReply(void);
 extern void polar_set_primary_consistent_lsn(XLogRecPtr new_consistent_lsn);
 extern XLogRecPtr polar_get_primary_consistent_lsn(void);
 extern TimestampTz polar_get_walrcv_last_msg_receipt_time(void);
+
+/* POLAR: promote-wait subsystem */
+extern bool polar_send_promote_request(void);
+extern void polar_walrcv_send_promote(bool polar_request_reply);
+extern void polar_process_walsender_reply(bool is_promote_allowed, XLogRecPtr end_lsn);
+extern XLogRecPtr polar_promote_get_end_lsn(void);
+extern bool polar_upstream_node_is_alive(void);
+extern void polar_promote_check_received_all_wal(void);
+
+/* POLAR end */
 
 #endif							/* _WALRECEIVER_H */

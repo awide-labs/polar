@@ -45,6 +45,7 @@
 #include "common/string.h"
 #include "miscadmin.h"
 #include "pgstat.h"
+#include "polar_datamax/polar_datamax.h"
 #include "replication/slot.h"
 #include "storage/fd.h"
 #include "storage/ipc.h"
@@ -1340,7 +1341,14 @@ ReplicationSlotReserveWal(void)
 	}
 	else
 	{
-		restart_lsn = GetRedoRecPtr();
+		/*
+		 * Polar: set restart lsn as the min received lsn when current node is
+		 * datamax so that we can send wal as much as possible
+		 */
+		if (!polar_is_datamax())
+			restart_lsn = GetRedoRecPtr();
+		else
+			restart_lsn = polar_datamax_get_min_received_lsn(polar_datamax_ctl, NULL);
 		SpinLockAcquire(&slot->mutex);
 		slot->data.restart_lsn = restart_lsn;
 		SpinLockRelease(&slot->mutex);

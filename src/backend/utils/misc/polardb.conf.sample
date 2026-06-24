@@ -20,3 +20,14 @@ polar_logindex_mem_size=64MB
 polar_xlog_queue_buffers=64MB
 polar_xlog_page_buffers=64MB
 polar_has_partial_write = on
+
+#------------------------------------------------------------------------------
+# DataMax (off by default; set to "standalone" together with standby.signal to
+# turn the node into a WAL-only datamax receiver).
+#------------------------------------------------------------------------------
+#polar_datamax_mode = off
+#polar_datamax_archive_timeout = 60s
+#polar_datamax_remove_archivedone_wal_timeout = 60s
+#polar_datamax_save_replication_slots_timeout = 5min
+#polar_datamax_prealloc_walfile_timeout = 30s
+#polar_datamax_prealloc_walfile_num = 2

@@ -65,6 +65,11 @@ Relation	boot_reldesc;		/* current relation descriptor */
 Form_pg_attribute attrtypes[MAXATTR];	/* points to attribute info */
 int			numattr;			/* number of attributes for cur. rel */
 
+/* POLAR: save specific system identifier given by initdb */
+uint64		polar_sysidentifier = 0;
+
+/* POLAR end */
+
 
 /*
  * Basic information associated with each type.  This is used before
@@ -221,7 +226,7 @@ BootstrapModeMain(int argc, char *argv[], bool check_only)
 	argv++;
 	argc--;
 
-	while ((flag = getopt(argc, argv, "B:c:d:D:Fkr:X:-:")) != -1)
+	while ((flag = getopt(argc, argv, "B:c:d:D:Fkr:X:-:i:")) != -1)
 	{
 		switch (flag)
 		{
@@ -292,6 +297,30 @@ BootstrapModeMain(int argc, char *argv[], bool check_only)
 						free(value);
 					break;
 				}
+				/* POLAR: record specific system_identifier */
+			case 'i':
+				{
+					char	   *parse_end;
+
+					errno = 0;
+					polar_sysidentifier = strtoull(optarg, &parse_end, 10);
+
+					/*
+					 * Reject anything that is not a nonzero unsigned decimal
+					 * integer: a bad value would otherwise parse to 0 and be
+					 * silently replaced by a generated identifier (see
+					 * BootStrapXLOG), so a datamax node would never match its
+					 * upstream's IDENTIFY_SYSTEM check.
+					 */
+					if (errno != 0 || *parse_end != '\0' ||
+						optarg[0] < '0' || optarg[0] > '9' ||
+						polar_sysidentifier == 0)
+						ereport(ERROR,
+								(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+								 errmsg("-i requires a nonzero unsigned integer system identifier")));
+					break;
+				}
+				/* POLAR end */
 			default:
 				write_stderr("Try \"%s --help\" for more information.\n",
 							 progname);

@@ -25,6 +25,7 @@
 #include "access/xlog_internal.h"
 #include "access/xlogrecovery.h"
 #include "pgstat.h"
+#include "polar_datamax/polar_datamax.h"
 #include "postmaster/startup.h"
 #include "replication/walreceiver.h"
 #include "storage/pmsignal.h"
@@ -70,6 +71,15 @@ WalRcvShmemInit(void)
 		SpinLockInit(&WalRcv->mutex);
 		pg_atomic_init_u64(&WalRcv->writtenUpto, 0);
 		pg_atomic_init_u64(&WalRcv->curr_primary_consistent_lsn, InvalidXLogRecPtr);
+
+		/* POLAR: promote-wait subsystem state */
+		pg_atomic_init_u32(&WalRcv->polar_promote_trigger_state,
+						   POLAR_PROMOTE_TRIGGER_INITIAL_STATE);
+		pg_atomic_init_u32(&WalRcv->polar_is_promote_allowed,
+						   POLAR_PROMOTE_ALLOWED_INITIAL_STATE);
+		pg_atomic_init_u64(&WalRcv->polar_end_lsn, InvalidXLogRecPtr);
+		pg_atomic_init_u64(&WalRcv->polar_latest_flush_lsn, InvalidXLogRecPtr);
+
 		WalRcv->latch = NULL;
 
 		if (polar_logindex_redo_instance)
@@ -318,6 +328,34 @@ RequestXLogStreaming(TimeLineID tli, XLogRecPtr recptr, const char *conninfo,
 		walrcv->flushedUpto = recptr;
 		walrcv->receivedTLI = tli;
 		walrcv->latestChunkStart = recptr;
+	}
+
+	/*
+	 * POLAR: when no timeline switch, set receivedUpto and latestChunkStart
+	 * to the last valid lsn when request xlog streaming so that when we
+	 * re-receive a wal segment file(there may be wrong data in the wal file
+	 * so we need to re-receive it) we can correctly judge whether we have
+	 * received new wal in WaitForWALToBecomeAvailable func according to new
+	 * receivedUpto rather than the previous one, which maybe greater than the
+	 * wal we actually received in current streaming process. similarly, set
+	 * latestChunkStart each time so that we can update XLogReceiptTime
+	 * correctly when we have replayed new wal
+	 */
+	else
+	{
+		TimeLineID	valid_tli = 0;
+		XLogRecPtr	valid_lsn = InvalidXLogRecPtr;
+
+		valid_lsn = polar_is_datamax() ? polar_datamax_get_last_valid_received_lsn(polar_datamax_ctl, &valid_tli) :
+			GetXLogReplayRecPtr(&valid_tli);
+		/* POLAR: set receivedUpto as the max value */
+		if (valid_lsn > recptr)
+		{
+			walrcv->latestChunkStart = walrcv->flushedUpto = valid_lsn;
+			walrcv->receivedTLI = valid_tli;
+		}
+		else
+			walrcv->latestChunkStart = walrcv->flushedUpto = recptr;
 	}
 	walrcv->receiveStart = recptr;
 	walrcv->receiveStartTLI = tli;

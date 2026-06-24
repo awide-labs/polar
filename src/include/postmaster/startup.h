@@ -32,6 +32,10 @@ extern void PostRestoreCommand(void);
 extern bool IsPromoteSignaled(void);
 extern void ResetPromoteSignaled(void);
 
+/* POLAR: promote-wait subsystem */
+extern void polar_clear_promote_file(void);
+extern bool polar_is_promote_ready(void);
+
 extern void enable_startup_progress_timeout(void);
 extern void disable_startup_progress_timeout(void);
 extern void begin_startup_progress_phase(void);

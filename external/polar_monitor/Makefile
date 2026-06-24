@@ -7,6 +7,7 @@ OBJS += polar_monitor_proxy.o
 OBJS += polar_monitor_rsc.o
 OBJS += polar_monitor_logindex.o polar_monitor_xlogbuf.o
 OBJS += polar_monitor_async_lock_replay.o
+OBJS += polar_monitor_datamax.o
 
 EXTENSION = polar_monitor
 DATA = polar_monitor--1.0.sql

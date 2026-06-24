@@ -28,6 +28,7 @@
 #include "commands/async.h"
 #include "miscadmin.h"
 #include "pgstat.h"
+#include "polar_datamax/polar_datamax.h"
 #include "postmaster/autovacuum.h"
 #include "postmaster/bgworker_internals.h"
 #include "postmaster/bgwriter.h"
@@ -148,6 +149,9 @@ CalculateShmemSize(int *num_semaphores)
 	size = add_size(size, CommitTsShmemSize());
 	/* POLAR csn */
 	size = add_size(size, polar_csnlog_shmem_size());
+	/* POLAR end */
+	/* POLAR datamax */
+	size = add_size(size, polar_datamax_shmem_size());
 	/* POLAR end */
 	size = add_size(size, SUBTRANSShmemSize());
 	size = add_size(size, TwoPhaseShmemSize());
@@ -398,6 +402,9 @@ CreateSharedMemoryAndSemaphores(void)
 	CommitTsShmemInit();
 	/* POLAR csn */
 	polar_csnlog_shmem_init();
+	/* POLAR end */
+	/* POLAR datamax */
+	polar_datamax_shmem_init();
 	/* POLAR end */
 	SUBTRANSShmemInit();
 	MultiXactShmemInit();

@@ -215,8 +215,12 @@ extern int	XLogFileOpen(XLogSegNo segno, TimeLineID tli);
 
 extern void CheckXLogRemoved(XLogSegNo segno, TimeLineID tli);
 extern XLogSegNo XLogGetLastRemovedSegno(void);
+
+/* POLAR: exported so the datamax module can advance lastRemovedSegNo */
+extern void UpdateLastRemovedPtr(char *filename);
 extern void XLogSetAsyncXactLSN(XLogRecPtr record);
 extern void XLogSetReplicationSlotMinimumLSN(XLogRecPtr lsn);
+extern XLogRecPtr XLogGetReplicationSlotMinimumLSN(void);
 
 extern void xlog_redo(XLogReaderState *record);
 extern void xlog_desc(StringInfo buf, XLogReaderState *record);
@@ -263,6 +267,7 @@ extern void assign_checkpoint_completion_target(double newval, void *extra);
 #define polar_is_primary()	(polar_get_node_type() == POLAR_PRIMARY)
 #define polar_is_replica()	(polar_get_node_type() == POLAR_REPLICA)
 #define polar_is_standby()	(polar_get_node_type() == POLAR_STANDBY)
+#define polar_is_datamax()	(polar_get_node_type() == POLAR_STANDALONE_DATAMAX)
 /* Only work during shared memory is attached */
 #define polar_vfs_is_writable() ((polar_get_vfs_state() & POLAR_VFS_RDWR) != 0)
 
@@ -343,6 +348,10 @@ extern SessionBackupState get_backup_status(void);
 /* files to signal promotion to primary */
 #define PROMOTE_SIGNAL_FILE		"promote"
 
+/* POLAR: signal files for the promote-wait subsystem */
+#define POLAR_FORCE_PROMOTE_SIGNAL_FILE		"polar_force_promote"
+#define POLAR_PROMOTE_NOT_ALLOWED_FILE		"polar_promote_not_allowed"
+
 /* POLAR */
 extern XLogRecPtr polar_calc_min_used_lsn(bool is_contain_replication_slot);
 extern void polar_request_last_restartpoint(void);
@@ -387,6 +396,7 @@ extern bool polar_wal_pipeline_notify(int ident);
 extern void polar_wal_pipeline_set_last_notify_lsn(int ident, XLogRecPtr last_notify_lsn);
 extern void polar_wal_pipeline_set_ready_write_lsn(XLogRecPtr ready_write_lsn);
 extern XLogRecPtr polar_wal_pipeline_get_current_insert_lsn(void);
+extern XLogRecPtr polar_get_last_valid_lsn(void);
 extern XLogRecPtr polar_wal_pipeline_get_continuous_insert_lsn(void);
 extern XLogRecPtr polar_wal_pipeline_get_write_lsn(void);
 extern XLogRecPtr polar_wal_pipeline_get_flush_lsn(void);

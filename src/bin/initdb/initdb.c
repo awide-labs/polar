@@ -162,6 +162,11 @@ static bool do_sync = true;
 static bool sync_only = false;
 static bool show_setting = false;
 static bool data_checksums = false;
+
+/* POLAR: specific system identifier passed down to the bootstrap backend */
+static char *polar_system_identifier = NULL;
+
+/* POLAR end */
 static char *xlog_dir = NULL;
 static char *str_wal_segment_size_mb = NULL;
 static int	wal_segment_size_mb;
@@ -1443,13 +1448,16 @@ bootstrap_template1(void)
 	/* Also ensure backend isn't confused by this environment var: */
 	unsetenv("PGCLIENTENCODING");
 
+	/* POLAR: add specific system identifier */
 	snprintf(cmd, sizeof(cmd),
-			 "\"%s\" --boot -X %d %s %s %s %s",
+			 "\"%s\" --boot -X %d %s %s %s %s %s %s",
 			 backend_exec,
 			 wal_segment_size_mb * (1024 * 1024),
 			 data_checksums ? "-k" : "",
 			 boot_options, extra_options,
-			 debug ? "-d 5" : "");
+			 debug ? "-d 5" : "",
+			 polar_system_identifier ? "-i" : "",
+			 polar_system_identifier ? polar_system_identifier : "");
 
 
 	PG_CMD_OPEN;
@@ -2283,6 +2291,7 @@ usage(const char *progname)
 	printf(_("  -E, --encoding=ENCODING   set default encoding for new databases\n"));
 	printf(_("  -g, --allow-group-access  allow group read/execute on data directory\n"));
 	printf(_("      --icu-locale=LOCALE   set ICU locale ID for new databases\n"));
+	printf(_("  -i, --system-identifier=SYSID  specify the database system identifier\n"));
 	printf(_("  -k, --data-checksums      use data page checksums\n"));
 	printf(_("      --locale=LOCALE       set default locale for new databases\n"));
 	printf(_("      --lc-collate=, --lc-ctype=, --lc-messages=LOCALE\n"
@@ -3007,6 +3016,8 @@ main(int argc, char *argv[])
 		{"discard-caches", no_argument, NULL, 14},
 		{"locale-provider", required_argument, NULL, 15},
 		{"icu-locale", required_argument, NULL, 16},
+		/* POLAR: specific system identifier */
+		{"system-identifier", required_argument, NULL, 'i'},
 		/* POLAR: parameters manage */
 		{"deploy-mode", required_argument, NULL, 17},
 		{NULL, 0, NULL, 0}
@@ -3050,7 +3061,7 @@ main(int argc, char *argv[])
 
 	/* process command-line options */
 
-	while ((c = getopt_long(argc, argv, "A:dD:E:gkL:nNsST:U:WX:", long_options, &option_index)) != -1)
+	while ((c = getopt_long(argc, argv, "A:dD:E:gi:kL:nNsST:U:WX:", long_options, &option_index)) != -1)
 	{
 		switch (c)
 		{
@@ -3099,6 +3110,32 @@ main(int argc, char *argv[])
 			case 'S':
 				sync_only = true;
 				break;
+				/* POLAR: specific system identifier */
+			case 'i':
+				{
+					/*
+					 * The value is forwarded to the bootstrap backend's -i
+					 * option and interpolated unquoted into a shell command,
+					 * so accept only a nonzero unsigned decimal integer (the
+					 * form pg_controldata prints).  Tolerate surrounding
+					 * whitespace and store the canonical decimal form so the
+					 * interpolated value is always shell-safe.
+					 */
+					const char *digits = optarg + strspn(optarg, " \t\n\r\v\f");
+					char	   *parse_end;
+					unsigned long long sysid;
+
+					errno = 0;
+					sysid = strtoull(digits, &parse_end, 10);
+					if (errno != 0 || digits[0] < '0' || digits[0] > '9' ||
+						parse_end[strspn(parse_end, " \t\n\r\v\f")] != '\0' ||
+						sysid == 0)
+						pg_fatal("system identifier specified with -i must be a nonzero unsigned integer");
+
+					polar_system_identifier = psprintf(UINT64_FORMAT, (uint64) sysid);
+					break;
+				}
+				/* POLAR end */
 			case 'k':
 				data_checksums = true;
 				break;

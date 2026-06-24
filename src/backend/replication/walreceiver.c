@@ -66,9 +66,11 @@
 #include "libpq/pqsignal.h"
 #include "miscadmin.h"
 #include "pgstat.h"
+#include "polar_datamax/polar_datamax.h"
 #include "postmaster/interrupt.h"
 #include "replication/walreceiver.h"
 #include "replication/walsender.h"
+#include "replication/walsender_private.h"
 #include "storage/ipc.h"
 #include "storage/pmsignal.h"
 #include "storage/proc.h"
@@ -104,6 +106,9 @@ WalReceiverFunctionsType *WalReceiverFunctions = NULL;
 
 #define NAPTIME_PER_CYCLE 100	/* max sleep time between cycles (100ms) */
 
+/* POLAR: timeout (ms) for re-sending a promote request to the walsender */
+#define POLAR_SEND_PROMOTE_REQUEST_TIMEOUT	500
+
 /*
  * These variables are used similarly to openLogFile/SegNo,
  * but for walreceiver to write the XLOG. recvFileTLI is the TimeLineID
@@ -112,6 +117,13 @@ WalReceiverFunctionsType *WalReceiverFunctions = NULL;
 static int	recvFile = -1;
 static TimeLineID recvFileTLI = 0;
 static XLogSegNo recvSegNo = 0;
+
+/*
+ * POLAR: set true between IDENTIFY_SYSTEM and the first received WAL record
+ * when an initial datamax node negotiated its streaming timeline from the
+ * primary; used to seed the datamax meta's min received info once.
+ */
+static bool polar_is_initial_datamax = false;
 
 /*
  * LogstreamResult indicates the byte positions that we have already
@@ -125,6 +137,13 @@ static struct
 
 static StringInfoData reply_message;
 static StringInfoData incoming_message;
+
+/*
+ * POLAR: in datamax mode, records the primary's last valid LSN reported
+ * with each WAL message so the datamax can advance its own last valid
+ * received LSN only up to a record boundary the primary has confirmed.
+ */
+static polar_datamax_valid_lsn_list *polar_datamax_received_valid_lsn_list = NULL;
 
 /* Prototypes for private functions */
 static void WalRcvFetchTimeLineHistoryFiles(TimeLineID first, TimeLineID last);
@@ -277,6 +296,15 @@ WalReceiverMain(void)
 
 	pg_atomic_write_u64(&WalRcv->writtenUpto, 0);
 
+	/*
+	 * POLAR: decide once, for the whole life of this walreceiver, whether WAL
+	 * path resolution should route through POLAR_DATAMAX_WAL_DIR. On a
+	 * datamax node every segment this process writes lives there; on any
+	 * other node it stays in the regular pg_wal. Node type is fixed at
+	 * startup, so set the flag here and never toggle it per-operation.
+	 */
+	polar_is_datamax_mode = polar_is_datamax();
+
 	/* POLAR:notify startup to read wal file instead of logindex queue */
 	before_shmem_exit(polar_notify_read_wal_file, 0);
 
@@ -348,6 +376,20 @@ WalReceiverMain(void)
 		pfree(sender_host);
 
 	first_stream = true;
+
+	/* POLAR: create and init the valid-LSN list when in datamax mode */
+	if (polar_is_datamax())
+	{
+		polar_datamax_received_valid_lsn_list = polar_datamax_create_valid_lsn_list();
+
+		/*
+		 * POLAR: register the cleanup handler only after the list exists, so
+		 * before_shmem_exit() captures the real pointer instead of NULL.
+		 */
+		before_shmem_exit(polar_datamax_free_valid_lsn_list,
+						  PointerGetDatum(polar_datamax_received_valid_lsn_list));
+	}
+
 	for (;;)
 	{
 		char	   *primary_sysid;
@@ -379,6 +421,30 @@ WalReceiverMain(void)
 					 errdetail("The primary's identifier is %s, the standby's identifier is %s.",
 							   primary_sysid, standby_sysid)));
 		}
+
+		/* POLAR: update datamax timeline if current is an initial one */
+		if (polar_is_datamax() && polar_datamax_is_initial(polar_datamax_ctl))
+		{
+			Assert(startpointTLI == POLAR_INVALID_TIMELINE_ID);
+
+			polar_is_initial_datamax = true;
+
+			/*
+			 * POLAR: an initial datamax requested streaming with an invalid
+			 * timeline / lsn, so fetch as much WAL as possible from the
+			 * primary's current timeline: adopt the primary's timeline that
+			 * IDENTIFY_SYSTEM just reported. The start lsn stays invalid, so
+			 * the primary's walsender computes the smallest available lsn.
+			 */
+			SpinLockAcquire(&walrcv->mutex);
+			walrcv->receiveStartTLI = startpointTLI = primaryTLI;
+			SpinLockRelease(&walrcv->mutex);
+			ereport(LOG,
+					(errmsg("initial datamax node updated requested streaming timeline with primary's current one %u",
+							primaryTLI)));
+		}
+		else
+			polar_is_initial_datamax = false;
 
 		/*
 		 * Confirm that the current timeline of the primary is the same or
@@ -453,7 +519,16 @@ WalReceiverMain(void)
 			first_stream = false;
 
 			/* Initialize LogstreamResult and buffers for processing messages */
-			LogstreamResult.Write = LogstreamResult.Flush = GetXLogReplayRecPtr(NULL);
+			if (!polar_is_datamax())
+				LogstreamResult.Write = LogstreamResult.Flush = GetXLogReplayRecPtr(NULL);
+
+			/*
+			 * POLAR: datamax does not replay, the last received lsn comes
+			 * from the datamax meta instead.
+			 */
+			else
+				LogstreamResult.Write = LogstreamResult.Flush =
+					polar_datamax_get_last_valid_received_lsn(polar_datamax_ctl, NULL);
 			initStringInfo(&reply_message);
 			initStringInfo(&incoming_message);
 
@@ -488,6 +563,16 @@ WalReceiverMain(void)
 					ProcessConfigFile(PGC_SIGHUP);
 					XLogWalRcvSendHSFeedback(true);
 				}
+
+				/* POLAR: ask the walsender whether promote can be executed */
+				if (polar_send_promote_request())
+				{
+					elog(LOG, "ask walsender whether promote can be executed");
+					polar_walrcv_send_promote(true);
+				}
+
+				/* POLAR: if all WAL has been received, promote is allowed */
+				polar_promote_check_received_all_wal();
 
 				/* See if we can read data immediately */
 				len = walrcv_receive(wrconn, &buf, &wait_fd);
@@ -767,6 +852,18 @@ WalRcvFetchTimeLineHistoryFiles(TimeLineID first, TimeLineID last)
 {
 	TimeLineID	tli;
 
+	/* WalReceiverMain() pinned the flag to the node type for this process */
+	Assert(polar_is_datamax_mode == polar_is_datamax());
+
+	/*
+	 * POLAR: a datamax keeps its WAL and timeline history under
+	 * POLAR_DATAMAX_WAL_DIR rather than the regular pg_wal.
+	 * existsTimeLineHistory() and writeTimeLineHistoryFile() pick the
+	 * directory from polar_is_datamax_mode, which WalReceiverMain() already
+	 * pinned for the life of this process. Otherwise the history file would
+	 * be written to (and looked up in) the wrong directory, and the datamax
+	 * would never see the upstream timeline switch.
+	 */
 	for (tli = first; tli <= last; tli++)
 	{
 		/* there's no history file for timeline 1 */
@@ -868,6 +965,12 @@ XLogWalRcvProcessMsg(unsigned char type, char *buf, Size len, TimeLineID tli)
 	/* POLAR */
 	XLogRecPtr	consistent_lsn;
 
+	/* POLAR: extra fields carried by the datamax 'e' message */
+	uint32		polar_primary_next_xid;
+	uint32		polar_primary_epoch;
+	XLogRecPtr	polar_primary_last_lsn;
+	XLogSegNo	polar_upstream_last_removed_segno;
+
 	resetStringInfo(&incoming_message);
 
 	switch (type)
@@ -891,6 +994,65 @@ XLogWalRcvProcessMsg(unsigned char type, char *buf, Size len, TimeLineID tli)
 				buf += hdrlen;
 				len -= hdrlen;
 				XLogWalRcvWrite(buf, len, dataStart, tli);
+				break;
+			}
+
+			/*
+			 * POLAR: WAL records for a datamax node.  Same as 'w', but also
+			 * carries the primary's nextXid and epoch (needed to feed back a
+			 * sane standby xmin), the primary's last valid LSN (used to keep
+			 * WAL consistent with the upstream node) and the primary's last
+			 * removed segment number (so the datamax does not remove WAL
+			 * which has not been removed upstream).
+			 */
+		case 'e':
+			{
+				/* copy message to StringInfo */
+				hdrlen = sizeof(int64) + sizeof(int64) + sizeof(int32) +
+					sizeof(int32) + sizeof(int64) + sizeof(int64) + sizeof(int64);
+				if (len < hdrlen)
+					ereport(ERROR,
+							(errcode(ERRCODE_PROTOCOL_VIOLATION),
+							 errmsg_internal("invalid WAL message received from primary")));
+				appendBinaryStringInfo(&incoming_message, buf, hdrlen);
+
+				/* read the fields */
+				dataStart = pq_getmsgint64(&incoming_message);
+				walEnd = pq_getmsgint64(&incoming_message);
+				polar_primary_next_xid = pq_getmsgint(&incoming_message, 4);
+				polar_primary_epoch = pq_getmsgint(&incoming_message, 4);
+				polar_primary_last_lsn = pq_getmsgint64(&incoming_message);
+				polar_upstream_last_removed_segno = pq_getmsgint64(&incoming_message);
+				sendTime = pq_getmsgint64(&incoming_message);
+				ProcessWalSndrMessage(walEnd, sendTime);
+
+				/* record nextXid and epoch of the primary */
+				POLAR_DATAMAX_SET_PRIMARY_NEXTXID(polar_primary_next_xid);
+				POLAR_DATAMAX_SET_PRIMARY_NEXTEPOCH(polar_primary_epoch);
+				/* record polar_primary_last_lsn into the list */
+				polar_datamax_insert_last_valid_lsn(polar_datamax_received_valid_lsn_list,
+													polar_primary_last_lsn);
+				/* record polar_upstream_last_removed_segno */
+				polar_datamax_update_upstream_last_removed_segno(polar_datamax_ctl,
+																 polar_upstream_last_removed_segno);
+
+				buf += hdrlen;
+				len -= hdrlen;
+				XLogWalRcvWrite(buf, len, dataStart, tli);
+
+				/*
+				 * POLAR: seed the datamax meta's min received info once, from
+				 * the first WAL record received by an initial datamax node.
+				 * The timeline was negotiated from the primary in
+				 * WalReceiverMain (startpointTLI = primaryTLI), and dataStart
+				 * is the smallest lsn the primary chose to stream.
+				 */
+				if (unlikely(polar_is_initial_datamax))
+				{
+					polar_datamax_update_min_received_info(polar_datamax_ctl, tli, dataStart);
+					polar_datamax_write_meta(polar_datamax_ctl, true);
+					polar_is_initial_datamax = false;
+				}
 				break;
 			}
 		case 'k':				/* Keepalive */
@@ -1069,6 +1231,31 @@ XLogWalRcvProcessMsg(unsigned char type, char *buf, Size len, TimeLineID tli)
 				}
 				break;
 			}
+
+			/*
+			 * POLAR: end_lsn reply from walsender; when received lsn =
+			 * end_lsn, promote is ready
+			 */
+		case 'l':
+			{
+				bool		is_promote_allowed;
+				XLogRecPtr	end_lsn;
+
+				hdrlen = sizeof(char) + sizeof(int64);
+				if (len != hdrlen)
+					ereport(ERROR,
+							(errcode(ERRCODE_PROTOCOL_VIOLATION),
+							 errmsg_internal("invalid endlsn message received from primary")));
+				appendBinaryStringInfo(&incoming_message, buf, hdrlen);
+
+				/* read the fields */
+				is_promote_allowed = pq_getmsgbyte(&incoming_message);
+				end_lsn = pq_getmsgint64(&incoming_message);
+				elog(LOG, "received reply from walsender, is_promote_allowed:%d, end_lsn:%X/%X",
+					 is_promote_allowed, LSN_FORMAT_ARGS(end_lsn));
+				polar_process_walsender_reply(is_promote_allowed, end_lsn);
+				break;
+			}
 			/* POLAR end */
 		default:
 			ereport(ERROR,
@@ -1088,6 +1275,8 @@ XLogWalRcvWrite(char *buf, Size nbytes, XLogRecPtr recptr, TimeLineID tli)
 	int			byteswritten;
 
 	Assert(tli != 0);
+	/* WalReceiverMain() pinned the flag to the node type for this process */
+	Assert(polar_is_datamax_mode == polar_is_datamax());
 
 	while (nbytes > 0)
 	{
@@ -1168,6 +1357,8 @@ static void
 XLogWalRcvFlush(bool dying, TimeLineID tli)
 {
 	Assert(tli != 0);
+	/* WalReceiverMain() pinned the flag to the node type for this process */
+	Assert(polar_is_datamax_mode == polar_is_datamax());
 
 	if (LogstreamResult.Flush < LogstreamResult.Write)
 	{
@@ -1182,6 +1373,18 @@ XLogWalRcvFlush(bool dying, TimeLineID tli)
 
 		LogstreamResult.Flush = LogstreamResult.Write;
 
+		/* POLAR: persist datamax meta on each flush. */
+		if (polar_is_datamax())
+		{
+			polar_datamax_update_received_info(polar_datamax_ctl, tli,
+											   LogstreamResult.Flush);
+			/* advance last valid received lsn up to the primary-confirmed lsn */
+			polar_datamax_update_cur_valid_lsn(polar_datamax_received_valid_lsn_list,
+											   LogstreamResult.Flush);
+			polar_datamax_write_meta(polar_datamax_ctl, true);
+		}
+		/* POLAR end */
+
 		/* Update shared-memory status */
 		SpinLockAcquire(&walrcv->mutex);
 		if (walrcv->flushedUpto < LogstreamResult.Flush)
@@ -1194,6 +1397,9 @@ XLogWalRcvFlush(bool dying, TimeLineID tli)
 			consistent_lsn = pg_atomic_read_u64(&walrcv->curr_primary_consistent_lsn);
 		}
 		SpinLockRelease(&walrcv->mutex);
+
+		/* POLAR: update latest flush lsn for the promote-wait subsystem */
+		pg_atomic_write_u64(&WalRcv->polar_latest_flush_lsn, LogstreamResult.Flush);
 
 		/* Signal the startup process and walsender that new WAL has arrived */
 		WakeupRecovery();
@@ -1242,6 +1448,8 @@ XLogWalRcvClose(XLogRecPtr recptr, TimeLineID tli)
 
 	Assert(recvFile >= 0 && !XLByteInSeg(recptr, recvSegNo, wal_segment_size));
 	Assert(tli != 0);
+	/* WalReceiverMain() pinned the flag to the node type for this process */
+	Assert(polar_is_datamax_mode == polar_is_datamax());
 
 	/*
 	 * fsync() and close current file before we switch to next one. We would
@@ -1326,7 +1534,8 @@ XLogWalRcvSendReply(bool force, bool requestReply)
 	/* Construct a new message */
 	writePtr = LogstreamResult.Write;
 	flushPtr = LogstreamResult.Flush;
-	applyPtr = GetXLogReplayRecPtr(NULL);
+	/* POLAR: a datamax never replays WAL, report the flush position instead */
+	applyPtr = polar_is_datamax() ? LogstreamResult.Flush : GetXLogReplayRecPtr(NULL);
 
 	resetStringInfo(&reply_message);
 	pq_sendbyte(&reply_message, 'r');
@@ -1457,7 +1666,8 @@ XLogWalRcvSendHSFeedback(bool immed)
 	 * discard needed xmin or catalog_xmin from any slots that may exist on
 	 * this replica.
 	 */
-	if (!HotStandbyActive())
+	/* POLAR: a datamax never accepts connections but still feeds back */
+	if (!HotStandbyActive() && !polar_is_datamax())
 		return;
 
 	/*
@@ -1467,6 +1677,22 @@ XLogWalRcvSendHSFeedback(bool immed)
 	if (hot_standby_feedback)
 	{
 		GetReplicationHorizons(&xmin, &catalog_xmin);
+
+		/*
+		 * POLAR: a datamax holds no primary data and runs no local
+		 * transactions; its frozen xid state would otherwise produce a
+		 * horizon older than the cascaded standby's slot xmin and infect the
+		 * primary's vacuum.  Feed back only the xmin of our own replication
+		 * slots - the primary only cares about the standby's xmin, which the
+		 * datamax just records and forwards.
+		 */
+		if (polar_is_datamax())
+		{
+			TransactionId slot_xmin;
+
+			ProcArrayGetReplicationSlotXmin(&slot_xmin, &catalog_xmin);
+			xmin = slot_xmin;
+		}
 	}
 	else
 	{
@@ -1477,10 +1703,21 @@ XLogWalRcvSendHSFeedback(bool immed)
 	/*
 	 * Get epoch and adjust if nextXid and oldestXmin are different sides of
 	 * the epoch boundary.
+	 *
+	 * POLAR: in datamax mode there is no local xid state; use the primary's
+	 * nextXid and epoch recorded in polar_datamax_ctl from the WAL stream.
 	 */
-	nextFullXid = ReadNextFullTransactionId();
-	nextXid = XidFromFullTransactionId(nextFullXid);
-	xmin_epoch = EpochFromFullTransactionId(nextFullXid);
+	if (!polar_is_datamax())
+	{
+		nextFullXid = ReadNextFullTransactionId();
+		nextXid = XidFromFullTransactionId(nextFullXid);
+		xmin_epoch = EpochFromFullTransactionId(nextFullXid);
+	}
+	else
+	{
+		nextXid = pg_atomic_read_u32(&polar_datamax_ctl->polar_primary_next_xid);
+		xmin_epoch = pg_atomic_read_u32(&polar_datamax_ctl->polar_primary_epoch);
+	}
 	catalog_xmin_epoch = xmin_epoch;
 	if (nextXid < xmin)
 		xmin_epoch--;
@@ -1777,6 +2014,148 @@ polar_get_walrcv_last_msg_receipt_time(void)
 	last_msg_receipt_time = walrcv->lastMsgReceiptTime;
 	SpinLockRelease(&walrcv->mutex);
 	return last_msg_receipt_time;
+}
+
+/*
+ * POLAR: Judge whether a promote request must be sent to the walsender.
+ *
+ * 1) if promote is triggered in the current instance, send a request when
+ *    polar_enable_promote_wait_for_walreceive_done = on and the walreceiver
+ *    received the promote trigger;
+ * 2) if promote is triggered in a downstream instance, send a request when
+ *    the walsender received a promote trigger from downstream;
+ * 3) at last, re-send the request when we haven't received the promote reply
+ *    from the walsender after the timeout.
+ *
+ * Returns true if it is necessary to send a request to the walsender.
+ */
+bool
+polar_send_promote_request(void)
+{
+	static TimestampTz last_send_time = 0;
+
+	/* walrcv already exists when this function is called */
+	if (((polar_enable_promote_wait_for_walreceive_done && POLAR_PROMOTE_IS_TRIGGERED()) ||
+		 POLAR_WALSNDCTL_RECEIVE_PROMOTE_TRIGGER()) &&
+		!POLAR_PROMOTE_REPLY_IS_RECEIVED())
+	{
+		TimestampTz send_now = GetCurrentTimestamp();
+
+		if (TimestampDifferenceExceeds(last_send_time, send_now, POLAR_SEND_PROMOTE_REQUEST_TIMEOUT))
+		{
+			last_send_time = send_now;
+			return true;
+		}
+	}
+	if (POLAR_PROMOTE_REPLY_IS_RECEIVED())
+		last_send_time = 0;
+
+	return false;
+}
+
+/* POLAR: send promote information to the walsender */
+void
+polar_walrcv_send_promote(bool polar_request_reply)
+{
+	bool		polar_promote_trigger = true;
+
+	resetStringInfo(&reply_message);
+	pq_sendbyte(&reply_message, 'p');
+	pq_sendbyte(&reply_message, polar_promote_trigger);
+	pq_sendbyte(&reply_message, polar_request_reply ? 1 : 0);
+	elog(LOG, "send promote trigger %d, polar_request_reply:%d",
+		 polar_promote_trigger, polar_request_reply);
+	walrcv_send(wrconn, reply_message.data, reply_message.len);
+}
+
+/* POLAR: process a promote reply received from the walsender */
+void
+polar_process_walsender_reply(bool is_promote_allowed, XLogRecPtr end_lsn)
+{
+	Assert(WalRcv);
+
+	/* already received and processed the reply */
+	if (POLAR_PROMOTE_REPLY_IS_RECEIVED())
+		return;
+
+	/* promote is allowed */
+	if (is_promote_allowed)
+	{
+		if (!XLogRecPtrIsInvalid(end_lsn))
+			POLAR_SET_END_LSN(end_lsn);
+	}
+	/* disable promote */
+	else
+		POLAR_SET_PROMOTE_NOT_ALLOWED();
+
+	/* having received the reply, don't send the promote request again */
+	POLAR_SET_RECEIVE_PROMOTE_REPLY();
+
+	/* tell the walsender we received the reply, so it won't reply again */
+	polar_walrcv_send_promote(false);
+}
+
+/* POLAR: get end_lsn when a promote request is received from downstream */
+XLogRecPtr
+polar_promote_get_end_lsn(void)
+{
+	XLogRecPtr	end_lsn = InvalidXLogRecPtr;
+
+	end_lsn = pg_atomic_read_u64(&WalRcv->polar_latest_flush_lsn);
+	/* polar_latest_flush_lsn is 0 when datamax/standby restart and no stream */
+	if (XLogRecPtrIsInvalid(end_lsn))
+	{
+		if (polar_is_datamax())
+			end_lsn = polar_datamax_get_last_received_lsn(polar_datamax_ctl, NULL);
+		else
+			end_lsn = GetXLogReplayRecPtr(NULL);
+	}
+	return end_lsn;
+}
+
+/*
+ * POLAR: judge whether the upstream node is alive via the WAL stream.
+ * Returns true when the upstream can be connected to, i.e. the walreceiver
+ * is ready.
+ */
+bool
+polar_upstream_node_is_alive(void)
+{
+	int			pid = 0;
+	bool		ready_to_display = false;
+
+	Assert(WalRcv);
+
+	SpinLockAcquire(&WalRcv->mutex);
+	pid = (int) WalRcv->pid;
+	ready_to_display = WalRcv->ready_to_display;
+	SpinLockRelease(&WalRcv->mutex);
+
+	return (pid != 0 && ready_to_display);
+}
+
+/*
+ * POLAR: judge whether all WAL has been received; if so, set
+ * polar_is_promote_allowed = true to indicate that promote can be executed.
+ */
+void
+polar_promote_check_received_all_wal(void)
+{
+	Assert(WalRcv);
+	Assert(pg_atomic_read_u64(&WalRcv->polar_end_lsn) <= LogstreamResult.Flush);
+
+	if (!POLAR_IS_PROMOTE_NOT_ALLOWED() &&
+		!POLAR_IS_END_LSN_INVALID() &&
+		!POLAR_IS_PROMOTE_ALLOWED() &&
+		pg_atomic_read_u64(&WalRcv->polar_end_lsn) == LogstreamResult.Flush)
+	{
+		elog(LOG, "polar_end_lsn:%X/%X, flush_lsn:%X/%X, received all wal, promote is allowed",
+			 LSN_FORMAT_ARGS(pg_atomic_read_u64(&WalRcv->polar_end_lsn)),
+			 LSN_FORMAT_ARGS(LogstreamResult.Flush));
+		POLAR_SET_PROMOTE_ALLOWED();
+		/* wake the startup process so it re-checks the promote trigger */
+		WakeupRecovery();
+	}
 }
 
 /*
