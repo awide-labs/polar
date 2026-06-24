@@ -2995,6 +2995,13 @@ GetSnapshotDataCSN(Snapshot snapshot)
 	}
 
 	/*
+	 * Order xmin and snapshotcsn reads. Otherwise fast-checks implemented via
+	 * comparing snap::xmin and xid can produce different results than CSN
+	 * lookup.
+	 */
+	pg_read_barrier();
+
+	/*
 	 * Get the current snapshot CSN. This serializes us with any concurrent
 	 * commits.
 	 */
