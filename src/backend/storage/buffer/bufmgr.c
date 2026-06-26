@@ -4189,7 +4189,7 @@ FlushBuffer(BufferDesc *buf, SMgrRelation reln, IOObject io_object,
 	ErrorContextCallback errcallback;
 	instr_time	io_start;
 	char	   *bufToWrite;
-	uint32		buf_state;
+	uint32		buf_state = 0;
 
 	/* POLAR */
 	bool		polar_replica = polar_is_replica();
