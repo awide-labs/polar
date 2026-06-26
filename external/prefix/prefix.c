@@ -535,6 +535,7 @@ bool pr_contains(prefix_range *left, prefix_range *right, bool eqval) {
  * does a given prefix_range includes a given prefix?
  */
 static inline
+__attribute__((used))
 bool pr_contains_prefix(prefix_range *pr, text *query, bool eqval) {
   int plen = strlen(pr->prefix);
   int qlen = VARSIZE_ANY_EXHDR(query);

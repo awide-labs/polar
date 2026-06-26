@@ -43,6 +43,7 @@ static ssize_t polar_pfsd_pwritev(int fd, const struct iovec *iov, int iovcnt, o
 int			max_pfsd_io_size = PFSD_DEFAULT_MAX_IOSIZE;
 
 static inline PolarVFSKind
+__attribute__((used))
 polar_pfsd_vfs_type(int fd)
 {
 	return POLAR_VFS_PFS;
