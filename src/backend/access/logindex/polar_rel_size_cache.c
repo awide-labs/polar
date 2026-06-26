@@ -484,6 +484,8 @@ polar_check_rel_block_valid_internal(polar_rel_size_cache_t cache, XLogRecPtr ls
 
 		default:
 			elog(PANIC, "Got unexpected state=%d when check block valid", result.state);
+			/* Silent compiler */
+			pg_unreachable();
 	}
 }
 
