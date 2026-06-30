@@ -74,6 +74,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Fixed a hang on fast or immediate shutdown of a standby or replica
+  that was stopped right after being promoted: the logindex background
+  worker could exit before the online promote finished, leaving the
+  shutdown checkpoint unable to advance the consistent LSN to the
+  checkpoint redo and looping on "Checkpoint blocked" until pg_ctl
+  timed out (XCOM-195)
 - Fixed desync between MyProc->xmin and TransactionXmin in SnapshotResetXmin
   when polar_csn_enable is on. This could lead to incorrect CSNLOG requests.
   (XCOM-195)

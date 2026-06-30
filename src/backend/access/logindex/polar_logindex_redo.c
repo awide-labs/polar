@@ -51,6 +51,7 @@
 #include "storage/ipc.h"
 #include "storage/polar_fd.h"
 #include "storage/procarray.h"
+#include "utils/faultinjector.h"
 #include "utils/injection_point.h"
 #include "utils/memutils.h"
 #include "utils/polar_bitpos.h"
@@ -2270,6 +2271,51 @@ static bool
 polar_logindex_bg_online_promote(polar_logindex_bg_redo_ctl_t *ctl, bool *can_hold)
 {
 	bool		dispatch_done = polar_logindex_bg_dispatch(ctl, can_hold);
+
+#ifdef USE_INJECTION_POINTS
+
+	/*
+	 * Test hook for the promote/fast-shutdown race (see TAP test
+	 * t/016_promote_then_fast_shutdown.pl). While the injection point is
+	 * attached, hold off the POLAR_BG_REDO_NOT_START transition (done by
+	 * logindex_worker_finish_parallel_replay() below) so the bg worker stays
+	 * in POLAR_BG_ONLINE_PROMOTE:
+	 *
+	 * - Before shutdown: park here indefinitely (and, once replay has
+	 * drained, log a one-shot marker the test waits on to know the worker is
+	 * parked in ONLINE_PROMOTE).
+	 *
+	 * - After shutdown is requested: hold for exactly one more pass so the bg
+	 * worker's shutdown-exit check -- which runs after this call in the same
+	 * main-loop iteration -- fires at least once while the state is still
+	 * ONLINE_PROMOTE. That is the precise window the bug needs: the buggy
+	 * code exits there, leaving the state stuck; the fixed code keeps
+	 * looping. On the following pass we stop holding so the (fixed) worker
+	 * completes the promote and the node shuts down cleanly.
+	 */
+	if (polar_injection_point_find("polar_hold_online_promote"))
+	{
+		static bool parked_logged = false;
+		static bool held_after_shutdown = false;
+
+		if (!ShutdownRequestPending)
+		{
+			if (dispatch_done && !parked_logged)
+			{
+				elog(LOG, "POLAR injection point: polar_hold_online_promote parked in ONLINE_PROMOTE");
+				parked_logged = true;
+			}
+			return dispatch_done;
+		}
+
+		/* Hold the NOT_START transition for exactly one pass after shutdown. */
+		if (!held_after_shutdown)
+		{
+			held_after_shutdown = true;
+			return dispatch_done;
+		}
+	}
+#endif
 
 	if (dispatch_done)
 		logindex_worker_finish_parallel_replay(ctl->instance, "online promote");

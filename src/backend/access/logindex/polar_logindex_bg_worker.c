@@ -138,11 +138,30 @@ create_logindex_bg_redo_ctl(polar_logindex_redo_ctl_t instance)
 static bool
 parallel_replay_should_exit(polar_logindex_redo_ctl_t instance)
 {
+	uint32		state = polar_get_bg_redo_state(instance);
+
 	/*
-	 * make sure the rule that the parallel replay workers should exit after
-	 * startup process.
+	 * During an online promote, replay_done alone is not enough to tell that
+	 * the promote has finished: it only means the latest dispatch pass
+	 * drained, not that bg_redo_state has advanced to POLAR_BG_REDO_NOT_START
+	 * (which additionally requires backend_min_replay_lsn to be invalid, see
+	 * polar_logindex_bg_online_promote()). Exiting while the state is still
+	 * POLAR_BG_ONLINE_PROMOTE leaves bg_redo_state stuck forever, so
+	 * polar_cal_cur_consistent_lsn() keeps returning the now-frozen
+	 * replayed_oldest_lsn instead of polar_max_valid_lsn(), and the shutdown
+	 * checkpoint hangs waiting for consistent_lsn to reach checkpoint.redo.
+	 * So keep looping until the promote is fully done.
 	 */
-	if (polar_get_bg_redo_state(instance) == POLAR_BG_PARALLEL_REPLAYING &&
+	if (state == POLAR_BG_ONLINE_PROMOTE)
+		return false;
+
+	/*
+	 * Otherwise make sure the rule that the parallel replay workers exit
+	 * after the startup process: while a standby is still replaying in
+	 * parallel and the startup process is alive, keep looping so the workers
+	 * outlive it.
+	 */
+	if (state == POLAR_BG_PARALLEL_REPLAYING &&
 		POLAR_STARTUP_IN_STATUS(instance, POLAR_STARTUP_RUNNING))
 		return false;
 
@@ -306,8 +325,9 @@ polar_logindex_bg_worker_main(char *startup_data, size_t startup_data_len)
 			/*
 			 * The logindex worker and parallel replay subprocs should exit
 			 * after online promote is finished in primary node during online
-			 * promote. They should exit after startup process exited in
-			 * parallel replay mode.
+			 * promote, and after the startup process exited in parallel
+			 * replay mode. Both conditions are checked by
+			 * parallel_replay_should_exit().
 			 */
 			if (polar_is_replica() ||
 				(replay_done && parallel_replay_should_exit(polar_logindex_redo_instance)))
