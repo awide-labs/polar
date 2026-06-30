@@ -302,9 +302,28 @@ polar_logindex_bg_worker_main(void)
 		{
 			/*
 			 * If in primary, we exit when finish online promote and flush all
-			 * inactive logindex table
+			 * inactive logindex table.
+			 *
+			 * During an online promote, replay_done alone is not enough to
+			 * tell that the promote has finished: it only means the latest
+			 * dispatch pass drained, not that bg_redo_state has advanced to
+			 * POLAR_BG_REDO_NOT_START (which additionally requires
+			 * backend_min_replay_lsn to be invalid, see
+			 * polar_logindex_bg_online_promote()). Exiting while the state is
+			 * still POLAR_BG_ONLINE_PROMOTE leaves bg_redo_state stuck
+			 * forever, so polar_cal_cur_consistent_lsn() keeps returning the
+			 * now-frozen replayed_oldest_lsn instead of
+			 * polar_max_valid_lsn(), and the shutdown checkpoint hangs
+			 * waiting for consistent_lsn to reach checkpoint.redo. So during
+			 * an online promote keep looping until it is fully done. Note
+			 * this must be limited to POLAR_BG_ONLINE_PROMOTE and not all
+			 * parallel states: a steady-state standby stays in
+			 * POLAR_BG_PARALLEL_REPLAYING and its bg worker must still exit
+			 * on shutdown as before.
 			 */
-			if (polar_is_replica() || replay_done)
+			if (polar_is_replica() ||
+				(replay_done &&
+				 polar_get_bg_redo_state(polar_logindex_redo_instance) != POLAR_BG_ONLINE_PROMOTE))
 			{
 				if (bg_redo_ctl)
 					polar_release_bg_redo_ctl(bg_redo_ctl);
