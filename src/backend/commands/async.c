@@ -156,6 +156,7 @@
 
 /* POLAR */
 #include "utils/backend_status.h"
+#include "utils/faultinjector.h"
 
 /*
  * Maximum size of a NOTIFY payload, including terminating NULL.  This
@@ -983,6 +984,8 @@ PreCommit_Notify(void)
 			nextNotify = asyncQueueAddEntries(nextNotify);
 			LWLockRelease(NotifyQueueLock);
 		}
+
+		SIMPLE_FAULT_INJECTOR("polar_notify_after_enqueue");
 
 		/* Note that we don't clear pendingNotifies; AtCommit_Notify will. */
 	}
