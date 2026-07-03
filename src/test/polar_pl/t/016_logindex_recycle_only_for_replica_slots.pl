@@ -50,7 +50,12 @@ sub wait_replication_catchup
 	$root_node->safe_psql($regress_db, "insert into test values (1);");
 	my $cur_insert_lsn = $root_node->lsn('insert');
 	$root_node->safe_psql($regress_db, "insert into test values (2);");
-	$root_node->wait_for_catchup($node->name, 'replay', $cur_insert_lsn);
+
+	# Wait for the standby to replay past cur_insert_lsn, but only fail if it
+	# genuinely stalls. wait_for_catchup() uses a fixed deadline, which bails
+	# out a standby that is still replaying happily but slowly.
+	$root_node->wait_for_catchup_with_progress($node->name, 'replay',
+		$cur_insert_lsn);
 }
 
 sub get_log_index_meta
@@ -138,10 +143,12 @@ $node_primary->append_conf('postgresql.conf', "wal_level='logical'");
 
 my $node_replica = PostgreSQL::Test::Cluster->new('replica');
 $node_replica->polar_init_replica($node_primary);
+$node_replica->append_conf('postgresql.conf', "wal_receiver_status_interval = '1s'");
 
 # add a standby and set it's root to replica
 my $node_standby = PostgreSQL::Test::Cluster->new('standby');
 $node_standby->polar_init_standby($node_primary);
+$node_standby->append_conf('postgresql.conf', "wal_receiver_status_interval = '1s'");
 
 $node_primary->start;
 

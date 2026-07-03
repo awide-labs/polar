@@ -3177,6 +3177,113 @@ sub wait_for_catchup
 
 =pod
 
+=item $node->wait_for_catchup_with_progress(standby_name, mode, target_lsn, stall_timeout, hard_cap)
+
+POLAR: progress-based variant of wait_for_catchup(). Same success condition
+(state = 'streaming' and the standby's <mode>_lsn has reached target_lsn), but
+instead of a fixed deadline it keeps polling as long as <mode>_lsn keeps
+advancing. It only fails if there is no progress for $stall_timeout seconds (a
+genuine stall) or the hard cap is exceeded.
+
+Use this instead of wait_for_catchup() when the standby is expected to catch up
+slowly a fixed deadline would bail out a standby that is still
+replaying happily. For crisp progress detection, set wal_receiver_status_interval
+small (e.g. 1s) on the receiver so a fresh replay_lsn is visible on each poll.
+
+The first four arguments match wait_for_catchup(), so the two are interchangeable
+for existing callers; target_lsn defaults to $node->lsn('write') when omitted,
+as in wait_for_catchup(). The trailing $stall_timeout and $hard_cap are optional
+input parameters (mirroring wait_for_catchup()'s trailing $timeout) defaulting to
+120s and 1800s. Requires the 'postgres' db. die()s on failure.
+
+=cut
+
+sub wait_for_catchup_with_progress
+{
+	my ($self, $standby_name, $mode, $target_lsn, $stall_timeout, $hard_cap)
+	  = @_;
+	# POLAR: the first four arguments match wait_for_catchup() so callers can
+	# swap one for the other without changes. The trailing $stall_timeout and
+	# $hard_cap mirror wait_for_catchup()'s trailing $timeout: optional input
+	# parameters that default to 120s and 1800s when undef.
+	$mode = defined($mode) ? $mode : 'replay';
+	my $mode_col = $mode . '_lsn';
+
+	# Allow passing of a PostgreSQL::Test::Cluster instance as shorthand
+	if (blessed($standby_name)
+		&& $standby_name->isa("PostgreSQL::Test::Cluster"))
+	{
+		$standby_name = $standby_name->name;
+	}
+
+	if (!defined($target_lsn))
+	{
+		$target_lsn = $self->lsn('write');
+	}
+
+	# fail after this many s with no <mode>_lsn progress (a real stall)
+	$stall_timeout = defined($stall_timeout) ? $stall_timeout : 120;
+	# absolute safety net in seconds
+	$hard_cap = defined($hard_cap) ? $hard_cap : 1800;
+	my $poll_interval = 1;
+
+	# Byte-offset of the target from the origin, so we can compare numerically.
+	my $target_bytes = $self->safe_psql('postgres',
+		"SELECT pg_wal_lsn_diff('$target_lsn'::pg_lsn, '0/0'::pg_lsn)");
+	croak "could not parse target LSN '$target_lsn'"
+	  unless defined($target_bytes) && $target_bytes =~ /^\d+/;
+
+	print "Waiting (progress-based) for replication conn "
+	  . $standby_name . "'s " . $mode
+	  . "_lsn to pass " . $target_lsn . " on " . $self->name . "\n";
+
+	my $last_bytes       = -1;
+	my $last_progress_at = time();
+	my $started_at       = time();
+
+	while (1)
+	{
+		my $row = $self->safe_psql('postgres',
+			    "SELECT pg_wal_lsn_diff($mode_col, '0/0'::pg_lsn), state"
+			  . " FROM pg_catalog.pg_stat_replication"
+			  . " WHERE application_name IN ('$standby_name', 'walreceiver')");
+
+		if ($row =~ /^([\d.]+)\|(\w+)/)
+		{
+			my ($bytes, $state) = ($1, $2);
+
+			if ($state eq 'streaming' && $bytes >= $target_bytes)
+			{
+				print "standby '$standby_name' reached $mode $target_lsn\n";
+				return 1;
+			}
+			if ($bytes > $last_bytes)
+			{
+				print "standby '$standby_name' ${mode}_lsn progressing: "
+				  . "$bytes / $target_bytes bytes\n";
+				$last_bytes       = $bytes;
+				$last_progress_at = time();
+			}
+		}
+
+		if (time() - $last_progress_at > $stall_timeout)
+		{
+			croak "standby '$standby_name' stalled: no $mode progress for "
+			  . "${stall_timeout}s (last byte-offset $last_bytes, target "
+			  . "$target_bytes [$target_lsn])";
+		}
+		if (time() - $started_at > $hard_cap)
+		{
+			croak "standby '$standby_name' exceeded ${hard_cap}s hard cap "
+			  . "waiting for $mode $target_lsn";
+		}
+
+		sleep($poll_interval);
+	}
+}
+
+=pod
+
 =item $node->wait_for_slot_catchup(slot_name, mode, target_lsn)
 
 Wait for the named replication slot to equal or pass the supplied target_lsn.
