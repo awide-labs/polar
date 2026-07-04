@@ -82,8 +82,6 @@ external/pg_similarity/
 external/pg_squeeze/
 external/pg_stat_kcache/
 external/pgtap/
-external/pldebugger/
-external/prefix/
 external/roaringbitmap/
 external/sequential_uuids/
 

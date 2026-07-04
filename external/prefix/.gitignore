@@ -1,8 +1,0 @@
-.deps
-results/
-debian/files
-debian/*.log
-debian/*.substvars
-debian/postgresql-*-prefix/
-/log/
-/tmp_check/
