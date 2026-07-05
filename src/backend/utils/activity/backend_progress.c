@@ -14,6 +14,8 @@
 #include "utils/backend_progress.h"
 #include "utils/backend_status.h"
 
+/* POLAR: Shared Server */
+#include "storage/polar_session_context.h"
 
 /*-----------
  * pgstat_progress_start_command() -
@@ -26,11 +28,22 @@ void
 pgstat_progress_start_command(ProgressCommandType cmdtype, Oid relid)
 {
 	volatile PgBackendStatus *beentry = MyBEEntry;
+	int			saved_guc_count = 0;
+
+	if (IS_POLAR_SESSION_SHARED())
+	{
+		beentry = &BackendStatusArray[polar_session()->id + NumBackendStatSlots_base];
+		saved_guc_count = polar_session_info()->saved_guc_count;
+	}
+
 
 	if (!beentry || !pgstat_track_activities)
 		return;
 
 	PGSTAT_BEGIN_WRITE_ACTIVITY(beentry);
+	beentry->last_backend_pid = MyProcPid;	/* POLAR: Shared Server */
+	beentry->saved_guc_count = saved_guc_count;
+
 	beentry->st_progress_command = cmdtype;
 	beentry->st_progress_command_target = relid;
 	MemSet(&beentry->st_progress_param, 0, sizeof(beentry->st_progress_param));
@@ -47,6 +60,13 @@ void
 pgstat_progress_update_param(int index, int64 val)
 {
 	volatile PgBackendStatus *beentry = MyBEEntry;
+	int			saved_guc_count = 0;
+
+	if (IS_POLAR_SESSION_SHARED())
+	{
+		beentry = &BackendStatusArray[polar_session()->id + NumBackendStatSlots_base];
+		saved_guc_count = polar_session_info()->saved_guc_count;
+	}
 
 	Assert(index >= 0 && index < PGSTAT_NUM_PROGRESS_PARAM);
 
@@ -54,6 +74,9 @@ pgstat_progress_update_param(int index, int64 val)
 		return;
 
 	PGSTAT_BEGIN_WRITE_ACTIVITY(beentry);
+	beentry->last_backend_pid = MyProcPid;	/* POLAR: Shared Server */
+	beentry->saved_guc_count = saved_guc_count;
+
 	beentry->st_progress_param[index] = val;
 	PGSTAT_END_WRITE_ACTIVITY(beentry);
 }
@@ -71,11 +94,20 @@ pgstat_progress_update_multi_param(int nparam, const int *index,
 {
 	volatile PgBackendStatus *beentry = MyBEEntry;
 	int			i;
+	int			saved_guc_count = 0;
+
+	if (IS_POLAR_SESSION_SHARED())
+	{
+		beentry = &BackendStatusArray[polar_session()->id + NumBackendStatSlots_base];
+		saved_guc_count = polar_session_info()->saved_guc_count;
+	}
 
 	if (!beentry || !pgstat_track_activities || nparam == 0)
 		return;
 
 	PGSTAT_BEGIN_WRITE_ACTIVITY(beentry);
+	beentry->last_backend_pid = MyProcPid;	/* POLAR: Shared Server */
+	beentry->saved_guc_count = saved_guc_count;
 
 	for (i = 0; i < nparam; ++i)
 	{
@@ -98,6 +130,13 @@ void
 pgstat_progress_end_command(void)
 {
 	volatile PgBackendStatus *beentry = MyBEEntry;
+	int			saved_guc_count = 0;
+
+	if (IS_POLAR_SESSION_SHARED())
+	{
+		beentry = &BackendStatusArray[polar_session()->id + NumBackendStatSlots_base];
+		saved_guc_count = polar_session_info()->saved_guc_count;
+	}
 
 	if (!beentry || !pgstat_track_activities)
 		return;
@@ -106,6 +145,8 @@ pgstat_progress_end_command(void)
 		return;
 
 	PGSTAT_BEGIN_WRITE_ACTIVITY(beentry);
+	beentry->last_backend_pid = MyProcPid;	/* POLAR: Shared Server */
+	beentry->saved_guc_count = saved_guc_count;
 	beentry->st_progress_command = PROGRESS_COMMAND_INVALID;
 	beentry->st_progress_command_target = InvalidOid;
 	PGSTAT_END_WRITE_ACTIVITY(beentry);

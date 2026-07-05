@@ -31,6 +31,11 @@
 #define VALGRIND_MEMPOOL_CHANGE(context, optr, nptr, size)	do {} while (0)
 #endif
 
+/* POLAR: Shared Server - compatibility macros for older code */
+#define MEMDEBUG_MAKE_MEM_DEFINED(addr, size)	VALGRIND_MAKE_MEM_DEFINED((addr), (size))
+#define MEMDEBUG_MAKE_MEM_NOACCESS(addr, size)	VALGRIND_MAKE_MEM_NOACCESS((addr), (size))
+#define MEMDEBUG_MAKE_MEM_UNDEFINED(addr, size)	VALGRIND_MAKE_MEM_UNDEFINED((addr), (size))
+
 
 #ifdef CLOBBER_FREED_MEMORY
 

@@ -253,6 +253,11 @@ typedef enum
 
 #define GUC_UNIT				(GUC_UNIT_MEMORY | GUC_UNIT_TIME)
 
+/* POLAR: Shared Server */
+#define GUC_SESSION_DEDICATED   0x800000	/* guc need in dedicated mode */
+#define GUC_ASSIGN_IN_TRANS		0x1000000	/* assign need in trans */
+/* POLAR end */
+
 /* POLAR defines start */
 #define MAX_NUM_OF_PARALLEL_BGWRITER	64
 /* POLAR end */
@@ -407,6 +412,8 @@ extern int	polar_instance_spec_mem;
 
 extern bool polar_enable_async_lock_replay;
 extern bool polar_enable_async_lock_replay_debug;
+
+extern bool polar_enable_shm_aset;
 
 /* POLAR wal pipeline */
 
@@ -633,6 +640,8 @@ extern ArrayType *GUCArrayReset(ArrayType *array);
 extern void write_nondefault_variables(GucContext context);
 extern void read_nondefault_variables(void);
 #endif
+
+extern void *guc_malloc(int elevel, size_t size);
 
 /* GUC serialization */
 extern Size EstimateGUCStateSpace(void);

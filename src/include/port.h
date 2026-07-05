@@ -44,6 +44,11 @@ typedef unsigned int socklen_t;
 extern bool pg_set_noblock(pgsocket sock);
 extern bool pg_set_block(pgsocket sock);
 
+/* POLAR: Shared Server - socket descriptor passing (polar_sock.c) */
+extern bool polar_pg_is_block(pgsocket sock);
+extern int	polar_pg_send_sock(pgsocket chan, pgsocket sock);
+extern pgsocket polar_pg_recv_sock(pgsocket chan);
+
 /* Portable path handling for Unix/Win32 (in path.c) */
 
 extern bool has_drive_prefix(const char *filename);

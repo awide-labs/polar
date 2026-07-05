@@ -71,7 +71,7 @@ extern BackendMemoryStat *memstats;
 
 extern Size getMemstatSize(void);
 extern void allocShmem(void);
-extern void polar_handle_monitor_hook(PolarHookActionType action);
+extern void polar_handle_monitor_hook(PolarHookActionType action, void *args);
 extern void polar_set_signal_mctx(void);
 extern void polar_check_signal_mctx(void);
 

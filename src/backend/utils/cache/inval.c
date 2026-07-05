@@ -132,6 +132,9 @@
 #include "utils/snapmgr.h"
 #include "utils/syscache.h"
 
+/* POLAR: Shared Server */
+#include "utils/polar_session_inval.h"
+#include "storage/polar_session_context.h"
 
 /*
  * Pending requests are stored as ready-to-send SharedInvalidationMessages.
@@ -869,6 +872,13 @@ AcceptInvalidationMessages(void)
 	if (IsTransactionState())
 		AssertCouldGetRelation();
 #endif
+
+	/* POLAR: Shared Server - process session invalidation messages */
+	if (IS_POLAR_SESSION_SHARED())
+	{
+		polar_session_accept_invalidation_messages(polar_session());
+	}
+	/* POLAR end */
 
 	ReceiveSharedInvalidMessages(LocalExecuteInvalidationMessage,
 								 InvalidateSystemCaches);

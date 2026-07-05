@@ -183,6 +183,13 @@ typedef struct PgBackendStatus
 	bool		polar_proxy_ssl_in_use;
 	char		polar_proxy_ssl_cipher_name[NAMEDATALEN];
 	char		polar_proxy_ssl_version[NAMEDATALEN];
+
+	/* POLAR: Shared Server */
+	int32		dispatcher_pid;
+	int32		session_local_id;
+	int32		last_backend_pid;
+	int32		saved_guc_count;
+	TimestampTz last_wait_start_timestamp;
 	/* POLAR end */
 } PgBackendStatus;
 
@@ -278,6 +285,21 @@ typedef struct LocalPgBackendStatus
 
 
 /* ----------
+ * Total number of backends including auxiliary
+ *
+ * We reserve a slot for each possible BackendId, plus one for each
+ * possible auxiliary process type.  (This scheme assumes there is not
+ * more than one of any auxiliary process type at a time.) MaxBackends
+ * includes autovacuum workers and background workers as well.
+ * ----------
+ */
+#define NumBackendStatSlots_base (MaxBackends + NUM_AUXPROCTYPES)
+
+/* POLAR: Shared Server - add slots for sessions */
+#define NumBackendStatSlots (NumBackendStatSlots_base + MaxPolarSessions)
+
+
+/* ----------
  * GUC parameters
  * ----------
  */
@@ -293,6 +315,7 @@ extern int	polar_session_id_display_method;
  * ----------
  */
 extern PGDLLIMPORT PgBackendStatus *MyBEEntry;
+extern PGDLLIMPORT PgBackendStatus *BackendStatusArray;
 
 
 /* ----------
@@ -311,6 +334,7 @@ extern void CreateSharedBackendStatus(void);
 /* Initialization functions */
 extern void pgstat_beinit(void);
 extern void pgstat_bestart(void);
+extern void polar_pgstat_beshutdown(int id);	/* POLAR: Shared Server */
 
 extern void pgstat_clear_backend_activity_snapshot(void);
 

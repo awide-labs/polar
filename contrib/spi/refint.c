@@ -11,6 +11,10 @@
 
 #include "commands/trigger.h"
 #include "executor/spi.h"
+
+/* POLAR: Shared Server */
+#include "storage/proc.h"
+
 #include "utils/builtins.h"
 #include "utils/memutils.h"
 #include "utils/rel.h"
@@ -93,6 +97,13 @@ check_primary_key(PG_FUNCTION_ARGS)
 	/* If UPDATE, then must check new Tuple, not old one */
 	else
 		tuple = trigdata->tg_newtuple;
+
+	/* POLAR: Shared Server */
+	if (POLAR_SS_NOT_DEDICATED())
+	{
+		MyProc->polar_is_backend_dedicated = true;
+		elog(LOG, "polar shared server set dedicated from check_primary_key");
+	}
 
 	trigger = trigdata->tg_trigger;
 	nargs = trigger->tgnargs;
@@ -290,6 +301,13 @@ check_foreign_key(PG_FUNCTION_ARGS)
 	if (TRIGGER_FIRED_BY_INSERT(trigdata->tg_event))
 		/* internal error */
 		elog(ERROR, "check_foreign_key: cannot process INSERT events");
+
+	/* POLAR: Shared Server */
+	if (POLAR_SS_NOT_DEDICATED())
+	{
+		MyProc->polar_is_backend_dedicated = true;
+		elog(LOG, "polar shared server set dedicated from check_foreign_key");
+	}
 
 	/* Have to check tg_trigtuple - tuple being deleted */
 	trigtuple = trigdata->tg_trigtuple;

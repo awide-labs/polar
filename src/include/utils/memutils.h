@@ -80,6 +80,11 @@ extern void MemoryContextDeleteChildren(MemoryContext context);
 extern void MemoryContextSetIdentifier(MemoryContext context, const char *id);
 extern void MemoryContextSetParent(MemoryContext context,
 								   MemoryContext new_parent);
+/* POLAR: Shared Server */
+extern Size polar_malloc_usable_size(MemoryContext context, void *pointer);
+extern void MemoryContextSetParentWithFallback(MemoryContext context,
+											   MemoryContext new_parent,
+											   bool is_shared);
 extern Size GetMemoryChunkSpace(void *pointer);
 extern MemoryContext MemoryContextGetParent(MemoryContext context);
 extern bool MemoryContextIsEmpty(MemoryContext context);
@@ -174,6 +179,9 @@ extern MemoryContext AllocSetContextCreateInternal(MemoryContext parent,
 #define AllocSetContextCreate \
 	AllocSetContextCreateInternal
 #endif
+
+/* POLAR: Shared Server - compatibility alias */
+#define AllocSetContextCreateExtended AllocSetContextCreateInternal
 
 /* slab.c */
 extern MemoryContext SlabContextCreate(MemoryContext parent,

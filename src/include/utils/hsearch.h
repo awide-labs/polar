@@ -104,6 +104,9 @@ typedef struct HASHCTL
 #define HASH_ATTACH		0x1000	/* Do not initialize hctl */
 #define HASH_FIXED_SIZE 0x2000	/* Initial size is a hard limit */
 
+/* POLAR: Shared Server */
+#define PSS_HASH_FLAG	0x4000	/* Use session memory context */
+
 /* max_dsize value to indicate expansible directory */
 #define NO_MAX_DSIZE			(-1)
 

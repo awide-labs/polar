@@ -2258,7 +2258,9 @@ _SPI_prepare_plan(const char *src, SPIPlanPtr plan)
 		 */
 		plansource = CreateCachedPlan(parsetree,
 									  src,
-									  CreateCommandTag(parsetree->stmt));
+									  CreateCommandTag(parsetree->stmt),
+									  false);	/* POLAR: Shared Server - SPI
+												 * uses local context */
 
 		/*
 		 * Parameter datatypes are driven by parserSetup hook if provided,

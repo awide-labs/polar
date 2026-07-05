@@ -48,6 +48,8 @@
 #include "utils/syscache.h"
 #include "utils/varlena.h"
 
+/* POLAR: Shared Server */
+#include "storage/polar_session_context.h"
 
 /*
  * We don't want to log each fetching of a value from a sequence,
@@ -1088,6 +1090,10 @@ static Relation
 lock_and_open_sequence(SeqTable seq)
 {
 	LocalTransactionId thislxid = MyProc->lxid;
+
+	/* POLAR: Shared Server - use session's local transaction ID */
+	if (POLAR_SHARED_SERVER_RUNNING())
+		thislxid = POLAR_SESSION(nextLocalTransactionId);
 
 	/* Get the lock if not already held in this xact */
 	if (seq->lxid != thislxid)

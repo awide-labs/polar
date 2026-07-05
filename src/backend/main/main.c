@@ -47,6 +47,8 @@
 #include "utils/pg_locale.h"
 #include "utils/ps_status.h"
 
+/* POLAR: Shared Server */
+#include "storage/polar_session_context.h"
 
 const char *progname;
 
@@ -102,6 +104,12 @@ main(int argc, char *argv[])
 	 */
 	MyProcPid = getpid();
 	MemoryContextInit();
+
+	/*
+	 * POLAR: Shared Server Create private session. Any Postgres server
+	 * process has a private session.
+	 */
+	polar_private_session_initialize();
 
 	/*
 	 * Set up locale information

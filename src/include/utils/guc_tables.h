@@ -28,6 +28,28 @@ enum config_type
 	PGC_ENUM
 };
 
+enum config_array_type
+{
+	CAT_INVALID = 0,
+	CAT_BOOL,
+	CAT_INT,
+	CAT_REAL,
+	CAT_STRING,
+	CAT_ENUM,
+
+	CAT_BOOL_PX,
+	CAT_INT_PX,
+	CAT_REAL_PX,
+	CAT_STRING_PX,
+	CAT_ENUM_PX,
+
+	CAT_BOOL_EXTERNAL,
+	CAT_INT_EXTERNAL,
+	CAT_REAL_EXTERNAL,
+	CAT_STRING_EXTERNAL,
+	CAT_ENUM_EXTERNAL,
+};
+
 union config_var_val
 {
 	bool		boolval;
@@ -102,6 +124,7 @@ enum config_group
 	POLAR_PROXY,
 	POLAR_IO_MANAGEMENT,
 	POLAR_CSN,
+	POLAR_SHARED_SERVER,
 	/* POLAR end */
 	DEVELOPER_OPTIONS
 };
@@ -178,6 +201,8 @@ struct config_generic
 	char	   *sourcefile;		/* file current setting is from (NULL if not
 								 * set in config file) */
 	int			sourceline;		/* line in source file */
+	enum config_array_type polar_array_type;
+	int			polar_array_index;
 };
 
 /* bit values in status field */
@@ -189,6 +214,8 @@ struct config_generic
 #define GUC_PENDING_RESTART 0x0002	/* changed value cannot be applied yet */
 #define GUC_NEEDS_REPORT	0x0004	/* new value must be reported to client */
 
+#define is_session_dedicated_guc(gen)	(((gen)->flags & GUC_SESSION_DEDICATED) != 0)
+#define is_session_in_trans_guc(gen)	(((gen)->flags & GUC_ASSIGN_IN_TRANS) != 0)
 
 /* GUC records for specific variable types */
 

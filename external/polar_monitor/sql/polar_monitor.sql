@@ -96,5 +96,9 @@ select * from pfs_info();
 select COUNT(*)  >= 0 AS result from polar_wal_pipeline_info;
 select COUNT(*)  >= 0 AS result from polar_wal_pipeline_stats;
 
+select count(*) >= 0 from polar_stat_session where backend_type='client backend';
+select count(*) >= 0 from polar_stat_dispatcher;
+select polar_dispatcher_pid() - polar_dispatcher_pid(), polar_session_backend_pid() - polar_session_backend_pid(), pg_backend_pid() - pg_backend_pid();
+
 --cleanup
 drop extension polar_monitor;

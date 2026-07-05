@@ -64,6 +64,9 @@
 #include "storage/procarray.h"
 #include "storage/spin.h"
 #include "utils/acl.h"
+
+/* POLAR: Shared Server */
+#include "storage/polar_session_context.h"
 #include "utils/builtins.h"
 #include "utils/rel.h"
 #include "utils/snapmgr.h"
@@ -4535,12 +4538,16 @@ CountOtherDBBackends(Oid databaseId, int *nbackends, int *nprepared)
 
 #define MAXAUTOVACPIDS	10		/* max autovacs to SIGTERM per iteration */
 	int			autovac_pids[MAXAUTOVACPIDS];
+
+	/* POLAR: Shared Server - track idle shared backends */
+	int			polar_shared_backend_pids[MAXAUTOVACPIDS];
 	int			tries;
 
 	/* 50 tries with 100ms sleep between tries makes 5 sec total wait */
 	for (tries = 0; tries < 50; tries++)
 	{
 		int			nautovacs = 0;
+		int			n_shared_backends = 0;	/* POLAR: Shared Server */
 		bool		found = false;
 		int			index;
 
@@ -4568,6 +4575,14 @@ CountOtherDBBackends(Oid databaseId, int *nbackends, int *nprepared)
 			else
 			{
 				(*nbackends)++;
+
+				/* POLAR: Shared Server - track idle shared backends */
+				if (POLAR_SHARED_SERVER_RUNNING() &&
+					proc->polar_shared_session == NULL &&
+					!proc->polar_is_backend_dedicated &&
+					n_shared_backends < MAXAUTOVACPIDS)
+					polar_shared_backend_pids[n_shared_backends++] = proc->pid;
+
 				if ((statusFlags & PROC_IS_AUTOVACUUM) &&
 					nautovacs < MAXAUTOVACPIDS)
 					autovac_pids[nautovacs++] = proc->pid;
@@ -4587,6 +4602,10 @@ CountOtherDBBackends(Oid databaseId, int *nbackends, int *nprepared)
 		 */
 		for (index = 0; index < nautovacs; index++)
 			(void) kill(autovac_pids[index], SIGTERM);	/* ignore any error */
+
+		/* POLAR: Shared Server - signal idle shared backends */
+		for (index = 0; index < n_shared_backends; index++)
+			(void) kill(polar_shared_backend_pids[index], SIGTERM); /* ignore any error */
 
 		/* sleep, then try again */
 		pg_usleep(100 * 1000L); /* 100ms */

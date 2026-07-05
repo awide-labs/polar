@@ -283,6 +283,13 @@ polar_proc_stat_lock(PG_FUNCTION_ARGS)
 		if (!CHECK_BACKENDID_VALID(beentry->backendid))
 			continue;
 
+		/* POLAR: Shared Server */
+		/* only show session pid */
+		if (POLAR_SHARED_SERVER_RUNNING() &&
+			beentry->st_backendType == B_BACKEND &&
+			beentry->session_local_id < 0)
+			continue;
+
 		procstat = &polar_locks_stat_array[beentry->backendid - 1];
 
 		for (i = 0; i <= LOCKTAG_LAST_TYPE; i++)

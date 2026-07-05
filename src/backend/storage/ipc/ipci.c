@@ -55,6 +55,8 @@
 /* POLAR */
 #include "access/polar_logindex_redo.h"
 #include "postmaster/polar_async_lock_replay.h"
+#include "postmaster/polar_dispatcher.h"
+#include "storage/polar_memutils.h"
 #include "storage/polar_rsc.h"
 #include "storage/polar_xlogbuf.h"
 #include "access/polar_csnlog.h"
@@ -203,6 +205,14 @@ CalculateShmemSize(int *num_semaphores)
 
 	/* POLAR: add RSC shared memory size */
 	size = add_size(size, polar_rsc_shmem_size());
+
+	/* POLAR: Shared Server */
+	size = add_size(size, polar_shm_aset_ctl_size());
+	size = add_size(size, polar_ss_shared_memory_shmem_size());
+	size = add_size(size, polar_ss_db_role_setting_shmem_size());
+	size = add_size(size, polar_ss_dispatcher_shmem_size());
+	size = add_size(size, polar_ss_session_context_shmem_size());
+	/* POLAR end */
 
 	/*
 	 * NOTE NOTE NOTE: DO NOT ADD YOUR ADD_SIZE FUNCTION BELOW ME !!!
@@ -478,6 +488,14 @@ CreateSharedMemoryAndSemaphores(void)
 	StatsShmemInit();
 
 	polar_feature_shmem_init();
+
+	/* POLAR: Shared Server */
+	polar_shm_aset_ctl_init();
+	polar_ss_shared_memory_shmem_init();
+	polar_ss_db_role_setting_shmem_init();
+	polar_ss_dispatcher_shmem_init();
+	polar_ss_session_context_shmem_init();
+	/* POLAR end */
 
 #ifdef EXEC_BACKEND
 

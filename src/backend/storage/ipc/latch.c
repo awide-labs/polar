@@ -100,17 +100,33 @@
 #endif
 #endif
 
+/*
+ * Connection pooler needs to delete events from event set.
+ * As far as we have to preserve positions of all other events,
+ * we can not move events. So we have to maintain list of free events.
+ * But poll/WaitForMultipleObjects manipulates with array of listened events.
+ * That is why elements in pollfds and handle arrays should be stored without holes
+ * and we need to maintain mapping between them and WaitEventSet events.
+ * This mapping is stored in "polar_permutation" array. Also we need backward mapping
+ * (from event to descriptors array) which is implemented using "polar_index" field of WaitEvent.
+ */
+
 /* typedef in latch.h */
 struct WaitEventSet
 {
 	int			nevents;		/* number of registered events */
 	int			nevents_space;	/* maximum number of events in this set */
+	int			polar_free_events;	/* L1-list of free events linked by "pos"
+									 * and terminated by -1. */
 
 	/*
 	 * Array, of nevents_space length, storing the definition of events this
 	 * set is waiting for.
 	 */
 	WaitEvent  *events;
+
+	int		   *polar_permutation;	/* indexes of used events (see comment
+									 * above) */
 
 	/*
 	 * If WL_LATCH_SET is specified in any wait event, latch is a pointer to
@@ -189,9 +205,9 @@ static void WaitEventAdjustEpoll(WaitEventSet *set, WaitEvent *event, int action
 #elif defined(WAIT_USE_KQUEUE)
 static void WaitEventAdjustKqueue(WaitEventSet *set, WaitEvent *event, int old_events);
 #elif defined(WAIT_USE_POLL)
-static void WaitEventAdjustPoll(WaitEventSet *set, WaitEvent *event);
+static void WaitEventAdjustPoll(WaitEventSet *set, WaitEvent *event, bool remove);
 #elif defined(WAIT_USE_WIN32)
-static void WaitEventAdjustWin32(WaitEventSet *set, WaitEvent *event);
+static void WaitEventAdjustWin32(WaitEventSet *set, WaitEvent *event, bool remove);
 #endif
 
 static inline int WaitEventSetWaitBlock(WaitEventSet *set, int cur_timeout,
@@ -724,6 +740,7 @@ CreateWaitEventSet(MemoryContext context, int nevents)
 	 */
 	sz += MAXALIGN(sizeof(WaitEventSet));
 	sz += MAXALIGN(sizeof(WaitEvent) * nevents);
+	sz += MAXALIGN(sizeof(int) * nevents);	/* for polar_permutation */
 
 #if defined(WAIT_USE_EPOLL)
 	sz += MAXALIGN(sizeof(struct epoll_event) * nevents);
@@ -744,23 +761,24 @@ CreateWaitEventSet(MemoryContext context, int nevents)
 	set->events = (WaitEvent *) data;
 	data += MAXALIGN(sizeof(WaitEvent) * nevents);
 
+	/* POLAR: Shared Server */
+	set->polar_permutation = (int *) data;
+	data += MAXALIGN(sizeof(int) * nevents);
+
 #if defined(WAIT_USE_EPOLL)
 	set->epoll_ret_events = (struct epoll_event *) data;
-	data += MAXALIGN(sizeof(struct epoll_event) * nevents);
 #elif defined(WAIT_USE_KQUEUE)
 	set->kqueue_ret_events = (struct kevent *) data;
-	data += MAXALIGN(sizeof(struct kevent) * nevents);
 #elif defined(WAIT_USE_POLL)
 	set->pollfds = (struct pollfd *) data;
-	data += MAXALIGN(sizeof(struct pollfd) * nevents);
 #elif defined(WAIT_USE_WIN32)
-	set->handles = (HANDLE) data;
-	data += MAXALIGN(sizeof(HANDLE) * nevents);
+	set->handles = (HANDLE *) data;
 #endif
 
 	set->latch = NULL;
 	set->nevents_space = nevents;
 	set->exit_on_postmaster_death = false;
+	set->polar_free_events = -1;
 
 #if defined(WAIT_USE_EPOLL)
 	if (!AcquireExternalFD())
@@ -833,12 +851,12 @@ FreeWaitEventSet(WaitEventSet *set)
 	close(set->kqueue_fd);
 	ReleaseExternalFD();
 #elif defined(WAIT_USE_WIN32)
-	WaitEvent  *cur_event;
+	int			i;
 
-	for (cur_event = set->events;
-		 cur_event < (set->events + set->nevents);
-		 cur_event++)
+	for (i = 0; i < set->nevents; i++)
 	{
+		WaitEvent  *cur_event = &set->events[set->polar_permutation[i]];
+
 		if (cur_event->events & WL_LATCH_SET)
 		{
 			/* uses the latch's HANDLE */
@@ -851,12 +869,41 @@ FreeWaitEventSet(WaitEventSet *set)
 		{
 			/* Clean up the event object we created for the socket */
 			WSAEventSelect(cur_event->fd, NULL, 0);
-			WSACloseEvent(set->handles[cur_event->pos + 1]);
+			WSACloseEvent(set->handles[cur_event->polar_index + 1]);
 		}
 	}
 #endif
 
 	pfree(set);
+}
+
+/*
+ * Remove event with specified socket descriptor
+ */
+void
+DeleteWaitEventFromSet(WaitEventSet *set, int event_pos)
+{
+	WaitEvent  *event = &set->events[event_pos];
+
+#if defined(WAIT_USE_EPOLL)
+	WaitEventAdjustEpoll(set, event, EPOLL_CTL_DEL);
+#elif defined(WAIT_USE_KQUEUE)
+	WaitEventAdjustKqueue(set, event, EV_DELETE);
+#elif defined(WAIT_USE_POLL)
+	WaitEventAdjustPoll(set, event, true);
+#elif defined(WAIT_USE_WIN32)
+	WaitEventAdjustWin32(set, event, true);
+#endif
+	if (--set->nevents != 0)
+	{
+		set->polar_permutation[event->polar_index] = set->polar_permutation[set->nevents];
+		set->events[set->polar_permutation[set->nevents]].polar_index = event->polar_index;
+	}
+	event->fd = PGINVALID_SOCKET;
+	event->events = 0;
+	event->polar_index = -1;
+	event->pos = set->polar_free_events;
+	set->polar_free_events = event_pos;
 }
 
 /* ---
@@ -893,9 +940,11 @@ AddWaitEventToSet(WaitEventSet *set, uint32 events, pgsocket fd, Latch *latch,
 				  void *user_data)
 {
 	WaitEvent  *event;
+	int			free_event;
 
 	/* not enough space */
-	Assert(set->nevents < set->nevents_space);
+	if (set->nevents == set->nevents_space)
+		return -1;
 
 	if (events == WL_EXIT_ON_PM_DEATH)
 	{
@@ -922,14 +971,29 @@ AddWaitEventToSet(WaitEventSet *set, uint32 events, pgsocket fd, Latch *latch,
 	if (fd == PGINVALID_SOCKET && (events & WL_SOCKET_MASK))
 		elog(ERROR, "cannot wait on socket event without a socket");
 
-	event = &set->events[set->nevents];
-	event->pos = set->nevents++;
+	free_event = set->polar_free_events;
+	if (free_event >= 0)
+	{
+		event = &set->events[free_event];
+		set->polar_free_events = event->pos;
+		event->pos = free_event;
+	}
+	else
+	{
+		event = &set->events[set->nevents];
+		event->pos = set->nevents;
+	}
+	set->polar_permutation[set->nevents] = event->pos;
+	event->polar_index = set->nevents++;
 	event->fd = fd;
 	event->events = events;
 	event->user_data = user_data;
 #ifdef WIN32
 	event->reset = false;
 #endif
+	/* POLAR: Shared Server */
+	event->polar_index = event->pos;
+	set->polar_permutation[event->pos] = event->pos;
 
 	if (events == WL_LATCH_SET)
 	{
@@ -959,9 +1023,9 @@ AddWaitEventToSet(WaitEventSet *set, uint32 events, pgsocket fd, Latch *latch,
 #elif defined(WAIT_USE_KQUEUE)
 	WaitEventAdjustKqueue(set, event, 0);
 #elif defined(WAIT_USE_POLL)
-	WaitEventAdjustPoll(set, event);
+	WaitEventAdjustPoll(set, event, false);
 #elif defined(WAIT_USE_WIN32)
-	WaitEventAdjustWin32(set, event);
+	WaitEventAdjustWin32(set, event, false);
 #endif
 
 	return event->pos;
@@ -982,7 +1046,7 @@ ModifyWaitEvent(WaitEventSet *set, int pos, uint32 events, Latch *latch)
 	int			old_events;
 #endif
 
-	Assert(pos < set->nevents);
+	Assert(pos < set->nevents_space);
 
 	event = &set->events[pos];
 #if defined(WAIT_USE_KQUEUE)
@@ -1039,9 +1103,9 @@ ModifyWaitEvent(WaitEventSet *set, int pos, uint32 events, Latch *latch)
 #elif defined(WAIT_USE_KQUEUE)
 	WaitEventAdjustKqueue(set, event, old_events);
 #elif defined(WAIT_USE_POLL)
-	WaitEventAdjustPoll(set, event);
+	WaitEventAdjustPoll(set, event, false);
 #elif defined(WAIT_USE_WIN32)
-	WaitEventAdjustWin32(set, event);
+	WaitEventAdjustWin32(set, event, false);
 #endif
 }
 
@@ -1083,6 +1147,13 @@ WaitEventAdjustEpoll(WaitEventSet *set, WaitEvent *event, int action)
 			epoll_ev.events |= EPOLLOUT;
 		if (event->events & WL_SOCKET_CLOSED)
 			epoll_ev.events |= EPOLLRDHUP;
+
+		/*
+		 * POLAR: Shared Server - use edge-triggered mode for dispatcher
+		 * sockets
+		 */
+		if (event->events & WL_SOCKET_EDGE_TRIGGERED)
+			epoll_ev.events |= EPOLLET;
 	}
 
 	/*
@@ -1102,11 +1173,17 @@ WaitEventAdjustEpoll(WaitEventSet *set, WaitEvent *event, int action)
 
 #if defined(WAIT_USE_POLL)
 static void
-WaitEventAdjustPoll(WaitEventSet *set, WaitEvent *event)
+WaitEventAdjustPoll(WaitEventSet *set, WaitEvent *event, bool remove)
 {
-	struct pollfd *pollfd = &set->pollfds[event->pos];
+	struct pollfd *pollfd = &set->pollfds[event->polar_index];
 
-	pollfd->revents = 0;
+	if (remove)
+	{
+		*pollfd = set->pollfds[set->nevents - 1];	/* nevents is not
+													 * decremented yet */
+		return;
+	}
+
 	pollfd->fd = event->fd;
 
 	/* prepare pollfd entry once */
@@ -1295,9 +1372,23 @@ WaitEventAdjustKqueue(WaitEventSet *set, WaitEvent *event, int old_events)
 
 #if defined(WAIT_USE_WIN32)
 static void
-WaitEventAdjustWin32(WaitEventSet *set, WaitEvent *event)
+WaitEventAdjustWin32(WaitEventSet *set, WaitEvent *event, bool remove)
 {
-	HANDLE	   *handle = &set->handles[event->pos + 1];
+	HANDLE	   *handle = &set->handles[event->polar_index + 1];
+
+	if (remove)
+	{
+		Assert(event->fd != PGINVALID_SOCKET);
+
+		if (*handle != WSA_INVALID_EVENT)
+			WSACloseEvent(*handle);
+
+		*handle = set->handles[set->nevents];	/* nevents is not decremented
+												 * yet but we need to add 1 to
+												 * the index */
+		set->handles[set->nevents] = WSA_INVALID_EVENT;
+		return;
+	}
 
 	if (event->events == WL_LATCH_SET)
 	{
@@ -1777,11 +1868,12 @@ WaitEventSetWaitBlock(WaitEventSet *set, int cur_timeout,
 {
 	int			returned_events = 0;
 	int			rc;
+	int			i;
+	struct pollfd *cur_pollfd = set->pollfds;
 	WaitEvent  *cur_event;
-	struct pollfd *cur_pollfd;
 
 	/* Sleep */
-	rc = poll(set->pollfds, set->nevents, (int) cur_timeout);
+	rc = poll(cur_pollfd, set->nevents, (int) cur_timeout);
 
 	/* Check return code */
 	if (rc < 0)
@@ -1803,15 +1895,13 @@ WaitEventSetWaitBlock(WaitEventSet *set, int cur_timeout,
 		return -1;
 	}
 
-	for (cur_event = set->events, cur_pollfd = set->pollfds;
-		 cur_event < (set->events + set->nevents) &&
-		 returned_events < nevents;
-		 cur_event++, cur_pollfd++)
+	for (i = 0; i < set->nevents && returned_events < nevents; i++, cur_pollfd++)
 	{
 		/* no activity on this FD, skip */
 		if (cur_pollfd->revents == 0)
 			continue;
 
+		cur_event = &set->events[set->polar_permutation[i]];
 		occurred_events->pos = cur_event->pos;
 		occurred_events->user_data = cur_event->user_data;
 		occurred_events->events = 0;
@@ -1913,17 +2003,25 @@ WaitEventSetWaitBlock(WaitEventSet *set, int cur_timeout,
 					  WaitEvent *occurred_events, int nevents)
 {
 	int			returned_events = 0;
+	int			i;
 	DWORD		rc;
 	WaitEvent  *cur_event;
 
 	/* Reset any wait events that need it */
-	for (cur_event = set->events;
-		 cur_event < (set->events + set->nevents);
-		 cur_event++)
+	for (i = 0; i < set->nevents; i++)
 	{
-		if (cur_event->reset)
+		/*
+		 * I have problem at Windows when SSPI connections "hanged" in
+		 * WaitForMultipleObjects which doesn't signal presence of input data
+		 * (while it is possible to read this data from the socket). Looks
+		 * like "reset" logic is not completely correct (resetting event just
+		 * after receiveing presious read event). Reseting all read events
+		 * fixes this problem.
+		 */
+		if (cur_event->events & WL_SOCKET_READABLE)
+			/* if (cur_event->reset) */
 		{
-			WaitEventAdjustWin32(set, cur_event);
+			WaitEventAdjustWin32(set, cur_event, false);
 			cur_event->reset = false;
 		}
 
@@ -2021,7 +2119,7 @@ WaitEventSetWaitBlock(WaitEventSet *set, int cur_timeout,
 	 * With an offset of one, due to the always present pgwin32_signal_event,
 	 * the handle offset directly corresponds to a wait event.
 	 */
-	cur_event = (WaitEvent *) &set->events[rc - WAIT_OBJECT_0 - 1];
+	cur_event = (WaitEvent *) &set->events[set->polar_permutation[rc - WAIT_OBJECT_0 - 1]];
 
 	occurred_events->pos = cur_event->pos;
 	occurred_events->user_data = cur_event->user_data;
@@ -2066,7 +2164,7 @@ WaitEventSetWaitBlock(WaitEventSet *set, int cur_timeout,
 	else if (cur_event->events & WL_SOCKET_MASK)
 	{
 		WSANETWORKEVENTS resEvents;
-		HANDLE		handle = set->handles[cur_event->pos + 1];
+		HANDLE		handle = set->handles[cur_event->polar_index + 1];
 
 		Assert(cur_event->fd);
 

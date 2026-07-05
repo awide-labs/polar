@@ -119,4 +119,9 @@ extern uint32 bms_hash_value(const Bitmapset *a);
 extern uint32 bitmap_hash(const void *key, Size keysize);
 extern int	bitmap_match(const void *key1, const void *key2, Size keysize);
 
+/* POLAR: Shared Server */
+extern uint32 polar_bms_alloc_size(const int upper);
+extern void polar_bms_reset(Bitmapset *a, const int upper);
+extern void polar_bms_add_member(Bitmapset *a, int x);
+
 #endif							/* BITMAPSET_H */

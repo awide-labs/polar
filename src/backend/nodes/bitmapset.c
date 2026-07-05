@@ -1192,3 +1192,43 @@ bitmap_match(const void *key1, const void *key2, Size keysize)
 	return !bms_equal(*((const Bitmapset *const *) key1),
 					  *((const Bitmapset *const *) key2));
 }
+
+/* POLAR: Shared Server */
+uint32
+polar_bms_alloc_size(const int upper)
+{
+	return BITMAPSET_SIZE(WORDNUM(upper) + 1);
+}
+
+void
+polar_bms_reset(Bitmapset *a, const int upper)
+{
+	if (upper < 0)
+		elog(ERROR, "negative bitmapset member not allowed");
+	memset(a, 0, polar_bms_alloc_size(upper));
+	a->nwords = WORDNUM(upper) + 1;
+}
+
+/*
+ * polar_bms_add_member - add a specified member to set
+ *
+ * Note: This version doesn't reallocate, assuming the bitmapset
+ * was pre-allocated with enough space.
+ */
+void
+polar_bms_add_member(Bitmapset *a, int x)
+{
+	int			wordnum,
+				bitnum;
+
+	if (x < 0)
+		elog(ERROR, "negative bitmapset member not allowed");
+
+	wordnum = WORDNUM(x);
+	bitnum = BITNUM(x);
+
+	if (wordnum >= a->nwords)
+		elog(ERROR, "bitmapset member out of range");
+
+	a->words[wordnum] |= ((bitmapword) 1 << bitnum);
+}

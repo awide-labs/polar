@@ -240,6 +240,20 @@ extern int	polar_mark_slow_log(bool is_slow_log);
 #define elog(elevel, ...)  \
 	ereport(elevel, errmsg_internal(__VA_ARGS__))
 
+/* POLAR: Shared Server - debug logging */
+extern bool polar_ss_enable_output_to_client;
+extern bool polar_enable_shared_server_log;
+
+#define ELOG_PSS(elevel, fmt,...) \
+	do { \
+		if (unlikely(polar_enable_shared_server_log)) \
+		{ \
+			polar_ss_enable_output_to_client = false; \
+			elog(elevel, "PSS: " fmt, ## __VA_ARGS__); \
+			polar_ss_enable_output_to_client = true; \
+		} \
+	} while(0)
+/* POLAR end */
 
 /* Support for constructing error strings separately from ereport() calls */
 
@@ -532,6 +546,7 @@ extern void polar_write_audit_log(ErrorData *edata, const char *fmt,...) pg_attr
 extern void polar_audit_log_flush(void);
 extern bool polar_audit_log_buffer_is_null(void);
 extern pg_noinline void set_backtrace(ErrorData *edata, int num_skip);
+extern char *polar_get_backtrace(void); /* POLAR: Shared Server */
 extern void polar_set_program_error_handler(SIGNAL_ARGS);
 extern void polar_reset_program_error_handler(void);
 

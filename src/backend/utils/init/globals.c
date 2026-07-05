@@ -47,6 +47,7 @@ volatile uint32 QueryCancelHoldoffCount = 0;
 volatile uint32 CritSectionCount = 0;
 
 int			MyProcPid;
+int			MySessionPid;		/* POLAR: Shared Server */
 pg_time_t	MyStartTime;
 TimestampTz MyStartTimestamp;
 struct Port *MyProcPort;
@@ -118,6 +119,7 @@ bool		IsPostmasterEnvironment = false;
 bool		IsUnderPostmaster = false;
 bool		IsBinaryUpgrade = false;
 bool		IsBackgroundWorker = false;
+bool		IsPolarDispatcher = false;	/* POLAR: Shared Server */
 
 bool		ExitOnAnyError = false;
 
@@ -143,6 +145,15 @@ int			MaxConnections = 90;
 int			max_worker_processes = 16;
 int			max_parallel_workers = 8;
 int			MaxBackends = 0;
+
+/* POLAR: Shared Server */
+int			MaxPolarDispatcher = 0;
+int			MaxPolarSessions = 0;
+int			MaxPolarSharedBackends = 0;
+int			MaxPolarSessionsPerDispatcher = 0;
+int			MaxPolarSharedBackendsPerDispatcher = 0;
+
+/* POLAR end */
 
 int			VacuumCostPageHit = 1;	/* GUC parameters for vacuum */
 int			VacuumCostPageMiss = 2;

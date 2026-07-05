@@ -666,6 +666,202 @@ ClientAuthentication(Port *port)
 }
 
 
+/* Shared Server
+ * shared server client authentication starts here.
+ * This is a trimmed down version of ClientAuthentication().
+ */
+void
+polar_session_client_authentication(Port *port)
+{
+	int			status = STATUS_ERROR;
+	const char *logdetail = NULL;
+
+	/*
+	 * Get the authentication method to use for this frontend/database
+	 * combination.  Note: we do not parse the file at this point; this has
+	 * already been done elsewhere.  hba.c dropped an error message into the
+	 * server logfile if parsing the hba config file failed.
+	 */
+	hba_getauthmethod(port);
+
+	/*
+	 * Now proceed to do the actual authentication check
+	 */
+	switch (port->hba->auth_method)
+	{
+		case uaMD5:
+			status = CheckPWChallengeAuth(port, &logdetail);
+			break;
+
+		case uaTrust:
+			status = STATUS_OK;
+			break;
+
+		case uaReject:
+
+			/*
+			 * An explicit "reject" entry in pg_hba.conf.  This report exposes
+			 * the fact that there's an explicit reject entry, which is
+			 * perhaps not so desirable from a security standpoint; but the
+			 * message for an implicit reject could confuse the DBA a lot when
+			 * the true situation is a match to an explicit reject.  And we
+			 * don't want to change the message for an implicit reject.  As
+			 * noted below, the additional information shown here doesn't
+			 * expose anything not known to an attacker.
+			 */
+			{
+				char		hostinfo[NI_MAXHOST];
+				const char *encryption_state;
+				SockAddr	raddr = POLAR_PROXY_GET_CLIENT_RADDR(port);
+
+				pg_getnameinfo_all(&raddr.addr, raddr.salen,
+								   hostinfo, sizeof(hostinfo),
+								   NULL, 0,
+								   NI_NUMERICHOST);
+
+				encryption_state =
+#ifdef ENABLE_GSS
+					(port->gss && port->gss->enc) ? _("GSS encryption") :
+#endif
+#ifdef USE_SSL
+					port->ssl_in_use ? _("SSL encryption") :
+#endif
+					_("no encryption");
+
+				Assert(!am_walsender || am_db_walsender);
+
+				ereport(FATAL,
+						(errcode(ERRCODE_INVALID_AUTHORIZATION_SPECIFICATION),
+				/* translator: last %s describes encryption state */
+						 errmsg("pg_hba.conf rejects connection for host \"%s\", user \"%s\", database \"%s\", %s",
+								hostinfo, port->user_name,
+								port->database_name,
+								encryption_state)));
+				break;
+			}
+
+		case uaImplicitReject:
+
+			/*
+			 * No matching entry, so tell the user we fell through.
+			 *
+			 * NOTE: the extra info reported here is not a security breach,
+			 * because all that info is known at the frontend and must be
+			 * assumed known to bad guys.  We're merely helping out the less
+			 * clueful good guys.
+			 */
+			{
+				char		hostinfo[NI_MAXHOST];
+				const char *encryption_state;
+				SockAddr	raddr = POLAR_PROXY_GET_CLIENT_RADDR(port);
+
+				/*
+				 * uaImplicitReject, port->hba is created by palloc0() in
+				 * check_hba().
+				 */
+				pfree(port->hba);
+				port->hba = NULL;
+
+				pg_getnameinfo_all(&raddr.addr, raddr.salen,
+								   hostinfo, sizeof(hostinfo),
+								   NULL, 0,
+								   NI_NUMERICHOST);
+
+				encryption_state =
+#ifdef ENABLE_GSS
+					(port->gss && port->gss->enc) ? _("GSS encryption") :
+#endif
+#ifdef USE_SSL
+					port->ssl_in_use ? _("SSL encryption") :
+#endif
+					_("no encryption");
+
+#define HOSTNAME_LOOKUP_DETAIL(port) \
+				(port->remote_hostname ? \
+				 (port->remote_hostname_resolv == +1 ? \
+				  errdetail_log("Client IP address resolved to \"%s\", forward lookup matches.", \
+								port->remote_hostname) : \
+				  port->remote_hostname_resolv == 0 ? \
+				  errdetail_log("Client IP address resolved to \"%s\", forward lookup not checked.", \
+								port->remote_hostname) : \
+				  port->remote_hostname_resolv == -1 ? \
+				  errdetail_log("Client IP address resolved to \"%s\", forward lookup does not match.", \
+								port->remote_hostname) : \
+				  port->remote_hostname_resolv == -2 ? \
+				  errdetail_log("Could not translate client host name \"%s\" to IP address: %s.", \
+								port->remote_hostname, \
+								gai_strerror(port->remote_hostname_errcode)) : \
+				  0) \
+				 : (port->remote_hostname_resolv == -2 ? \
+					errdetail_log("Could not resolve client IP address to a host name: %s.", \
+								  gai_strerror(port->remote_hostname_errcode)) : \
+					0))
+
+				Assert(!am_walsender || am_db_walsender);
+				ereport(FATAL,
+						(errcode(ERRCODE_INVALID_AUTHORIZATION_SPECIFICATION),
+				/* translator: last %s describes encryption state */
+						 errmsg("no pg_hba.conf entry for host \"%s\", user \"%s\", database \"%s\", %s",
+								hostinfo, port->user_name,
+								port->database_name,
+								encryption_state),
+						 HOSTNAME_LOOKUP_DETAIL(port)));
+				break;
+			}
+
+		default:
+			{
+				char		hostinfo[NI_MAXHOST];
+				const char *encryption_state;
+				SockAddr	raddr = POLAR_PROXY_GET_CLIENT_RADDR(port);
+
+				pg_getnameinfo_all(&raddr.addr, raddr.salen,
+								   hostinfo, sizeof(hostinfo),
+								   NULL, 0,
+								   NI_NUMERICHOST);
+				encryption_state =
+#ifdef ENABLE_GSS
+					(port->gss && port->gss->enc) ? _("GSS encryption") :
+#endif
+#ifdef USE_SSL
+					port->ssl_in_use ? _("SSL encryption") :
+#endif
+					_("no encryption");
+
+				ereport(FATAL,
+						(errcode(ERRCODE_INVALID_AUTHORIZATION_SPECIFICATION),
+						 errmsg("shared server only support md5/trust auth method, host \"%s\", user \"%s\", database \"%s\", %s",
+								hostinfo, port->user_name,
+								port->database_name,
+								encryption_state)));
+			}
+	}
+
+	if ((status == STATUS_OK && port->hba->clientcert == clientCertFull)
+		|| port->hba->auth_method == uaCert)
+	{
+		/*
+		 * Make sure we only check the certificate if we use the cert method
+		 * or verify-full option.
+		 */
+#ifdef USE_SSL
+		status = CheckCertAuth(port);
+#else
+		Assert(false);
+#endif
+	}
+
+	if (ClientAuthentication_hook)
+		(*ClientAuthentication_hook) (port, status);
+
+	if (status == STATUS_OK)
+		sendAuthRequest(port, AUTH_REQ_OK, NULL, 0);
+	else
+		auth_failed(port, status, logdetail);
+	pq_flush();
+	port->hba = NULL;
+}
+
 /*
  * Send an authentication request packet to the frontend.
  */

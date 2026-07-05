@@ -1,0 +1,342 @@
+create extension polar_monitor;
+create extension polar_monitor_preload;
+select polar_dispatcher_pid() - polar_dispatcher_pid(), polar_session_backend_pid() - polar_session_backend_pid(), pg_backend_pid() - pg_backend_pid();
+ ?column? | ?column? | ?column? 
+----------+----------+----------
+        0 |        0 |        0
+(1 row)
+
+select polar_is_dedicated_backend();
+ polar_is_dedicated_backend 
+----------------------------
+ t
+(1 row)
+
+-- test guc cache
+\c -
+set enable_indexscan=0;
+set max_parallel_maintenance_workers=99;
+set jit_above_cost=123.456;
+set application_name='test1';
+set synchronous_commit='off';
+select polar_dispatcher_pid() - polar_dispatcher_pid(), polar_session_backend_pid() - polar_session_backend_pid(), pg_backend_pid() - pg_backend_pid();
+ ?column? | ?column? | ?column? 
+----------+----------+----------
+        0 |        0 |        0
+(1 row)
+
+select polar_is_dedicated_backend();
+ polar_is_dedicated_backend 
+----------------------------
+ f
+(1 row)
+
+show enable_indexscan;
+ enable_indexscan 
+------------------
+ off
+(1 row)
+
+show max_parallel_maintenance_workers;
+ max_parallel_maintenance_workers 
+----------------------------------
+ 99
+(1 row)
+
+show jit_above_cost;
+ jit_above_cost 
+----------------
+ 123.456
+(1 row)
+
+show application_name;
+ application_name 
+------------------
+ test1
+(1 row)
+
+show synchronous_commit;
+ synchronous_commit 
+--------------------
+ off
+(1 row)
+
+create table t1_ss(c1 int);
+begin;
+insert into t1_ss values (1);
+commit;
+show enable_indexscan;
+ enable_indexscan 
+------------------
+ off
+(1 row)
+
+show max_parallel_maintenance_workers;
+ max_parallel_maintenance_workers 
+----------------------------------
+ 99
+(1 row)
+
+show jit_above_cost;
+ jit_above_cost 
+----------------
+ 123.456
+(1 row)
+
+show application_name;
+ application_name 
+------------------
+ test1
+(1 row)
+
+show synchronous_commit;
+ synchronous_commit 
+--------------------
+ off
+(1 row)
+
+select polar_is_dedicated_backend();
+ polar_is_dedicated_backend 
+----------------------------
+ f
+(1 row)
+
+drop table t1_ss;
+-- test custom guc
+\c -
+select polar_is_dedicated_backend();
+ polar_is_dedicated_backend 
+----------------------------
+ f
+(1 row)
+
+set test.ab=1;
+select polar_is_dedicated_backend();
+ polar_is_dedicated_backend 
+----------------------------
+ t
+(1 row)
+
+show test.ab;
+ test.ab 
+---------
+ 1
+(1 row)
+
+select polar_is_dedicated_backend();
+ polar_is_dedicated_backend 
+----------------------------
+ t
+(1 row)
+
+-- test polar_ss_dedicated_guc_names
+\c -
+alter system set polar_ss_dedicated_guc_names ='enable_indexscan,max_parallel_maintenance_workers,application_name';
+select pg_reload_conf();
+ pg_reload_conf 
+----------------
+ t
+(1 row)
+
+\c -
+set enable_indexscan=0;
+select polar_is_dedicated_backend();
+ polar_is_dedicated_backend 
+----------------------------
+ t
+(1 row)
+
+show enable_indexscan;
+ enable_indexscan 
+------------------
+ off
+(1 row)
+
+\c -
+set max_parallel_maintenance_workers=100;
+select polar_is_dedicated_backend();
+ polar_is_dedicated_backend 
+----------------------------
+ t
+(1 row)
+
+show max_parallel_maintenance_workers;
+ max_parallel_maintenance_workers 
+----------------------------------
+ 100
+(1 row)
+
+\c -
+set application_name='test1';
+select polar_is_dedicated_backend();
+ polar_is_dedicated_backend 
+----------------------------
+ t
+(1 row)
+
+show application_name;
+ application_name 
+------------------
+ test1
+(1 row)
+
+alter system set polar_ss_dedicated_guc_names ='';
+select pg_reload_conf();
+ pg_reload_conf 
+----------------
+ t
+(1 row)
+
+-- test polar_ss_dedicated_extension_names
+drop extension polar_monitor;
+drop extension polar_monitor_preload;
+\c -
+alter system set polar_ss_dedicated_extension_names ='polar_monitor_preload';
+select pg_reload_conf();
+ pg_reload_conf 
+----------------
+ t
+(1 row)
+
+\c -
+create extension polar_monitor;
+select polar_session_backend_pid() - polar_session_backend_pid();
+ ?column? 
+----------
+        0
+(1 row)
+
+\c - 
+select polar_is_dedicated_backend();
+ polar_is_dedicated_backend 
+----------------------------
+ f
+(1 row)
+
+\c -
+create extension polar_monitor_preload;
+\c - 
+select polar_session_backend_pid() - polar_session_backend_pid();
+ ?column? 
+----------
+        0
+(1 row)
+
+select polar_is_dedicated_backend();
+ polar_is_dedicated_backend 
+----------------------------
+ f
+(1 row)
+
+\c -
+alter system set polar_ss_dedicated_extension_names ='';
+select pg_reload_conf();
+ pg_reload_conf 
+----------------
+ t
+(1 row)
+
+-- test polar_ss_dedicated_dbuser_names
+\c regression postgres
+DROP DATABASE IF EXISTS d1;
+NOTICE:  database "d1" does not exist, skipping
+CREATE DATABASE d1;
+DROP ROLE IF EXISTS u1;
+NOTICE:  role "u1" does not exist, skipping
+CREATE ROLE u1 LOGIN;
+\c d1
+create extension polar_monitor;
+\c d1 u1
+select polar_is_dedicated_backend();
+ polar_is_dedicated_backend 
+----------------------------
+ f
+(1 row)
+
+\c regression postgres
+alter system set polar_ss_dedicated_dbuser_names ='d1/*';
+select pg_reload_conf();
+ pg_reload_conf 
+----------------
+ t
+(1 row)
+
+\c d1 postgres
+select polar_is_dedicated_backend();
+ polar_is_dedicated_backend 
+----------------------------
+ t
+(1 row)
+
+\c regression postgres
+select polar_is_dedicated_backend();
+ polar_is_dedicated_backend 
+----------------------------
+ f
+(1 row)
+
+\c regression postgres
+alter system set polar_ss_dedicated_dbuser_names ='*/u1';
+select pg_reload_conf();
+ pg_reload_conf 
+----------------
+ t
+(1 row)
+
+\c regression u1
+select polar_is_dedicated_backend();
+ polar_is_dedicated_backend 
+----------------------------
+ t
+(1 row)
+
+\c regression postgres
+select polar_is_dedicated_backend();
+ polar_is_dedicated_backend 
+----------------------------
+ f
+(1 row)
+
+\c regression postgres
+alter system set polar_ss_dedicated_dbuser_names ='d1/u1';
+select pg_reload_conf();
+ pg_reload_conf 
+----------------
+ t
+(1 row)
+
+\c d1 u1
+select polar_is_dedicated_backend();
+ polar_is_dedicated_backend 
+----------------------------
+ t
+(1 row)
+
+\c d1 postgres
+select polar_is_dedicated_backend();
+ polar_is_dedicated_backend 
+----------------------------
+ f
+(1 row)
+
+\c regression u1
+select polar_is_dedicated_backend();
+ polar_is_dedicated_backend 
+----------------------------
+ f
+(1 row)
+
+\c regression postgres
+alter system set polar_ss_dedicated_dbuser_names ='';
+select pg_reload_conf();
+ pg_reload_conf 
+----------------
+ t
+(1 row)
+
+DROP DATABASE IF EXISTS d1;
+DROP ROLE IF EXISTS u1;
+-- end
+\c regression postgres
+drop extension polar_monitor;
+drop extension polar_monitor_preload;

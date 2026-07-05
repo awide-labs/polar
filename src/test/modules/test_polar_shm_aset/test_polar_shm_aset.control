@@ -1,0 +1,4 @@
+comment = 'Test code for persisted buffer pool.'
+default_version = '1.0'
+module_pathname = '$libdir/test_polar_shm_aset'
+relocatable = true

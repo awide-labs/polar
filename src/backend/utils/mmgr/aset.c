@@ -50,6 +50,9 @@
 #include "utils/memdebug.h"
 #include "utils/memutils.h"
 
+/* POLAR: Shared Server */
+#include "storage/polar_session_context.h"
+
 /*--------------------
  * Chunk freelist k holds chunks of size 1 << (k + ALLOC_MINBITS),
  * for k = 0 .. ALLOCSET_NUM_FREELISTS-1.
@@ -155,7 +158,7 @@ typedef struct AllocBlockData
 	AllocBlock	next;			/* next block in aset's blocks list, if any */
 	char	   *freeptr;		/* start of free space in this block */
 	char	   *endptr;			/* end of space in this block */
-}			AllocBlockData;
+} AllocBlockData;
 
 /*
  * AllocChunk
@@ -191,7 +194,7 @@ typedef struct AllocChunkData
 	/* aset is the owning aset if allocated, or the freelist link if free */
 	void	   *aset;
 	/* there must not be any padding to reach a MAXALIGN boundary here! */
-}			AllocChunkData;
+} AllocChunkData;
 
 /*
  * Only the "aset" field should be accessed outside this module.

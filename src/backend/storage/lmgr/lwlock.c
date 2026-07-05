@@ -243,6 +243,12 @@ static const char *const BuiltinTrancheNames[] = {
 	"csnlog_buffers",
 	/* LWTRANCHE_POLAR_CSNLOG_LOCAL_CACHE: */
 	"csnlog_local_cache",
+	/* LWTRANCHE_POLAR_SS_DISPATCHER_INVAL_BUFFER: */
+	"polar_ss_dispatcher_inval_buffer",
+	/* LWTRANCHE_POLAR_SS_DB_ROLE_SETTING: */
+	"polar_ss_db_role_setting",
+	/* LWTRANCHE_POLAR_SS_SESSION_CONTEXT: */
+	"polar_ss_session_context",
 	/* POLAR end */
 };
 

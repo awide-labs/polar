@@ -45,6 +45,41 @@
 #include "utils/syscache.h"
 #include "utils/varlena.h"
 
+/* POLAR: Shared Server */
+#include "storage/polar_session_context.h"
+#include "storage/proc.h"
+
+/*
+ * POLAR: Shared Server - Session ACL cache structure
+ */
+typedef struct PolarSessionAcl
+{
+	Oid			m_cached_role[2];
+	List	   *m_cached_roles[2];
+	uint32		m_cached_db_hash;
+} PolarSessionAcl;
+
+PolarSessionAcl *
+polar_session_acl_create(MemoryContext mctx)
+{
+	PolarSessionAcl *self;
+
+	if (mctx)
+		self = (PolarSessionAcl *) MemoryContextAlloc(mctx, sizeof(PolarSessionAcl));
+	else
+		self = (PolarSessionAcl *) malloc(sizeof(PolarSessionAcl));
+
+	memset(self, 0, sizeof(PolarSessionAcl));
+	self->m_cached_role[0] = InvalidOid;
+	self->m_cached_role[1] = InvalidOid;
+	self->m_cached_roles[0] = NIL;
+	self->m_cached_roles[1] = NIL;
+
+	return self;
+}
+
+/* POLAR end */
+
 typedef struct
 {
 	const char *name;

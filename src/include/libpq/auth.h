@@ -28,4 +28,5 @@ extern void sendAuthRequest(Port *port, AuthRequest areq, const char *extradata,
 typedef void (*ClientAuthentication_hook_type) (Port *, int);
 extern PGDLLIMPORT ClientAuthentication_hook_type ClientAuthentication_hook;
 
+extern void polar_session_client_authentication(Port *port);
 #endif							/* AUTH_H */

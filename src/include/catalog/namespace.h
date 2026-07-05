@@ -187,4 +187,10 @@ extern PGDLLIMPORT char *namespace_search_path;
 extern List *fetch_search_path(bool includeImplicit);
 extern int	fetch_search_path_array(Oid *sarray, int sarray_len);
 
+/* POLAR: Shared Server */
+extern void polar_inval_namespace_path(void);
+extern bool polar_session_has_temp_namespace(void);
+
+/* POLAR end */
+
 #endif							/* NAMESPACE_H */

@@ -28,6 +28,9 @@
 #include "storage/polar_lock_stats.h"
 #include "utils/guc.h"
 
+/* POLAR: Shared Server */
+#include "storage/polar_session_context.h"
+
 /* lwlock stat summary for local backend */
 polar_lwlock_stat polar_lwlock_stat_local_summary;
 
@@ -48,9 +51,18 @@ polar_all_locks_stat *polar_locks_stat_array = NULL;
 
 #define IS_MYAUX_PROC_TYPE_VALID() (MyAuxProcType != NotAnAuxProcess)
 
+/* POLAR: Shared Server - use session ID for shared backends */
 #define POLAR_LOCK_STAT_BACKEND_INDEX() \
-	(IS_MYBACKEND_ID_VALID() ? MyBackendId - 1 : \
-		(IS_MYAUX_PROC_TYPE_VALID() ? MaxBackends + MyAuxProcType : -1))
+	(IS_POLAR_SESSION_SHARED() \
+		? (polar_session()->id + POLAR_MAX_LOCK_STAT_SLOTS_BASE) \
+		: (IS_MYBACKEND_ID_VALID() \
+			? (MyBackendId - 1) \
+			: (IS_MYAUX_PROC_TYPE_VALID() \
+				? (MaxBackends + MyAuxProcType) \
+				: -1 \
+			) \
+		) \
+	)
 
 #define POLAR_CHECK_LOCK_TYPE_AND_MODE(type, mode) \
 	(type <= LOCKTAG_LAST_TYPE && mode >= 0 && mode <= AccessExclusiveLock)

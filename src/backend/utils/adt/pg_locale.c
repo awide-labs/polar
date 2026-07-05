@@ -67,6 +67,9 @@
 #include "utils/relcache.h"
 #include "utils/syscache.h"
 
+/* POLAR: Shared Server */
+#include "storage/polar_session_context.h"
+
 #ifdef USE_ICU
 #include <unicode/ucnv.h>
 #endif

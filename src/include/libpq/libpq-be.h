@@ -229,6 +229,10 @@ typedef struct Port
 	bool		polar_proxy_ssl_in_use;
 	char	   *polar_proxy_ssl_cipher_name;
 	char	   *polar_proxy_ssl_version;
+
+	/* POLAR: Shared Server */
+	uint32		polar_startup_gucs_hash;
+	TimestampTz SessionStartTime;	/* backend start time */
 } Port;
 
 #define POLAR_PROXY_GET_RADDR(port, proxy)		((proxy) ? (port)->polar_proxy_client_raddr : (port)->raddr)

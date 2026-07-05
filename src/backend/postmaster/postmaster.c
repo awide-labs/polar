@@ -150,6 +150,8 @@
 /* POLAR */
 #include "access/polar_logindex_redo.h"
 #include "postmaster/polar_async_lock_replay.h"
+#include "postmaster/polar_dispatcher.h"
+#include "storage/polar_session_context.h"
 #include "storage/polar_fd.h"
 /* POLAR end */
 
@@ -234,7 +236,10 @@ int			ReservedBackends;
 
 /* The socket(s) we're listening to. */
 #define MAXLISTEN	64
-static pgsocket ListenSocket[MAXLISTEN];
+/* POLAR: Shared Server - expand for dispatcher sockets */
+#define POLAR_MAXLISTEN		(MAXLISTEN + POLAR_DISPATCHER_MAX_COUNT)
+static pgsocket ListenSocket[POLAR_MAXLISTEN];
+static bool dispatcher_had_restart = false;
 
 /*
  * These globals control the behavior of the postmaster in case some
@@ -260,6 +265,12 @@ bool		enable_bonjour = false;
 char	   *bonjour_name;
 bool		restart_after_crash = true;
 bool		remove_temp_files_after_crash = true;
+
+/* POLAR: Shared Server - startup packet received from dispatcher */
+char	   *polar_dispatcher_startup_buf = NULL;
+int32		polar_dispatcher_startup_len = 0;
+
+/* POLAR end */
 
 /* PIDs of special child processes; 0 when not running */
 static pid_t StartupPID = 0,
@@ -430,13 +441,12 @@ static void BackendRun(Port *port) pg_attribute_noreturn();
 static void ExitPostmaster(int status) pg_attribute_noreturn();
 static int	ServerLoop(void);
 static int	BackendStartup(Port *port);
-static int	ProcessStartupPacket(Port *port, bool ssl_done, bool gss_done);
+static int	polar_get_startup_packet(bool ssl_done, bool gss_done, char **polar_buf, int32 *polar_len);
 static void SendNegotiateProtocolVersion(List *unrecognized_protocol_options);
-static void processCancelRequest(Port *port, void *pkt);
 static int	initMasks(fd_set *rmask);
+static int	polar_init_dispatcher_masks(fd_set *rmask, int numSockets);
 static void report_fork_failure_to_client(Port *port, int errnum);
 static CAC_state canAcceptConnections(int backend_type);
-static bool RandomCancelKey(int32 *cancel_key);
 static void signal_child(pid_t pid, int signal);
 static bool SignalSomeChildren(int signal, int targets);
 static void TerminateChildren(int signal);
@@ -448,6 +458,14 @@ static bool assign_backendlist_entry(RegisteredBgWorker *rw);
 static void maybe_start_bgworkers(void);
 static bool CreateOptsFile(int argc, char *argv[], char *fullprogname);
 static pid_t StartChildProcess(AuxProcType type);
+
+/* POLAR: Shared Server */
+static void polar_dispatcher_start(void);
+static void polar_dispatcher_handle_signal(int signal);
+static void polar_dispatcher_worker_start(int id);
+static Port *polar_conn_create_from_dispatcher(int serverFd, char **startup_buf, int32 *startup_len);
+
+/* POLAR end */
 static void StartAutovacuumWorker(void);
 static void MaybeStartWalReceiver(void);
 static void InitPostmasterDeathWatchHandle(void);
@@ -514,7 +532,7 @@ typedef struct
 	Port		port;
 	InheritableSocket portsocket;
 	char		DataDir[MAXPGPATH];
-	pgsocket	ListenSocket[MAXLISTEN];
+	pgsocket	ListenSocket[POLAR_MAXLISTEN];
 	int32		MyCancelKey;
 	int			MyPMChildSlot;
 #ifndef WIN32
@@ -664,7 +682,7 @@ PostmasterMain(int argc, char *argv[])
 
 	InitProcessGlobals();
 
-	PostmasterPid = MyProcPid;
+	MySessionPid = PostmasterPid = MyProcPid;
 
 	IsPostmasterEnvironment = true;
 
@@ -1310,7 +1328,7 @@ PostmasterMain(int argc, char *argv[])
 	 * Mark them all closed, and set up an on_proc_exit function that's
 	 * charged with closing the sockets again at postmaster shutdown.
 	 */
-	for (i = 0; i < MAXLISTEN; i++)
+	for (i = 0; i < POLAR_MAXLISTEN; i++)
 		ListenSocket[i] = PGINVALID_SOCKET;
 
 	on_proc_exit(CloseServerPorts, 0);
@@ -1699,6 +1717,9 @@ PostmasterMain(int argc, char *argv[])
 	/* Some workers may be scheduled to start now */
 	maybe_start_bgworkers();
 
+	/* POLAR: Shared Server - start dispatchers */
+	polar_dispatcher_start();
+
 	status = ServerLoop();
 
 	/*
@@ -1724,7 +1745,7 @@ CloseServerPorts(int status, Datum arg)
 	 * before we remove the postmaster.pid lockfile; otherwise there's a race
 	 * condition if a new postmaster wants to re-use the TCP port number.
 	 */
-	for (i = 0; i < MAXLISTEN; i++)
+	for (i = 0; i < POLAR_MAXLISTEN; i++)
 	{
 		if (ListenSocket[i] != PGINVALID_SOCKET)
 		{
@@ -1944,6 +1965,69 @@ DetermineSleepTime(struct timeval *timeout)
 	}
 }
 
+/**
+ * This function tries to estimate workload of proxy.
+ * We have a lot of information about proxy state in polar_dispatcher_proc array:
+ * total number of clients, SSL clients, backends, traffic, number of transactions,...
+ * So in principle it is possible to implement much more sophisticated evaluation function,
+ * but right now we take in account only number of clients and SSL connections (which requires much more CPU)
+ */
+static uint64
+GetConnectionProxyWorkload(int id)
+{
+	return polar_dispatcher_proc[id].n_clients + polar_dispatcher_proc[id].n_ssl_clients * 3;
+}
+
+/**
+ * Choose connection pool for this session.
+ * Right now sessions can not be moved between pools (in principle it is not so difficult to implement it),
+ * so to support order balancing we should do some smart work here.
+ */
+static PolarDispatcherProc *
+polar_select_dispatcher(void)
+{
+	/*
+	 * index used for round-robin distribution of connections between
+	 * dispatchers
+	 */
+	static int	polar_current_dispatcher_index;
+	int			i;
+	uint64		min_workload;
+	int			least_loaded_proxy;
+
+	if (polar_ss_dispatcher_count == 1)
+		return &polar_dispatcher_proc[0];
+
+	switch (polar_ss_client_schedule_policy)
+	{
+		case CLIENT_SCHEDULE_ROUND_ROBIN:
+			return &polar_dispatcher_proc[polar_current_dispatcher_index++ % polar_ss_dispatcher_count];
+
+		case CLIENT_SCHEDULE_RANDOM:
+			return &polar_dispatcher_proc[random() % polar_ss_dispatcher_count];
+
+		case CLIENT_SCHEDULE_LOAD_BALANCING:
+			min_workload = GetConnectionProxyWorkload(0);
+			least_loaded_proxy = 0;
+			for (i = 1; i < polar_ss_dispatcher_count; i++)
+			{
+				int			workload = GetConnectionProxyWorkload(i);
+
+				if (workload < min_workload)
+				{
+					min_workload = workload;
+					least_loaded_proxy = i;
+				}
+			}
+			return &polar_dispatcher_proc[least_loaded_proxy];
+
+		default:
+			elog(ERROR, "invalid polar_ss_client_schedule_policy: %d", polar_ss_client_schedule_policy);
+	}
+	return NULL;
+}
+
+
 /*
  * Main idle loop of postmaster
  *
@@ -1952,8 +2036,10 @@ DetermineSleepTime(struct timeval *timeout)
 static int
 ServerLoop(void)
 {
-	fd_set		readmask;
-	int			nSockets;
+	fd_set		readmask,
+				readmask_base;
+	int			nSockets,
+				nSockets_base = 0;
 	time_t		last_lockfile_recheck_time,
 				last_touch_time;
 
@@ -1961,11 +2047,24 @@ ServerLoop(void)
 
 	nSockets = initMasks(&readmask);
 
+	if (POLAR_SHARED_SERVER_RUNNING())
+	{
+		nSockets_base = nSockets;
+		memcpy((char *) &readmask_base, (char *) &readmask, sizeof(fd_set));
+	}
+
 	for (;;)
 	{
 		fd_set		rmask;
 		int			selres;
 		time_t		now;
+
+		if (POLAR_SHARED_SERVER_RUNNING() && dispatcher_had_restart)
+		{
+			dispatcher_had_restart = false;
+			memcpy((char *) &readmask, (char *) &readmask_base, sizeof(fd_set));
+			nSockets = polar_init_dispatcher_masks(&readmask, nSockets_base);
+		}
 
 		/*
 		 * Wait for a connection request to arrive.
@@ -2034,7 +2133,15 @@ ServerLoop(void)
 					port = ConnCreate(ListenSocket[i]);
 					if (port)
 					{
-						BackendStartup(port);
+						if (POLAR_SHARED_SERVER_RUNNING())
+						{
+							PolarDispatcherProc *proc = polar_select_dispatcher();
+
+							if (polar_pg_send_sock(proc->pipes[0], port->sock) < 0)
+								elog(LOG, "could not send socket to connection pool: %m");
+						}
+						else
+							BackendStartup(port);
 
 						/*
 						 * We no longer need the open socket or port structure
@@ -2045,6 +2152,40 @@ ServerLoop(void)
 					}
 				}
 			}
+
+			/* POLAR: Shared Server - Check for data from dispatcher */
+			if (POLAR_SHARED_SERVER_RUNNING())
+			{
+				for (i = 0; i < polar_ss_dispatcher_count; i++)
+				{
+					if (FD_ISSET(ListenSocket[MAXLISTEN + i], &rmask))
+					{
+						Port	   *port = polar_conn_create_from_dispatcher(ListenSocket[MAXLISTEN + i],
+																			 &polar_dispatcher_startup_buf,
+																			 &polar_dispatcher_startup_len);
+
+						if (port)
+						{
+							polar_my_dispatcher_id = i;
+							BackendStartup(port);
+
+							/*
+							 * We no longer need the open socket or port
+							 * structure in this process
+							 */
+							StreamClose(port->sock);
+							ConnFree(port);
+						}
+						if (polar_dispatcher_startup_buf)
+						{
+							free(polar_dispatcher_startup_buf);
+							polar_dispatcher_startup_buf = NULL;
+							polar_dispatcher_startup_len = 0;
+						}
+					}
+				}
+			}
+			/* POLAR end */
 		}
 
 		/* If we have lost the log collector, try to start a new one */
@@ -2130,6 +2271,10 @@ ServerLoop(void)
 		/* Get other worker processes running, if needed */
 		if (StartWorkerNeeded || HaveCrashedWorker)
 			maybe_start_bgworkers();
+
+		/* POLAR: Shared Server - start dispatchers if in run state */
+		if (pmState == PM_RUN)
+			polar_dispatcher_start();
 
 #ifdef HAVE_PTHREAD_IS_THREADED_NP
 
@@ -2234,6 +2379,28 @@ initMasks(fd_set *rmask)
 
 
 /*
+ * Shared Server. Init wait event set for dispatchers.
+ */
+static int
+polar_init_dispatcher_masks(fd_set *rmask, int numSockets)
+{
+	int			i;
+
+	for (i = 0; i < polar_ss_dispatcher_count; i++)
+	{
+		PolarDispatcherProc *proc = &polar_dispatcher_proc[i];
+
+		FD_SET(proc->pipes[0], rmask);
+		ListenSocket[MAXLISTEN + i] = proc->pipes[0];
+
+		if (proc->pipes[0] > numSockets)
+			numSockets = proc->pipes[0];
+	}
+	return numSockets + 1;
+}
+
+
+/*
  * Read a client's startup packet and do something according to it.
  *
  * Returns STATUS_OK or STATUS_ERROR, or might call ereport(FATAL) and
@@ -2252,14 +2419,11 @@ initMasks(fd_set *rmask)
  * requests.
  */
 static int
-ProcessStartupPacket(Port *port, bool ssl_done, bool gss_done)
+polar_get_startup_packet(bool ssl_done, bool gss_done, char **polar_buf, int32 *polar_len)
 {
 	int32		len;
 	char	   *buf;
-	ProtocolVersion proto;
-	MemoryContext oldcontext;
 
-retry:
 	pq_startmsgread();
 
 	/*
@@ -2313,6 +2477,9 @@ retry:
 	buf = palloc(len + 1);
 	buf[len] = '\0';
 
+	*polar_buf = buf;
+	*polar_len = len;
+
 	if (pq_getbytes(buf, len) == EOF)
 	{
 		ereport(COMMERROR,
@@ -2321,6 +2488,24 @@ retry:
 		return STATUS_ERROR;
 	}
 	pq_endmsgread();
+	return STATUS_OK;
+}
+
+
+/* POLAR: Shared Server */
+int
+polar_parse_startup_packet(Port *port, MemoryContext memctx, char *buf, int len, bool ssl_done, bool gss_done)
+{
+	ProtocolVersion proto;
+	MemoryContext oldcontext;
+	char	   *polar_next_buf = NULL;	/* packet read during SSL/GSS
+										 * renegotiation */
+	int32		polar_next_len = 0;
+
+retry:
+	am_walsender = false;
+	am_db_walsender = false;
+	am_px_worker = false;
 
 	/*
 	 * The first field is either a protocol version number or a special
@@ -2388,7 +2573,35 @@ retry1:
 		 * regular startup packet, cancel, etc packet should follow, but not
 		 * another SSL negotiation request, and a GSS request should only
 		 * follow if SSL was rejected (client may negotiate in either order)
+		 *
+		 * POLAR: Shared Server - read the follow-up packet and loop back
+		 * instead of recursing into polar_parse_startup_packet(), so that a
+		 * malicious client cannot exhaust the stack by alternating rejected
+		 * SSL and GSS negotiation requests.
 		 */
+		{
+			int			polar_status;
+
+			/* discard the buffer read during a previous renegotiation, if any */
+			if (polar_next_buf != NULL)
+			{
+				pfree(polar_next_buf);
+				polar_next_buf = NULL;
+			}
+
+			polar_status = polar_get_startup_packet(true, SSLok == 'S',
+													&polar_next_buf, &polar_next_len);
+			if (polar_status != STATUS_OK)
+			{
+				if (polar_next_buf != NULL)
+					pfree(polar_next_buf);
+				return polar_status;
+			}
+			buf = polar_next_buf;
+			len = polar_next_len;
+		}
+		/* POLAR: end */
+
 		ssl_done = true;
 		if (SSLok == 'S')
 		{
@@ -2441,7 +2654,35 @@ retry1:
 		 * regular startup packet, cancel, etc packet should follow, but not
 		 * another GSS negotiation request, and an SSL request should only
 		 * follow if GSS was rejected (client may negotiate in either order)
+		 *
+		 * POLAR: Shared Server - read the follow-up packet and loop back
+		 * instead of recursing into polar_parse_startup_packet(), so that a
+		 * malicious client cannot exhaust the stack by alternating rejected
+		 * SSL and GSS negotiation requests.
 		 */
+		{
+			int			polar_status;
+
+			/* discard the buffer read during a previous renegotiation, if any */
+			if (polar_next_buf != NULL)
+			{
+				pfree(polar_next_buf);
+				polar_next_buf = NULL;
+			}
+
+			polar_status = polar_get_startup_packet(GSSok == 'G', true,
+													&polar_next_buf, &polar_next_len);
+			if (polar_status != STATUS_OK)
+			{
+				if (polar_next_buf != NULL)
+					pfree(polar_next_buf);
+				return polar_status;
+			}
+			buf = polar_next_buf;
+			len = polar_next_len;
+		}
+		/* POLAR: end */
+
 		gss_done = true;
 		if (GSSok == 'G')
 		{
@@ -2481,7 +2722,7 @@ retry1:
 	 * not worry about leaking this storage on failure, since we aren't in the
 	 * postmaster process anymore.
 	 */
-	oldcontext = MemoryContextSwitchTo(TopMemoryContext);
+	oldcontext = MemoryContextSwitchTo(memctx);
 
 	/* Handle protocol version 3 startup packet */
 	{
@@ -2732,6 +2973,39 @@ retry1:
 	if (port->database_name == NULL || port->database_name[0] == '\0')
 		port->database_name = pstrdup(port->user_name);
 
+	/* POLAR: Shared Server */
+	port->polar_startup_gucs_hash = 0;
+	if (port->cmdline_options != NULL)
+		port->polar_startup_gucs_hash = polar_murmurhash2(port->cmdline_options,
+														  strlen(port->cmdline_options), port->polar_startup_gucs_hash);
+
+	elog(DEBUG1, "startup_gucs cmd: %u, %s", port->polar_startup_gucs_hash,
+		 port->cmdline_options ? port->cmdline_options : "null");
+
+	if (port->guc_options != NULL)
+	{
+		ListCell   *gucopts = list_head(port->guc_options);
+
+		while (gucopts)
+		{
+			char	   *name;
+			char	   *value;
+
+			name = lfirst(gucopts);
+			gucopts = lnext(port->guc_options, gucopts);
+
+			value = lfirst(gucopts);
+			gucopts = lnext(port->guc_options, gucopts);
+
+			port->polar_startup_gucs_hash = polar_murmurhash2(name, strlen(name), port->polar_startup_gucs_hash);
+			port->polar_startup_gucs_hash = polar_murmurhash2(value, strlen(value), port->polar_startup_gucs_hash);
+
+			elog(DEBUG1, "startup_gucs opt: %u, %s='%s'", port->polar_startup_gucs_hash, name, value);
+		}
+	}
+	else
+		elog(DEBUG1, "startup_gucs opt: null");
+
 	if (Db_user_namespace)
 	{
 		/*
@@ -2823,6 +3097,10 @@ retry1:
 			break;
 	}
 
+	/* POLAR: Shared Server - release the buffer read during renegotiation */
+	if (polar_next_buf != NULL)
+		pfree(polar_next_buf);
+
 	return STATUS_OK;
 }
 
@@ -2860,7 +3138,8 @@ SendNegotiateProtocolVersion(List *unrecognized_protocol_options)
  * start-a-new-connection packet.  Perform the necessary processing.
  * Nothing is sent back to the client.
  */
-static void
+/* POLAR: Shared Server - made non-static for dispatcher access */
+void
 processCancelRequest(Port *port, void *pkt)
 {
 	CancelRequestPacket *canc = (CancelRequestPacket *) pkt;
@@ -2876,7 +3155,7 @@ processCancelRequest(Port *port, void *pkt)
 
 	backendPID = (int) pg_ntoh32(canc->backendPID);
 	cancelAuthCode = (int32) pg_ntoh32(canc->cancelAuthCode);
-
+	elog(DEBUG1, "PID %d(%d)in cancel request", backendPID, cancelAuthCode);
 	/* POLAR: cancel request for proxy sid */
 	if (POLAR_IS_PROXY_SID(backendPID))
 	{
@@ -2898,7 +3177,7 @@ processCancelRequest(Port *port, void *pkt)
 							backendPID)));
 			return;
 		}
-		else
+		else if (!POLAR_IS_SESSION_ID(realBackendPID))
 		{
 			/* Found a match; signal that backend to cancel current op */
 			ereport(DEBUG2,
@@ -2907,6 +3186,24 @@ processCancelRequest(Port *port, void *pkt)
 			signal_child(realBackendPID, SIGINT);
 			return;
 		}
+	}
+
+	if (POLAR_IS_SESSION_ID(backendPID))
+	{
+		if (!polar_send_signal(backendPID, &cancelAuthCode, SIGINT))
+		{
+			/* Right PID, wrong key: no way, Jose */
+			ereport(WARNING,
+					(errmsg("wrong key in cancel request for process %d",
+							backendPID)));
+		}
+		else
+		{
+			ereport(LOG,
+					(errmsg_internal("processing cancel request: process %d will killed",
+									 backendPID)));
+		}
+		return;
 	}
 	/* POLAR end */
 
@@ -3029,7 +3326,7 @@ ConnCreate(int serverFd)
 		ExitPostmaster(1);
 	}
 
-	if (StreamConnection(serverFd, port) != STATUS_OK)
+	if (StreamConnection(serverFd, port, false) != STATUS_OK)
 	{
 		if (port->sock != PGINVALID_SOCKET)
 			StreamClose(port->sock);
@@ -3089,7 +3386,7 @@ ClosePostmasterPorts(bool am_syslogger)
 	 * Close the postmaster's listen sockets.  These aren't tracked by fd.c,
 	 * so we don't call ReleaseExternalFD() here.
 	 */
-	for (i = 0; i < MAXLISTEN; i++)
+	for (i = 0; i < POLAR_MAXLISTEN; i++)
 	{
 		if (ListenSocket[i] != PGINVALID_SOCKET)
 		{
@@ -3256,6 +3553,9 @@ SIGHUP_handler(SIGNAL_ARGS)
 		/* POLAR: signal logindex background process */
 		if (LogIndexBgPID != 0)
 			signal_child(LogIndexBgPID, SIGHUP);
+
+		/* POLAR: Shared Server - signal dispatchers */
+		polar_dispatcher_handle_signal(SIGHUP);
 
 		/* Reload authentication config files too */
 		if (!load_hba())
@@ -3427,6 +3727,8 @@ pmdie(SIGNAL_ARGS)
 			/* tell children to shut down ASAP */
 			SetQuitSignalReason(PMQUIT_FOR_STOP);
 			TerminateChildren(SIGQUIT);
+			/* POLAR: Shared Server - signal dispatchers */
+			polar_dispatcher_handle_signal(SIGQUIT);
 			pmState = PM_WAIT_BACKENDS;
 
 			/* set stopwatch for them to die */
@@ -3470,6 +3772,9 @@ reaper(SIGNAL_ARGS)
 
 	while ((pid = waitpid(-1, &exitstatus, WNOHANG)) > 0)
 	{
+		ereport(DEBUG4,
+				(errmsg_internal("reaping dead processes %d", pid)));
+
 		/*
 		 * Check if this child was a startup process.
 		 */
@@ -3581,6 +3886,9 @@ reaper(SIGNAL_ARGS)
 				AutoVacPID = StartAutoVacLauncher();
 			if (PgArchStartupAllowed() && PgArchPID == 0)
 				PgArchPID = StartArchiver();
+
+			/* POLAR: Shared Server - start dispatchers */
+			polar_dispatcher_start();
 
 			/* workers may be scheduled to start now */
 			maybe_start_bgworkers();
@@ -3783,6 +4091,32 @@ reaper(SIGNAL_ARGS)
 				HandleChildCrash(pid, exitstatus, _("logindex background process"));
 			continue;
 		}
+
+		/*
+		 * POLAR: Shared Server - was it one of our dispatchers?
+		 */
+		if (POLAR_SHARED_SERVER_RUNNING())
+		{
+			int			i;
+			bool		found = false;
+
+			for (i = 0; i < polar_ss_dispatcher_count; i++)
+			{
+				if (pid == polar_dispatcher_proc[i].pid)
+				{
+					polar_dispatcher_proc[i].pid = 0;
+					found = true;
+
+					if (!EXIT_STATUS_0(exitstatus))
+						HandleChildCrash(pid, exitstatus,
+										 _("polar dispatcher process"));
+					break;
+				}
+			}
+			if (found)
+				continue;
+		}
+		/* POLAR end */
 
 		/* Was it one of our background workers? */
 		if (CleanupBackgroundWorker(pid, exitstatus))
@@ -4246,9 +4580,31 @@ HandleChildCrash(int pid, int exitstatus, const char *procname)
 		ereport(DEBUG2,
 				(errmsg_internal("sending %s to process %d",
 								 (SendStop ? "SIGSTOP" : "SIGQUIT"),
-								 (int) AutoVacPID)));
+								 (int) LogIndexBgPID)));
 		signal_child(LogIndexBgPID, (SendStop ? SIGSTOP : SIGQUIT));
 	}
+
+	/* POLAR: Shared Server - take care of dispatchers too */
+	if (POLAR_SHARED_SERVER_RUNNING())
+	{
+		int			i;
+
+		for (i = 0; i < polar_ss_dispatcher_count; i++)
+		{
+			if (pid == polar_dispatcher_proc[i].pid)
+				polar_dispatcher_proc[i].pid = 0;
+			else if (polar_dispatcher_proc[i].pid != 0 && take_action)
+			{
+				ereport(DEBUG2,
+						(errmsg_internal("sending %s to process %d",
+										 (SendStop ? "SIGSTOP" : "SIGQUIT"),
+										 (int) polar_dispatcher_proc[i].pid)));
+				signal_child(polar_dispatcher_proc[i].pid,
+							 (SendStop ? SIGSTOP : SIGQUIT));
+			}
+		}
+	}
+	/* POLAR end */
 
 	/* We do NOT restart the syslogger */
 
@@ -4392,6 +4748,10 @@ PostmasterStateMachine(void)
 		/* POLAR: and the logindex background process too */
 		if (LogIndexBgPID != 0)
 			signal_child(LogIndexBgPID, SIGTERM);
+
+		/* POLAR: Shared Server - signal dispatchers */
+		polar_dispatcher_handle_signal(SIGTERM);
+
 		/* checkpointer, archiver, stats, and syslogger may continue for now */
 
 		/* Now transition to PM_WAIT_BACKENDS state to wait for them to die */
@@ -4754,6 +5114,8 @@ TerminateChildren(int signal)
 	/* POLAR: signal logindex background process */
 	if (LogIndexBgPID != 0)
 		signal_child(LogIndexBgPID, signal);
+
+	polar_dispatcher_handle_signal(signal);
 }
 
 /*
@@ -5061,7 +5423,28 @@ BackendInitialize(Port *port)
 	 * Receive the startup packet (which might turn out to be a cancel request
 	 * packet).
 	 */
-	status = ProcessStartupPacket(port, false, false);
+	if (POLAR_SHARED_SERVER_RUNNING() && polar_dispatcher_startup_buf != NULL)
+	{
+		/* this port is received from dispatcher. Don't support SSL/GSS now. */
+		status = polar_parse_startup_packet(port,
+											TopMemoryContext,
+											polar_dispatcher_startup_buf,
+											polar_dispatcher_startup_len,
+											true, true);
+		free(polar_dispatcher_startup_buf);
+		polar_dispatcher_startup_buf = NULL;
+	}
+	else
+	{
+		char	   *polar_buf = NULL;
+		int32		polar_len = 0;
+
+		status = polar_get_startup_packet(false, false, &polar_buf, &polar_len);
+		if (STATUS_OK == status)
+			status = polar_parse_startup_packet(port, TopMemoryContext, polar_buf, polar_len, false, false);
+		if (polar_buf != NULL)
+			pfree(polar_buf);
+	}
 
 	/*
 	 * Disable the timeout, and prevent SIGTERM again.
@@ -5996,7 +6379,8 @@ StartupPacketTimeoutHandler(void)
 /*
  * Generate a random cancel key.
  */
-static bool
+/* POLAR: Shared Server - made non-static for dispatcher access */
+bool
 RandomCancelKey(int32 *cancel_key)
 {
 	return pg_strong_random(cancel_key, sizeof(int32));
@@ -6325,6 +6709,7 @@ int
 MaxLivePostmasterChildren(void)
 {
 	return 2 * (MaxConnections + autovacuum_max_workers + 1 +
+				MaxPolarDispatcher +	/* POLAR: Shared Server */
 				max_wal_senders + max_worker_processes);
 }
 
@@ -7455,3 +7840,178 @@ polar_assign_enable_send_stop(bool newval, void *extra)
 {
 	SendStop = newval;
 }
+
+/*
+ * POLAR: Shared Server - Dispatcher Functions
+ */
+
+/*
+ * polar_dispatcher_start
+ *		Start dispatcher processes if shared server is enabled.
+ */
+static void
+polar_dispatcher_start(void)
+{
+	if (POLAR_SHARED_SERVER_RUNNING())
+	{
+		int			i;
+
+		for (i = 0; i < polar_ss_dispatcher_count; i++)
+		{
+			if (0 == polar_dispatcher_proc[i].pid)
+			{
+				PolarDispatcherProc *proc = &polar_dispatcher_proc[i];
+
+				if (socketpair(AF_UNIX, SOCK_STREAM, 0, proc->pipes) < 0)
+					ereport(FATAL,
+							(errcode_for_file_access(),
+							 errmsg_internal("could not create socket pair for launching sessions: %m")));
+
+				polar_dispatcher_worker_start(i);
+
+				dispatcher_had_restart = true;
+			}
+		}
+	}
+}
+
+/*
+ * polar_dispatcher_handle_signal
+ *		Send signal to all dispatcher processes.
+ */
+static void
+polar_dispatcher_handle_signal(int signal)
+{
+	if (POLAR_SHARED_SERVER_RUNNING())
+	{
+		int			i;
+
+		elog(LOG, "polar_dispatcher_handle_signal %d", signal);
+		for (i = 0; i < polar_ss_dispatcher_count; i++)
+		{
+			if (polar_dispatcher_proc[i].pid != 0)
+				signal_child(polar_dispatcher_proc[i].pid, signal);
+		}
+	}
+}
+
+/*
+ * polar_dispatcher_worker_start
+ *		Start an shared server dispatcher worker process.
+ *
+ * This function is here because it enters the resulting PID into the
+ * postmaster's private backends list.
+ *
+ * NB -- this code very roughly matches BackendStartup.
+ */
+static void
+polar_dispatcher_worker_start(int id)
+{
+	pid_t		pid;
+
+	polar_my_dispatcher_id = id;
+
+	switch ((pid = fork_process()))
+	{
+		case -1:
+			ereport(LOG,
+					(errmsg("could not fork dispatcher worker process: %m")));
+			return;
+
+		case 0:
+			/* in postmaster child ... */
+			InitPostmasterChild();
+
+			/* Close the postmaster's sockets */
+			ClosePostmasterPorts(false);
+
+			dispatcher_main(0, NULL);
+			break;
+		default:
+			elog(LOG, "Start dispatcher process id:%d, pid:%d", polar_my_dispatcher_id, pid);
+			polar_dispatcher_proc[id].id = id;
+			polar_dispatcher_proc[id].pid = pid;
+	}
+}
+
+/*
+ * polar_conn_create_from_dispatcher
+ *		Create a connection from a dispatcher.
+ */
+static Port *
+polar_conn_create_from_dispatcher(int serverFd, char **startup_buf, int32 *startup_len)
+{
+	Port	   *port;
+	pgsocket	backend_sock;
+	int32		total;
+	int32		offset;
+	ssize_t		rc;
+
+	backend_sock = polar_pg_recv_sock(serverFd);
+	/* socketpair between postmaster an dispatcher should not have error. */
+	Assert(backend_sock != PGINVALID_SOCKET);
+
+	if (backend_sock == PGINVALID_SOCKET)
+		goto io_error;
+
+	/* get the startup len */
+	for (offset = 0; offset < 4; offset += rc)
+	{
+		while ((rc = recv(serverFd, ((char *) &total) + offset, 4 - offset, 0)) < 0 && errno == EINTR);
+		if (rc <= 0)
+			goto io_error;
+	}
+
+	total = pg_ntoh32(total);
+	total -= 4;
+	*startup_len = total;
+
+	*startup_buf = malloc(total);
+	if (!*startup_buf)
+		goto oom_error;
+
+	/* get the total startup packet */
+	for (offset = 0; offset < total; offset += rc)
+	{
+		while ((rc = recv(serverFd, *startup_buf + offset, total - offset, 0)) < 0 && errno == EINTR);
+		if (rc <= 0)
+			goto io_error;
+	}
+
+	if (!(port = (Port *) calloc(1, sizeof(Port))))
+		goto oom_error;
+
+	port->sock = backend_sock;
+	if (StreamConnection(serverFd, port, true) != STATUS_OK)
+	{
+		StreamClose(port->sock);
+		ConnFree(port);
+		return NULL;
+	}
+
+	/*
+	 * Allocate GSSAPI specific state struct
+	 */
+#ifndef EXEC_BACKEND
+#if defined(ENABLE_GSS) || defined(ENABLE_SSPI)
+	port->gss = (pg_gssinfo *) calloc(1, sizeof(pg_gssinfo));
+	if (!port->gss)
+		goto oom_error;
+#endif
+#endif
+	return port;
+
+oom_error:
+	ereport(LOG,
+			(errcode(ERRCODE_OUT_OF_MEMORY),
+			 errmsg("out of memory")));
+	ExitPostmaster(1);
+	return NULL;
+
+io_error:
+	Assert(false);				/* socketpair between postmaster an dispatcher
+								 * should not have error. */
+	return NULL;
+}
+
+/* POLAR: Shared Server end */

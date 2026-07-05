@@ -31,5 +31,6 @@ OBJS = \
 OBJS += polar_async_lock_replay.o
 OBJS += polar_parallel_bgwriter.o
 OBJS += polar_wal_pipeliner.o
+OBJS += polar_dispatcher.o
 
 include $(top_srcdir)/src/backend/common.mk

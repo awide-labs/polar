@@ -33,6 +33,8 @@
 #include "fmgr.h"
 #include "lib/stringinfo.h"
 #include "miscadmin.h"
+#include "storage/polar_session_context.h"
+#include "storage/proc.h"
 #include "storage/shmem.h"
 #include "utils/hsearch.h"
 
@@ -358,7 +360,16 @@ internal_load_library(const char *libname)
 		 */
 		PG_init = (PG_init_t) dlsym(file_scanner->handle, "_PG_init");
 		if (PG_init)
+		{
+			/* POLAR: Shared Server */
+			if (POLAR_SS_NOT_DEDICATED())
+			{
+				MyProc->polar_is_backend_dedicated = true;
+				elog(LOG, "polar shared server set dedicated from internal_load_library '%s'",
+					 libname);
+			}
 			(*PG_init) ();
+		}
 
 		/* OK to link it into list */
 		if (file_list == NULL)

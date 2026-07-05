@@ -29,5 +29,6 @@ OBJS = \
 	typcache.o
 
 OBJS += polar_local_cache.o
+OBJS += polar_session_inval.o
 
 include $(top_srcdir)/src/backend/common.mk

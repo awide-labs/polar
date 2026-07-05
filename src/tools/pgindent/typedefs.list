@@ -56,7 +56,9 @@ AggregateInstrumentation
 AlenState
 Alias
 AllocBlock
+AllocBlockData
 AllocChunk
+AllocChunkData
 AllocPointer
 AllocSet
 AllocSetContext
@@ -225,6 +227,7 @@ BUF_MEM
 BYTE
 BY_HANDLE_FILE_INFORMATION
 Backend
+BackendChannel
 BackendId
 BackendMemoryStat
 BackendParameters
@@ -377,6 +380,7 @@ CkptTsStatus
 ClientAuthentication_hook_type
 ClientCertMode
 ClientCertName
+ClientChannel
 ClientData
 ClonePtrType
 ClosePortalStmt
@@ -550,6 +554,8 @@ DR_printtup
 DR_sqlfunction
 DR_transientrel
 DSA
+DSAContextCounters
+DSALockStat
 DWORD
 DataDumperPtr
 DataPageDeleteStack
@@ -588,6 +594,7 @@ DirectoryMethodFile
 DisableTimeoutParams
 DiscardMode
 DiscardStmt
+DispatcherStateContext
 DistanceValue
 DistinctColInfo
 DistinctExpr
@@ -1536,6 +1543,7 @@ MemoryContextCallback
 MemoryContextCallbackFunction
 MemoryContextCounters
 MemoryContextData
+MemoryContextFallbackData
 MemoryContextIteratorState
 MemoryContextMethods
 MemoryContextStat
@@ -1884,6 +1892,7 @@ PTEntryArray
 PTIterationArray
 PTOKEN_PRIVILEGES
 PTOKEN_USER
+PT_RESULT
 PULONG
 PUTENVPROC
 PVIndStats
@@ -2095,12 +2104,26 @@ PlannerInfo
 PlannerParamItem
 Point
 Pointer
+PolarChannelType
 PolarCollectIoStat
+PolarDbRoleSetting
+PolarDbRoleSettingArray
+PolarDispatcher
+PolarDispatcherProc
+PolarDispatcherSISeg
 PolarHookActionType
+PolarName
+PolarNames
 PolarNodeType
 PolarProcIOStat
 PolarProcStatm
 PolarReleaseAssertLevel
+PolarSessionAcl
+PolarSessionContext
+PolarSessionGUC
+PolarSessionInfo
+PolarSessionNamespace
+PolarSessionSuperUser
 PolarSettingAction
 PolarSettingWalHeader
 PolarStatSqlCollector
@@ -2124,6 +2147,7 @@ PortalStrategy
 PostParseColumnRefHook
 PostgresPollingStatusType
 PostingItem
+PostmasterChannel
 PostponedQual
 PreParseColumnRefHook
 PredClass
@@ -2472,6 +2496,7 @@ ScanKeywordList
 ScanState
 ScanTypeControl
 ScannerCallbackState
+ScheduleSource
 SchemaQuery
 SecBuffer
 SecBufferDesc
@@ -2498,6 +2523,8 @@ SerializedTransactionState
 Session
 SessionBackupState
 SessionEndType
+SessionPool
+SessionPoolKey
 SetConstraintState
 SetConstraintStateData
 SetConstraintTriggerData
@@ -2545,6 +2572,11 @@ Sharedsort
 ShellTypeInfo
 ShippableCacheEntry
 ShippableCacheKey
+ShmAllocSet
+ShmAllocSetContext
+ShmAsetCtl
+ShmAsetFreeList
+ShmAsetType
 ShmemIndexEnt
 ShutdownForeignScan_function
 ShutdownInformation
@@ -2629,6 +2661,7 @@ SplitTextOutputData
 SplitVar
 SplitedPageLayout
 StackElem
+StackInfoOnDisk
 StartBlobPtrType
 StartBlobsPtrType
 StartDataPtrType
@@ -3426,6 +3459,7 @@ keepwal_entry
 keepwal_hash
 keyEntryData
 key_t
+lc_t
 lclContext
 lclTocEntry
 leafSegmentInfo
@@ -3647,6 +3681,7 @@ polar_logindex_redo_ctl_data_t
 polar_logindex_replay_end_t
 polar_lwlock_mini_padded
 polar_lwlock_stat
+polar_monitor_hook_type
 polar_net_stat
 polar_network_op_stat
 polar_proc_stat
@@ -3857,6 +3892,9 @@ symbol
 tablespaceinfo
 teSection
 temp_tablespaces_extra
+test_mode
+test_msg
+test_parameters
 test_re_flags
 test_regex_ctx
 test_shm_mq_header

@@ -20,6 +20,9 @@
 #include "utils/fmgroids.h"
 #include "utils/rel.h"
 
+/* POLAR: Shared Server */
+#include "postmaster/polar_dispatcher.h"
+
 void
 AlterSetting(Oid databaseid, Oid roleid, VariableSetStmt *setstmt)
 {
@@ -159,6 +162,9 @@ AlterSetting(Oid databaseid, Oid roleid, VariableSetStmt *setstmt)
 
 	/* Close pg_db_role_setting, but keep lock till commit */
 	table_close(rel, NoLock);
+
+	/* POLAR: Shared Server - update version for session invalidation */
+	polar_update_db_role_setting_version(databaseid, roleid, false);
 }
 
 /*
@@ -204,6 +210,9 @@ DropSetting(Oid databaseid, Oid roleid)
 	table_endscan(scan);
 
 	table_close(relsetting, RowExclusiveLock);
+
+	/* POLAR: Shared Server - update version for session invalidation */
+	polar_update_db_role_setting_version(databaseid, roleid, true);
 }
 
 /*

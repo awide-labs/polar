@@ -49,7 +49,7 @@ void		_PG_init(void);
 PG_MODULE_MAGIC;
 
 void
-polar_handle_monitor_hook(PolarHookActionType action)
+polar_handle_monitor_hook(PolarHookActionType action, void *args)
 {
 	switch (action)
 	{
@@ -58,6 +58,11 @@ polar_handle_monitor_hook(PolarHookActionType action)
 			break;
 
 		case POLAR_CHECK_SIGNAL_MCTX:
+			polar_check_signal_mctx();
+			break;
+
+		case POLAR_SS_CHECK_SIGNAL_MCTX:
+			/* POLAR: Shared Server - handle session signal context */
 			polar_check_signal_mctx();
 			break;
 

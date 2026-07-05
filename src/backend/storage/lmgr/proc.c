@@ -176,6 +176,7 @@ InitProcGlobal(void)
 	ProcGlobal->spins_per_delay = DEFAULT_SPINS_PER_DELAY;
 	ProcGlobal->freeProcs = NULL;
 	ProcGlobal->autovacFreeProcs = NULL;
+	ProcGlobal->polarDispatcherFreeProcs = NULL;
 	ProcGlobal->bgworkerFreeProcs = NULL;
 	ProcGlobal->walsenderFreeProcs = NULL;
 	ProcGlobal->startupBufferPinWaitBufId = -1;
@@ -262,6 +263,14 @@ InitProcGlobal(void)
 			ProcGlobal->bgworkerFreeProcs = &procs[i];
 			procs[i].procgloballist = &ProcGlobal->bgworkerFreeProcs;
 		}
+		else if (i < MaxConnections + autovacuum_max_workers + 1 +
+				 max_worker_processes + MaxPolarDispatcher)
+		{
+			/* PGPROC for bgworker, add to polarDispatcherFreeProcs list */
+			procs[i].links.next = (SHM_QUEUE *) ProcGlobal->polarDispatcherFreeProcs;
+			ProcGlobal->polarDispatcherFreeProcs = &procs[i];
+			procs[i].procgloballist = &ProcGlobal->polarDispatcherFreeProcs;
+		}
 		else if (i < MaxBackends)
 		{
 			/* PGPROC for walsender, add to walsenderFreeProcs list */
@@ -323,6 +332,8 @@ InitProcess(void)
 		procgloballist = &ProcGlobal->bgworkerFreeProcs;
 	else if (am_walsender)
 		procgloballist = &ProcGlobal->walsenderFreeProcs;
+	else if (IsPolarDispatcher)
+		procgloballist = &ProcGlobal->polarDispatcherFreeProcs;
 	else
 		procgloballist = &ProcGlobal->freeProcs;
 
@@ -375,7 +386,7 @@ InitProcess(void)
 	 * cleaning up.  (XXX autovac launcher currently doesn't participate in
 	 * this; it probably should.)
 	 */
-	if (IsUnderPostmaster && !IsAutoVacuumLauncherProcess())
+	if (IsUnderPostmaster && !IsAutoVacuumLauncherProcess() && !IsPolarDispatcher)
 		MarkPostmasterChildActive();
 
 	/*
@@ -400,6 +411,12 @@ InitProcess(void)
 	MyProc->roleId = InvalidOid;
 	MyProc->tempNamespaceId = InvalidOid;
 	MyProc->isBackgroundWorker = !AmRegularBackendProcess();
+
+	/* POLAR: Shared Server */
+	MyProc->isPolarDispatcher = IsPolarDispatcher;
+	MyProc->polar_is_backend_dedicated = false;
+	MyProc->polar_shared_session = NULL;
+
 	MyProc->delayChkptFlags = 0;
 	MyProc->statusFlags = 0;
 	/* NB -- autovac launcher intentionally does not set IS_AUTOVACUUM */
@@ -605,6 +622,12 @@ InitAuxiliaryProcess(void)
 	MyProc->roleId = InvalidOid;
 	MyProc->tempNamespaceId = InvalidOid;
 	MyProc->isBackgroundWorker = true;
+
+	/* POLAR: Shared Server */
+	MyProc->isPolarDispatcher = IsPolarDispatcher;
+	MyProc->polar_is_backend_dedicated = false;
+	MyProc->polar_shared_session = NULL;
+
 	MyProc->delayChkptFlags = 0;
 	MyProc->statusFlags = 0;
 	MyProc->lwWaiting = LW_WS_NOT_WAITING;
@@ -988,7 +1011,7 @@ ProcKill(int code, Datum arg)
 	 * way, so tell the postmaster we've cleaned up acceptably well. (XXX
 	 * autovac launcher should be included here someday)
 	 */
-	if (IsUnderPostmaster && !IsAutoVacuumLauncherProcess())
+	if (IsUnderPostmaster && !IsAutoVacuumLauncherProcess() && !IsPolarDispatcher)
 		MarkPostmasterChildInactive();
 
 	/* wake autovac launcher if needed -- see comments in FreeWorkerInfo */

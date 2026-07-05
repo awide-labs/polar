@@ -188,6 +188,13 @@ polar_stat_process(PG_FUNCTION_ARGS)
 		}
 		beentry = &local_beentry->backendStatus;
 
+		/* POLAR: Shared Server */
+		/* TODO: not compat this monitor now @yanhua */
+		if (POLAR_SHARED_SERVER_RUNNING() &&
+			beentry->st_backendType == B_BACKEND &&
+			beentry->session_local_id > 0)
+			continue;
+
 		values[0] = Int32GetDatum(beentry->st_procpid);
 		values[19] = UInt64GetDatum(beentry->st_query_id);
 

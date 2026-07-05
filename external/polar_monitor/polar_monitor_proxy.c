@@ -26,6 +26,7 @@
 #include "postgres.h"
 
 #include "funcapi.h"
+#include "storage/polar_session_context.h"
 #include "utils/backend_status.h"
 #include "utils/builtins.h"
 
@@ -114,7 +115,8 @@ polar_stat_get_pid(PG_FUNCTION_ARGS)
 	int			pid = PG_ARGISNULL(0) ? MyProcPid : PG_GETARG_INT32(0);
 
 	if (!PG_ARGISNULL(0) && !POLAR_IS_PROXY_SID(pid))
-		elog(ERROR, "POLAR: Invalid virtual pid: %d, should between (10^7, INT_MAX]", pid);
+		elog(ERROR, "POLAR: Invalid virtual pid: %d%s",
+			 pid, POLAR_SHARED_SERVER_RUNNING() ? "" : ", should between (10^7, INT_MAX)");
 	PG_RETURN_INT32(polar_proxy_get_pid(pid, 0, false));
 }
 
@@ -125,6 +127,7 @@ polar_stat_get_sid(PG_FUNCTION_ARGS)
 	int			pid = PG_ARGISNULL(0) ? MyProcPid : PG_GETARG_INT32(0);
 
 	if (!PG_ARGISNULL(0) && !POLAR_IS_PID(pid))
-		elog(ERROR, "POLAR: Invalid real pid: %d, should between (0, 10^7)", pid);
+		elog(ERROR, "POLAR: Invalid real pid: %d%s",
+			 pid, POLAR_SHARED_SERVER_RUNNING() ? "" : ", should between (0, 10^7)");
 	PG_RETURN_INT32(polar_proxy_get_sid(pid, NULL));
 }

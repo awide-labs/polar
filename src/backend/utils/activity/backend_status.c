@@ -30,17 +30,9 @@
 #include "access/xlog.h"
 #include "tcop/tcopprot.h"
 
-/* ----------
- * Total number of backends including auxiliary
- *
- * We reserve a slot for each possible BackendId, plus one for each
- * possible auxiliary process type.  (This scheme assumes there is not
- * more than one of any auxiliary process type at a time.) MaxBackends
- * includes autovacuum workers and background workers as well.
- * ----------
- */
-#define NumBackendStatSlots (MaxBackends + NUM_AUXPROCTYPES)
-
+/* POLAR: Shared Server */
+#include "postmaster/polar_dispatcher.h"
+#include "storage/polar_session_context.h"
 
 /* ----------
  * GUC parameters
@@ -62,7 +54,8 @@ bool		polar_stat_need_update_proxy_info;
 PgBackendStatus *MyBEEntry = NULL;
 
 
-static PgBackendStatus *BackendStatusArray = NULL;
+PgBackendStatus *BackendStatusArray = NULL;
+
 static char *BackendAppnameBuffer = NULL;
 static char *BackendClientHostnameBuffer = NULL;
 static char *BackendActivityBuffer = NULL;
@@ -312,6 +305,20 @@ pgstat_bestart(void)
 	PgBackendGSSStatus lgssstatus;
 #endif
 
+	/* POLAR: Shared Server - use session's backend status entry */
+	Port	   *current_port = MyProcPort;
+
+	if (IS_POLAR_SESSION_SHARED())
+	{
+		vbeentry->session_local_id = -1;
+		vbeentry = &BackendStatusArray[polar_session()->id + NumBackendStatSlots_base];
+		current_port = polar_session_info()->client_port;
+		vbeentry->session_local_id = polar_session()->id;
+		vbeentry->dispatcher_pid = polar_dispatcher_proc[polar_my_dispatcher_id].pid;
+	}
+#define MyProcPort current_port
+	/* POLAR end */
+
 	/* pgstats state must be initialized from pgstat_beinit() */
 	Assert(vbeentry != NULL);
 
@@ -491,6 +498,8 @@ pgstat_bestart(void)
 	/* Update app name to current GUC setting */
 	if (application_name)
 		pgstat_report_appname(application_name);
+
+#undef MyProcPort				/* POLAR: Shared Server */
 }
 
 /*
@@ -500,6 +509,10 @@ static void
 pgstat_beshutdown_hook(int code, Datum arg)
 {
 	volatile PgBackendStatus *beentry = MyBEEntry;
+
+	/* POLAR: Shared Server - use session's backend status entry */
+	if (IS_POLAR_SESSION_SHARED())
+		beentry = &BackendStatusArray[polar_session()->id + NumBackendStatSlots_base];
 
 	/*
 	 * Clear my status entry, following the protocol of bumping st_changecount
@@ -514,6 +527,28 @@ pgstat_beshutdown_hook(int code, Datum arg)
 
 	/* so that functions can check if backend_status.c is up via MyBEEntry */
 	MyBEEntry = NULL;
+}
+
+/*
+ * POLAR: Shared Server - shutdown backend status for a specific session slot
+ */
+void
+polar_pgstat_beshutdown(int id)
+{
+	volatile PgBackendStatus *beentry = &BackendStatusArray[id + NumBackendStatSlots_base];
+
+	/*
+	 * Clear the status entry, following the protocol of bumping
+	 * st_changecount before and after.
+	 */
+	PGSTAT_BEGIN_WRITE_ACTIVITY(beentry);
+	beentry->st_procpid = 0;	/* mark invalid */
+	beentry->session_local_id = 0;
+	beentry->last_backend_pid = 0;
+	beentry->dispatcher_pid = 0;
+	beentry->saved_guc_count = 0;
+	PGSTAT_END_WRITE_ACTIVITY(beentry);
+	ELOG_PSS(DEBUG1, "polar_pgstat_beshutdown %d", id);
 }
 
 /*
@@ -565,7 +600,16 @@ pgstat_report_activity(BackendState state, const char *cmd_str)
 	volatile PgBackendStatus *beentry = MyBEEntry;
 	TimestampTz start_timestamp;
 	TimestampTz current_timestamp;
+	TimestampTz last_wait_start_timestamp = 0;
 	int			len = 0;
+	int			saved_guc_count = 0;
+
+	if (IS_POLAR_SESSION_SHARED())
+	{
+		beentry = &BackendStatusArray[polar_session()->id + NumBackendStatSlots_base];
+		saved_guc_count = polar_session_info()->saved_guc_count;
+		last_wait_start_timestamp = polar_session()->last_wait_start_timestamp;
+	}
 
 	TRACE_POSTGRESQL_STATEMENT_STATUS(cmd_str);
 
@@ -650,8 +694,11 @@ pgstat_report_activity(BackendState state, const char *cmd_str)
 	 */
 	PGSTAT_BEGIN_WRITE_ACTIVITY(beentry);
 
+	beentry->last_backend_pid = MyProcPid;	/* POLAR: Shared Server */
+	beentry->saved_guc_count = saved_guc_count;
 	beentry->st_state = state;
 	beentry->st_state_start_timestamp = current_timestamp;
+	beentry->last_wait_start_timestamp = last_wait_start_timestamp;
 
 	/*
 	 * If a new query is started, we reset the query identifier as it'll only
@@ -681,6 +728,13 @@ void
 pgstat_report_query_id(uint64 query_id, bool force)
 {
 	volatile PgBackendStatus *beentry = MyBEEntry;
+	int			saved_guc_count = 0;
+
+	if (IS_POLAR_SESSION_SHARED())
+	{
+		beentry = &BackendStatusArray[polar_session()->id + NumBackendStatSlots_base];
+		saved_guc_count = polar_session_info()->saved_guc_count;
+	}
 
 	/*
 	 * if track_activities is disabled, st_query_id should already have been
@@ -707,6 +761,8 @@ pgstat_report_query_id(uint64 query_id, bool force)
 	 */
 	PGSTAT_BEGIN_WRITE_ACTIVITY(beentry);
 	beentry->st_query_id = query_id;
+	beentry->last_backend_pid = MyProcPid;	/* POLAR: Shared Server */
+	beentry->saved_guc_count = saved_guc_count;
 	PGSTAT_END_WRITE_ACTIVITY(beentry);
 }
 
@@ -722,6 +778,13 @@ pgstat_report_appname(const char *appname)
 {
 	volatile PgBackendStatus *beentry = MyBEEntry;
 	int			len;
+	int			saved_guc_count = 0;
+
+	if (IS_POLAR_SESSION_SHARED())
+	{
+		beentry = &BackendStatusArray[polar_session()->id + NumBackendStatSlots_base];
+		saved_guc_count = polar_session_info()->saved_guc_count;
+	}
 
 	if (!beentry)
 		return;
@@ -735,6 +798,8 @@ pgstat_report_appname(const char *appname)
 	 * ensure the compiler doesn't try to get cute.
 	 */
 	PGSTAT_BEGIN_WRITE_ACTIVITY(beentry);
+	beentry->last_backend_pid = MyProcPid;	/* POLAR: Shared Server */
+	beentry->saved_guc_count = saved_guc_count;
 
 	memcpy((char *) beentry->st_appname, appname, len);
 	beentry->st_appname[len] = '\0';
@@ -750,6 +815,13 @@ void
 pgstat_report_xact_timestamp(TimestampTz tstamp)
 {
 	volatile PgBackendStatus *beentry = MyBEEntry;
+	int			saved_guc_count = 0;
+
+	if (IS_POLAR_SESSION_SHARED())
+	{
+		beentry = &BackendStatusArray[polar_session()->id + NumBackendStatSlots_base];
+		saved_guc_count = polar_session_info()->saved_guc_count;
+	}
 
 	if (!pgstat_track_activities || !beentry)
 		return;
@@ -760,6 +832,8 @@ pgstat_report_xact_timestamp(TimestampTz tstamp)
 	 * ensure the compiler doesn't try to get cute.
 	 */
 	PGSTAT_BEGIN_WRITE_ACTIVITY(beentry);
+	beentry->last_backend_pid = MyProcPid;	/* POLAR: Shared Server */
+	beentry->saved_guc_count = saved_guc_count;
 
 	beentry->st_xact_start_timestamp = tstamp;
 
@@ -1300,8 +1374,16 @@ polar_proxy_set_sid(int proxy_sid, PgBackendStatus *lbeentry)
 void
 polar_proxy_set_cancel_key(int32 cancel_key, PgBackendStatus *lbeentry)
 {
+	int			saved_guc_count = 0;
+
 	if (lbeentry == NULL)
 		lbeentry = MyBEEntry;
+
+	if (IS_POLAR_SESSION_SHARED())
+	{
+		lbeentry = &BackendStatusArray[polar_session()->id + NumBackendStatSlots_base];
+		saved_guc_count = polar_session_info()->saved_guc_count;
+	}
 
 	if (!lbeentry->polar_proxy)
 		elog(ERROR, "POLAR: Unable to set cancel key when not under proxy mode");
@@ -1311,6 +1393,8 @@ polar_proxy_set_cancel_key(int32 cancel_key, PgBackendStatus *lbeentry)
 		elog(LOG, "[Proxy] %s: new cancel key: %d", PG_FUNCNAME_MACRO, cancel_key);
 
 	PGSTAT_BEGIN_WRITE_ACTIVITY(lbeentry);
+	lbeentry->last_backend_pid = MyProcPid;
+	lbeentry->saved_guc_count = saved_guc_count;
 	lbeentry->polar_proxy_cancel_key = cancel_key;
 	PGSTAT_END_WRITE_ACTIVITY(lbeentry);
 }
@@ -1401,6 +1485,9 @@ polar_proxy_get_sid(int pid, int32 *cancel_key)
 	volatile PgBackendStatus *my_beentry = MyBEEntry;
 	volatile PgBackendStatus *beentry = NULL;
 	int			i = 0;
+
+	if (IS_POLAR_SESSION_SHARED())
+		my_beentry = &BackendStatusArray[polar_session()->id + NumBackendStatSlots_base];
 
 	polar_proxy_log_beentry_state(my_beentry, PG_FUNCNAME_MACRO);
 	if (polar_enable_debug_proxy)

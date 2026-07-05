@@ -23,6 +23,9 @@
 #include "storage/proclist_types.h"
 #include "portability/instr_time.h"
 
+/* POLAR: Shared Server */
+#include "storage/polar_session_context.h"
+
 /*
  * Each backend advertises up to PGPROC_MAX_CACHED_SUBXIDS TransactionIds
  * for non-aborted subtransactions of its current top transaction.  These
@@ -335,6 +338,13 @@ struct PGPROC
 	 * If committed, value is csn, else InvalidTransactionId.
 	 ---*/
 	CommitSeqNo polar_csn;
+
+	/* POLAR: Shared Server */
+	bool		isPolarDispatcher;	/* true if polar dispatcher worker */
+	/* Backend is bound to 1 session and serves only that session */
+	volatile bool polar_is_backend_dedicated;
+	struct PolarSessionContext *volatile polar_shared_session;
+	/* POLAR end */
 };
 
 /* NOTE: "typedef struct PGPROC PGPROC" appears in storage/lock.h. */
@@ -422,6 +432,8 @@ typedef struct PROC_HDR
 	PGPROC	   *freeProcs;
 	/* Head of list of autovacuum's free PGPROC structures */
 	PGPROC	   *autovacFreeProcs;
+	/* Head of list of dispatcher worker free PGPROC structures */
+	PGPROC	   *polarDispatcherFreeProcs;
 	/* Head of list of bgworker free PGPROC structures */
 	PGPROC	   *bgworkerFreeProcs;
 	/* Head of list of walsender free PGPROC structures */

@@ -16,6 +16,10 @@
 /* POLAR */
 #include <signal.h>
 
+/* Forward declarations */
+struct Port;
+typedef struct Port Port;
+
 /* GUC options */
 extern PGDLLIMPORT bool EnableSSL;
 extern PGDLLIMPORT int ReservedBackends;
@@ -68,6 +72,13 @@ extern void ShmemBackendArrayAllocation(void);
 
 /* POLAR */
 extern void polar_assign_enable_send_stop(bool newval, void *extra);
+
+/* POLAR: Shared Server */
+extern void processCancelRequest(Port *port, void *pkt);
+extern bool RandomCancelKey(int32 *cancel_key);
+extern int	polar_parse_startup_packet(Port *port, MemoryContext memctx,
+									   char *buf, int len, bool ssl_done,
+									   bool gss_done);
 
 /* POLAR end */
 

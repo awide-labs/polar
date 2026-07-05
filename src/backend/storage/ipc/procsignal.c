@@ -687,7 +687,7 @@ procsignal_sigusr1_handler(SIGNAL_ARGS)
 	 * shared memory
 	 */
 	if (polar_monitor_hook)
-		polar_monitor_hook(POLAR_SET_SIGNAL_MCTX);
+		polar_monitor_hook(POLAR_SET_SIGNAL_MCTX, NULL);
 
 	SetLatch(MyLatch);
 

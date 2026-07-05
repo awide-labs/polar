@@ -1,0 +1,6 @@
+# ----------
+# src/test/regress/ss_schedule
+#
+test: tablespace
+
+test: polar_shared_server

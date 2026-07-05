@@ -20,6 +20,10 @@ extern void init_ps_display(const char *fixed_part);
 
 extern void set_ps_display(const char *activity);
 
+extern void polar_ss_init_ps_display(const char *username, const char *dbname,
+									 const uint32 polar_startup_gucs_hash,
+									 const char *host_info, const char *initial_str);
+
 extern const char *get_ps_display(int *displen);
 
 #endif							/* PS_STATUS_H */

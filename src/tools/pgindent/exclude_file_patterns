@@ -65,3 +65,9 @@ external/roaringbitmap/
 
 # weird
 src/include/utils/faultinjector_lists.h
+
+# Shared Server: the protothread library is imported third-party code, and
+# polar_dispatcher.c is built on its computed-goto/switch coroutine macros,
+# which pgindent cannot parse.
+src/include/protothread/
+src/backend/postmaster/polar_dispatcher\.c$

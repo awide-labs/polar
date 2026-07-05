@@ -90,6 +90,10 @@
 #include "postmaster/syslogger.h"
 #include "utils/polar_backtrace.h"
 
+/* POLAR: Shared Server */
+#include "storage/polar_session_context.h"
+#include "utils/polar_coredump.h"
+
 /* In this module, access gettext() via err_gettext() */
 #undef _
 #define _(x) err_gettext(x)
@@ -1119,6 +1123,35 @@ end:
 }
 
 /*
+ * POLAR: Shared Server - get a simple backtrace as a string
+ */
+char *
+polar_get_backtrace(void)
+{
+#define LOCAL_BUF_LEN  1024
+	static __thread char buf[LOCAL_BUF_LEN];
+#ifdef HAVE_BACKTRACE_SYMBOLS
+	static __thread void *addrs[100];
+	int			size = backtrace(addrs, sizeof(addrs) / sizeof(addrs[0]));
+	int			i = 0;
+	int			pos = 0;
+
+	for (i = 0; i < size && pos < LOCAL_BUF_LEN; i++)
+		pos += snprintf(buf + pos, LOCAL_BUF_LEN - pos, " %p", addrs[i]);
+
+	if (pos >= LOCAL_BUF_LEN)
+	{
+		pos = LOCAL_BUF_LEN - 1;
+		buf[pos] = '\0';
+	}
+#else
+	buf[0] = '\0';
+#endif
+#undef LOCAL_BUF_LEN
+	return buf;
+}
+
+/*
  * errmsg_internal --- add a primary error message text to the current error
  *
  * This is exactly like errmsg() except that strings passed to errmsg_internal
@@ -1679,7 +1712,11 @@ EmitErrorReport(void)
 		send_message_to_server_log(edata);
 
 	/* Send to client, if enabled */
-	if (edata->output_to_client)
+	/* POLAR: Shared Server - only send if session is initialized */
+	if (edata->output_to_client &&
+		(!POLAR_SHARED_SERVER_RUNNING() ||
+		 !IS_POLAR_SESSION_SHARED() ||
+		 (polar_session_info() != NULL && polar_session_info()->is_inited)))
 		send_message_to_frontend(edata);
 
 	MemoryContextSwitchTo(oldcontext);
@@ -4087,9 +4124,11 @@ polar_write_channel(PipeProtoChunk *chunk_buf, int len)
  *
  * Ignore the coredump events or print the coredump stacktrace.
  */
-static void
+void
 polar_program_error_handler(SIGNAL_ARGS)
 {
+	PolarSessionContext tmp_session = *polar_session();
+
 	polar_reset_program_error_handler();
 
 	POLAR_IGNORE_COREDUMP_BACKTRACE(postgres_signal_arg, 3);
@@ -4099,6 +4138,14 @@ polar_program_error_handler(SIGNAL_ARGS)
 		fprintf(stderr, "Got coredump signal(%d) in process(%d)\n", postgres_signal_arg, MyProcPid);
 		POLAR_DUMP_BACKTRACE();
 	}
+
+	/* Shared Server, for debug */
+	if (POLAR_SHARED_SERVER_RUNNING() &&
+		tmp_session.memory_context &&
+		polar_enable_shared_server_hang)
+		while (1)
+		{
+		};
 
 	/* trigger coredump */
 	raise(postgres_signal_arg);

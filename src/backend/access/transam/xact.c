@@ -61,6 +61,9 @@
 #include "storage/procarray.h"
 #include "storage/sinvaladt.h"
 #include "storage/smgr.h"
+
+/* POLAR: Shared Server */
+#include "storage/polar_session_context.h"
 #include "utils/builtins.h"
 #include "utils/catcache.h"
 #include "utils/combocid.h"
@@ -2156,6 +2159,9 @@ StartTransaction(void)
 	 */
 	vxid.backendId = MyBackendId;
 	vxid.localTransactionId = GetNextLocalTransactionId();
+
+	/* POLAR: Shared Server - increment session's local transaction ID */
+	polar_session_info()->m_nextLocalTransactionId++;
 
 	/*
 	 * Lock the virtual transaction id before we announce it in the proc array

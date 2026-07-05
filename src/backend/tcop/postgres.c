@@ -41,10 +41,12 @@
 #include "access/printtup.h"
 #include "access/xact.h"
 #include "catalog/pg_type.h"
+#include "catalog/namespace.h"
 #include "commands/async.h"
 #include "commands/prepare.h"
 #include "common/pg_prng.h"
 #include "jit/jit.h"
+#include "libpq/auth.h"
 #include "libpq/libpq.h"
 #include "libpq/pqformat.h"
 #include "libpq/pqsignal.h"
@@ -76,6 +78,7 @@
 #include "tcop/pquery.h"
 #include "tcop/tcopprot.h"
 #include "tcop/utility.h"
+#include "utils/acl.h"
 #include "utils/lsyscache.h"
 #include "utils/memutils.h"
 #include "utils/polar_features.h"
@@ -89,6 +92,7 @@
 #include "catalog/namespace.h"
 #include "libpq/polar_network_stats.h"
 #include "postmaster/syslogger.h"
+#include "storage/polar_session_context.h"
 
 /* ----------------
  *		global variables
@@ -238,10 +242,6 @@ static char *polar_get_errmsg_params(ParamListInfo params);
 /* POLAR: for flush audit log, return buffer status */
 static void polar_audit_log_flush_callback(int code, Datum arg);
 extern bool polar_audit_log_buffer_is_null(void);
-
-/* POLAR: for sigusr2 */
-static void polar_procsignal_sigusr2_handler(SIGNAL_ARGS);
-
 
 /* POLAR: handle cancel query interrupt during client read/write */
 static void polar_process_client_readwrite_cancel_interrupt(void);
@@ -434,6 +434,7 @@ SocketBackend(StringInfo inBuf)
 			break;
 
 		case 'X':				/* terminate */
+		case 'Y':				/* POLAR: Shared Server */
 			maxmsglen = PQ_SMALL_MESSAGE_LIMIT;
 			doing_extended_query_message = false;
 			ignore_till_sync = false;
@@ -1526,10 +1527,9 @@ exec_parse_message(const char *query_string,	/* string to execute */
 		/* Unnamed prepared statement --- release any prior unnamed stmt */
 		drop_unnamed_stmt();
 		/* Create context for parsing */
-		unnamed_stmt_context =
-			AllocSetContextCreate(MessageContext,
-								  "unnamed prepared statement",
-								  ALLOCSET_DEFAULT_SIZES);
+		unnamed_stmt_context = AllocSetContextCreateExtended(MessageContext,
+															"unnamed prepared statement",
+															ALLOCSET_DEFAULT_SIZES);
 		oldcontext = MemoryContextSwitchTo(unnamed_stmt_context);
 	}
 
@@ -1576,7 +1576,8 @@ exec_parse_message(const char *query_string,	/* string to execute */
 		 * needs to see the unmodified raw parse tree.
 		 */
 		psrc = CreateCachedPlan(raw_parse_tree, query_string,
-								CreateCommandTag(raw_parse_tree->stmt));
+								CreateCommandTag(raw_parse_tree->stmt),
+								POLAR_SS_NOT_DEDICATED() && is_named);
 
 		/*
 		 * Set up a snapshot if parse analysis will need one.
@@ -1607,7 +1608,8 @@ exec_parse_message(const char *query_string,	/* string to execute */
 		/* Empty input string.  This is legal. */
 		raw_parse_tree = NULL;
 		psrc = CreateCachedPlan(raw_parse_tree, query_string,
-								CMDTAG_UNKNOWN);
+								CMDTAG_UNKNOWN,
+								POLAR_SS_NOT_DEDICATED() && is_named);
 		querytree_list = NIL;
 	}
 
@@ -3688,14 +3690,9 @@ ProcessInterrupts(void)
 		ProcessLogMemoryContextInterrupt();
 
 	/* POLAR: monitor */
-	if (MemoryContextDumpPending && polar_monitor_hook)
-	{
-		MemoryContextDumpPending = false;
-		polar_monitor_hook(POLAR_CHECK_SIGNAL_MCTX);
-	}
 
 	if (polar_monitor_hook)
-		polar_monitor_hook(POLAR_CHECK_SIGNAL_MCTX);
+		polar_monitor_hook(POLAR_CHECK_SIGNAL_MCTX, NULL);
 
 	if (polar_enable_track_network_stat)
 		polar_local_network_stat();
@@ -4829,6 +4826,13 @@ PostgresMain(const char *dbname, const char *username)
 		 */
 		InvalidateCatalogSnapshotConditionally();
 
+		/* POLAR: Shared Server - increment command count */
+		if (POLAR_SHARED_SERVER_RUNNING())
+		{
+			pg_atomic_fetch_add_u64(&polar_session()->finished_command_count, 1);
+		}
+		/* POLAR end */
+
 		/*
 		 * (1) If we've reached idle state, tell the frontend we're ready for
 		 * a new query.
@@ -4928,6 +4932,14 @@ PostgresMain(const char *dbname, const char *username)
 				}
 			}
 
+			if (polar_need_switch_session())
+			{
+				/* POLAR: Shared Server */
+				polar_switch_to_session(polar_private_session);
+				pg_write_barrier();
+				/* POLAR end */
+			}
+
 			/* Report any recently-changed GUC options */
 			ReportChangedGUCOptions();
 
@@ -4947,6 +4959,18 @@ PostgresMain(const char *dbname, const char *username)
 		 * (3) read a command (loop blocks here)
 		 */
 		firstchar = ReadCommand(&input_message);
+
+		/* POLAR: Shared Server - switch session after reading command */
+		if (polar_need_switch_session())
+		{
+			/* barrier keep order between ReadCommand and reading polar_shared_session */
+			pg_read_barrier();
+			if (MyProc->polar_shared_session != NULL)
+				polar_switch_to_session(MyProc->polar_shared_session);
+			else
+				polar_switch_to_session(polar_private_session);
+		}
+		/* POLAR end */
 
 		/*
 		 * (4) turn off the idle-in-transaction and idle-session timeouts if
@@ -4983,10 +5007,24 @@ PostgresMain(const char *dbname, const char *username)
 		 * (6) check for any other interesting events that happened while we
 		 * slept.
 		 */
-		if (ConfigReloadPending)
+		if (ConfigReloadPending ||
+			(POLAR_SHARED_SERVER_RUNNING() && polar_session_info()->m_ConfigReloadPending))
 		{
+			polar_session_info()->m_ConfigReloadPending = false;
 			ConfigReloadPending = false;
 			ProcessConfigFile(PGC_SIGHUP);
+
+			/*
+			 * Shared Server.
+			 * Keep parsed_hba_context, parsed_hba_lines, parsed_ident_context, parsed_ident_lines
+			 * existing and updated on shared backend.
+			 */
+			if (POLAR_SHARED_SERVER_RUNNING())
+			{
+				load_hba();
+				load_ident();
+			}
+			/* POLAR end */
 		}
 
 		/*
@@ -5214,6 +5252,114 @@ PostgresMain(const char *dbname, const char *username)
 				/* FALLTHROUGH */
 
 			case 'X':
+				if (firstchar == 'X' &&
+					IS_POLAR_SESSION_SHARED())
+				{
+					PolarSessionContext *current_session = polar_session();
+					/* recovery backend state to idle */
+					AbortOutOfAnyTransaction();
+					if (polar_session_has_temp_namespace())
+					{
+						/* Remove all temp tables from the temporary namespace. */
+						StartTransactionCommand();
+						ResetTempTableNamespace();
+						CommitTransactionCommand();
+					}
+					/* we don't send_ready_for_query. update process display */
+					if (IsAbortedTransactionBlockState())
+					{
+						set_ps_display("idle in transaction (aborted)");
+						pgstat_report_activity(STATE_IDLEINTRANSACTION_ABORTED, NULL);
+
+						/* Start the idle-in-transaction timer */
+						if (IdleInTransactionSessionTimeout > 0
+							&& (IdleInTransactionSessionTimeout < TransactionTimeout || TransactionTimeout == 0))
+						{
+							idle_in_transaction_timeout_enabled = true;
+							enable_timeout_after(IDLE_IN_TRANSACTION_SESSION_TIMEOUT,
+												 IdleInTransactionSessionTimeout);
+						}
+					}
+					else if (IsTransactionOrTransactionBlock())
+					{
+						set_ps_display("idle in transaction");
+						pgstat_report_activity(STATE_IDLEINTRANSACTION, NULL);
+
+						/* Start the idle-in-transaction timer */
+						if (IdleInTransactionSessionTimeout > 0
+							&& (IdleInTransactionSessionTimeout < TransactionTimeout || TransactionTimeout == 0))
+						{
+							idle_in_transaction_timeout_enabled = true;
+							enable_timeout_after(IDLE_IN_TRANSACTION_SESSION_TIMEOUT,
+												 IdleInTransactionSessionTimeout);
+						}
+					}
+					else
+					{
+						long		stats_timeout;
+
+						/*
+						 * Process incoming notifies (including self-notifies), if
+						 * any, and send relevant messages to the client.  Doing it
+						 * here helps ensure stable behavior in tests: if any notifies
+						 * were received during the just-finished transaction, they'll
+						 * be seen by the client before ReadyForQuery is.
+						 */
+						if (notifyInterruptPending)
+							ProcessNotifyInterrupt(false);
+
+						/*
+						 * Check if we need to report stats. If pgstat_report_stat()
+						 * decides it's too soon to flush out pending stats / lock
+						 * contention prevented reporting, it'll tell us when we
+						 * should try to report stats again (so that stats updates
+						 * aren't unduly delayed if the connection goes idle for a
+						 * long time). We only enable the timeout if we don't already
+						 * have a timeout in progress, because we don't disable the
+						 * timeout below. enable_timeout_after() needs to determine
+						 * the current timestamp, which can have a negative
+						 * performance impact. That's OK because pgstat_report_stat()
+						 * won't have us wake up sooner than a prior call.
+						 */
+						stats_timeout = pgstat_report_stat(false);
+						if (stats_timeout > 0)
+						{
+							if (!get_timeout_active(IDLE_STATS_UPDATE_TIMEOUT))
+								enable_timeout_after(IDLE_STATS_UPDATE_TIMEOUT,
+													 stats_timeout);
+						}
+						else
+						{
+							/* all stats flushed, no need for the timeout */
+							if (get_timeout_active(IDLE_STATS_UPDATE_TIMEOUT))
+								disable_timeout(IDLE_STATS_UPDATE_TIMEOUT, false);
+						}
+
+						set_ps_display("idle");
+						pgstat_report_activity(STATE_IDLE, NULL);
+
+						/* Start the idle-session timer */
+						if (IdleSessionTimeout > 0)
+						{
+							idle_session_timeout_enabled = true;
+							enable_timeout_after(IDLE_SESSION_TIMEOUT,
+												 IdleSessionTimeout);
+						}
+					}
+
+					pq_putemptymessage('X');
+					pq_flush();
+
+					polar_delete_local_memory_context(polar_session()->memory_context);
+					current_session->will_close = 1;
+					polar_switch_to_session(polar_private_session);
+
+					/* barrier keep order between sending 'X' reply and changing status PSSE_CLOSED. */
+					SpinLockAcquire(&current_session->holding_lock);
+					pg_atomic_write_u32(&current_session->status, PSSE_CLOSED);
+					SpinLockRelease(&current_session->holding_lock);
+					break;
+				}
 
 				/*
 				 * Reset whereToSendOutput to prevent ereport from attempting
@@ -5231,6 +5377,77 @@ PostgresMain(const char *dbname, const char *username)
 				 */
 				proc_exit(0);
 
+			/* POLAR: new added command used for by polar */
+			case 'Y':			/* describe */
+				{
+					int			sub_type;
+					sub_type = pq_getmsgbyte(&input_message);
+					if (sub_type == 'A' &&
+						IS_POLAR_SESSION_SHARED())
+					{
+						char    remote_ps_data[NI_MAXHOST];
+						bool	use_local_resource;
+						ELOG_PSS(DEBUG5, "polar shared server process Y cmd");
+						/* shared server, shared session init, only sended by dispatcher */
+						/* auth */
+						if (!polar_private_session->info->is_inited)
+						{
+							MyProcPort->polar_startup_gucs_hash = polar_session_info()->client_port->polar_startup_gucs_hash;
+							if (polar_session_info()->client_port->remote_port[0] == '\0')
+								snprintf(remote_ps_data, sizeof(remote_ps_data), "%s",
+										polar_session_info()->client_port->remote_host);
+							else
+								snprintf(remote_ps_data, sizeof(remote_ps_data), "%s(%s)",
+										polar_session_info()->client_port->remote_host,
+										polar_session_info()->client_port->remote_port);
+						}
+
+						pq_getmsgend(&input_message);
+						StartTransactionCommand();
+						(void) GetTransactionSnapshot();
+
+						use_local_resource = (CurrentResourceOwner == NULL);
+						if (use_local_resource)
+							CurrentResourceOwner = ResourceOwnerCreate(NULL, "session_info_init");
+
+						if (pg_database_aclcheck(MyDatabaseId, GetUserId(), ACL_CONNECT) != ACLCHECK_OK)
+							ereport(FATAL,
+									(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
+									errmsg("permission denied for database \"%s\"",
+											polar_session_info()->client_port->database_name),
+									errdetail("User does not have CONNECT privilege.")));
+
+						if (use_local_resource)
+						{
+							ResourceOwnerRelease(CurrentResourceOwner,
+												RESOURCE_RELEASE_BEFORE_LOCKS,
+												false, true);
+							CurrentResourceOwner = NULL;
+						}
+
+						polar_session_client_authentication(polar_session_info()->client_port);
+						/* process startup guc */
+						polar_process_startup_options(polar_session_info()->client_port, superuser());
+						CommitTransactionCommand();
+						BeginReportingGUCOptions();
+
+						if (!polar_private_session->info->is_inited)
+						{
+							polar_ss_init_ps_display(MyProcPort->user_name,
+								MyProcPort->database_name,
+								MyProcPort->polar_startup_gucs_hash, remote_ps_data,
+								update_process_title ? "idle" : "");
+							polar_private_session->info->is_inited = true;
+						}
+						polar_session_info()->is_inited = true;
+						send_ready_for_query = true;
+					}
+					else
+						goto polar_default_label;
+				}
+				break;
+			/* POLAR end */
+
 			case 'd':			/* copy data */
 			case 'c':			/* copy done */
 			case 'f':			/* copy fail */
@@ -5243,6 +5460,7 @@ PostgresMain(const char *dbname, const char *username)
 				break;
 
 			default:
+			polar_default_label:
 				ereport(FATAL,
 						(errcode(ERRCODE_PROTOCOL_VIOLATION),
 						 errmsg("invalid frontend message type %d",

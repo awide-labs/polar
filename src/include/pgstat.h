@@ -33,6 +33,15 @@
 /* Default directory to store temporary statistics data in */
 #define PG_STAT_TMP_DIR		"pg_stat_tmp"
 
+/* POLAR: Shared Server - session ID ranges */
+#include "storage/polar_session_context.h"
+#define POLAR_BASE_SESSION_ID		POLAR_MAX_PROCESS_COUNT
+#define POLAR_BASE_VIRTUAL_PID		2 * POLAR_MAX_PROCESS_COUNT
+#define POLAR_IS_REAL_PID(pid)		(0 < pid && pid < POLAR_MAX_PROCESS_COUNT)
+#define POLAR_IS_SESSION_ID(pid)	(POLAR_BASE_SESSION_ID <= pid && pid < POLAR_BASE_VIRTUAL_PID)
+#define POLAR_IS_VIRTUAL_PID(pid)	(POLAR_BASE_VIRTUAL_PID <= pid && pid < 2 * POLAR_BASE_VIRTUAL_PID)
+/* POLAR end */
+
 /* The types of statistics entries */
 typedef enum PgStat_Kind
 {

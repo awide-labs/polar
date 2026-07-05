@@ -289,6 +289,7 @@ typedef enum NodeTag
 	T_AllocSetContext,
 	T_SlabContext,
 	T_GenerationContext,
+	T_ShmAllocSetContext,		/* POLAR: Shared Server */
 
 	/*
 	 * TAGS FOR VALUE NODES (value.h)

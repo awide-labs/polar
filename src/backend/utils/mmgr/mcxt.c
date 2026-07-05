@@ -34,6 +34,7 @@
 
 /* POLAR */
 #include "storage/polar_fd.h"
+#include "storage/polar_session_context.h"
 #include "utils/guc.h"
 
 /*****************************************************************************
@@ -424,6 +425,27 @@ MemoryContextSetParent(MemoryContext context, MemoryContext new_parent)
 		context->nextchild = NULL;
 	}
 }
+
+/*
+ * POLAR: Shared Server
+ * MemoryContextSetParentWithFallback
+ *		Set parent with fallback info for shared session contexts.
+ */
+void
+MemoryContextSetParentWithFallback(MemoryContext context,
+								   MemoryContext new_parent, bool is_shared)
+{
+	if (!is_shared)
+		MemoryContextSetParent(context, new_parent);
+	else
+	{
+		MemoryContextSetParent(context, polar_session()->memory_context);
+		context->fallback.parent_name = new_parent->name;
+		context->fallback.parent_ident = new_parent->ident;
+		context->fallback.mcxt = NULL;
+	}
+}
+/* POLAR end */
 
 /*
  * MemoryContextAllowInCriticalSection
@@ -1625,4 +1647,24 @@ polar_palloc_in_crit(Size size)
 	ret = palloc(size);
 	context->allowInCritSection = allow_in_crit;
 	return ret;
+}
+
+/* POLAR: Shared Server */
+Size
+polar_malloc_usable_size(MemoryContext context, void *pointer)
+{
+	AssertArg(MemoryContextIsValid(context));
+	AssertNotInCriticalSection(context);
+
+	if (MemoryContextContains(context, pointer))
+		return context->methods->malloc_usable_size(context, pointer);
+	else if (context->fallback.mcxt != NULL)
+		return context->fallback.mcxt->methods->malloc_usable_size(context->fallback.mcxt, pointer);
+	else
+	{
+		Assert(false);
+		elog(ERROR, "context(%d-%s-%s) does not contains this pointer",
+				context->type, context->name,
+				context->ident ? context->ident : "null");
+	}
 }

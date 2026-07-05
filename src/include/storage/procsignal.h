@@ -71,6 +71,9 @@ extern void ProcessProcSignalBarrier(void);
 
 extern void procsignal_sigusr1_handler(SIGNAL_ARGS);
 
+/* POLAR: Shared Server */
+extern void polar_procsignal_sigusr2_handler(SIGNAL_ARGS);
+
 /* POLAR: CheckProcSignal for POLAR */
 extern bool polar_check_proc_signal(ProcSignalReason reason);
 

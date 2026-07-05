@@ -16,6 +16,19 @@
 
 #include "nodes/nodes.h"
 
+typedef struct DSALockStat
+{
+	uint64		lock_area_count;
+	uint64		lock_area_time_us;
+	uint64		lock_area_max_time_us;
+	uint64		lock_sclass_count;
+	uint64		lock_sclass_time_us;
+	uint64		lock_sclass_max_time_us;
+	uint64		lock_freelist_count;
+	uint64		lock_freelist_time_us;
+	uint64		lock_freelist_max_time_us;
+} DSALockStat;
+
 /*
  * MemoryContextCounters
  *		Summarization state for MemoryContextStats collection.
@@ -33,6 +46,17 @@ typedef struct MemoryContextCounters
 	Size		totalspace;		/* Total bytes requested from malloc */
 	Size		freespace;		/* The unused portion of totalspace */
 } MemoryContextCounters;
+
+/* POLAR */
+typedef struct DSAContextCounters
+{
+	Size		total_segment_size;
+	Size		max_total_segment_size;
+	int			refcnt;
+	bool		pinned;
+	Size		usable_pages;
+	Size		max_contiguous_pages;
+} DSAContextCounters;
 
 /*
  * MemoryContext
@@ -72,8 +96,23 @@ typedef struct MemoryContextMethods
 #ifdef MEMORY_CONTEXT_CHECKING
 	void		(*check) (MemoryContext context);
 #endif
+	/* POLAR px */
+	void		(*declare_accounting_root) (MemoryContext context);
+	Size		(*get_peak_usage) (MemoryContext context);
+	Size		(*malloc_usable_size) (MemoryContext context, void *pointer);
+	/* POLAR end */
 } MemoryContextMethods;
 
+/* POLAR: Shared Server - fallback data for shared memory contexts */
+typedef struct MemoryContextFallbackData
+{
+	const char *parent_name;	/* context name (just for debugging) */
+	const char *parent_ident;	/* context ID if any (just for debugging) */
+	Size		minContextSize;
+	Size		initBlockSize;
+	Size		maxBlockSize;
+	MemoryContext mcxt;
+} MemoryContextFallbackData;
 
 typedef struct MemoryContextData
 {
@@ -90,6 +129,7 @@ typedef struct MemoryContextData
 	const char *name;			/* context name (just for debugging) */
 	const char *ident;			/* context ID if any (just for debugging) */
 	MemoryContextCallback *reset_cbs;	/* list of reset/delete callbacks */
+	MemoryContextFallbackData fallback; /* POLAR: Shared Server */
 } MemoryContextData;
 
 /* utils/palloc.h contains typedef struct MemoryContextData *MemoryContext */
@@ -106,6 +146,7 @@ typedef struct MemoryContextData
 	 (IsA((context), AllocSetContext) || \
 	  IsA((context), SlabContext) || \
 	  IsA((context), GenerationContext) || \
-	  IsA((context), AlignedAllocRedirectContext)))
+	  IsA((context), AlignedAllocRedirectContext) || \
+	  IsA((context), ShmAllocSetContext)))	/* POLAR: Shared Server */
 
 #endif							/* MEMNODES_H */

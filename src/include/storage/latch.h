@@ -135,6 +135,8 @@ typedef struct Latch
 #define WL_SOCKET_CONNECTED  WL_SOCKET_WRITEABLE
 #endif
 #define WL_SOCKET_CLOSED 	 (1 << 7)
+/* POLAR: Shared Server - edge-triggered mode for dispatcher sockets */
+#define WL_SOCKET_EDGE_TRIGGERED (1 << 8)
 #define WL_SOCKET_MASK		(WL_SOCKET_READABLE | \
 							 WL_SOCKET_WRITEABLE | \
 							 WL_SOCKET_CONNECTED | \
@@ -149,6 +151,9 @@ typedef struct WaitEvent
 #ifdef WIN32
 	bool		reset;			/* Is reset of the event required? */
 #endif
+	/* POLAR: Shared Server */
+	int			polar_index;	/* position in descriptors array (for
+								 * poll/win32) */
 } WaitEvent;
 
 /* forward declaration to avoid exposing latch.c implementation details */
@@ -171,6 +176,9 @@ extern void FreeWaitEventSet(WaitEventSet *set);
 extern int	AddWaitEventToSet(WaitEventSet *set, uint32 events, pgsocket fd,
 							  Latch *latch, void *user_data);
 extern void ModifyWaitEvent(WaitEventSet *set, int pos, uint32 events, Latch *latch);
+
+/* POLAR: Shared Server */
+extern void DeleteWaitEventFromSet(WaitEventSet *set, int event_pos);
 
 extern int	WaitEventSetWait(WaitEventSet *set, long timeout,
 							 WaitEvent *occurred_events, int nevents,

@@ -17,6 +17,7 @@
 
 #include <ctype.h>
 #include <fcntl.h>
+#include <math.h>
 #include <unistd.h>
 
 #include "access/genam.h"
@@ -70,6 +71,8 @@
 /* POLAR */
 #include "storage/polar_fd.h"
 #include "storage/polar_rsc.h"
+#include "storage/polar_session_context.h"
+#include "postmaster/polar_dispatcher.h"
 
 /* POLAR: GUC */
 bool		polar_apply_global_guc_for_super;
@@ -329,6 +332,8 @@ CheckMyDatabase(const char *name, bool am_superuser, bool override_allow_connect
 	char	   *ctype;
 	char	   *iculocale;
 
+	ELOG_PSS(DEBUG1, "CheckMyDatabase %s", name);
+
 	/* Fetch our pg_database row normally, via syscache */
 	tup = SearchSysCache1(DATABASEOID, ObjectIdGetDatum(MyDatabaseId));
 	if (!HeapTupleIsValid(tup))
@@ -572,8 +577,29 @@ InitializeMaxBackends(void)
 {
 	Assert(MaxBackends == 0);
 
+	MaxPolarDispatcher = 0;
+	MaxPolarSessions = 0;
+	MaxPolarSharedBackends = 0;
+	MaxPolarSessionsPerDispatcher = 0;
+	MaxPolarSharedBackendsPerDispatcher = 0;
+
+	if (POLAR_SHARED_SERVER_RUNNING())
+	{
+		MaxPolarDispatcher = polar_ss_dispatcher_count;
+		MaxPolarSessions = MaxConnections;
+		if (polar_ss_backend_max_count > 0)
+			MaxPolarSharedBackends = polar_ss_backend_max_count;
+		else if (polar_ss_backend_max_count == 0)
+			MaxPolarSharedBackends = MaxConnections;
+		else
+			MaxPolarSharedBackends = MaxConnections / (0 - polar_ss_backend_max_count);
+		MaxPolarSessionsPerDispatcher = (int) floor(MaxPolarSessions / polar_ss_dispatcher_count);
+		MaxPolarSharedBackendsPerDispatcher = (int) floor(MaxPolarSharedBackends / polar_ss_dispatcher_count);
+	}
+
 	/* the extra unit accounts for the autovacuum launcher */
 	MaxBackends = MaxConnections + autovacuum_max_workers + 1 +
+		MaxPolarDispatcher +	/* POLAR: Shared Server */
 		max_worker_processes + max_wal_senders;
 
 	/* internal error because the values were all checked previously */
@@ -699,7 +725,8 @@ InitPostgres(const char *in_dbname, Oid dboid,
 
 	/* POLAR end */
 
-	elog(DEBUG3, "InitPostgres");
+	elog(DEBUG3, "InitPostgres is_shared:%d, session_id:%d",
+		 polar_current_session->is_shared, polar_current_session->session_id);
 
 	/*
 	 * Add my PGPROC struct to the ProcArray.
@@ -770,6 +797,9 @@ InitPostgres(const char *in_dbname, Oid dboid,
 		before_shmem_exit(pgstat_before_server_shutdown, 0);
 		before_shmem_exit(ShutdownXLOG, 0);
 	}
+
+	/* POLAR: Shared Server */
+	polar_ss_shmem_aset_init_backend();
 
 	/*
 	 * Initialize the relation cache and the system catalog caches.  Note that
@@ -1272,6 +1302,8 @@ process_startup_options(Port *port, bool am_superuser)
 		int			maxac;
 		int			ac;
 
+		ELOG_PSS(DEBUG1, "process_startup_options '%s'", port->cmdline_options);
+
 		maxac = 2 + (strlen(port->cmdline_options) + 1) / 2;
 
 		av = (char **) palloc(maxac * sizeof(char *));
@@ -1304,8 +1336,29 @@ process_startup_options(Port *port, bool am_superuser)
 		value = lfirst(gucopts);
 		gucopts = lnext(port->guc_options, gucopts);
 
+		ELOG_PSS(DEBUG1, "process startup packet guc_options '%s', '%s'", name, value);
+
 		SetConfigOption(name, value, gucctx, PGC_S_CLIENT);
 	}
+}
+
+/* POLAR: Shared Server */
+void
+polar_process_startup_options(struct Port *port, bool am_superuser)
+{
+	SetCurrentStatementStartTimestamp();
+
+	process_startup_options(port, am_superuser);
+
+	/* Process pg_db_role_setting options */
+	process_settings(MyDatabaseId, GetSessionUserId());
+
+	/* set default namespace search path */
+	InitializeSearchPath();
+
+	/* Apply PostAuthDelay as soon as we've read all options */
+	if (PostAuthDelay > 0)
+		pg_usleep(PostAuthDelay * 1000000L);
 }
 
 /*
@@ -1323,6 +1376,7 @@ process_settings(Oid databaseid, Oid roleid)
 	if (!IsUnderPostmaster)
 		return;
 
+	ELOG_PSS(DEBUG1, "process_settings %d, %d", databaseid, roleid);
 	relsetting = table_open(DbRoleSettingRelationId, AccessShareLock);
 
 	/* read all the settings under the same snapshot for efficiency */
@@ -1363,6 +1417,12 @@ ShutdownPostgres(int code, Datum arg)
 {
 	/* Make sure we've killed any active transaction */
 	AbortOutOfAnyTransaction();
+
+	/*
+	 * Shared Server exit callback function that must be called before release
+	 * lock, because dsa_free still need the lock.
+	 */
+	polar_shared_server_exit();
 
 	/*
 	 * User locks are not released by transaction end, so be sure to release
@@ -1537,4 +1597,54 @@ polar_init_dynamic_bgworker_in_backends(void)
 	}
 
 	SetProcessingMode(NormalProcessing);
+}
+
+void
+polar_session_info_init(PolarSessionContext *session, PolarSessionContext *old_session)
+{
+	Assert(session->is_shared);
+
+	if (!session->info->is_inited)
+	{
+		pgstat_bestart();
+
+		session->info->roleid = GetSessionUserId();
+		ELOG_PSS(DEBUG1, "polar_session_info_init session %p, %d",
+				 session, session->session_id);
+	}
+	else
+	{
+		if (session->is_shared && session->info->is_inited && !old_session->info->is_inited)
+		{
+			char		remote_ps_data[NI_MAXHOST];
+
+			MyProcPort->polar_startup_gucs_hash = session->info->client_port->polar_startup_gucs_hash;
+			if (session->info->client_port->remote_port[0] == '\0')
+				snprintf(remote_ps_data, sizeof(remote_ps_data), "%s",
+						 session->info->client_port->remote_host);
+			else
+				snprintf(remote_ps_data, sizeof(remote_ps_data), "%s(%s)",
+						 session->info->client_port->remote_host,
+						 session->info->client_port->remote_port);
+
+			StartTransactionCommand();
+			GetTransactionSnapshot();
+
+			/* process startup guc */
+			polar_process_startup_options(session->info->client_port, superuser());
+
+			CommitTransactionCommand();
+
+			polar_ss_init_ps_display(MyProcPort->user_name, MyProcPort->database_name,
+									 MyProcPort->polar_startup_gucs_hash, remote_ps_data,
+									 update_process_title ? "idle" : "");
+
+			old_session->info->is_inited = true;
+			ELOG_PSS(DEBUG1, "polar_session_info_init local %p, %d",
+					 session, session->session_id);
+		}
+
+		Assert(MyProcPort->polar_startup_gucs_hash ==
+			   session->info->client_port->polar_startup_gucs_hash);
+	}
 }

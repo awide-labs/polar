@@ -33,6 +33,9 @@
 #include "utils/inet.h"
 #include "utils/timestamp.h"
 
+/* POLAR: Shared Server */
+#include "storage/polar_session_context.h"
+
 #define UINT32_ACCESS_ONCE(var)		 ((uint32)(*((volatile uint32 *)&(var))))
 
 #define HAS_PGSTAT_PERMISSIONS(role)	 (has_privs_of_role(GetUserId(), ROLE_PG_READ_ALL_STATS) || has_privs_of_role(GetUserId(), role))
@@ -503,6 +506,12 @@ pg_stat_get_progress_info(PG_FUNCTION_ARGS)
 
 		beentry = &local_beentry->backendStatus;
 
+		/* POLAR: Shared Server - only show session pid */
+		if (POLAR_SHARED_SERVER_RUNNING() &&
+			beentry->st_backendType == B_BACKEND &&
+			beentry->session_local_id < 0)
+			continue;
+
 		/*
 		 * Report values for only those backends which are running the given
 		 * command.
@@ -598,6 +607,12 @@ pg_stat_get_activity(PG_FUNCTION_ARGS)
 		}
 
 		beentry = &local_beentry->backendStatus;
+
+		/* POLAR: Shared Server - only show session pid */
+		if (POLAR_SHARED_SERVER_RUNNING() &&
+			beentry->st_backendType == B_BACKEND &&
+			beentry->session_local_id < 0)
+			continue;
 
 		/* If looking for specific PID, ignore all the others */
 		if (pid != -1 && beentry->st_procpid != pid)
@@ -1239,6 +1254,12 @@ pg_stat_get_db_numbackends(PG_FUNCTION_ARGS)
 	for (beid = 1; beid <= tot_backends; beid++)
 	{
 		PgBackendStatus *beentry = pgstat_fetch_stat_beentry(beid);
+
+		/* POLAR: Shared Server - only show session pid */
+		if (POLAR_SHARED_SERVER_RUNNING() &&
+			beentry->st_backendType == B_BACKEND &&
+			beentry->session_local_id < 0)
+			continue;
 
 		if (beentry && beentry->st_databaseid == dbid)
 			result++;

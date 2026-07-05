@@ -88,7 +88,9 @@ PrepareQuery(ParseState *pstate, PrepareStmt *stmt,
 	 * to see the unmodified raw parse tree.
 	 */
 	plansource = CreateCachedPlan(rawstmt, pstate->p_sourcetext,
-								  CreateCommandTag(stmt->query));
+								  CreateCommandTag(stmt->query),
+								  false);	/* POLAR: Shared Server - PREPARE
+											 * uses local context */
 
 	/* Transform list of TypeNames to array of type OIDs */
 	nargs = list_length(stmt->argtypes);

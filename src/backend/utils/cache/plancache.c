@@ -163,11 +163,13 @@ InitPlanCache(void)
  * raw_parse_tree: output of raw_parser(), or NULL if empty query
  * query_string: original query text
  * commandTag: command tag for query, or UNKNOWN if empty query
+ * polar_on_session_context: POLAR Shared Server - use session context
  */
 CachedPlanSource *
 CreateCachedPlan(RawStmt *raw_parse_tree,
 				 const char *query_string,
-				 CommandTag commandTag)
+				 CommandTag commandTag,
+				 bool polar_on_session_context)
 {
 	CachedPlanSource *plansource;
 	MemoryContext source_context;
@@ -181,6 +183,9 @@ CreateCachedPlan(RawStmt *raw_parse_tree,
 	 * just in case, allow it to grow large.  Initially it's a child of the
 	 * caller's context (which we assume to be transient), so that it will be
 	 * cleaned up on error.
+	 *
+	 * POLAR: Shared Server - if polar_on_session_context is true, we should
+	 * allocate in session context. For now, use the standard context.
 	 */
 	source_context = AllocSetContextCreate(CurrentMemoryContext,
 										   "CachedPlanSource",

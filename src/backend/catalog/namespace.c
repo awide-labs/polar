@@ -59,6 +59,67 @@
 #include "utils/syscache.h"
 #include "utils/varlena.h"
 
+/* POLAR: Shared Server */
+#include "utils/polar_session_inval.h"
+#include "storage/polar_session_context.h"
+
+/*
+ * POLAR: Shared Server - Session namespace state structure
+ */
+typedef struct PolarSessionNamespace
+{
+	List	   *m_activeSearchPath;
+	Oid			m_activeCreationNamespace;
+	bool		m_activeTempCreationPending;
+	uint64		m_activePathGeneration;
+
+	List	   *m_baseSearchPath;
+	Oid			m_baseCreationNamespace;
+	bool		m_baseTempCreationPending;
+	Oid			m_namespaceUser;
+	bool		m_baseSearchPathValid;
+
+	List	   *m_overrideStack;
+
+	Oid			m_myTempNamespace;
+	Oid			m_myTempToastNamespace;
+	SubTransactionId m_myTempNamespaceSubID;
+} PolarSessionNamespace;
+
+PolarSessionNamespace *
+polar_session_namespace_create(MemoryContext mctx)
+{
+	PolarSessionNamespace *self;
+
+	if (mctx)
+		self = (PolarSessionNamespace *) MemoryContextAlloc(mctx, sizeof(PolarSessionNamespace));
+	else
+		self = (PolarSessionNamespace *) malloc(sizeof(PolarSessionNamespace));
+
+	memset(self, 0, sizeof(PolarSessionNamespace));
+
+	self->m_activeSearchPath = NIL;
+	self->m_baseSearchPath = NIL;
+	self->m_overrideStack = NIL;
+	self->m_baseSearchPathValid = true;
+	self->m_activePathGeneration = 1;
+
+	return self;
+}
+
+bool
+polar_session_has_temp_namespace(void)
+{
+	return OidIsValid(polar_session_info()->ns->m_myTempNamespace);
+}
+
+void
+polar_inval_namespace_path(void)
+{
+	polar_session_info()->ns->m_baseSearchPathValid = false;
+}
+
+/* POLAR end */
 
 /*
  * The namespace search path is a possibly-empty list of namespace OIDs.

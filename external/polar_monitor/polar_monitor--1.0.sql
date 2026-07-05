@@ -778,3 +778,150 @@ LANGUAGE C PARALLEL SAFE;
 
 REVOKE ALL ON FUNCTION polar_get_datamax_info() FROM PUBLIC;
 REVOKE ALL ON FUNCTION polar_set_datamax_reserved_lsn(pg_lsn, bool) FROM PUBLIC;
+
+-- DSA and AllocSet based on DSA
+CREATE OR REPLACE FUNCTION polar_stat_dsa(
+            OUT name TEXT,
+            OUT total_segment_size int8,
+            OUT pinned bool,
+            OUT refcnt int4,
+            OUT usable_pages int8,
+            OUT max_contiguous_pages int8,
+            OUT max_total_segment_size int8,
+            OUT usable_space_pct float4)
+AS 'MODULE_PATHNAME', 'polar_stat_dsa'
+LANGUAGE C PARALLEL SAFE;
+
+CREATE OR REPLACE VIEW polar_stat_dsa AS
+	SELECT * FROM polar_stat_dsa();
+
+CREATE OR REPLACE FUNCTION polar_shm_aset_ctl(
+                    OUT type int2,
+                    OUT name TEXT,
+                    OUT size int8)
+AS 'MODULE_PATHNAME', 'polar_shm_aset_ctl'
+LANGUAGE C PARALLEL SAFE;
+
+CREATE OR REPLACE VIEW polar_shm_aset_ctl AS
+	SELECT * FROM polar_shm_aset_ctl();
+
+-- shared server
+CREATE FUNCTION polar_dispatcher_pid()
+RETURNS int4
+AS 'MODULE_PATHNAME', 'polar_dispatcher_pid'
+LANGUAGE C STABLE PARALLEL RESTRICTED;
+
+/* POLAR: Shared Server */
+CREATE FUNCTION polar_session_backend_pid()
+RETURNS int4
+AS 'MODULE_PATHNAME', 'polar_session_backend_pid'
+LANGUAGE C STABLE PARALLEL RESTRICTED;
+
+CREATE FUNCTION polar_is_dedicated_backend()
+RETURNS bool
+AS 'MODULE_PATHNAME', 'polar_is_dedicated_backend'
+LANGUAGE C STABLE PARALLEL RESTRICTED;
+
+CREATE OR REPLACE FUNCTION polar_stat_dispatcher
+(
+	OUT id                    int4,
+	OUT pid                   int4,
+	OUT n_clients             int4,
+	OUT n_ssl_clients         int4,
+	OUT n_idle_clients        int4,
+	OUT n_pending_clients     int4,
+	OUT n_signalling_clients   int4,
+	OUT n_startup_clients     int4,
+	OUT n_pools               int4,
+	OUT n_backends            int4,
+	OUT n_idle_backends       int4,
+	OUT n_dedicated_backends  int4,
+	OUT tx_bytes              int8,
+	OUT rx_bytes              int8,
+	OUT n_transactions        int8
+)
+RETURNS SETOF record
+AS 'MODULE_PATHNAME', 'polar_stat_dispatcher'
+LANGUAGE C STRICT PARALLEL SAFE;
+
+CREATE OR REPLACE VIEW polar_stat_dispatcher AS
+  SELECT * FROM polar_stat_dispatcher();
+
+REVOKE ALL ON FUNCTION polar_stat_dispatcher FROM PUBLIC;
+REVOKE ALL ON polar_stat_dispatcher FROM PUBLIC;
+
+CREATE OR REPLACE FUNCTION polar_stat_session
+(
+  pid integer,
+  OUT datid oid,
+  OUT pid integer,
+  OUT usesysid oid,
+  OUT application_name text,
+  OUT state text,
+  OUT query text,
+  OUT wait_event_type text,
+  OUT wait_event text,
+  OUT xact_start timestamp with time zone,
+  OUT query_start timestamp with time zone,
+  OUT backend_start timestamp with time zone,
+  OUT state_change timestamp with time zone,
+  OUT client_addr inet,
+  OUT client_hostname text,
+  OUT client_port integer,
+  OUT backend_xid xid,
+  OUT backend_xmin xid,
+  OUT backend_type text,
+  OUT ssl boolean,
+  OUT sslversion text,
+  OUT sslcipher text,
+  OUT sslbits integer,
+  OUT sslclientdn text,
+  OUT sslclientserial numeric,
+  OUT sslissuerdn text,
+  OUT dispatcher_pid integer,
+  OUT id integer,
+  OUT last_backend_pid integer,
+  OUT saved_guc_count integer,
+  OUT last_wait_start timestamp with time zone
+)
+RETURNS SETOF record
+AS 'MODULE_PATHNAME', 'polar_stat_session'
+LANGUAGE C STABLE PARALLEL RESTRICTED;
+
+CREATE VIEW polar_stat_session AS
+    SELECT
+            S.datid AS datid,
+            D.datname AS datname,
+            S.dispatcher_pid,
+            S.id,
+            S.pid as session_id,
+            S.last_backend_pid,
+            S.usesysid,
+            U.rolname AS usename,
+            S.application_name,
+            S.client_addr,
+            S.client_hostname,
+            S.client_port,
+            S.saved_guc_count,
+            S.last_wait_start,
+            S.backend_start,
+            S.xact_start,
+            S.query_start,
+            S.state_change,
+            S.wait_event_type,
+            S.wait_event,
+            S.state,
+            S.backend_xid,
+            s.backend_xmin,
+            S.query,
+            S.backend_type
+    FROM polar_stat_session(NULL) AS S
+        LEFT JOIN pg_database AS D ON (S.datid = D.oid)
+        LEFT JOIN pg_authid AS U ON (S.usesysid = U.oid);
+
+CREATE OR REPLACE FUNCTION polar_dump_dsa(name TEXT)
+    RETURNS void
+AS 'MODULE_PATHNAME', 'polar_dump_dsa'
+    LANGUAGE C STRICT PARALLEL SAFE;
+
+REVOKE ALL ON FUNCTION polar_dump_dsa FROM PUBLIC;

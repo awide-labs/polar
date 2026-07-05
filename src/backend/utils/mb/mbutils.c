@@ -43,6 +43,9 @@
 #include "utils/relcache.h"
 #include "utils/syscache.h"
 
+/* POLAR: Shared Server */
+#include "storage/polar_session_context.h"
+
 /*
  * We maintain a simple linked list caching the fmgr lookup info for the
  * currently selected conversion functions, as well as any that have been

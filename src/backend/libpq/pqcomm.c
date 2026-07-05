@@ -709,11 +709,16 @@ Setup_AF_UNIX(const char *sock_path)
  * RETURNS: STATUS_OK or STATUS_ERROR
  */
 int
-StreamConnection(pgsocket server_fd, Port *port)
+StreamConnection(pgsocket server_fd, Port *port, bool polar_skip_accept)
 {
 	/* accept connection and fill in the client (remote) address */
+	/*
+	 * POLAR: Shared Server - polar_skip_accept skips accept for existing
+	 * socket
+	 */
 	port->raddr.salen = sizeof(port->raddr.addr);
-	if ((port->sock = accept(server_fd,
+	if (!polar_skip_accept &&
+		(port->sock = accept(server_fd,
 							 (struct sockaddr *) &port->raddr.addr,
 							 &port->raddr.salen)) == PGINVALID_SOCKET)
 	{
@@ -732,15 +737,18 @@ StreamConnection(pgsocket server_fd, Port *port)
 		return STATUS_ERROR;
 	}
 
-	/* POLAR: Get real client address of ALB. */
-	port->raddr.salen = sizeof(port->raddr.addr);
-	if (getpeername(port->sock,
-					(struct sockaddr *) &port->raddr.addr,
-					&port->raddr.salen) < 0)
+	/* POLAR: Get real client address of ALB / Shared Server */
+	if (polar_skip_accept)
 	{
-		ereport(LOG,
-				(errmsg("%s() failed: %m", "getpeername")));
-		return STATUS_ERROR;
+		port->raddr.salen = sizeof(port->raddr.addr);
+		if (getpeername(port->sock,
+						(struct sockaddr *) &port->raddr.addr,
+						&port->raddr.salen) < 0)
+		{
+			ereport(LOG,
+					(errmsg("%s() failed: %m", "getpeername")));
+			return STATUS_ERROR;
+		}
 	}
 
 	/* fill in the server (local) address */

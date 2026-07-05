@@ -25,9 +25,10 @@ typedef void (*shmem_startup_hook_type) (void);
 typedef enum
 {
 	POLAR_SET_SIGNAL_MCTX,
-	POLAR_CHECK_SIGNAL_MCTX
+	POLAR_CHECK_SIGNAL_MCTX,
+	POLAR_SS_CHECK_SIGNAL_MCTX	/* POLAR: Shared Server */
 } PolarHookActionType;
-typedef void (*polar_monitor_hook_type) (PolarHookActionType action);
+typedef void (*polar_monitor_hook_type) (PolarHookActionType action, void *args);
 
 /*----------
  * API for handling cleanup that must occur during either ereport(ERROR)

@@ -1,0 +1,50 @@
+CREATE EXTENSION polar_monitor;
+CREATE EXTENSION test_polar_shm_aset;
+SELECT test_shm_aset_random(3, 5, 1024, 4096, 'random');
+ test_shm_aset_random 
+----------------------
+ 
+(1 row)
+
+SELECT test_shm_aset_random(3, 5, 1024, 4096, 'forwards');
+ test_shm_aset_random 
+----------------------
+ 
+(1 row)
+
+SELECT test_shm_aset_random(3, 5, 1024, 4096, 'backwards');
+ test_shm_aset_random 
+----------------------
+ 
+(1 row)
+
+SELECT count(*) from test_shm_aset_random_parallel(3, 5, 1024, 8192, 'random', 5);
+ count 
+-------
+     5
+(1 row)
+
+SELECT count(*) from test_shm_aset_random_parallel(3, 5, 1024, 8192, 'forwards', 5);
+ count 
+-------
+     5
+(1 row)
+
+SELECT count(*) from test_shm_aset_random_parallel(3, 5, 1024, 8192, 'backwards', 5);
+ count 
+-------
+     5
+(1 row)
+
+SELECT * FROM polar_shm_aset_ctl;
+ type | name |   size   
+------+------+----------
+    0 | GPC  | 10485760
+(1 row)
+
+SELECT * FROM polar_stat_dsa;
+ name | total_segment_size | pinned | refcnt | usable_pages | max_contiguous_pages | max_total_segment_size | usable_space_pct 
+------+--------------------+--------+--------+--------------+----------------------+------------------------+------------------
+ GPC  |           10485760 | t      |     18 |         2553 |                 2328 |               10485760 |         0.997266
+(1 row)
+

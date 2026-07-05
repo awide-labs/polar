@@ -27,15 +27,44 @@
 #include "utils/inval.h"
 #include "utils/syscache.h"
 
+/* POLAR: Shared Server */
+#include "storage/polar_session_context.h"
+
 /*
  * In common cases the same roleid (ie, the session or current ID) will
  * be queried repeatedly.  So we maintain a simple one-entry cache for
  * the status of the last requested roleid.  The cache can be flushed
  * at need by watching for cache update events on pg_authid.
  */
-static Oid	last_roleid = InvalidOid;	/* InvalidOid == cache not valid */
-static bool last_roleid_is_super = false;
 static bool roleid_callback_registered = false;
+
+/* POLAR: Shared Server - session-specific superuser cache */
+typedef struct PolarSessionSuperUser
+{
+	Oid			m_last_roleid;	/* InvalidOid == cache not valid */
+	bool		m_last_roleid_is_super;
+} PolarSessionSuperUser;
+
+PolarSessionSuperUser *
+polar_session_superuser_create(MemoryContext mctx)
+{
+	PolarSessionSuperUser *self;
+
+	if (mctx)
+		self = (PolarSessionSuperUser *) MemoryContextAlloc(mctx, sizeof(PolarSessionSuperUser));
+	else
+		self = (PolarSessionSuperUser *) malloc(sizeof(PolarSessionSuperUser));
+
+	memset(self, 0, sizeof(PolarSessionSuperUser));
+
+	return self;
+}
+
+#define POLAR_SESSION_SUPERUSER(name) \
+	(polar_session_info()->superuser->m_##name)
+
+#define last_roleid				POLAR_SESSION_SUPERUSER(last_roleid)
+#define last_roleid_is_super	POLAR_SESSION_SUPERUSER(last_roleid_is_super)
 
 static void RoleidCallback(Datum arg, int cacheid, uint32 hashvalue);
 

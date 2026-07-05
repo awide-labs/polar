@@ -190,6 +190,7 @@ extern PGDLLIMPORT bool IsPostmasterEnvironment;
 extern PGDLLIMPORT bool IsUnderPostmaster;
 extern PGDLLIMPORT bool IsBackgroundWorker;
 extern PGDLLIMPORT bool IsBinaryUpgrade;
+extern PGDLLIMPORT bool IsPolarDispatcher;	/* POLAR: Shared Server */
 
 extern PGDLLIMPORT bool ExitOnAnyError;
 
@@ -202,7 +203,47 @@ extern PGDLLIMPORT int MaxConnections;
 extern PGDLLIMPORT int max_worker_processes;
 extern PGDLLIMPORT int max_parallel_workers;
 
+/* POLAR: Shared Server */
+extern PGDLLIMPORT int MaxPolarDispatcher;
+extern PGDLLIMPORT int MaxPolarSessions;
+extern PGDLLIMPORT int MaxPolarSharedBackends;
+extern PGDLLIMPORT int MaxPolarSessionsPerDispatcher;
+extern PGDLLIMPORT int MaxPolarSharedBackendsPerDispatcher;
+
+/* POLAR: Shared Server schedule policy enum options */
+enum ClientSchedulePolicy
+{
+	CLIENT_SCHEDULE_ROUND_ROBIN,
+	CLIENT_SCHEDULE_RANDOM,
+	CLIENT_SCHEDULE_LOAD_BALANCING
+};
+
+enum SessionSchedulePolicy
+{
+	SESSION_SCHEDULE_FIFO,
+	SESSION_SCHEDULE_RANDOM,
+	SESSION_SCHEDULE_DISPOSABLE,
+	SESSION_SCHEDULE_DEDICATED,
+};
+
+extern PGDLLIMPORT int polar_ss_dispatcher_count;
+extern PGDLLIMPORT int polar_ss_backend_max_count;
+extern PGDLLIMPORT int polar_ss_backend_pool_min_size;
+extern PGDLLIMPORT int polar_ss_backend_idle_timeout;
+extern PGDLLIMPORT int polar_ss_backend_keepalive_timeout;
+extern PGDLLIMPORT int polar_ss_session_wait_timeout;
+
+extern PGDLLIMPORT int polar_ss_db_role_setting_max_size;
+extern PGDLLIMPORT int polar_ss_client_schedule_policy;
+extern PGDLLIMPORT int polar_ss_session_schedule_policy;
+extern PGDLLIMPORT char *polar_ss_dedicated_guc_names;
+extern PGDLLIMPORT char *polar_ss_dedicated_extension_names;
+extern PGDLLIMPORT char *polar_ss_dedicated_dbuser_names;
+
+/* POLAR end */
+
 extern PGDLLIMPORT int MyProcPid;
+extern PGDLLIMPORT int MySessionPid;	/* POLAR: Shared Server */
 extern PGDLLIMPORT pg_time_t MyStartTime;
 extern PGDLLIMPORT TimestampTz MyStartTimestamp;
 extern PGDLLIMPORT struct Port *MyProcPort;
@@ -512,6 +553,7 @@ extern void InitPostgres(const char *in_dbname, Oid dboid,
 						 bool override_allow_connections,
 						 char *out_dbname);
 extern void BaseInit(void);
+extern void polar_process_startup_options(struct Port *port, bool am_superuser);
 
 /* POLAR */
 extern const char *polar_max_connections_show_hook(void);

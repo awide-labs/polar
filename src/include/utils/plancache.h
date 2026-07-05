@@ -190,7 +190,8 @@ extern void ResetPlanCache(void);
 
 extern CachedPlanSource *CreateCachedPlan(struct RawStmt *raw_parse_tree,
 										  const char *query_string,
-										  CommandTag commandTag);
+										  CommandTag commandTag,
+										  bool polar_on_session_context);
 extern CachedPlanSource *CreateOneShotCachedPlan(struct RawStmt *raw_parse_tree,
 												 const char *query_string,
 												 CommandTag commandTag);

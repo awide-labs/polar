@@ -22,4 +22,7 @@ OBJS = \
 	portalmem.o \
 	slab.o
 
+# POLAR: Shared Server
+OBJS += polar_shm_aset.o
+
 include $(top_srcdir)/src/backend/common.mk
