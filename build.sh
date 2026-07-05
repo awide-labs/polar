@@ -169,7 +169,7 @@ port=$(random_unused_port)
 # 2.2 complie options
 debug=on
 minimal=off
-compiler_flag="-g -pipe -Wall -fno-omit-frame-pointer -fsigned-char"
+compiler_flag="-g -Wall -fno-omit-frame-pointer"
 # disable origin rpath config because of our own rpath config in LDFLAGS
 configure_flag="--enable-depend --with-uuid=e2fs --disable-rpath --with-segsize=128"
 make_flag=""
