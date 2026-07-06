@@ -430,6 +430,23 @@ WalReceiverMain(void)
 			polar_is_initial_datamax = true;
 
 			/*
+			 * POLAR: when a datamax cascades from another datamax, the
+			 * upstream may itself be an initial datamax that has not yet
+			 * learned its timeline from its own primary, so IDENTIFY_SYSTEM
+			 * reports timeline 0. Adopting that invalid timeline would make
+			 * the TIMELINE_HISTORY request below fail with "invalid timeline
+			 * 0" and take the walreceiver down. Bail out instead and let the
+			 * startup process reconnect after wal_retrieve_retry_interval, by
+			 * which time the upstream should have advanced to a valid
+			 * timeline.
+			 */
+			if (primaryTLI == POLAR_INVALID_TIMELINE_ID)
+				ereport(ERROR,
+						(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+						 errmsg("primary server has not established a timeline yet"),
+						 errdetail("The upstream datamax node reported timeline 0; will retry.")));
+
+			/*
 			 * POLAR: an initial datamax requested streaming with an invalid
 			 * timeline / lsn, so fetch as much WAL as possible from the
 			 * primary's current timeline: adopt the primary's timeline that
@@ -921,10 +938,18 @@ WalRcvDie(int code, Datum arg)
 	WalRcvData *walrcv = WalRcv;
 	TimeLineID *startpointTLI_p = (TimeLineID *) DatumGetPointer(arg);
 
-	Assert(*startpointTLI_p != 0);
-
-	/* Ensure that all WAL records received are flushed to disk */
-	XLogWalRcvFlush(true, *startpointTLI_p);
+	/*
+	 * Ensure that all WAL records received are flushed to disk.
+	 *
+	 * POLAR: an initial datamax exits here with an invalid (0) timeline when
+	 * it errors out before establishing streaming (e.g. its upstream datamax
+	 * has not learned its own timeline yet). Nothing has been received in
+	 * that case, so the flush would be a no-op; skip it rather than trip the
+	 * tli != 0 assertions, which would turn a recoverable walreceiver error
+	 * into a SIGABRT that crashes the whole node.
+	 */
+	if (*startpointTLI_p != POLAR_INVALID_TIMELINE_ID)
+		XLogWalRcvFlush(true, *startpointTLI_p);
 
 	/* Mark ourselves inactive in shared memory */
 	SpinLockAcquire(&walrcv->mutex);

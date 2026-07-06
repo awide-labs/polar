@@ -60,6 +60,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Fixed spurious "invalid timeline 0" replication errors logged at
+  startup by a DataMax node that streams WAL from another DataMax node.
+  If the upstream had not yet established its own timeline (still
+  timeline 0), the downstream adopted that invalid timeline and its
+  walreceiver repeatedly failed to start streaming until the upstream
+  caught up. It now detects the not-yet-ready upstream and retries
+  cleanly until the upstream reports a valid timeline (XCOM-193)
 - Fixed stale-relfilenode errors on cascading shared-storage replicas
   caused by the upstream standby removing or truncating relation files
   before the replica had replayed the preceding DDL lock record. Queries
