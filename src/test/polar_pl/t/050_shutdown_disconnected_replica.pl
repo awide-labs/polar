@@ -285,6 +285,44 @@ sub assert_no_checkpoint_blocked
 	);
 }
 
+# v5-specific companion to assert_no_checkpoint_blocked. Variant 5
+# deliberately keeps the slot ACTIVE until the shutdown flush-wait loop is
+# already spinning, then kills the walsender mid-loop. So, unlike v1-v4,
+# the loop's first polar_is_checkpoint_legal() check necessarily logs one
+# or more "Checkpoint blocked. ... oldest apply lsn = L_seed" warnings
+# (non-zero) before our SIGTERM even lands -- those are EXPECTED here, so
+# assert_no_checkpoint_blocked (which flags any non-zero value) does not
+# apply to this variant.
+sub assert_checkpoint_apply_lsn_released
+{
+	my ($primary, $tag) = @_;
+
+	my $logtext = PostgreSQL::Test::Utils::slurp_file($primary->logfile);
+	my @apply = $logtext =~ /Checkpoint blocked\..*?oldest apply lsn (\S+)/g;
+
+	ok(@apply > 0,
+		"[$tag] shutdown flush loop logged Checkpoint-blocked progress");
+
+	# Index of the first release to the "0/0" invalid marker.
+	my $released_at;
+	for my $i (0 .. $#apply)
+	{
+		if ($apply[$i] eq '0/0') { $released_at = $i; last; }
+	}
+
+	ok(defined $released_at,
+		"[$tag] oldest_apply_lsn released to 0/0 after the walsender exited "
+		  . "(loop-internal recompute dropped the inactive slot)");
+	return unless defined $released_at;
+
+	# Residual-race guard: once released it must stay released -- no later
+	# iteration may re-pin oldest_apply_lsn to a stale non-zero value.
+	my @stale = grep { $_ ne '0/0' } @apply[ $released_at + 1 .. $#apply ];
+	is(scalar @stale, 0,
+		"[$tag] oldest_apply_lsn stays released (no stale non-zero value after 0/0)")
+	  or diag("[$tag] stale apply_lsn after release: @stale");
+}
+
 # Initial seed traffic + verifying that the replica feedback has
 # reached the slot. Returns the recorded oldest_apply_lsn.
 sub seed_and_record_apply_lsn
@@ -704,12 +742,12 @@ subtest 'walsender exits mid-checkpoint exposes residual race' => sub {
 		POSIX::_exit(0);
 	}
 
-	# With loop-internal recompute fix, this passes.
-	# If a future change drops the loop-internal recompute, the loop
-	# spins on stale oldest_apply_lsn = L_seed until PGCTLTIMEOUT and
-	# this assertion fails -- that is the regression v6 guards.
+	# The shutdown checkpoint enters polar_flush_buffer_for_shutdown while
+	# the slot is still ACTIVE, so its flush-wait loop necessarily logs one
+	# or more non-zero "Checkpoint blocked ... oldest apply lsn = L_seed"
+	# warnings before our SIGTERM lands -- expected for v5, unlike v1-v4.
 	shutdown_primary_ok($primary, 'fast', $tag);
-	assert_no_checkpoint_blocked($primary, $tag);
+	assert_checkpoint_apply_lsn_released($primary, $tag);
 
 	# Reap the helper so it doesn't outlive the subtest.
 	waitpid($kill_pid, 0);
