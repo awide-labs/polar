@@ -340,6 +340,9 @@ static SubXactCallbackItem *SubXact_callbacks = NULL;
 
 polar_unsplittable_reason_t polar_unsplittable_reason;
 XLogRecPtr	polar_xact_split_wait_lsn = InvalidXLogRecPtr;
+int			polar_proxy_wait_timeout_ms = 1000;
+int			polar_proxy_wait_max_delay_us = 100;
+int			polar_consistency_mode = POLAR_CONSISTENCY_BEST_EFFORT;
 
 /*
  * POLAR: login history

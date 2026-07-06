@@ -8,6 +8,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Add LSN-based session-consistency wait for connection proxies:
+  replicas block at snapshot acquisition until WAL replay reaches a
+  target LSN, with configurable timeout and best-effort/strict modes (XCOM-193)
 - Add DataMax standalone mode, a dedicated log-storage node that streams
   WAL from an upstream primary and durably retains and archives it
   without applying it, so it holds no primary data (XCOM-193)

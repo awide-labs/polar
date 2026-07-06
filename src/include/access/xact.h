@@ -548,6 +548,17 @@ typedef enum polar_unsplittable_reason_t
 
 extern polar_unsplittable_reason_t polar_unsplittable_reason;
 extern XLogRecPtr polar_xact_split_wait_lsn;
+extern int	polar_proxy_wait_timeout_ms;
+extern int	polar_proxy_wait_max_delay_us;
+
+/* POLAR: consistency wait mode */
+typedef enum
+{
+	POLAR_CONSISTENCY_BEST_EFFORT,	/* WARNING on timeout, return stale data */
+	POLAR_CONSISTENCY_STRICT	/* ERROR on timeout, abort query */
+} PolarConsistencyMode;
+
+extern int	polar_consistency_mode;
 
 extern void polar_xact_split_begin(const char *newval, void *extra);
 extern void polar_xact_split_end(void);

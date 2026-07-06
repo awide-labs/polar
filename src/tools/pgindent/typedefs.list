@@ -2106,6 +2106,7 @@ Point
 Pointer
 PolarChannelType
 PolarCollectIoStat
+PolarConsistencyMode
 PolarDbRoleSetting
 PolarDbRoleSettingArray
 PolarDispatcher

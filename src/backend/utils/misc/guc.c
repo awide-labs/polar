@@ -423,7 +423,9 @@ static ConfigVariable *ProcessConfigFileInternal(GucContext context,
 static void polar_assign_virtual_pid(const int newval, void *extra);
 static void polar_assign_cancel_key(const int newval, void *extra);
 static const char *polar_show_xact_split_xids(void);
+static bool polar_check_xact_split_wait_lsn(char **newval, void **extra, GucSource source);
 static void polar_assign_xact_split_wait_lsn(const char *newval, void *extra);
+static const char *polar_show_xact_split_wait_lsn(void);
 static bool polar_check_rename_wal_ready_file(char **newval, void **extra, GucSource source);
 static void polar_assign_rename_wal_ready_file(const char *newval, void *extra);
 static void polar_assign_ignore_coredump_functions(const char *newval, void *extra);
@@ -514,6 +516,12 @@ static const struct config_enum_entry polar_save_stack_info_level_options[] = {
 static const struct config_enum_entry polar_datamax_mode_options[] = {
 	{"off", POLAR_DATAMAX_OFF, false},
 	{"standalone", POLAR_DATAMAX_STANDALONE, false},
+	{NULL, 0, false}
+};
+
+static const struct config_enum_entry polar_consistency_mode_options[] = {
+	{"best_effort", POLAR_CONSISTENCY_BEST_EFFORT, false},
+	{"strict", POLAR_CONSISTENCY_STRICT, false},
 	{NULL, 0, false}
 };
 
@@ -6128,6 +6136,36 @@ static struct config_int ConfigureNamesInt[] =
 		&polar_datamax_prealloc_walfile_num,
 		2,
 		1, INT_MAX / 1000,
+	},
+	/* POLAR: xact split LSN wait — overall budget */
+	{
+		{"polar_proxy_wait_timeout_ms", PGC_USERSET, POLAR_PROXY,
+			gettext_noop("Total time the replica will wait for the target LSN before giving up."),
+			gettext_noop("This is the OVERALL deadline for a single LSN consistency wait. "
+						 "When the deadline is reached, polar_consistency_mode decides whether to "
+						 "WARN and return stale data (best_effort) or ERROR and abort (strict). "
+						 "Set to 0 to wait indefinitely. See polar_proxy_wait_max_delay_us for the "
+						 "per-iteration polling cap."),
+			GUC_UNIT_MS | POLAR_GUC_IS_VISIBLE | POLAR_GUC_IS_CHANGABLE
+		},
+		&polar_proxy_wait_timeout_ms,
+		1000, 0, INT_MAX,
+		NULL, NULL, NULL
+	},
+
+	/* POLAR: xact split LSN wait — per-iteration polling cap */
+	{
+		{"polar_proxy_wait_max_delay_us", PGC_USERSET, POLAR_PROXY,
+			gettext_noop("Maximum sleep between LSN polls during a consistency wait."),
+			gettext_noop("Controls polling RATE (not total wait time): the busy-wait starts at "
+						 "10us and doubles up to this cap, then steady-polls at the cap. "
+						 "Lower = tighter latency, higher CPU. Higher = lower CPU, longer "
+						 "wake-up latency once the target is reached. See polar_proxy_wait_timeout_ms "
+						 "for the overall deadline."),
+			POLAR_GUC_IS_VISIBLE | POLAR_GUC_IS_CHANGABLE
+		},
+		&polar_proxy_wait_max_delay_us,
+		100, 10, 10000,
 		NULL, NULL, NULL
 	},
 	/* POLAR int GUCs end */
@@ -6549,13 +6587,13 @@ static struct config_string ConfigureNamesString[] =
 
 	{
 		{"polar_xact_split_wait_lsn", PGC_USERSET, POLAR_PROXY,
-			gettext_noop("xact id of current split transaction."),
+			gettext_noop("Target LSN the replica must reach before acquiring the next snapshot."),
 			NULL,
 			GUC_SUPERUSER_ONLY | GUC_NOT_IN_SAMPLE | GUC_DISALLOW_IN_FILE | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_UNCHANGABLE
 		},
 		&polar_xact_split_wait_lsn_str,
 		NULL,
-		NULL, polar_assign_xact_split_wait_lsn, NULL
+		polar_check_xact_split_wait_lsn, polar_assign_xact_split_wait_lsn, polar_show_xact_split_wait_lsn
 	},
 
 	{
@@ -7489,6 +7527,18 @@ static struct config_enum ConfigureNamesEnum[] =
 		},
 		&polar_datamax_mode,
 		POLAR_DATAMAX_OFF, polar_datamax_mode_options,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"polar_consistency_mode", PGC_USERSET, POLAR_PROXY,
+			gettext_noop("Behavior when an LSN consistency wait times out."),
+			gettext_noop("'best_effort' logs WARNING and returns potentially stale data. "
+						 "'strict' raises ERROR and aborts the query."),
+			POLAR_GUC_IS_VISIBLE | POLAR_GUC_IS_CHANGABLE
+		},
+		&polar_consistency_mode,
+		POLAR_CONSISTENCY_BEST_EFFORT, polar_consistency_mode_options,
 		NULL, NULL, NULL
 	},
 
@@ -16253,17 +16303,58 @@ polar_show_xact_split_xids(void)
 	return xids ? xids : "unsplittable";
 }
 
+static bool
+polar_check_xact_split_wait_lsn(char **newval, void **extra, GucSource source)
+{
+	if (*newval && strcmp(*newval, "") != 0)
+	{
+		XLogRecPtr	lsn;
+		XLogRecPtr *myextra;
+		char *endptr;
+
+		errno = 0;
+		lsn = strtou64(*newval, &endptr, 10);
+
+		/* We want to reject negative values for convenience */
+		if (errno != 0 || endptr == *newval || *endptr != '\0' || strchr(*newval, '-'))
+			return false;
+
+		myextra = (XLogRecPtr *) guc_malloc(ERROR, sizeof(XLogRecPtr));
+		*myextra = lsn;
+		*extra = (void *) myextra;
+	}
+
+	return true;
+}
+
 static void
 polar_assign_xact_split_wait_lsn(const char *newval, void *extra)
 {
-	char	   *endptr;
-
-	if (newval == NULL || strlen(newval) == 0)
-	{
+	if (newval && strcmp(newval, "") != 0)
+		polar_xact_split_wait_lsn = *((XLogRecPtr *) extra);
+	else
 		polar_xact_split_wait_lsn = InvalidXLogRecPtr;
-		return;
-	}
-	polar_xact_split_wait_lsn = strtou64(newval, &endptr, 10);
+}
+
+/*
+ * POLAR: show hook returns the LIVE in-memory parsed target.
+ *
+ * After GetSnapshotData() consumes the target (sets it to
+ * InvalidXLogRecPtr), SHOW should report empty rather than the stale
+ * string the proxy set, so users see exactly what later snapshots in
+ * the same statement will observe.
+ */
+static const char *
+polar_show_xact_split_wait_lsn(void)
+{
+	static char buf[32];
+
+	if (XLogRecPtrIsInvalid(polar_xact_split_wait_lsn))
+		return "";
+
+	snprintf(buf, sizeof(buf), UINT64_FORMAT,
+			 (uint64) polar_xact_split_wait_lsn);
+	return buf;
 }
 
 static bool
