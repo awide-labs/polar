@@ -100,7 +100,6 @@
 char	   *SyncRepStandbyNames;
 bool		polar_enable_sync_ddl = true;
 bool		polar_enable_sync_ddl_legacy = false;
-bool		polar_enable_cascading_sync_ddl = true;
 
 XLogRecPtr	polar_ddl_lock_lsn = InvalidXLogRecPtr;
 

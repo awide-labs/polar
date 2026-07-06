@@ -87,7 +87,6 @@ extern PGDLLIMPORT char *syncrep_parse_error_msg;
 extern PGDLLIMPORT char *SyncRepStandbyNames;
 extern bool polar_enable_sync_ddl;
 extern bool polar_enable_sync_ddl_legacy;
-extern bool polar_enable_cascading_sync_ddl;
 
 extern XLogRecPtr polar_ddl_lock_lsn;
 

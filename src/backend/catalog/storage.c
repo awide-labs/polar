@@ -1120,8 +1120,7 @@ smgr_redo(XLogReaderState *record)
 			 * we look it up under that same xid; there is no subxact list
 			 * here.
 			 */
-			if (polar_is_standby() && polar_enable_shared_storage_mode
-				&& polar_enable_cascading_sync_ddl)
+			if (polar_is_standby() && polar_enable_shared_storage_mode)
 				polar_cascading_ddl_wait_and_clear(XLogRecGetXid(record),
 												   0, NULL);
 

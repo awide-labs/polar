@@ -877,8 +877,7 @@ ReplicationSlotDropPtr(ReplicationSlot *slot)
 	 * reader, so wake recovery to re-check promptly instead of relying on its
 	 * 10 ms poll.
 	 */
-	if (polar_is_standby() && polar_enable_shared_storage_mode
-		&& polar_enable_cascading_sync_ddl)
+	if (polar_is_standby() && polar_enable_shared_storage_mode)
 		WakeupRecovery();
 }
 

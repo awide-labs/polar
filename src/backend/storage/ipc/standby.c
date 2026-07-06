@@ -1152,8 +1152,7 @@ standby_redo(XLogReaderState *record)
 												  xlrec->locks[i].dbOid,
 												  xlrec->locks[i].relOid);
 
-			if (polar_is_standby() && polar_enable_shared_storage_mode
-				&& polar_enable_cascading_sync_ddl)
+			if (polar_is_standby() && polar_enable_shared_storage_mode)
 			{
 				/*
 				 * POLAR: Record the barrier LSN for this transaction so that

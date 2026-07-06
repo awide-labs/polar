@@ -3448,8 +3448,7 @@ dbase_redo(XLogReaderState *record)
 		 * acknowledged the end-LSN of this XLOG_DBASE_DROP record before
 		 * deleting the shared-storage database directories.
 		 */
-		if (polar_is_standby() && polar_enable_shared_storage_mode
-			&& polar_enable_cascading_sync_ddl)
+		if (polar_is_standby() && polar_enable_shared_storage_mode)
 			polar_wait_ddl_lock_on_standby(record->EndRecPtr);
 
 		for (i = 0; i < xlrec->ntablespaces; i++)

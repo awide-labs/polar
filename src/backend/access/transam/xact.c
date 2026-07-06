@@ -6210,8 +6210,7 @@ xact_redo_commit(xl_xact_parsed_commit *parsed,
 		 * standby_redo() when it replayed the preceding XLOG_STANDBY_LOCK
 		 * record.
 		 */
-		if (polar_is_standby() && polar_enable_shared_storage_mode
-			&& polar_enable_cascading_sync_ddl)
+		if (polar_is_standby() && polar_enable_shared_storage_mode)
 			polar_cascading_ddl_wait_and_clear(xid, parsed->nsubxacts,
 											   parsed->subxacts);
 
@@ -6228,8 +6227,7 @@ xact_redo_commit(xl_xact_parsed_commit *parsed,
 	 * This is a no-op when the entry was already removed by the wait above or
 	 * by an earlier smgr_redo().
 	 */
-	if (polar_is_standby() && polar_enable_shared_storage_mode
-		&& polar_enable_cascading_sync_ddl)
+	if (polar_is_standby() && polar_enable_shared_storage_mode)
 		polar_cascading_ddl_discard(xid, parsed->nsubxacts, parsed->subxacts);
 
 	if (parsed->nstats > 0)
@@ -6351,8 +6349,7 @@ xact_redo_abort(xl_xact_parsed_abort *parsed, TransactionId xid,
 	 * that took an AccessExclusiveLock but dropped no files do not leak an
 	 * entry in the startup process.
 	 */
-	if (polar_is_standby() && polar_enable_shared_storage_mode
-		&& polar_enable_cascading_sync_ddl)
+	if (polar_is_standby() && polar_enable_shared_storage_mode)
 		polar_cascading_ddl_discard(xid, parsed->nsubxacts, parsed->subxacts);
 
 	if (parsed->nstats > 0)

@@ -1566,8 +1566,7 @@ tblspc_redo(XLogReaderState *record)
 		 * acknowledged the end-LSN of this XLOG_TBLSPC_DROP record before
 		 * removing the tablespace directories from shared storage.
 		 */
-		if (polar_is_standby() && polar_enable_shared_storage_mode
-			&& polar_enable_cascading_sync_ddl)
+		if (polar_is_standby() && polar_enable_shared_storage_mode)
 			polar_wait_ddl_lock_on_standby(record->EndRecPtr);
 
 		/*

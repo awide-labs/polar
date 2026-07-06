@@ -2425,8 +2425,7 @@ ProcessStandbyReplyMessage(void)
 		polar_release_ddl_waiters();
 		SyncRepReleaseWaiters();
 	}
-	else if (MyWalSnd->to_replica && polar_enable_cascading_sync_ddl
-			 && !XLogRecPtrIsInvalid(lockPtr))
+	else if (MyWalSnd->to_replica && !XLogRecPtrIsInvalid(lockPtr))
 	{
 		/*
 		 * POLAR: This is a cascading walsender serving a shared-storage
