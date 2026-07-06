@@ -107,6 +107,23 @@ sub polar_walfile_compare
 	return $ret;
 }
 
+# Compare only the valid, already-flushed prefix ($len bytes) of a wal segment
+# both nodes hold in common.  Once the primary recycles old wal, the only
+# segment master and datamax both retain is the one currently being received:
+# its unused tail differs between the nodes (a recycled segment keeps stale
+# bytes past the write point, not zeroes) and its head keeps growing as the
+# primary emits background wal.  Wal bytes below the flushed lsn are immutable
+# and are streamed verbatim, so comparing that prefix is race-free.
+sub polar_walfile_prefix_compare
+{
+	my ($waldir1, $waldir2, $walfile, $len) = @_;
+	my $f1 = "$waldir1/$walfile";
+	my $f2 = "$waldir2/$walfile";
+	return 0 unless (-f $f1 && -f $f2 && $len > 0);
+	# cmp -s -n LEN exits 0 iff the first LEN bytes are identical
+	return (system("cmp", "-s", "-n", $len, $f1, $f2) == 0) ? 1 : 0;
+}
+
 # insert data to generate wal
 my $wait_timeout = 40;
 $node_master->safe_psql('postgres', 'CREATE TABLE test_table(val integer);');
@@ -150,16 +167,30 @@ $node_master->start;
 $node_datamax->safe_psql('postgres', 'ALTER SYSTEM SET polar_datamax_remove_archivedone_wal_timeout = 3000;');
 $node_datamax->reload;
 $node_datamax->wait_walstreaming_establish_timeout($wait_timeout);
+# generate some wal, then let the primary recycle/remove the wal it no longer
+# needs (archive_mode is now off and the datamax slot is the only thing pinning
+# older segments)
+$node_master->safe_psql('postgres',
+	'INSERT INTO test_table(val) SELECT coalesce(max(val),0) + 1 AS newval FROM test_table RETURNING val');
 $node_master->safe_psql('postgres', "checkpoint");
 sleep 30;
 
-$insert_lsn = $node_master->lsn('insert');
-$last_segno = $node_master->safe_psql('postgres', "select pg_walfile_name('$insert_lsn');");
+# After recycling, master and datamax share only the segment currently being
+# received.  Its whole-file contents legitimately differ (recycled tail + the
+# primary's ongoing background wal), so compare just the flushed prefix that
+# both nodes are guaranteed to hold identically.  Wait for datamax to durably
+# store everything up to that flush lsn first.
+$insert_lsn = $node_master->lsn('flush');
+print "flush_lsn: $insert_lsn\n";
+$node_master->wait_for_catchup($node_datamax, 'flush', $insert_lsn, 300, 1);
+my ($cmp_walfile, $cmp_offset) = split(/\|/,
+	$node_master->safe_psql('postgres',
+		"select file_name, file_offset from pg_walfile_name_offset('$insert_lsn')"));
+print "compare walfile $cmp_walfile, first $cmp_offset bytes\n";
 @master_wal = polar_get_walfile($node_master, 0);
 @datamax_wal = polar_get_walfile($node_datamax, 1);
-$result = 0;
-$result = polar_walfile_compare(\@master_wal, \@datamax_wal, $master_waldir, $datamax_waldir, $last_segno);
-ok($result == 1, "master deletes walfile, datamax keep the wal files those haven't been removed by master\n"); 
+$result = polar_walfile_prefix_compare($master_waldir, $datamax_waldir, $cmp_walfile, $cmp_offset);
+ok($result == 1, "master deletes walfile, datamax keep the wal files those haven't been removed by master\n");
 
 $node_standby->stop;
 $node_datamax->stop;
