@@ -137,6 +137,15 @@ BEGIN
 	delete $ENV{LC_ALL};
 	$ENV{LC_MESSAGES} = 'C';
 
+	# Disable debuginfod for any tool the harness or a test spawns
+	# -- notably eu-stack, used by PostgreSQL::Test::Cluster::stop_child to
+	# check a SIGSTOPped child parked at a safe stack.  When the host has
+	# DEBUGINFOD_URLS set (e.g. Ubuntu ships debuginfod.ubuntu.com) but
+	# cannot reach that server the debuginfod client blocks on the connection
+	# timeout for every unwound module, turning stack capture into minutes
+	# and flaking timing-sensitive tests.
+	$ENV{DEBUGINFOD_URLS} = '';
+
 	# This list should be kept in sync with pg_regress.c.
 	my @envkeys = qw (
 	  PGCHANNELBINDING
