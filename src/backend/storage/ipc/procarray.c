@@ -2533,6 +2533,77 @@ GetSnapshotDataReuse(Snapshot snapshot)
  * Note: this function should probably not be called with an argument that's
  * not statically allocated (see xip allocation below).
  */
+
+/*
+ * Stable error-detail string emitted alongside the LSN wait timeout
+ * (ERROR in strict mode, WARNING in best_effort). External tools such
+ * as ProxySQL match on this token to recognise the timeout class and
+ * route retries away from the affected replica.
+ */
+#define POLAR_PROXY_LSN_WAIT_TIMEOUT_DETAIL \
+	"polar_proxy_lsn_wait_timeout"
+
+/*
+ * polar_split_wait_for_lsn — busy-wait until replay LSN >= target.
+ * Exponential backoff with timeout; on timeout ERROR in strict mode,
+ * WARNING in best-effort mode.
+ */
+static void
+polar_split_wait_for_lsn(XLogRecPtr target_lsn)
+{
+	XLogRecPtr	current_lsn;
+
+	/* All time units are in usec */
+	int			max_delay = polar_proxy_wait_max_delay_us;
+	int			delay = 10;
+	int			total_wait = 0;
+	int			timeout = polar_proxy_wait_timeout_ms * 1000;
+
+	current_lsn = GetXLogReplayRecPtr(NULL);
+
+	if (unlikely(polar_enable_xact_split_debug))
+		elog(LOG, "PROXY: LSN wait start: target=%X/%X, current=%X/%X, timeout_ms=%d",
+			 (uint32) (target_lsn >> 32), (uint32) target_lsn,
+			 (uint32) (current_lsn >> 32), (uint32) current_lsn,
+			 polar_proxy_wait_timeout_ms);
+
+	while (current_lsn < target_lsn)
+	{
+		if (timeout && total_wait >= timeout)
+		{
+			if (polar_consistency_mode == POLAR_CONSISTENCY_STRICT)
+			{
+				ereport(ERROR,
+						(errcode(ERRCODE_SNAPSHOT_TOO_OLD),
+						 errmsg("LSN wait timeout after %d ms",
+								polar_proxy_wait_timeout_ms),
+						 errdetail_internal("%s", POLAR_PROXY_LSN_WAIT_TIMEOUT_DETAIL),
+						 errhint("Replica lag exceeded threshold. Retry or use primary.")));
+			}
+			else
+			{
+				ereport(WARNING,
+						(errmsg("LSN wait timeout after %d ms",
+								polar_proxy_wait_timeout_ms),
+						 errdetail_internal("%s", POLAR_PROXY_LSN_WAIT_TIMEOUT_DETAIL)));
+			}
+			break;
+		}
+
+		CHECK_FOR_INTERRUPTS();
+		pg_usleep(delay);
+
+		total_wait += delay;
+		delay = Min(2 * delay, max_delay);
+
+		current_lsn = GetXLogReplayRecPtr(NULL);
+	}
+
+	if (unlikely(polar_enable_xact_split_debug))
+		elog(LOG, "PROXY: LSN wait done: replay=%X/%X, waited_us=%d, success=%d",
+			 (uint32) (current_lsn >> 32), (uint32) current_lsn, total_wait, current_lsn >= target_lsn);
+}
+
 Snapshot
 GetSnapshotData(Snapshot snapshot)
 {
@@ -2586,32 +2657,52 @@ GetSnapshotData(Snapshot snapshot)
 					 errmsg("out of memory")));
 	}
 
+	/*----------
+	 * POLAR: Wait for replica to catch up to a proxy-supplied target LSN.
+	 *
+	 * The LSN-based wait must be called exactly once per logical proxy
+	 * request, even though GetSnapshotData() runs many times per query.
+	 *
+	 * Why one wait per read:
+	 *
+	 * GetSnapshotData() is called per snapshot, and a single user
+	 * statement acquires many snapshots (catalog lookups, planner,
+	 * executor). If we leave the target value set after waiting, every
+	 * subsequent snapshot in the same statement re-enters this block and:
+	 *   - best_effort: re-runs the full wait, re-emits WARNING, multiplies
+	 *     latency by the snapshot count;
+	 *   - strict: would re-ERROR, but never gets there because the first
+	 *     timeout aborts the statement anyway;
+	 *   - and after the statement, the target is still set, so a subsequent
+	 *     unrelated straight read on this session waits again.
+	 *
+	 * Clearing the in-memory global right after polar_split_wait_for_lsn()
+	 * returns satisfies the target exactly once per read.
+	 *
+	 * Correctness:
+	 *   - On success, replay LSN is monotonic in shared memory. Later
+	 *     snapshots see at least as much WAL as the target required.
+	 *   - On best_effort timeout, the user has explicitly accepted stale
+	 *     reads; re-waiting subsequent snapshots rarely closes the gap.
+	 *   - On strict timeout, polar_split_wait_for_lsn() ereport(ERROR)s and
+	 *     never returns to the clear. Transaction abort rolls back the GUC
+	 *     via the assign hook, re-syncing the in-memory global.
+	 *   - The string GUC value (polar_xact_split_wait_lsn) is not touched
+	 *     here — only the parsed XLogRecPtr global. Proxy re-sets on the
+	 *     next request, the assign hook re-populates the global.
+	 *----------
+	 */
+	if (polar_is_replica() &&
+		!XLogRecPtrIsInvalid(polar_xact_split_wait_lsn))
+	{
+		polar_split_wait_for_lsn(polar_xact_split_wait_lsn);
+
+		polar_xact_split_wait_lsn = InvalidXLogRecPtr;
+	}
+
 	/* POLAR csn */
 	if (polar_csn_enable)
 		return GetSnapshotDataCSN(snapshot);
-
-	/* POLAR: wait for replay if polar_xact_split_wait_lsn is set */
-	if (!XLogRecPtrIsInvalid(polar_xact_split_wait_lsn))
-	{
-		static XLogRecPtr replay_lsn = InvalidXLogRecPtr;
-		int			delay = 0;
-		int			total_wait = 0;
-
-		while (replay_lsn < polar_xact_split_wait_lsn)
-		{
-			total_wait += delay;
-
-			if (delay == 0)
-				delay = 5;
-			else
-				pg_usleep(delay);
-
-			delay = delay > 1000 ? 1000 : delay * 2;	/* 1ms at most */
-			replay_lsn = GetXLogReplayRecPtr(NULL);
-			if (total_wait != 0 && (total_wait / 1000) % 10000 == 0)	/* log every 10 seconds */
-				elog(LOG, "polar xact split wait replay for %ds", total_wait / 1000000);
-		}
-	}
 
 	/*
 	 * It is sufficient to get shared lock on ProcArrayLock, even if we are

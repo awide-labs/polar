@@ -64,6 +64,7 @@
 #include "utils/builtins.h"
 #include "utils/combocid.h"
 #include "utils/guc.h"
+#include "utils/guc_hooks.h"
 #include "utils/inval.h"
 #include "utils/memutils.h"
 #include "utils/relmapper.h"
@@ -345,6 +346,9 @@ static SubXactCallbackItem *SubXact_callbacks = NULL;
 
 polar_unsplittable_reason_t polar_unsplittable_reason;
 XLogRecPtr	polar_xact_split_wait_lsn = InvalidXLogRecPtr;
+int			polar_proxy_wait_timeout_ms = 1000;
+int			polar_proxy_wait_max_delay_us = 100;
+int			polar_consistency_mode = POLAR_CONSISTENCY_BEST_EFFORT;
 
 /* local function prototypes */
 static void AssignTransactionId(TransactionState s);
@@ -6539,17 +6543,59 @@ polar_show_xact_split_xids(void)
 	return xids ? xids : "unsplittable";
 }
 
+bool
+polar_check_xact_split_wait_lsn(char **newval, void **extra, GucSource source)
+{
+	if (*newval && strcmp(*newval, "") != 0)
+	{
+		XLogRecPtr	lsn;
+		XLogRecPtr *myextra;
+		char *endptr;
+
+		errno = 0;
+		lsn = strtou64(*newval, &endptr, 10);
+
+		/* We want to reject negative values for convenience */
+		if (errno != 0 || endptr == *newval || *endptr != '\0' || strchr(*newval, '-'))
+			return false;
+
+		myextra = (XLogRecPtr *) guc_malloc(ERROR, sizeof(XLogRecPtr));
+		*myextra = lsn;
+		*extra = (void *) myextra;
+	}
+
+	return true;
+}
+
 void
 polar_assign_xact_split_wait_lsn(const char *newval, void *extra)
 {
-	char	   *endptr;
-
-	if (newval == NULL || strlen(newval) == 0)
-	{
+	if (newval && strcmp(newval, "") != 0)
+		polar_xact_split_wait_lsn = *((XLogRecPtr *) extra);
+	else
 		polar_xact_split_wait_lsn = InvalidXLogRecPtr;
-		return;
-	}
-	polar_xact_split_wait_lsn = strtou64(newval, &endptr, 10);
+}
+
+/*
+ * POLAR: show hook returns the LIVE in-memory parsed target.
+ *
+ * After GetSnapshotData() consumes the target (sets it to
+ * InvalidXLogRecPtr), SHOW should report empty rather than the stale
+ * string the proxy set, so users see exactly what later snapshots in
+ * the same statement will observe.
+ */
+const char *
+polar_show_xact_split_wait_lsn(void)
+{
+	static char buf[32];
+
+	if (XLogRecPtrIsInvalid(polar_xact_split_wait_lsn))
+		return "";
+
+	snprintf(buf, sizeof(buf), UINT64_FORMAT,
+			 (uint64) polar_xact_split_wait_lsn);
+	return buf;
+
 }
 
 /*

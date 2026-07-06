@@ -2210,6 +2210,7 @@ Pointer
 PolarNodeType
 PolarProcStatm
 PolarCollectIoStat
+PolarConsistencyMode
 PolarHookActionType
 PolarProcIOStat
 POLAR_PROC_GLOBAL_IO_READ

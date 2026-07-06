@@ -8,6 +8,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Add LSN-based session-consistency wait for connection proxies:
+  replicas block at snapshot acquisition until WAL replay reaches a
+  target LSN, with configurable timeout and best-effort/strict modes
+  (XCOM-195)
 - Wrapped the `pgbulkload` extension call with the native `COPY FROM`
   command (XCOM-195):
   - Added the following new `COPY FROM` options:

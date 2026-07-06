@@ -188,5 +188,6 @@ extern void polar_assign_max_standby_archive_delay(int newval, void *extra);
 extern void polar_assign_max_standby_streaming_delay(int newval, void *extra);
 extern bool polar_check_max_replica_archive_delay(int *newval, void **extra, GucSource source);
 extern bool polar_check_max_replica_streaming_delay(int *newval, void **extra, GucSource source);
+extern bool polar_check_xact_split_wait_lsn(char **newval, void **extra, GucSource source);
 
 #endif							/* GUC_HOOKS_H */

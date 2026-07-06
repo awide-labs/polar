@@ -200,6 +200,12 @@ static const struct config_enum_entry server_message_level_options[] = {
 	{NULL, 0, false}
 };
 
+static const struct config_enum_entry polar_consistency_mode_options[] = {
+	{"best_effort", POLAR_CONSISTENCY_BEST_EFFORT, false},
+	{"strict", POLAR_CONSISTENCY_STRICT, false},
+	{NULL, 0, false}
+};
+
 static const struct config_enum_entry intervalstyle_options[] = {
 	{"postgres", INTSTYLE_POSTGRES, false},
 	{"postgres_verbose", INTSTYLE_POSTGRES_VERBOSE, false},
@@ -4235,6 +4241,39 @@ struct config_int ConfigureNamesInt[] =
 		NULL, NULL, NULL
 	},
 
+	/* POLAR: xact split LSN wait — overall budget */
+	{
+		{"polar_proxy_wait_timeout_ms", PGC_USERSET, POLAR_PROXY,
+			gettext_noop("Total time the replica will wait for the target LSN before giving up."),
+			gettext_noop("This is the OVERALL deadline for a single LSN consistency wait. "
+
+						 "When the deadline is reached, polar_consistency_mode decides whether to "
+						 "WARN and return stale data (best_effort) or ERROR and abort (strict). "
+						 "Set to 0 to wait indefinitely. See polar_proxy_wait_max_delay_us for the "
+						 "per-iteration polling cap."),
+			GUC_UNIT_MS | POLAR_GUC_IS_VISIBLE | POLAR_GUC_IS_CHANGABLE
+		},
+		&polar_proxy_wait_timeout_ms,
+		1000, 0, INT_MAX,
+		NULL, NULL, NULL
+	},
+
+	/* POLAR: xact split LSN wait — per-iteration polling cap */
+	{
+		{"polar_proxy_wait_max_delay_us", PGC_USERSET, POLAR_PROXY,
+			gettext_noop("Maximum sleep between LSN polls during a consistency wait."),
+			gettext_noop("Controls polling RATE (not total wait time): the busy-wait starts at "
+						 "10us and doubles up to this cap, then steady-polls at the cap. "
+						 "Lower = tighter latency, higher CPU. Higher = lower CPU, longer "
+						 "wake-up latency once the target is reached. See polar_proxy_wait_timeout_ms "
+						 "for the overall deadline."),
+			POLAR_GUC_IS_VISIBLE | POLAR_GUC_IS_CHANGABLE
+		},
+		&polar_proxy_wait_max_delay_us,
+		100, 10, 10000,
+		NULL, NULL, NULL
+	},
+
 	/* POLAR int GUCs end */
 
 	{
@@ -6464,13 +6503,13 @@ struct config_string ConfigureNamesString[] =
 
 	{
 		{"polar_xact_split_wait_lsn", PGC_USERSET, POLAR_PROXY,
-			gettext_noop("xact id of current split transaction."),
+			gettext_noop("Target LSN the replica must reach before acquiring the next snapshot."),
 			NULL,
 			GUC_SUPERUSER_ONLY | GUC_NOT_IN_SAMPLE | GUC_DISALLOW_IN_FILE | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_UNCHANGEABLE
 		},
 		&polar_xact_split_wait_lsn_str,
 		NULL,
-		NULL, polar_assign_xact_split_wait_lsn, NULL
+		polar_check_xact_split_wait_lsn, polar_assign_xact_split_wait_lsn, polar_show_xact_split_wait_lsn
 	},
 
 	{
@@ -7369,6 +7408,18 @@ struct config_enum ConfigureNamesEnum[] =
 		},
 		&polar_session_id_display_method,
 		POLAR_SID_DISPLAY_PROXY, polar_session_id_display_options,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"polar_consistency_mode", PGC_USERSET, POLAR_PROXY,
+			gettext_noop("Behavior when an LSN consistency wait times out."),
+			gettext_noop("'best_effort' logs WARNING and returns potentially stale data. "
+						 "'strict' raises ERROR and aborts the query."),
+			POLAR_GUC_IS_VISIBLE | POLAR_GUC_IS_CHANGABLE
+		},
+		&polar_consistency_mode,
+		POLAR_CONSISTENCY_BEST_EFFORT, polar_consistency_mode_options,
 		NULL, NULL, NULL
 	},
 
