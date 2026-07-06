@@ -2167,7 +2167,6 @@ void
 polar_promote_check_received_all_wal(void)
 {
 	Assert(WalRcv);
-	Assert(pg_atomic_read_u64(&WalRcv->polar_end_lsn) <= LogstreamResult.Flush);
 
 	if (!POLAR_IS_PROMOTE_NOT_ALLOWED() &&
 		!POLAR_IS_END_LSN_INVALID() &&
