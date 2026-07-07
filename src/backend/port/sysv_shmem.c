@@ -38,6 +38,7 @@
 #include "storage/fd.h"
 #include "storage/ipc.h"
 #include "storage/pg_shmem.h"
+#include "storage/polar_shmem_tune.h"
 #include "storage/polar_zc.h"
 #include "utils/guc.h"
 #include "utils/pidfile.h"
@@ -663,6 +664,10 @@ CreateAnonymousSegment(Size *size)
 	}
 
 	*size = allocsize;
+
+	/* Interleave the anonymous segment before anything faults it */
+	polar_shmem_numa_interleave_range(ptr, *size);
+
 	return ptr;
 }
 

@@ -132,6 +132,7 @@
 #include "storage/bulk_write.h"
 #include "storage/polar_fd.h"
 #include "storage/polar_rsc.h"
+#include "storage/polar_shmem_tune.h"
 #include "storage/polar_zc.h"
 #include "storage/polar_xlogbuf.h"
 #include "utils/polar_local_cache.h"
@@ -1673,6 +1674,21 @@ static struct config_bool ConfigureNamesBool[] =
 			GUC_NO_RESET_ALL | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_CHANGABLE
 		},
 		&polar_enable_zero_copy,
+		true,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"polar_shmem_numa_interleave", PGC_POSTMASTER, POLAR_STORAGE,
+			gettext_noop("Enables NUMA interleaving of the main shared-memory segment."),
+			gettext_noop("Spreads the segment's pages across NUMA nodes with CPUs instead of "
+						 "leaving each on the node that first touches it. Memory-only nodes "
+						 "are excluded. Has no effect with fewer than two nodes with CPUs, "
+						 "or when the postmaster runs under an explicit memory policy such as "
+						 "numactl."),
+			GUC_NO_RESET_ALL | POLAR_GUC_IS_VISIBLE | POLAR_GUC_IS_CHANGABLE
+		},
+		&polar_shmem_numa_interleave,
 		true,
 		NULL, NULL, NULL
 	},
