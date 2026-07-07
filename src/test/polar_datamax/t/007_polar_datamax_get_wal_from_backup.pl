@@ -141,6 +141,9 @@ $node_datamax->polar_init_datamax($primary_system_identifier);
 $node_master->polar_create_slot($node_datamax->name);
 $node_datamax->start;
 $node_datamax->safe_psql('postgres','CREATE EXTENSION polar_monitor;');
+# Freeze so polar_get_datamax_info() stays resolvable after the datamax
+# node is restarted below.
+$node_datamax->safe_psql('postgres','VACUUM (FREEZE);');
 $node_datamax->stop;
 $node_datamax->polar_datamax_set_recovery($node_master);
 
@@ -219,6 +222,9 @@ $node_datamax1->polar_init_datamax($primary_system_identifier);
 $node_master->polar_create_slot($node_datamax1->name);
 $node_datamax1->start;
 $node_datamax1->safe_psql('postgres','CREATE EXTENSION polar_monitor;');
+# Freeze so polar_get_datamax_info() stays resolvable after the datamax
+# node is restarted below.
+$node_datamax1->safe_psql('postgres','VACUUM (FREEZE);');
 $node_datamax1->stop;
 $node_datamax1->append_conf('postgresql.conf', "polar_logindex_mem_size = 0");
 $node_datamax1->append_conf('postgresql.conf', "polar_wal_pipeline_enable = false");

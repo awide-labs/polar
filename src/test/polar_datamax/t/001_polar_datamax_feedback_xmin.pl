@@ -34,6 +34,9 @@ $node_master->polar_create_slot($node_datamax->name);
 $node_datamax->start;
 $node_datamax->polar_create_slot($node_standby->name);
 $node_datamax->safe_psql('postgres','CREATE EXTENSION polar_monitor;');
+# Freeze so polar_get_datamax_info() stays resolvable after the datamax
+# node is restarted below.
+$node_datamax->safe_psql('postgres','VACUUM (FREEZE);');
 $node_datamax->stop;
 
 # set datamax recovery config
