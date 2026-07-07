@@ -46,6 +46,7 @@ polar_zc_main_segment_active(void)
 #include <unistd.h>
 
 #include "storage/pg_shmem.h"	/* GetHugePageSize, huge_pages */
+#include "storage/polar_shmem_tune.h"	/* polar_shmem_numa_interleave_range */
 #include "storage/shmem.h"		/* add_size */
 #include "utils/guc.h"			/* SetConfigOption */
 
@@ -183,6 +184,15 @@ retry:
 				 errmsg("could not mmap memfd \"%s\" of %zu bytes: %m",
 						name, map_size)));
 	}
+
+	/*
+	 * Install the placement policy before any page is faulted. For a regular
+	 * memfd the policy is shared on the inode and binds every faulter, pfsd
+	 * included; for MFD_HUGETLB it lives only in this VMA (and in the
+	 * children that inherit it across fork), so pages first faulted through
+	 * pfsd's own mapping are not covered by it.
+	 */
+	polar_shmem_numa_interleave_range(raw, map_size);
 
 	/*
 	 * Register the whole region; the *_zc shim computes buf_off relative to

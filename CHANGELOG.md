@@ -17,6 +17,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   check instead of waiting, so strict mode raised a spurious "LSN wait
   timeout" error and best-effort mode returned stale data (XCOM-234).
 
+### Performance
+
+- Interleave the main shared-memory area across available NUMA nodes with
+  CPUs on multi-NUMA-node Linux servers for more predictable memory access,
+  excluding memory-only CXL, HBM and PMEM nodes. Explicit `numactl` policies
+  are preserved. Enabled by default with
+  `polar_shmem_numa_interleave` (XCOM-236)
+
 ## [17.11.2] - 2026-11-06
 
 ### Added
