@@ -4217,6 +4217,7 @@ process_pm_pmsignal(void)
 		}
 
 		pmState = PM_RECOVERY;
+		StartWorkerNeeded = true;
 	}
 
 	if (CheckPostmasterSignal(PMSIGNAL_BEGIN_HOT_STANDBY) &&
