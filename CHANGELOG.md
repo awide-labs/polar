@@ -15,6 +15,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Performance
 
+- Prefault huge-page shared memory in a background worker during startup to
+  reduce memory-allocation work during query processing without blocking the
+  postmaster. Enabled by default with `polar_shmem_prefault` (XCOM-236)
 - Interleave the main shared-memory area across available NUMA nodes with
   CPUs on multi-NUMA-node Linux servers for more predictable memory access,
   excluding memory-only CXL, HBM and PMEM nodes. Explicit `numactl` policies

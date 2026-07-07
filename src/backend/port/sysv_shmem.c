@@ -668,6 +668,13 @@ CreateAnonymousSegment(Size *size)
 	/* Interleave the anonymous segment before anything faults it */
 	polar_shmem_numa_interleave_range(ptr, *size);
 
+	/*
+	 * Start a worker to prefault the whole segment under the policy just
+	 * installed, without delaying postmaster startup. Gated on huge pages
+	 * inside the helper.
+	 */
+	polar_shmem_prefault_start(ptr, *size);
+
 	return ptr;
 }
 

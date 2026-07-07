@@ -6204,6 +6204,7 @@ sigusr1_handler(SIGNAL_ARGS)
 		}
 
 		pmState = PM_RECOVERY;
+		StartWorkerNeeded = true;
 	}
 
 	if (CheckPostmasterSignal(PMSIGNAL_BEGIN_HOT_STANDBY) &&

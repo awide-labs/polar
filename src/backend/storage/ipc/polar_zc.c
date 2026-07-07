@@ -74,11 +74,12 @@ typedef struct PolarZcRegion
 	char	   *base;			/* mmap base == the registered region start */
 	Size		size;			/* mapped length */
 	bool		huge;			/* got huge pages (not the TRY fallback) */
+	bool		numa_interleaved;	/* NUMA interleave policy was installed */
 } PolarZcRegion;
 
 static PolarZcRegion MainSegReg =
 {
-	false, -1, -1, NULL, 0, false
+	false, -1, -1, NULL, 0, false, false
 };
 
 /*
@@ -195,7 +196,7 @@ retry:
 	 * children that inherit it across fork), so pages first faulted through
 	 * pfsd's own mapping are not covered by it.
 	 */
-	polar_shmem_numa_interleave_range(raw, map_size);
+	reg->numa_interleaved = polar_shmem_numa_interleave_range(raw, map_size);
 
 	/*
 	 * Register the whole region; the *_zc shim computes buf_off relative to
@@ -241,11 +242,28 @@ polar_zc_main_segment_create(Size *size)
 	SetConfigOption("huge_pages_status", MainSegReg.huge ? "on" : "off",
 					PGC_INTERNAL, PGC_S_DYNAMIC_DEFAULT);
 
+	if (MainSegReg.huge && MainSegReg.numa_interleaved &&
+		!polar_shmem_prefault)
+		ereport(WARNING,
+				(errmsg("zero-copy shared memory is using huge pages with NUMA "
+						"interleaving but prefaulting is disabled"),
+				 errdetail("Pages faulted by pfsd may be placed on the NUMA node "
+						   "where pfsd accesses them."),
+				 errhint("Enable polar_shmem_prefault for best-effort page "
+						 "placement under the shared-memory NUMA policy.")));
+
 	/*
 	 * report the actual (possibly huge-page-rounded) length back to the
 	 * caller
 	 */
 	*size = MainSegReg.size;
+
+	/*
+	 * Prefault the whole segment in a worker once the status above is known -
+	 * the helper's huge-page gate reads it - placing pages under the policy
+	 * installed inside polar_zc_region_init.
+	 */
+	polar_shmem_prefault_start(raw, MainSegReg.size);
 	return raw;
 }
 
