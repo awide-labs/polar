@@ -1562,9 +1562,9 @@ tblspc_redo(XLogReaderState *record)
 		WaitForProcSignalBarrier(EmitProcSignalBarrier(PROCSIGNAL_BARRIER_SMGRRELEASE));
 
 		/*
-		 * POLAR: On a standby, wait until all cascading replicas have
-		 * acknowledged the end-LSN of this XLOG_TBLSPC_DROP record before
-		 * removing the tablespace directories from shared storage.
+		 * POLAR: On a standby, wait until all cascading replicas have applied
+		 * this XLOG_TBLSPC_DROP before removing the tablespace directories
+		 * from shared storage. See the matching comment in dbase_redo().
 		 */
 		if (polar_is_standby() && polar_enable_shared_storage_mode)
 			polar_wait_ddl_lock_on_standby(record->EndRecPtr);

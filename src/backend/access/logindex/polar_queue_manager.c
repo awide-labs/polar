@@ -51,6 +51,7 @@
 #include "miscadmin.h"
 #include "postmaster/startup.h"
 #include "replication/origin.h"
+#include "replication/syncrep.h"
 #include "replication/walreceiver.h"
 #include "storage/shmem.h"
 #include "utils/faultinjector.h"
@@ -634,6 +635,27 @@ polar_standby_xlog_send_queue_push(polar_ringbuf_t queue, XLogReaderState *xlogr
 	polar_reset_main_data();
 }
 
+/*
+ * POLAR: The highest LSN a walsender may send.
+ *
+ * On a primary: the WAL flush position. During recovery: the replay position
+ * (a shared-storage replica must not receive WAL past what the standby has
+ * replayed, or it could read not-yet-extended blocks), lifted to the
+ * cascading-DDL barrier while the startup is parked in
+ * polar_wait_ddl_lock_on_standby(). That barrier is the EndRecPtr of the
+ * very record whose redo the startup is blocked inside -- replayPtr can never
+ * reach it, yet replicas must receive and apply it for the wait to be
+ * satisfied. Only that single control record is exposed past replayPtr.
+ */
+XLogRecPtr
+polar_max_sendable_lsn(void)
+{
+	if (!RecoveryInProgress())
+		return GetFlushRecPtr(NULL);
+
+	return Max(polar_get_xlog_replay_recptr_nolock(), polar_get_wait_ddl_lsn());
+}
+
 XLogRecPtr
 polar_xlog_send_queue_next_lsn(polar_ringbuf_ref_t *ref, size_t *len)
 {
@@ -661,6 +683,7 @@ polar_xlog_send_queue_raw_data_pop(polar_ringbuf_ref_t *ref,
 	ssize_t		copy_size = 0;
 	size_t		free_size = size;
 	XLogRecPtr	lsn = InvalidXLogRecPtr;
+	XLogRecPtr	flush_lsn = InvalidXLogRecPtr;
 
 	while (polar_ringbuf_avail(ref) > 0
 		   && polar_ringbuf_next_ready_pkt(ref, &pktlen) != POLAR_RINGBUF_PKT_INVALID_TYPE)
@@ -687,8 +710,13 @@ polar_xlog_send_queue_raw_data_pop(polar_ringbuf_ref_t *ref,
 		 * POLAR: Flush lsn is not updated in recovery mode, especially for
 		 * replica and standby.
 		 */
-		if (lsn > POLAR_LOGINDEX_FLUSHABLE_LSN())
-			break;
+		if (XLogRecPtrIsInvalid(flush_lsn) || lsn > flush_lsn)
+		{
+			flush_lsn = polar_max_sendable_lsn();
+
+			if (lsn > flush_lsn)
+				break;
+		}
 
 		memcpy(data, &pktlen, sizeof(uint32));
 		len = sizeof(uint32);

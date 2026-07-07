@@ -3444,9 +3444,13 @@ dbase_redo(XLogReaderState *record)
 		WaitForProcSignalBarrier(EmitProcSignalBarrier(PROCSIGNAL_BARRIER_SMGRRELEASE));
 
 		/*
-		 * POLAR: On a standby, wait until all cascading replicas have
-		 * acknowledged the end-LSN of this XLOG_DBASE_DROP record before
-		 * deleting the shared-storage database directories.
+		 * POLAR: On a standby, wait until all cascading replicas have applied
+		 * this XLOG_DBASE_DROP -- which is what runs their
+		 * ResolveRecoveryConflictWithDatabase()/DropDatabaseBuffers() --
+		 * before deleting the database directories from shared storage. The
+		 * record's own EndRecPtr lies past replayPtr while we are inside its
+		 * redo, so the walsender must be told to send it; see
+		 * polar_wait_ddl_lock_on_standby() and polar_max_sendable_lsn().
 		 */
 		if (polar_is_standby() && polar_enable_shared_storage_mode)
 			polar_wait_ddl_lock_on_standby(record->EndRecPtr);

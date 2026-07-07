@@ -2125,6 +2125,19 @@ ApplyWalRecord(XLogReaderState *xlogreader, XLogRecord *record,
 	}
 
 	/*
+	 * POLAR: keep some memory of polar_xlog_queue and push record meta into
+	 * polar_xlog_queue.
+	 *
+	 * Must happen BEFORE rm_redo: a dbase/tblspc drop redo blocks in
+	 * polar_wait_ddl_lock_on_standby() until cascading replicas acknowledge
+	 * this very record, which the walsender can only deliver from this queue.
+	 * Pushing early is safe -- records are not sendable until replayed (see
+	 * polar_max_sendable_lsn()).
+	 */
+	if (polar_is_standby() && reachedConsistency && polar_logindex_redo_instance)
+		polar_standby_xlog_send_queue_push(polar_logindex_redo_instance->xlog_queue, xlogreader);
+
+	/*
 	 * Update shared replayEndRecPtr before replaying this record, so that
 	 * XLogFlush will update minRecoveryPoint correctly.
 	 *
@@ -2202,13 +2215,6 @@ ApplyWalRecord(XLogReaderState *xlogreader, XLogRecord *record,
 	if (!polar_logindex_parse_xlog(polar_logindex_redo_instance, record->xl_rmid,
 								   xlogreader, redo_start_lsn, &logindex_mini_trans_lsn))
 		GetRmgr(record->xl_rmid).rm_redo(xlogreader);
-
-	/*
-	 * POLAR: keep some memory of polar_xlog_queue and push record meta into
-	 * polar_xlog_queue.
-	 */
-	if (polar_is_standby() && reachedConsistency && polar_logindex_redo_instance)
-		polar_standby_xlog_send_queue_push(polar_logindex_redo_instance->xlog_queue, xlogreader);
 
 	/*
 	 * After redo, check whether the backup pages associated with the WAL

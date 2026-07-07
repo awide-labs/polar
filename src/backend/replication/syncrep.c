@@ -1555,6 +1555,18 @@ polar_wait_ddl_lock_for_pending_deletes(void)
 }
 
 /*
+ * POLAR: Read the cascading-DDL barrier LSN published by
+ * polar_wait_ddl_lock_on_standby(). Never reset: a stale value is always
+ * <= replayPtr once its wait completes, so Max(replayPtr, barrier) callers
+ * are unaffected.
+ */
+XLogRecPtr
+polar_get_wait_ddl_lsn(void)
+{
+	return pg_atomic_read_u64(&WalSndCtl->polar_wait_ddl_lsn);
+}
+
+/*
  * POLAR: polar_wait_ddl_lock_on_standby
  *
  * Mirrors polar_wait_ddl_lock() for the standby → cascading-replica path.
@@ -1588,6 +1600,20 @@ polar_wait_ddl_lock_on_standby(XLogRecPtr barrier_lsn)
 {
 	if (XLogRecPtrIsInvalid(barrier_lsn))
 		return;
+
+	/*
+	 * POLAR: Publish the barrier so the walsender can send one record past
+	 * replayPtr (see polar_max_sendable_lsn()). For a dbase/tblspc drop the
+	 * barrier is the EndRecPtr of the very record we are blocked inside,
+	 * which replayPtr can never reach; without the lift a replica could never
+	 * acknowledge it. Barriers behind replayPtr (relation drops) make this a
+	 * no-op. Single writer (startup), so a plain raise is safe.
+	 */
+	if (barrier_lsn > pg_atomic_read_u64(&WalSndCtl->polar_wait_ddl_lsn))
+	{
+		pg_atomic_write_u64(&WalSndCtl->polar_wait_ddl_lsn, barrier_lsn);
+		WalSndWakeup();
+	}
 
 	for (;;)
 	{

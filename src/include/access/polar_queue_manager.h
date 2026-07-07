@@ -87,6 +87,7 @@ extern void polar_xlog_recv_queue_push_storage_begin(polar_ringbuf_t queue, pola
 extern XLogRecord *polar_xlog_recv_queue_pop_record(XLogReaderState *state, char **errormsg);
 
 extern XLogRecPtr polar_xlog_send_queue_next_lsn(polar_ringbuf_ref_t *ref, size_t *len);
+extern XLogRecPtr polar_max_sendable_lsn(void);
 
 extern bool polar_xlog_remove_payload(XLogRecord *record);
 

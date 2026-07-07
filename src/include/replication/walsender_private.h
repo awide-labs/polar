@@ -123,6 +123,14 @@ typedef struct
 	/* POLAR: set true when any walsender received promote request */
 	bool		polar_receive_promote;
 
+	/*
+	 * POLAR: DDL barrier LSN awaited by the startup process in
+	 * polar_wait_ddl_lock_on_standby(); cascading walsenders lift their send
+	 * bound to it (see polar_max_sendable_lsn()). Single writer (startup),
+	 * multi-reader (walsenders).
+	 */
+	pg_atomic_uint64 polar_wait_ddl_lsn;
+
 	WalSnd		walsnds[FLEXIBLE_ARRAY_MEMBER];
 } WalSndCtlData;
 

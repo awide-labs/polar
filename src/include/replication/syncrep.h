@@ -128,6 +128,7 @@ extern bool polar_release_ddl_waiters(void);
 extern void polar_wait_ddl_lock(void);
 extern void polar_wait_ddl_lock_for_pending_deletes(void);
 extern void polar_wait_ddl_lock_on_standby(XLogRecPtr barrier_lsn);
+extern XLogRecPtr polar_get_wait_ddl_lsn(void);
 extern void polar_cascading_ddl_record_lock(TransactionId xid, XLogRecPtr lsn);
 extern void polar_cascading_ddl_wait_and_clear(TransactionId xid, int nsubxacts,
 											   TransactionId *subxacts);

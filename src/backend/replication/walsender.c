@@ -3354,6 +3354,20 @@ XLogSendPhysicalExt(polar_repl_mode_t polar_replication_mode)
 
 		SendRqstPtr = GetStandbyFlushRecPtr(&SendRqstTLI);
 
+		/*
+		 * POLAR: GetStandbyFlushRecPtr() caps replica connections at
+		 * replayPtr. Lift the cap to an active cascading-DDL barrier so the
+		 * replica can receive the record whose redo is parked in
+		 * polar_wait_ddl_lock_on_standby() (see polar_max_sendable_lsn()).
+		 */
+		if (polar_enable_shared_storage_mode && MyWalSnd->to_replica)
+		{
+			XLogRecPtr	ddl_gate_lsn = polar_get_wait_ddl_lsn();
+
+			if (!XLogRecPtrIsInvalid(ddl_gate_lsn) && ddl_gate_lsn > SendRqstPtr)
+				SendRqstPtr = ddl_gate_lsn;
+		}
+
 		if (!RecoveryInProgress())
 		{
 			/* We have been promoted. */
@@ -3973,6 +3987,10 @@ WalSndShmemInit(void)
 
 		/* POLAR: promote-wait subsystem ctl flag */
 		WalSndCtl->polar_receive_promote = false;
+
+		/* POLAR: cascading-DDL barrier send-bound lift */
+		pg_atomic_init_u64(&WalSndCtl->polar_wait_ddl_lsn,
+						   InvalidXLogRecPtr);
 
 		for (i = 0; i < max_wal_senders; i++)
 		{
@@ -4724,9 +4742,11 @@ polar_send_physical_by_queue(polar_ringbuf_ref_t *ref)
 
 	/*
 	 * POLAR: Flush lsn is not updated in recovery mode, especially for
-	 * replica and standby.
+	 * replica and standby. polar_max_sendable_lsn() also lifts the bound to
+	 * an active cascading-DDL barrier (see there); the lifted value is what
+	 * we report to the replica below.
 	 */
-	flush_ptr = POLAR_LOGINDEX_FLUSHABLE_LSN();
+	flush_ptr = polar_max_sendable_lsn();
 	next_lsn = polar_xlog_send_queue_next_lsn(ref, &pktlen);
 
 	if (last_flush_ptr >= flush_ptr || next_lsn > flush_ptr
