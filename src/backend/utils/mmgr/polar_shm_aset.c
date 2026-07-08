@@ -1145,17 +1145,20 @@ static Size
 polar_ShmAllocUsableSize(MemoryContext context, void *pointer)
 {
 	Size		ret;
-	ShmAllocSet set = (ShmAllocSet) context;
 	AllocChunk	chunk = AllocPointerGetChunk(pointer);
 
 	MEMDEBUG_MAKE_MEM_DEFINED(chunk, ALLOCCHUNK_PRIVATE_LEN);
 
 #ifdef MEMORY_CONTEXT_CHECKING
-	/* Test for someone scribbling on unused space in chunk */
-	if (chunk->requested_size < chunk->size)
-		if (!sentinel_ok(pointer, chunk->requested_size))
-			elog(ERROR, "detected write past chunk end in %s %p",
-				 set->header.name, chunk);
+	{
+		ShmAllocSet set = (ShmAllocSet) context;
+
+		/* Test for someone scribbling on unused space in chunk */
+		if (chunk->requested_size < chunk->size)
+			if (!sentinel_ok(pointer, chunk->requested_size))
+				elog(ERROR, "detected write past chunk end in %s %p",
+					 set->header.name, chunk);
+	}
 #endif
 
 	ret = chunk->requested_size;
