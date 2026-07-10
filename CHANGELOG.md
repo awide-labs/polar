@@ -77,6 +77,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Fixed a race in pg_bulkload's asynchronous input reader (used in
+  MULTI_PROCESS mode) that could make a load occasionally read zero rows
+  from the input file, finishing with nothing loaded and no parse errors
+  reported (XCOM-195)
 - Fixed LISTEN sessions silently stalling on the async-notify queue when CSN
   snapshots are enabled. A transaction that aborted after enqueuing a
   notification was treated as still in progress, so any session reading the
