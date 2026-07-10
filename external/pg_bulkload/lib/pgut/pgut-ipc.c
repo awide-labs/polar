@@ -455,6 +455,9 @@ retry:
 			/* Write each data stored in iov. */
 			for (i = 0; i < count; i++)
 			{
+				/* skip empty (and possibly NULL-based) iov, e.g. the terminator */
+				if (iov[i].iov_len == 0)
+					continue;
 				memcpy(dst, iov[i].iov_base, iov[i].iov_len);
 				dst += iov[i].iov_len;
 			}
@@ -476,6 +479,9 @@ retry:
 			 */
 			for (i = 0; i < count; i++)
 			{
+				/* skip empty (and possibly NULL-based) iov, e.g. the terminator */
+				if (iov[i].iov_len == 0)
+					continue;
 				memcpy(dst, iov[i].iov_base, iov[i].iov_len);
 				dst += iov[i].iov_len;
 			}
@@ -496,6 +502,9 @@ retry:
 			 */
 			for (i = 0; i < count && iov[i].iov_len <= tail; i++)
 			{
+				/* skip empty (and possibly NULL-based) iov, e.g. the terminator */
+				if (iov[i].iov_len == 0)
+					continue;
 				memcpy(dst, iov[i].iov_base, iov[i].iov_len);
 				dst += iov[i].iov_len;
 				tail -= iov[i].iov_len;
@@ -514,6 +523,9 @@ retry:
 			/* Write rest of requested data. */
 			for (; i < count; i++)
 			{
+				/* skip empty (and possibly NULL-based) iov, e.g. the terminator */
+				if (iov[i].iov_len == 0)
+					continue;
 				memcpy(dst, iov[i].iov_base, iov[i].iov_len);
 				dst += iov[i].iov_len;
 			}

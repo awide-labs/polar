@@ -22,6 +22,7 @@
 
 #include "pgut/pgut-be.h"
 
+#include "port/atomics.h"
 #include "storage/fd.h"
 
 extern PGDLLIMPORT CommandDest		whereToSendOutput;
@@ -48,12 +49,20 @@ typedef struct AsyncSource
 	Source	base;
 
 	FILE   *fd;
-	bool	eof;
+
+	/*
+	 * eof, begin and end are shared with the consumer thread and are
+	 * read/written without the lock on the hot path, so they are volatile to
+	 * force real, non-torn loads/stores.  Ordering between them (and the
+	 * buffer contents) is enforced by the read/write barriers in
+	 * AsyncSourceRead() and AsyncSourceMain().
+	 */
+	volatile bool	eof;
 
 	char   *buffer;		/* read buffer */
 	int		size;		/* buffer size */
-	int		begin;		/* begin of the buffer finished with reading */
-	int		end;		/* end of the buffer finished with reading */
+	volatile int	begin;	/* begin of the buffer finished with reading */
+	volatile int	end;	/* end of the buffer finished with reading */
 
 	/*
 	 * because ereport() does not support multi-thread, the read thread stores
@@ -251,7 +260,14 @@ AsyncSourceRead(AsyncSource *self, void *buffer, size_t len)
 
 	bytesread = 0;
 retry:
+	/*
+	 * Read the published end offset, then issue a read barrier before
+	 * touching the buffer.  This pairs with the write barrier in
+	 * AsyncSourceMain() and guarantees we see the data the read thread wrote
+	 * before it advanced self->end.
+	 */
 	end = self->end;
+	pg_read_barrier();
 	errhead = self->errmsg[0];
 
 	/* error in read thread */
@@ -291,8 +307,23 @@ retry:
 
 	self->begin = begin;
 
-	if (bytesread == len || (self->eof && begin == end))
+	if (bytesread == len)
 		return bytesread;
+
+	/*
+	 * The request could not be fully satisfied.  If the read thread has
+	 * signalled EOF, re-read self->end *after* observing eof (with a read
+	 * barrier, paired with the write barrier before self->eof in
+	 * AsyncSourceMain()) and compare against that fresh value rather than the
+	 * possibly-stale end sampled at the top of this iteration.  Only when we
+	 * have drained up to the final end is there really no more data.
+	 */
+	if (self->eof)
+	{
+		pg_read_barrier();
+		if (begin == self->end)
+			return bytesread;
+	}
 
 	/* not enough data yet */
 	CHECK_FOR_INTERRUPTS();
@@ -389,10 +420,14 @@ AsyncSourceMain(void *arg)
 		if (end == self->size)
 			end = 0;
 
+		/* make the freshly read data visible before publishing end */
+		pg_write_barrier();
 		self->end = end;
 
 		if (feof(self->fd))
 		{
+			/* publish end before signalling eof */
+			pg_write_barrier();
 			self->eof = true;
 			break;
 		}
