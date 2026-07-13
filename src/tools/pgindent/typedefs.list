@@ -2223,6 +2223,7 @@ PolarUniqueFeatureUtils
 PolarVFSKind
 PolarWalType
 PolarWriteCombineStat
+PolarZcRegion
 PolicyInfo
 PolyNumAggState
 Pool

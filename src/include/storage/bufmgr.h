@@ -205,6 +205,7 @@ extern PGDLLIMPORT bool polar_rsc_optimize_rel_size_udf;
 
 /* in buf_init.c */
 extern PGDLLIMPORT char *BufferBlocks;
+extern char *polar_checksum_copy_slot(void);
 
 /* in localbuf.c */
 extern PGDLLIMPORT int NLocBuffer;

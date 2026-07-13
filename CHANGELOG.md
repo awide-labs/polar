@@ -140,6 +140,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Performance
 
+- Eliminate the per-I/O memory copy on shared storage: PolarDB now reads and
+  writes directly from its shared-memory buffers instead of copying every page
+  through the pfsdaemon's shared pool. Enabled by default via
+  `polar_enable_zero_copy` (XCOM-195)
 - Speed up statements that must wait for WAL to reach disk (synchronous
   commits, DDL, and similar durable writes) when `polar_wal_pipeline_mode`
   is 3 or 5, cutting idle-system latency from ~100ms to single-digit

@@ -245,7 +245,13 @@ SimpleLruShmemSize(int nslots, int nlsns)
 		sz += MAXALIGN(nslots * nlsns * sizeof(XLogRecPtr));	/* group_lsn[] */
 
 	sz = POLAR_BUFFER_EXTEND_SIZE(sz);
-	return BUFFERALIGN(sz) + BLCKSZ * nslots;
+
+	/*
+	 * POLAR: the page buffers are PG_IO_ALIGN_SIZE-aligned so they qualify
+	 * for O_DIRECT pfsd zero-copy IO (the in-segment metadata layout above
+	 * only guarantees 32-byte BUFFERALIGN alignment).
+	 */
+	return BUFFERALIGN(sz) + PG_IO_ALIGN_SIZE + BLCKSZ * nslots;
 }
 
 /*

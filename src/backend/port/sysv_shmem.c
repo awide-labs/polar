@@ -34,6 +34,7 @@
 #include "storage/fd.h"
 #include "storage/ipc.h"
 #include "storage/pg_shmem.h"
+#include "storage/polar_zc.h"
 #include "utils/guc.h"
 #include "utils/guc_hooks.h"
 #include "utils/pidfile.h"
@@ -601,6 +602,18 @@ CreateAnonymousSegment(Size *size)
 	Size		allocsize = *size;
 	void	   *ptr = MAP_FAILED;
 	int			mmap_errno = 0;
+
+	/*
+	 * POLAR: zero-copy. Back the whole segment with a single pfsd-registered
+	 * memfd (honoring huge pages) so every shmem buffer can be read/written
+	 * in place via pfsd_p*_zc instead of bouncing through pfsd's pool. Only
+	 * the postmaster reaches here (fork-only, no EXEC_BACKEND); children
+	 * inherit the mapping and registration across fork. The helper rounds
+	 * *size up and returns the mmap base. Inert unless pfsd zero-copy is
+	 * active.
+	 */
+	if (polar_zc_main_segment_active())
+		return polar_zc_main_segment_create(size);
 
 #ifndef MAP_HUGETLB
 	/* PGSharedMemoryCreate should have dealt with this case */

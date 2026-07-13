@@ -19,14 +19,29 @@
 #include "storage/proc.h"
 
 /* POLAR */
+#include "access/twophase.h"	/* max_prepared_xacts, via POLAR_TOTALPROCS */
+#include "access/xlog.h"		/* DataChecksumsEnabled */
 #include "common/file_utils.h"
 #include "storage/polar_copybuf.h"
-#include "storage/polar_fd.h"
 #include "storage/polar_flush.h"
+#include "storage/polar_zc.h"
 #include "utils/guc.h"
 
 BufferDescPadded *BufferDescriptors;
 char	   *BufferBlocks;
+
+/*
+ * POLAR: base of the shmem array holding one checksum-copy scratch page per
+ * process (see InitBufferPool). With zero-copy active the whole main segment is
+ * a registered memfd, so this array is zero-copy too; pfsd streams the stamped
+ * page in place (pfsd_pwrite_zc) instead of bouncing it through its pool. NULL
+ * when zero-copy is inactive or checksums are off, in which case the checksum
+ * path uses private heap. Set in the postmaster before fork, then inherited, so
+ * reads from backends need no locking.
+ */
+static char *polar_checksum_copy_blocks = NULL;
+static int	polar_checksum_copy_nslots = 0;
+
 ConditionVariableMinimallyPadded *BufferIOCVArray;
 WritebackContext BackendWritebackContext;
 CkptSortItem *CkptBufferIds;
@@ -108,6 +123,56 @@ polar_zero_buffer_init()
 }
 
 /*
+ * POLAR: number of checksum-copy scratch slots; one BLCKSZ page per process.
+ */
+#define POLAR_CHECKSUM_COPY_NSLOTS	POLAR_TOTALPROCS
+
+/*
+ * POLAR: should the per-process checksum-copy scratch live in shared memory
+ * (so it rides the registered memfd and stays zero-copy)? Only when zero-copy
+ * is active and checksums are on -- otherwise PageSetChecksumCopy uses private
+ * heap. Same predicate in BufferShmemSize() and InitBufferPool() so sizing and
+ * allocation agree.
+ *
+ * The BLCKSZ test excludes sub-4K block sizes: a BLCKSZ not a multiple of
+ * PG_IO_ALIGN_SIZE can never take pfsd's zero-copy path (polar_pfsd_zc_translate
+ * rejects it on the write length), so the scratch would be pure waste. BLCKSZ
+ * is a compile-time constant, so this folds away on normal (>= 4K) builds.
+ */
+static inline bool
+checksum_copy_zc_active(void)
+{
+	return polar_zc_main_segment_active() && DataChecksumsEnabled() &&
+		BLCKSZ % PG_IO_ALIGN_SIZE == 0;
+}
+
+/*
+ * POLAR: this process's checksum-copy scratch slot in the shmem array, or NULL
+ * when the array is unavailable (zero-copy inactive, checksums off, or no MyProc
+ * yet). Indexed by MyProcNumber, which is unique per live process and reused as
+ * processes come and go, so a long-running server keeps every flusher on the
+ * zero-copy path. The returned pointer is PG_IO_ALIGN_SIZE-aligned: the array
+ * base is aligned in InitBufferPool and the slot stride BLCKSZ is a multiple of
+ * PG_IO_ALIGN_SIZE -- guaranteed because checksum_copy_zc_active() (hence a
+ * non-NULL array) requires it. Stable for the process lifetime, so the caller
+ * may cache it.
+ */
+char *
+polar_checksum_copy_slot(void)
+{
+	int			slot;
+
+	if (polar_checksum_copy_blocks == NULL || MyProc == NULL)
+		return NULL;
+
+	slot = MyProcNumber;
+	if (slot < 0 || slot >= polar_checksum_copy_nslots)
+		return NULL;
+
+	return polar_checksum_copy_blocks + (Size) slot * BLCKSZ;
+}
+
+/*
  * Initialize shared buffer pool
  *
  * This is called once during shared-memory initialization (either in the
@@ -133,6 +198,25 @@ InitBufferPool(void)
 				  ShmemInitStruct("Buffer Blocks",
 								  NBuffers * (Size) BLCKSZ + PG_IO_ALIGN_SIZE,
 								  &foundBufs));
+
+	/*
+	 * POLAR: with zero-copy + checksums, FlushBuffer writes a stamped copy of
+	 * the page (PageSetChecksumCopy), not the shared buffer. Carve a
+	 * per-process scratch array from shared memory so that copy rides the
+	 * registered memfd and stays zero-copy; IO-aligned so each BLCKSZ slot is
+	 * sector-aligned.
+	 */
+	if (checksum_copy_zc_active())
+	{
+		bool		foundCkpyCopy;
+
+		polar_checksum_copy_nslots = POLAR_CHECKSUM_COPY_NSLOTS;
+		polar_checksum_copy_blocks = (char *)
+			TYPEALIGN(PG_IO_ALIGN_SIZE,
+					  ShmemInitStruct("Polar Checksum Copy Blocks",
+									  polar_checksum_copy_nslots * (Size) BLCKSZ + PG_IO_ALIGN_SIZE,
+									  &foundCkpyCopy));
+	}
 
 	/* Align condition variables to cacheline boundary. */
 	BufferIOCVArray = (ConditionVariableMinimallyPadded *)
@@ -241,6 +325,16 @@ BufferShmemSize(void)
 	/* size of data pages, plus alignment padding */
 	size = add_size(size, PG_IO_ALIGN_SIZE);
 	size = add_size(size, mul_size(NBuffers, BLCKSZ));
+
+	/*
+	 * POLAR: per-process checksum-copy scratch array (see InitBufferPool),
+	 * only when zero-copy is active and checksums are on. Same predicate as
+	 * the allocation so sizing and carve agree.
+	 */
+	if (checksum_copy_zc_active())
+		size = add_size(size,
+						add_size(mul_size(POLAR_CHECKSUM_COPY_NSLOTS, BLCKSZ),
+								 PG_IO_ALIGN_SIZE));
 
 	/* size of stuff controlled by freelist.c */
 	size = add_size(size, StrategyShmemSize());
