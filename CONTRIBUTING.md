@@ -6,7 +6,11 @@ Awide Polar is an open source database based on PostgreSQL and [PolarDB for Post
 
 ## Before Contributing
 
-- Sign the contributor license agreement (CLA) for Awide Polar
+- Sign the [Individual Contributor License Agreement](legal/INDIVIDUAL-CLA.md)
+  (or have your employer sign the [Corporate CLA](legal/CORPORATE-CLA.md))
+  via a [CLA signing issue](https://github.com/awide-labs/polar/issues/new?template=cla_signing.yml)
+  or email to `info@awide.io`. A maintainer adds the `cla-signed` label on your
+  pull request after verification.
 
 ## Steps
 
