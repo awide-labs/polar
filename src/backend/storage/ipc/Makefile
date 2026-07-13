@@ -29,5 +29,6 @@ OBJS = \
 
 OBJS += polar_procpool.o
 OBJS += polar_session_context.o
+OBJS += polar_zc.o
 
 include $(top_srcdir)/src/backend/common.mk

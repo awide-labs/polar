@@ -196,7 +196,13 @@ SimpleLruPureShmemSize(int nslots, int nlsns)
 		sz += MAXALIGN(nslots * nlsns * sizeof(XLogRecPtr));	/* group_lsn[] */
 
 	sz = POLAR_BUFFER_EXTEND_SIZE(sz);
-	return BUFFERALIGN(sz) + BLCKSZ * nslots;
+
+	/*
+	 * POLAR: the page buffers are PG_IO_ALIGN_SIZE-aligned so they qualify
+	 * for O_DIRECT pfsd zero-copy IO (the in-segment metadata layout above
+	 * only guarantees 32-byte BUFFERALIGN alignment).
+	 */
+	return BUFFERALIGN(sz) + PG_IO_ALIGN_SIZE + BLCKSZ * nslots;
 }
 
 Size
@@ -287,6 +293,20 @@ SimpleLruInit(SlruCtl ctl, const char *name, int nslots, int nlsns,
 		}
 
 		ptr += BUFFERALIGN(offset);
+
+		/*
+		 * POLAR: pfsd O_DIRECT zero-copy IO needs each BLCKSZ slot sector-
+		 * aligned; the metadata layout above only guarantees 32-byte
+		 * (BUFFERALIGN) alignment, so align the slot base up to
+		 * PG_IO_ALIGN_SIZE. For BLCKSZ >= PG_IO_ALIGN_SIZE (every block size
+		 * zero-copy applies to) the slot stride BLCKSZ is a multiple of it,
+		 * so aligning the base aligns every slot; sub-4K block sizes never
+		 * reach pfsd's zc path anyway (it rejects the sub-sector write
+		 * length), so only slot 0 being aligned is moot. The matching slop is
+		 * reserved in SimpleLruPureShmemSize.
+		 */
+		ptr = (char *) TYPEALIGN(PG_IO_ALIGN_SIZE, ptr);
+
 		for (slotno = 0; slotno < nslots; slotno++)
 		{
 			LWLockInitialize(&shared->buffer_locks[slotno].lock,

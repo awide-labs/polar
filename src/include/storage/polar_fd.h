@@ -173,12 +173,33 @@ typedef struct vfs_mgr
 	int			(*vfs_posix_fadvise) (int fd, off_t offset, off_t len, int advice);
 	int			(*vfs_umount) (char *ftype, const char *pbdname);
 	PolarVFSKind (*vfs_type) (int fd);
+
+	/*
+	 * POLAR: like vfs_type but resolves the kind from a path instead of an
+	 * open fd, so callers that only have a configured path (e.g.
+	 * polar_datadir) can ask which VFS backs it without opening a file.
+	 */
+	PolarVFSKind (*vfs_type_by_path) (const char *path);
+
+	/*
+	 * POLAR: zero-copy IO. Register/unregister a caller-owned fd-backed
+	 * buffer so pfsd can do device IO in place. Implemented by the pfsd VFS
+	 * only; NULL (-> wrappers return -1) for every other kind.
+	 */
+	int64		(*vfs_register_buffer) (int memfd, size_t size, void *base);
+	int			(*vfs_unregister_buffer) (int64 buf_id);
 } vfs_mgr;
 
 extern vfs_mgr polar_vfs[];
 
 static inline PolarVFSKind
 polar_bufferio_vfs_type(int fd)
+{
+	return POLAR_VFS_LOCAL_BIO;
+}
+
+static inline PolarVFSKind
+polar_bufferio_vfs_type_by_path(const char *path)
 {
 	return POLAR_VFS_LOCAL_BIO;
 }
@@ -220,6 +241,27 @@ polar_mount(vfs_mount_arg_t *mount_arg)
 	if (polar_vfs[polar_vfs_switch].vfs_mount)
 		ret = polar_vfs[polar_vfs_switch].vfs_mount(mount_arg);
 	return ret;
+}
+
+/*
+ * POLAR: zero-copy IO. Register/unregister a fd-backed buffer with the active
+ * VFS. Returns -1 if the active VFS does not support it (any non-pfsd VFS), in
+ * which case callers fall back to the copying path.
+ */
+static inline int64
+polar_register_buffer(int memfd, size_t size, void *base)
+{
+	if (polar_vfs[polar_vfs_switch].vfs_register_buffer)
+		return polar_vfs[polar_vfs_switch].vfs_register_buffer(memfd, size, base);
+	return -1;
+}
+
+static inline int
+polar_unregister_buffer(int64 buf_id)
+{
+	if (polar_vfs[polar_vfs_switch].vfs_unregister_buffer)
+		return polar_vfs[polar_vfs_switch].vfs_unregister_buffer(buf_id);
+	return -1;
 }
 
 static inline int
@@ -507,6 +549,12 @@ static inline PolarVFSKind
 polar_vfs_type(int fd)
 {
 	return polar_vfs[polar_vfs_switch].vfs_type(fd);
+}
+
+static inline PolarVFSKind
+polar_vfs_type_by_path(const char *path)
+{
+	return polar_vfs[polar_vfs_switch].vfs_type_by_path(path);
 }
 
 #endif

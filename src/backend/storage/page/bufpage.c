@@ -23,6 +23,7 @@
 #include "utils/memutils.h"
 
 /* POLAR */
+#include "storage/bufmgr.h"		/* polar_checksum_copy_slot */
 #include "storage/polar_fd.h"
 #include "utils/guc.h"
 
@@ -1525,10 +1526,21 @@ PageSetChecksumCopy(Page page, BlockNumber blkno)
 	 * and second to avoid wasting space in processes that never call this.
 	 */
 	if (pageCopy == NULL)
-		pageCopy = MemoryContextAllocAligned(TopMemoryContext,
-											 BLCKSZ,
-											 PG_IO_ALIGN_SIZE,
-											 0);
+	{
+		/*
+		 * POLAR: with zero-copy active, take this process's copy from the
+		 * registered memfd region so pfsd streams it in place
+		 * (pfsd_pwrite_zc) rather than through its pool; the slot is stable,
+		 * so caching it is fine. NULL (-> private heap) when zero-copy is
+		 * inactive or unregistered.
+		 */
+		pageCopy = polar_checksum_copy_slot();
+		if (pageCopy == NULL)
+			pageCopy = MemoryContextAllocAligned(TopMemoryContext,
+												 BLCKSZ,
+												 PG_IO_ALIGN_SIZE,
+												 0);
+	}
 
 	memcpy(pageCopy, (char *) page, BLCKSZ);
 	((PageHeader) pageCopy)->pd_checksum = pg_checksum_page(pageCopy, blkno);

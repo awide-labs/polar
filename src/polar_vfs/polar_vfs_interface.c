@@ -124,6 +124,9 @@ static inline const char *polar_vfs_file_type_and_path(const char *path, int *ki
 static void *vfs_mmap(void *start, size_t length, int prot, int flags, int file, off_t offset);
 
 static PolarVFSKind vfs_type(int fd);
+static PolarVFSKind vfs_type_by_path(const char *path);
+static int64 vfs_register_buffer(int memfd, size_t size, void *base);
+static int	vfs_unregister_buffer(int64 buf_id);
 
 static const vfs_mgr *const vfs[POLAR_VFS_KIND_SIZE] =
 {
@@ -195,6 +198,9 @@ static const vfs_mgr vfs_interface =
 	.vfs_chmod = vfs_chmod,
 	.vfs_mmap = vfs_mmap,
 	.vfs_type = vfs_type,
+	.vfs_type_by_path = vfs_type_by_path,
+	.vfs_register_buffer = vfs_register_buffer,
+	.vfs_unregister_buffer = vfs_unregister_buffer,
 };
 
 bool		localfs_mode = false;
@@ -370,6 +376,27 @@ vfs_umount(char *ftype, const char *pbdname)
 		mounted = false;
 	}
 	return rc;
+}
+
+/*
+ * POLAR: zero-copy buffer (un)registration. A pfsd-only, global (not per-file)
+ * capability, so it dispatches straight to the PFS kind rather than resolving a
+ * path/fd. Returns -1 when the PFS kind does not implement it.
+ */
+static int64
+vfs_register_buffer(int memfd, size_t size, void *base)
+{
+	if (vfs[POLAR_VFS_PFS]->vfs_register_buffer)
+		return vfs[POLAR_VFS_PFS]->vfs_register_buffer(memfd, size, base);
+	return -1;
+}
+
+static int
+vfs_unregister_buffer(int64 buf_id)
+{
+	if (vfs[POLAR_VFS_PFS]->vfs_unregister_buffer)
+		return vfs[POLAR_VFS_PFS]->vfs_unregister_buffer(buf_id);
+	return -1;
 }
 
 static int
@@ -1352,4 +1379,14 @@ vfs_type(int fd)
 	vfdP = vfs_find_file(fd);
 
 	return vfs[vfdP->kind]->vfs_type(vfdP->fd);
+}
+
+static PolarVFSKind
+vfs_type_by_path(const char *path)
+{
+	int			kind = POLAR_VFS_UNKNOWN_FILE;
+
+	polar_vfs_file_type_and_path(path, &kind);
+
+	return (PolarVFSKind) kind;
 }

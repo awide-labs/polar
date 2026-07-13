@@ -132,6 +132,7 @@
 #include "storage/bulk_write.h"
 #include "storage/polar_fd.h"
 #include "storage/polar_rsc.h"
+#include "storage/polar_zc.h"
 #include "storage/polar_xlogbuf.h"
 #include "utils/polar_local_cache.h"
 
@@ -1631,6 +1632,20 @@ static struct config_bool ConfigureNamesBool[] =
 		},
 		&polar_enable_shared_storage_mode,
 		false,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"polar_enable_zero_copy", PGC_POSTMASTER, POLAR_STORAGE,
+			gettext_noop("Back the whole shared-memory segment with a registered memfd for pfsd zero-copy IO."),
+			gettext_noop("Eliminates the per-IO memcpy into the pfsd shared-memory pool for every "
+						 "shmem-resident buffer (WAL, buffer pool, SLRU, copy buffers). "
+						 "Takes effect only on shared storage backed by a real pfsd mount; "
+						 "ignored in localfs or non-shared-storage mode."),
+			GUC_NO_RESET_ALL | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_CHANGABLE
+		},
+		&polar_enable_zero_copy,
+		true,
 		NULL, NULL, NULL
 	},
 

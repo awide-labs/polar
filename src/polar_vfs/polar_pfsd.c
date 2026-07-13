@@ -38,6 +38,9 @@ static ssize_t polar_pfsd_preadv(int fd, const struct iovec *iov, int iovcnt, of
 static ssize_t polar_pfsd_write(int fd, const void *buf, size_t len);
 static ssize_t polar_pfsd_pwrite(int fd, const void *buf, size_t len, off_t offset);
 static ssize_t polar_pfsd_pwritev(int fd, const struct iovec *iov, int iovcnt, off_t offset);
+
+static int64 polar_pfsd_register_buffer(int memfd, size_t size, void *base);
+static int	polar_pfsd_unregister_buffer(int64 buf_id);
 #endif
 
 int			max_pfsd_io_size = PFSD_DEFAULT_MAX_IOSIZE;
@@ -93,6 +96,8 @@ const vfs_mgr polar_vfs_pfsd =
 	.vfs_chmod = pfsd_chmod,
 	.vfs_mmap = NULL,
 	.vfs_type = polar_pfsd_vfs_type,
+	.vfs_register_buffer = polar_pfsd_register_buffer,
+	.vfs_unregister_buffer = polar_pfsd_unregister_buffer,
 #else
 	.vfs_env_init = NULL,
 	.vfs_env_destroy = NULL,
@@ -148,6 +153,91 @@ polar_transform_pfs_flag(int flag)
 		pfs_flag |= PFS_TOOL;
 
 	return pfs_flag;
+}
+
+/*
+ * POLAR: the one zero-copy ("zc") registered region.
+ *
+ * Maps the pfsd-registered memfd [base, end) to its buf_id. A PFS read/write
+ * whose buffer lies entirely inside it and meets sector alignment goes straight
+ * out of the memfd via pfsd_pread_zc / pfsd_pwrite_zc; everything else copies.
+ *
+ * The whole main shared-memory segment is this single registered memfd
+ * (polar_zc_main_segment_create), so one region covers every shmem buffer (WAL,
+ * buffer pool, SLRU, copy buffers, checksum scratch). Registered once in the
+ * postmaster before fork and mutated only there (prior generation unregistered
+ * before the next is installed), so it needs no locking and one slot suffices.
+ */
+static struct ZcRegion
+{
+	const char *base;
+	const char *end;
+	uint64		buf_id;
+	bool		active;
+}			ZcRegion;
+
+static int64
+polar_pfsd_register_buffer(int memfd, size_t size, void *base)
+{
+	int64		buf_id = pfsd_register_shared_buffer(memfd, size);
+
+	if (buf_id < 0)
+		return -1;
+
+	ZcRegion.base = (const char *) base;
+	ZcRegion.end = (const char *) base + size;
+	ZcRegion.buf_id = (uint64) buf_id;
+	ZcRegion.active = true;
+	return buf_id;
+}
+
+static int
+polar_pfsd_unregister_buffer(int64 buf_id)
+{
+	if (ZcRegion.active && ZcRegion.buf_id == (uint64) buf_id)
+	{
+		ZcRegion.active = false;
+		ZcRegion.base = NULL;
+		ZcRegion.end = NULL;
+	}
+
+	return pfsd_unregister_shared_buffer(buf_id);
+}
+
+/*
+ * If [buf, buf+len) lies inside the registered region, translate it to the
+ * (buf_id, buf_off) the *_zc calls expect and return true. buf_off is the
+ * offset within the region (i.e. relative to its mmap base), which is what pfsd
+ * resolves against its own mapping of the same memfd.
+ *
+ * The zc path is O_DIRECT-style, so buf_off, len and the file offset must all
+ * meet PG_IO_ALIGN_SIZE sector alignment. The whole segment is one region, so
+ * an arbitrary write could land misaligned -- guard here and fall back to the
+ * copying path (no alignment constraint) rather than let the server EINVAL.
+ * Aligned consumers pass; sub-4K-blocksize IO always falls back. use_zc is
+ * decided once per call, relying on max_pfsd_io_size (4 MiB) being a multiple
+ * of the alignment to keep every chunk's offset aligned through the IO loop.
+ */
+static inline bool
+polar_pfsd_zc_translate(const void *buf, size_t len, off_t off,
+						uint64 *buf_id, off_t *buf_off)
+{
+	const struct ZcRegion *r = &ZcRegion;
+	const char *p = (const char *) buf;
+	off_t		boff;
+
+	if (!r->active || p < r->base || p + len > r->end)
+		return false;
+
+	boff = (off_t) (p - r->base);
+
+	/* sector-alignment guard: else fall back to the copying path */
+	if (((boff | (off_t) len | off) & (PG_IO_ALIGN_SIZE - 1)) != 0)
+		return false;
+
+	*buf_id = r->buf_id;
+	*buf_off = boff;
+	return true;
 }
 
 static ssize_t
@@ -222,11 +312,17 @@ polar_pfsd_pread(int fd, void *buf, size_t len, off_t offset)
 	ssize_t		nleft = len;
 	char	   *from = (char *) buf;
 	ssize_t		count = 0;
+	uint64		zc_buf_id = 0;
+	off_t		zc_buf_off = 0;
+	bool		use_zc = polar_pfsd_zc_translate(buf, len, offset, &zc_buf_id, &zc_buf_off);
 
 	while (nleft > 0)
 	{
 		iolen = Min(nleft, max_pfsd_io_size);
-		res = pfsd_pread(fd, from, iolen, off);
+		if (use_zc)
+			res = pfsd_pread_zc(fd, zc_buf_id, zc_buf_off, iolen, off);
+		else
+			res = pfsd_pread(fd, from, iolen, off);
 
 		if (res <= 0)
 		{
@@ -240,6 +336,7 @@ polar_pfsd_pread(int fd, void *buf, size_t len, off_t offset)
 		from += res;
 		off += res;
 		nleft -= res;
+		zc_buf_off += res;
 	}
 
 	return count;
@@ -279,6 +376,9 @@ polar_pfsd_pwrite(int fd, const void *buf, size_t len, off_t offset)
 	ssize_t		writesize;
 	ssize_t		res = -1;
 	ssize_t		count = 0;
+	uint64		zc_buf_id = 0;
+	off_t		zc_buf_off = 0;
+	bool		use_zc = polar_pfsd_zc_translate(buf, len, offset, &zc_buf_id, &zc_buf_off);
 
 	nleft = len;
 	from = (char *) buf;
@@ -287,7 +387,10 @@ polar_pfsd_pwrite(int fd, const void *buf, size_t len, off_t offset)
 	while (nleft > 0)
 	{
 		writesize = Min(nleft, max_pfsd_io_size);
-		res = pfsd_pwrite(fd, from, writesize, startoffset);
+		if (use_zc)
+			res = pfsd_pwrite_zc(fd, zc_buf_id, zc_buf_off, writesize, startoffset);
+		else
+			res = pfsd_pwrite(fd, from, writesize, startoffset);
 
 		if (res <= 0)
 		{
@@ -301,6 +404,7 @@ polar_pfsd_pwrite(int fd, const void *buf, size_t len, off_t offset)
 		nleft -= res;
 		from += res;
 		startoffset += res;
+		zc_buf_off += res;
 	}
 
 	return count;

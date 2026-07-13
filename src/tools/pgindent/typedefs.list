@@ -2133,6 +2133,7 @@ PolarTBlockState
 PolarUniqueFeatureUtils
 PolarVFSKind
 PolarWalType
+PolarZcRegion
 PolicyInfo
 PolyNumAggState
 Pool

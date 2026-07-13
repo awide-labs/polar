@@ -132,6 +132,7 @@ vfs_mgr		polar_vfs[] =
 		.vfs_posix_fadvise = NULL,
 #endif
 		.vfs_type = polar_bufferio_vfs_type,
+		.vfs_type_by_path = polar_bufferio_vfs_type_by_path,
 	},
 	{
 		.vfs_env_init = NULL,
@@ -171,6 +172,7 @@ vfs_mgr		polar_vfs[] =
 		.vfs_posix_fadvise = NULL,
 		.vfs_mmap = NULL,
 		.vfs_type = NULL,
+		.vfs_type_by_path = NULL,
 	}
 };
 

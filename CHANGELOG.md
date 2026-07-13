@@ -175,6 +175,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Performance
 
+- Eliminate the per-I/O memory copy on shared storage: PolarDB now reads and
+  writes directly from its shared-memory buffers instead of copying every page
+  through the pfsdaemon's shared pool. Enabled by default via
+  `polar_enable_zero_copy` (XCOM-193)
 - Reduce contention on the flush list on RW node by splitting it into multiple
   partitions (currently 64), with each partition having its own own lock,
   control structure and statistics (XCOM-38)
