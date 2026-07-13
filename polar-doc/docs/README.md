@@ -2,7 +2,7 @@
 home: true
 title: Documentation
 heroImage: /images/polardb.png
-footer: Apache 2.0 Licensed | Copyright © Alibaba Group, Inc.
+footer: AGPL-3.0 Licensed | Copyright © Awide Labs Ltd.
 ---
 
 ---

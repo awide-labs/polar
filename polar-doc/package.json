@@ -1,7 +1,7 @@
 {
   "name": "polardb_pg_documentation",
   "version": "0.2.0",
-  "license": "Apache-2.0",
+  "license": "AGPL-3.0",
   "author": "Alibaba Cloud",
   "description": "VuePress documentation of PolarDB for PostgreSQL",
   "directories": {
@@ -15,12 +15,12 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/ApsaraDB/PolarDB-for-PostgreSQL.git"
+    "url": "git+https://github.com/polardb/PolarDB-for-PostgreSQL.git"
   },
   "bugs": {
-    "url": "https://github.com/ApsaraDB/PolarDB-for-PostgreSQL/issues"
+    "url": "https://github.com/polardb/PolarDB-for-PostgreSQL/issues"
   },
-  "homepage": "https://github.com/ApsaraDB/PolarDB-for-PostgreSQL#readme",
+  "homepage": "https://github.com/polardb/PolarDB-for-PostgreSQL#readme",
   "devDependencies": {
     "@vuepress/bundler-vite": "2.0.0-rc.20",
     "@vuepress/plugin-markdown-ext": "2.0.0-rc.85",

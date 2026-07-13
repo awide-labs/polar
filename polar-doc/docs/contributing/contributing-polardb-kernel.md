@@ -14,8 +14,8 @@ PolarDB for PostgreSQL is an open source project based on PostgreSQL and other o
 
 Here is a checklist to prepare and submit your PR (pull request):
 
-- Create your own Github repository copy by forking `ApsaraDB/PolarDB-for-PostgreSQL`.
-- Checkout documentations [Advanced Deployment](../deploying/deploy.md) for how to hack PolarDB-PG.
+- Create your own Github repository copy by forking `polardb/PolarDB-for-PostgreSQL`.
+- See the [architecture overview](../theory/arch-overview.md) for background on how PolarDB-PG works.
 - Run `make stylecheck` to format your code, and push changes to your personal fork.
 - Edit detailed commit message, and create a PR to upstream.
 - Wait for all CI checks to pass.
@@ -28,7 +28,7 @@ Let's use an example to walk through the list.
 
 ### Fork Your Own Repository
 
-On GitHub repository of [PolarDB for PostgreSQL](https://github.com/ApsaraDB/PolarDB-for-PostgreSQL), Click **fork** button to create your own PolarDB repository.
+On GitHub repository of [PolarDB for PostgreSQL](https://github.com/polardb/PolarDB-for-PostgreSQL), Click **fork** button to create your own PolarDB repository.
 
 ### Create Local Repository
 
@@ -73,7 +73,7 @@ git push -f dev
 
 ### Create a Pull Request
 
-Click **New pull request** or **Compare & pull request** button, choose to compare branches `ApsaraDB/PolarDB-for-PostgreSQL:POLARDB_15_STABLE` and `<your-github>/PolarDB-for-PostgreSQL:dev`, and write PR description.
+Click **New pull request** or **Compare & pull request** button, choose to compare branches `polardb/PolarDB-for-PostgreSQL:POLARDB_15_STABLE` and `<your-github>/PolarDB-for-PostgreSQL:dev`, and write PR description.
 
 GitHub will automatically run regression test on your code. Your PR should pass all these checks.
 

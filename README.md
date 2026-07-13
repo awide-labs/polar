@@ -1,85 +1,75 @@
 <div align="center">
 
-[![logo](./polar-doc/docs/.vuepress/public/images/polardb.png)](https://apsaradb.github.io/PolarDB-for-PostgreSQL/)
+# Awide Polar
 
-# PolarDB for PostgreSQL
+**An open-source cloud-native database based on PostgreSQL**
 
-**A cloud-native database developed by Alibaba Cloud**
+[![official site](https://img.shields.io/badge/official%20site-blueviolet?style=flat)](https://awide.tech/awidepolar)
 
-#### English | [简体中文](./README_zh.md)
-
-[![official](https://img.shields.io/badge/official%20site-blueviolet?style=flat&logo=alibabacloud)](https://apsaradb.github.io/PolarDB-for-PostgreSQL/)
-
-[![GitHub License](https://img.shields.io/github/license/ApsaraDB/PolarDB-for-PostgreSQL?style=flat&logo=apache)](./LICENSE)
-[![github-issues](https://img.shields.io/github/issues/ApsaraDB/PolarDB-for-PostgreSQL?style=flat&logo=github)](https://github.com/ApsaraDB/PolarDB-for-PostgreSQL/issues)
-[![github-pullrequest](https://img.shields.io/github/issues-pr/ApsaraDB/PolarDB-for-PostgreSQL?style=flat&logo=github)](https://github.com/ApsaraDB/PolarDB-for-PostgreSQL/pulls)
-[![GitHub Discussions](https://img.shields.io/github/discussions/ApsaraDB/PolarDB-for-PostgreSQL?logo=github)](https://github.com/ApsaraDB/PolarDB-for-PostgreSQL/discussions)
-[![github-forks](https://img.shields.io/github/forks/ApsaraDB/PolarDB-for-PostgreSQL?style=flat&logo=github)](https://github.com/ApsaraDB/PolarDB-for-PostgreSQL/network/members)
-[![github-stars](https://img.shields.io/github/stars/ApsaraDB/PolarDB-for-PostgreSQL?style=flat&logo=github)](https://github.com/ApsaraDB/PolarDB-for-PostgreSQL/stargazers)
-[![github-contributors](https://img.shields.io/github/contributors/ApsaraDB/PolarDB-for-PostgreSQL?style=flat&logo=github)](https://github.com/ApsaraDB/PolarDB-for-PostgreSQL/graphs/contributors)
-[![GitHub deployments](<https://img.shields.io/github/deployments/ApsaraDB/PolarDB-for-PostgreSQL/github-pages?logo=github&label=github-pages%20(docs)>)](https://apsaradb.github.io/PolarDB-for-PostgreSQL/zh/)
-[![GitHub branch check runs](<https://img.shields.io/github/check-runs/ApsaraDB/PolarDB-for-PostgreSQL/POLARDB_15_STABLE?logo=github&label=checks%20(v15)>)](https://github.com/ApsaraDB/PolarDB-for-PostgreSQL/tree/POLARDB_15_STABLE)
-[![Leaderboard](https://img.shields.io/badge/PolarDB--for--PostgreSQL-Check%20Your%20Contribution-orange?style=flat&logo=alibabacloud)](https://opensource.alibaba.com/contribution_leaderboard/details?projectValue=polardb-pg)
+[![GitHub License](https://img.shields.io/badge/license-AGPL--3.0-blue?style=flat)](./LICENSE)
+[![github-issues](https://img.shields.io/github/issues/awide-labs/polar?style=flat&logo=github)](https://github.com/awide-labs/polar/issues)
+[![github-pullrequest](https://img.shields.io/github/issues-pr/awide-labs/polar?style=flat&logo=github)](https://github.com/awide-labs/polar/pulls)
+[![github-forks](https://img.shields.io/github/forks/awide-labs/polar?style=flat&logo=github)](https://github.com/awide-labs/polar/network/members)
+[![github-stars](https://img.shields.io/github/stars/awide-labs/polar?style=flat&logo=github)](https://github.com/awide-labs/polar/stargazers)
+[![github-contributors](https://img.shields.io/github/contributors/awide-labs/polar?style=flat&logo=github)](https://github.com/awide-labs/polar/graphs/contributors)
 
 </div>
 
 ## Overview
 
-![arch.png](./polar-doc/docs/imgs/1_polardb_architecture.png)
+![Awide Polar architecture](./awide-doc/attachments/architecture.drawio.svg)
 
-PolarDB for PostgreSQL (hereafter simplified as PolarDB) is a cloud native database service independently developed by Alibaba Cloud. This service is 100% compatible with PostgreSQL and uses a shared-storage-based architecture in which computing is decoupled from storage. This service features flexible scalability, millisecond-level latency and hybrid transactional/analytical processing (HTAP) capabilities.
+Awide Polar is a cloud-native database based on [PolarDB for PostgreSQL](https://github.com/polardb/PolarDB-for-PostgreSQL) by Alibaba Cloud. It is fully compatible with PostgreSQL and uses a shared-storage-based architecture in which computing is decoupled from storage. Awide Polar features flexible scalability, millisecond-level latency, and hybrid transactional/analytical processing (HTAP) capabilities.
 
-1. Flexible scalability: You can use the service to scale out a compute cluster or a storage cluster based on your business requirements.
+1. Flexible scalability: You can scale out a compute cluster or a storage cluster based on your business requirements.
    - If the computing power is insufficient, you can scale out only the compute cluster.
    - If the storage capacity or the storage I/O is insufficient, you can scale out a storage cluster without interrupting your service.
 2. Millisecond-level latency:
    - Write-ahead logging (WAL) logs are stored in the shared storage. Only the metadata of WAL records is replicated from the read-write node to read-only nodes.
-   - The _LogIndex_ technology provided by PolarDB features two record replay modes: lazy replay and parallel replay. The technology can be used to minimize the record replication latency from the read-write node to read-only nodes.
-3. HTAP: HTAP is implemented by using a shared-storage-based massively parallel processing (MPP) architecture. The architecture is used to accelerate online analytical processing (OLAP) queries in online transaction processing (OLTP) scenarios. PolarDB supports a complete suite of data types that are used in OLTP scenarios. PolarDB supports two computing engines that can process these types of data:
+   - The _LogIndex_ technology features two record replay modes: lazy replay and parallel replay. The technology can be used to minimize the record replication latency from the read-write node to read-only nodes.
+3. HTAP: HTAP is implemented by using a shared-storage-based massively parallel processing (MPP) architecture. The architecture is used to accelerate online analytical processing (OLAP) queries in online transaction processing (OLTP) scenarios. Awide Polar supports a complete suite of data types that are used in OLTP scenarios and two computing engines that can process these types of data:
    - Standalone execution: processes OLTP queries that feature high concurrency.
    - Distributed execution: processes large OLAP queries.
 
-PolarDB provides a wide range of innovative multi-model database capabilities to help you process, analyze, and search for different types of data, such as spatio-temporal, geographic information system (GIS), image, vector, and graph data.
+Awide Polar provides a wide range of innovative multi-model database capabilities to help you process, analyze, and search for different types of data, such as spatio-temporal, geographic information system (GIS), image, vector, and graph data.
 
 ## Branch Introduction
 
-The `POLARDB_15_STABLE` is the stable branch based on PostgreSQL 15, which supports compute-storage separation architecture.
+The `POLARDB_15_STABLE` branch is the stable branch based on PostgreSQL 15, which supports the compute-storage separation architecture.
 
 ## Architecture and Roadmap
 
-PolarDB for PostgreSQL uses a shared-storage-based architecture in which computing is decoupled from storage. The conventional shared-nothing architecture is changed to the shared-storage architecture. N copies of data in the compute cluster and N copies of data in the storage cluster are changed to N copies of data in the compute cluster and one copy of data in the storage cluster. The shared storage stores one copy of data, but the data states in memory are different. The WAL logs must be synchronized from the primary node to read-only nodes to ensure data consistency. In addition, when the primary node flushes dirty pages, it must be controlled to prevent the read-only nodes from reading future pages. Meanwhile, the read-only nodes must be prevented from reading the outdated pages that are not correctly replayed in memory. To resolve this issue, PolarDB provides the index structure _LogIndex_ to maintain the page replay history. LogIndex can be used to synchronize data from the primary node to read-only nodes.
+Awide Polar uses a shared-storage-based architecture in which computing is decoupled from storage. The conventional shared-nothing architecture is changed to the shared-storage architecture. N copies of data in the compute cluster and N copies of data in the storage cluster are changed to N copies of data in the compute cluster and one copy of data in the storage cluster. The shared storage stores one copy of data, but the data states in memory are different. The WAL logs must be synchronized from the primary node to read-only nodes to ensure data consistency. In addition, when the primary node flushes dirty pages, it must be controlled to prevent the read-only nodes from reading future pages. Meanwhile, the read-only nodes must be prevented from reading the outdated pages that are not correctly replayed in memory. To resolve this issue, Awide Polar provides the index structure _LogIndex_ to maintain the page replay history. LogIndex can be used to synchronize data from the primary node to read-only nodes.
 
-After computing is decoupled from storage, the I/O latency and throughput increase. When a single read-only node is used to process analytical queries, the CPUs, memory, and I/O of other read-only nodes and the large storage I/O bandwidth cannot be fully utilized. To resolve this issue, PolarDB provides the shared-storage-based MPP engine. The engine can use CPUs to accelerate analytical queries at SQL level and support a mix of OLAP workloads and OLTP workloads for HTAP.
+After computing is decoupled from storage, the I/O latency and throughput increase. When a single read-only node is used to process analytical queries, the CPUs, memory, and I/O of other read-only nodes and the large storage I/O bandwidth cannot be fully utilized. To resolve this issue, Awide Polar provides the shared-storage-based MPP engine. The engine can use CPUs to accelerate analytical queries at SQL level and support a mix of OLAP workloads and OLTP workloads for HTAP.
 
-For more information, see [Architecture](https://apsaradb.github.io/PolarDB-for-PostgreSQL/theory/arch-overview.html).
+For more information, see [Architecture](polar-doc/docs/theory/arch-overview.md).
 
-## Quick Start with PolarDB
+## Quick Start
 
-If you have Docker installed already，then you can pull the instance image of PolarDB-PG based on local storage. Create, run and enter the container, and use PolarDB-PG instance directly:
+If you have Docker installed, you can pull the Awide Polar local instance image, create and run a container, and connect directly:
 
 ```bash
 # pull the instance image and run the container
-docker pull polardb/polardb_pg_local_instance:15
-docker run -it --cap-add=SYS_PTRACE --privileged=true --rm polardb/polardb_pg_local_instance:15 psql
+docker pull awide-labs/awide-polar-local:15
+docker run -it --cap-add=SYS_PTRACE --privileged=true --rm awide-labs/awide-polar-local:15 psql
 # check
 postgres=# SELECT version();
                                    version
 ----------------------------------------------------------------------
- PostgreSQL 15.x (PolarDB 15.x.x.x build xxxxxxxx) on {your_platform}
+ PostgreSQL 15.x (Awide Polar 15.x.x.x build xxxxxxxx) on {your_platform}
 (1 row)
 ```
 
-For more advanced deployment way, please refer to [Advanced Deployment](https://apsaradb.github.io/PolarDB-for-PostgreSQL/deploying/deploy.html). Before your deployment, we recommand to figure out the [Architecture](https://apsaradb.github.io/PolarDB-for-PostgreSQL/deploying/introduction.html) of PolarDB for PostgreSQL.
+For deployment and product information, see the [Awide Polar website](https://awide.tech/awidepolar).
 
 ## Development
 
-Please refer to [Development Guide](https://apsaradb.github.io/PolarDB-for-PostgreSQL/development/dev-on-docker.html) to compile and development PolarDB for PostgreSQL.
+See [CONTRIBUTING.md](CONTRIBUTING.md) and the [kernel contribution guide](polar-doc/docs/contributing/contributing-polardb-kernel.md) to compile and develop Awide Polar.
 
 ## Documentation
 
-Please refer to [Online Documentation Website](https://apsaradb.github.io/PolarDB-for-PostgreSQL/) to see the whole documentations.
-
-If you want to explore or develop documentation locally, see [Document Contribution](https://apsaradb.github.io/PolarDB-for-PostgreSQL/contributing/contributing-polardb-docs.html).
+Documentation lives in [`polar-doc/docs/`](polar-doc/docs/). Run `pnpm run docs:dev` from `polar-doc/` to preview locally.
 
 ## Contributing
 
@@ -87,26 +77,22 @@ We welcome contributions! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guid
 
 Here are the contributors:
 
-<a href="https://github.com/ApsaraDB/PolarDB-for-PostgreSQL/graphs/contributors">
-  <img src="https://contrib.rocks/image?repo=ApsaraDB/PolarDB-for-PostgreSQL" />
+<a href="https://github.com/awide-labs/polar/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=awide-labs/polar" />
 </a>
 
 Made with [contrib.rocks](https://contrib.rocks).
 
 ## Star History
 
-[![Star History Chart](https://api.star-history.com/svg?repos=ApsaraDB/PolarDB-for-PostgreSQL&type=Date)](https://star-history.com/#ApsaraDB/PolarDB-for-PostgreSQL&Date)
+[![Star History Chart](https://api.star-history.com/svg?repos=awide-labs/polar&type=Date)](https://star-history.com/#awide-labs/polar&Date)
 
 ## Software License
 
-PolarDB for PostgreSQL is released under Apache License (Version 2.0), developed based on PostgreSQL which is released under PostgreSQL License. See [LICENSE](./LICENSE) for more information.
+Awide Polar is released under the [GNU Affero General Public License v3.0](https://www.gnu.org/licenses/agpl-3.0.html) (AGPLv3). See [LICENSE](./LICENSE) for the full license text.
 
-PolarDB for PostgreSQL contains various third-party components under other open source licenses. See [NOTICE](./NOTICE) for more information.
-
-## Join the Community
-
-Click this [link](https://qr.dingtalk.com/action/joingroup?code=v1,k1,AEOqzSc8Uwzer7yhpNeYp8okNX3KVqpDMk/2oZ3ZRnQ=&_dt_no_comment=1&origin=11) and use DingTalk application to join the DingTalk group.
+This project is developed from [PolarDB for PostgreSQL](https://github.com/polardb/PolarDB-for-PostgreSQL) by Alibaba Cloud, which is licensed under the Apache License 2.0, and from PostgreSQL, which is licensed under the PostgreSQL License. Portions of the codebase retain those upstream licenses as described in [NOTICE](./NOTICE). Awide Polar also contains various third-party components under other open source licenses; see [NOTICE](./NOTICE) for details.
 
 ## Copyright
 
-Copyright © Alibaba Group, Inc.
+Copyright © Awide Labs
