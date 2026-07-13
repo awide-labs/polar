@@ -381,13 +381,6 @@ WalReceiverMain(void)
 	if (polar_is_datamax())
 	{
 		polar_datamax_received_valid_lsn_list = polar_datamax_create_valid_lsn_list();
-
-		/*
-		 * POLAR: register the cleanup handler only after the list exists, so
-		 * before_shmem_exit() captures the real pointer instead of NULL.
-		 */
-		before_shmem_exit(polar_datamax_free_valid_lsn_list,
-						  PointerGetDatum(polar_datamax_received_valid_lsn_list));
 	}
 
 	for (;;)
@@ -950,6 +943,18 @@ WalRcvDie(int code, Datum arg)
 	 */
 	if (*startpointTLI_p != POLAR_INVALID_TIMELINE_ID)
 		XLogWalRcvFlush(true, *startpointTLI_p);
+
+	/*
+	 * POLAR: free the valid-LSN list here, after the final flush above has
+	 * used it. Doing it here also covers the timeline-0 path where the flush
+	 * was skipped.
+	 */
+	if (polar_is_datamax() && polar_datamax_received_valid_lsn_list != NULL)
+	{
+		polar_datamax_free_valid_lsn_list(code,
+										  PointerGetDatum(polar_datamax_received_valid_lsn_list));
+		polar_datamax_received_valid_lsn_list = NULL;
+	}
 
 	/* Mark ourselves inactive in shared memory */
 	SpinLockAcquire(&walrcv->mutex);

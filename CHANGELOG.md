@@ -63,6 +63,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Fixed a DataMax node crash (or silent memory corruption in non-assert
+  builds) that could occur when its WAL receiver shut down with WAL
+  still unflushed, e.g. after the primary dropped the connection to
+  reclaim WAL under retention limits. (XCOM-193)
 - Fixed a race in pg_bulkload's asynchronous input reader (used in
   MULTI_PROCESS mode) that could make a load occasionally read zero rows
   from the input file, finishing with nothing loaded and no parse errors
