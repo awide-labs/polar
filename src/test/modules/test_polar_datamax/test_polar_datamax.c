@@ -19,8 +19,6 @@
 #include "utils/palloc.h"
 #include <unistd.h>
 
-#define POLAR_DATA_DIR (polar_enable_shared_storage_mode ? polar_datadir : DataDir)
-
 PG_MODULE_MAGIC;
 static void
 test_polar_datamax_shmem_size()
@@ -72,7 +70,7 @@ test_polar_datamax_load_write_meta()
 
 	/* create meta */
 	polar_datamax_write_meta(polar_datamax_ctl, false);
-	snprintf(meta_path, MAXPGPATH, "%s/%s/%s", POLAR_DATA_DIR, POLAR_DATAMAX_DIR, POLAR_DATAMAX_META_FILE);
+	snprintf(meta_path, MAXPGPATH, "%s/%s/%s", POLAR_DATA_DIR(), POLAR_DATAMAX_DIR, POLAR_DATAMAX_META_FILE);
 	Assert(PathNameOpenFile(meta_path, O_RDONLY | PG_BINARY) > 0);
 
 	/* update meta and write */
@@ -225,7 +223,7 @@ test_polar_datamax_handle_timeline_switch()
 	Assert(next_tli == 2);
 
 	/* delete meta file */
-	snprintf(meta_path, MAXPGPATH, "%s/%s/%s", POLAR_DATA_DIR, POLAR_DATAMAX_DIR, POLAR_DATAMAX_META_FILE);
+	snprintf(meta_path, MAXPGPATH, "%s/%s/%s", POLAR_DATA_DIR(), POLAR_DATAMAX_DIR, POLAR_DATAMAX_META_FILE);
 	durable_unlink(meta_path, LOG);
 
 	/* delete history file */
@@ -328,6 +326,14 @@ test_polar_datamax_remove_old_wal()
 	int			wal_file_num = 5;
 
 	polar_datamax_update_min_received_info(polar_datamax_ctl, 3, 3);
+
+	/*
+	 * Materialize the meta file: the timeline-switch test deleted it, and
+	 * polar_datamax_remove_old_wal() (also reached by the clean-task, archive
+	 * and parse-xlog tests below) persists the meta without O_CREAT, which is
+	 * a FATAL on a missing file.
+	 */
+	polar_datamax_write_meta(polar_datamax_ctl, false);
 
 	/* case 1, not datamax mode */
 	polar_set_node_type(POLAR_PRIMARY);
@@ -491,7 +497,8 @@ test_polar_datamax_archive_and_remove_archivedone()
 	polar_datamax_update_upstream_last_removed_segno(polar_datamax_ctl, seg);
 	XLogSegNoOffsetToRecPtr(seg, 0, wal_segment_size, reserved_lsn);
 	polar_datamax_update_received_info(polar_datamax_ctl, tli, reserved_lsn);
-	wal_keep_size_mb = (wal_file_num * wal_segment_size) / (1024 * 1024);
+	/* compute in 64 bits: with 1 GB segments the product overflows int */
+	wal_keep_size_mb = (int) ((uint64) wal_file_num * wal_segment_size / (1024 * 1024));
 	polar_datamax_remove_archivedone_wal_timeout = 1000;
 	sleep(3);
 	polar_datamax_remove_archivedone_wal(polar_datamax_ctl);
@@ -599,7 +606,7 @@ test_polar_datamax_create_walfile(bool modify_wal, unsigned long modify_start)
 #define TEST_WAL_SIZE 16*1024*1024
 	char		path[MAXPGPATH];
 	char		readpath[MAXPGPATH] = "/home/postgres/polardb_pg/src/test/modules/test_polar_datamax/000000010000000000000001";
-	int			fd;
+	File		fd;
 	FILE	   *readfile;
 	int			nbytes;
 	char	   *buffer,
@@ -616,8 +623,8 @@ test_polar_datamax_create_walfile(bool modify_wal, unsigned long modify_start)
 	XLogFilePath(path, tli, segno, wal_segment_size);
 	if ((fd = PathNameOpenFile(path, O_RDWR | PG_BINARY)) < 0)
 		elog(ERROR, "could not open file \"%s\"", path);
-	if (polar_fallocate(fd, 0, 0, wal_segment_size) != 0)
-		elog(ERROR, "polar_fallocate file \"%s\" failed", path);
+	if (FileFallocate(fd, 0, wal_segment_size, WAIT_EVENT_WAL_INIT_WRITE) != 0)
+		elog(ERROR, "FileFallocate file \"%s\" failed", path);
 
 	/* read from test walfile */
 	if ((readfile = fopen(readpath, "rb")) == NULL)
@@ -657,12 +664,13 @@ test_polar_datamax_create_walfile(bool modify_wal, unsigned long modify_start)
 			memset(buffer, 0, sizeof(char) * TEST_WAL_SIZE);
 			start = buffer;
 		}
-		if ((int) polar_write(fd, start, XLOG_BLCKSZ) != (int) XLOG_BLCKSZ)
+		if ((int) FileWrite(fd, start, XLOG_BLCKSZ, (off_t) nbytes,
+							WAIT_EVENT_WAL_INIT_WRITE) != (int) XLOG_BLCKSZ)
 		{
 			int			save_errno = errno;
 
+			FileClose(fd);
 			polar_unlink(path);
-			polar_close(fd);
 			/* if write didn't set errno, assume problem is no disk space */
 			errno = save_errno ? save_errno : ENOSPC;
 			ereport(ERROR,
@@ -670,20 +678,17 @@ test_polar_datamax_create_walfile(bool modify_wal, unsigned long modify_start)
 					 errmsg("could not write to file \"%s\": %m", path)));
 		}
 	}
-	if (polar_fsync(fd) != 0)
+	if (FileSync(fd, WAIT_EVENT_WAL_INIT_SYNC) != 0)
 	{
 		int			save_errno = errno;
 
-		polar_close(fd);
+		FileClose(fd);
 		errno = save_errno;
 		ereport(ERROR,
 				(errcode_for_file_access(),
 				 errmsg("could not fsync file \"%s\": %m", path)));
 	}
-	if (polar_close(fd))
-		ereport(ERROR,
-				(errcode_for_file_access(),
-				 errmsg("could not close file \"%s\": %m", path)));
+	FileClose(fd);
 
 	free(buffer);
 }
