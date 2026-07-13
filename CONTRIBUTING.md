@@ -1,23 +1,23 @@
-# Contributing to PolarDB
+# Contributing to Awide Polar
 
-Thank you for your interest in contributing to PolarDB! This document outlines the guidelines and requirements for contributing to this project.
+Thank you for your interest in contributing to Awide Polar! This document outlines the guidelines and requirements for contributing to this project.
 
-PolarDB for PostgreSQL is an open source project based on PostgreSQL and other open source projects. Our main target is to create a larger community of PostgreSQL. Contributors are welcomed to submit their code and ideas. In a long run, we hope this project can be managed by developers from both inside and outside Alibaba Cloud.
+Awide Polar is an open source database based on PostgreSQL and [PolarDB for PostgreSQL](https://github.com/polardb/PolarDB-for-PostgreSQL), the open source project by Alibaba Cloud. Our goal is to grow the PostgreSQL community. Contributors are welcome to submit code and ideas.
 
 ## Before Contributing
 
-- Follow the instructions and sign [CLA](https://gist.github.com/alibaba-oss/151a13b0a72e44ba471119c7eb737d74) of PolarDB for PostgreSQL
+- Sign the contributor license agreement (CLA) for Awide Polar
 
 ## Steps
 
 Here is a checklist to prepare and submit your PR (pull request):
 
-- Create your own Github repository copy by forking `ApsaraDB/PolarDB-for-PostgreSQL`.
-- Checkout documentations [Advanced Deployment](https://apsaradb.github.io/PolarDB-for-PostgreSQL/deploying/deploy.html) for how to hack PolarDB-PG.
+- Create your own GitHub repository copy by forking [`awide-labs/polar`](https://github.com/awide-labs/polar).
+- Check out the [architecture overview](polar-doc/docs/theory/arch-overview.md) and the [development guide](polar-doc/docs/contributing/contributing-polardb-kernel.md) for how to build and run Awide Polar.
 - Run `make stylecheck` to format your code, and push changes to your personal fork.
-- Edit detailed commit message following the Conventional Commits format (see below), and create a PR to upstream.
+- Write a detailed commit message following the Conventional Commits format (see below), and open a PR against the upstream repository.
 - Wait for all CI checks to pass.
-- Wait for review and address all feedbacks.
+- Wait for review and address all feedback.
 - Wait for merging.
 
 ## Commit Message Format
@@ -97,7 +97,7 @@ include:
 - `Skip-changelog: true` - Skip changelog requirement (see Changelog section)
 - `See: <URL>` - Reference to external documentation, RFCs, or related
   resources
-- `Discussion: <URL>` - Link to discussion related to this particular commit, e.g. mailing list discussion
+- `Discussion: <URL>` - Link to a discussion related to this commit, e.g., a mailing list thread
 
 All footers must follow the `token: value` format and are exempt from the
 72-character line length limit.
@@ -107,8 +107,8 @@ All footers must follow the `token: value` format and are exempt from the
 - **Merge commits**: Automatically generated merge commits are exempt from
   Conventional Commits validation
 - **Commits brought by merges**: All commits that are brought in by merge
-  commits (e.g., when merging from upstream) are also exempt from validation,
-  as we have no control over their commit message format
+  commits (e.g., when merging from upstream PolarDB for PostgreSQL) are also
+  exempt from validation, as we have no control over their commit message format
 
 ### Examples
 
@@ -191,7 +191,7 @@ Each changelog entry (paragraph starting with `- ` at the first column) must end
 - Add new configuration parameter `polar_enable_parallel_ddl` (PROJ-1234)
 
 - Reduce contention on the flush list on RW node by splitting it into multiple
-  partitions (currently 64), with each partition having its own own lock,
+  partitions (currently 64), with each partition having its own lock,
   control structure and statistics (PROJ-5678)
 
 - The following third-party extensions have been removed (PROJ-9012):
@@ -225,42 +225,42 @@ Skip-changelog: true
 
 ### Languages
 
-- PostgreSQL kernel, extension and related tools use C, in order to remain compatibility with community version and to upgrade easily.
-- Management related tools can use shell or Perl for efficient development.
+- PostgreSQL kernel, extensions, and related tools use C to remain compatible with the community version and to upgrade easily.
+- Management-related tools can use shell or Perl for efficient development.
 
-### Coding Style
+### C Style
 
-- Coding in C follows PostgreSQL's programing style, such as naming, error message format, control statements, length of lines, comment format, length of functions and global variables. In detail, please refer to [PostgreSQL style](https://www.postgresql.org/docs/current/source.html). Here is some highlines:
+- C code follows PostgreSQL's programming style, including naming, error message format, control statements, line length, comment format, and the length of functions and global variables. For details, see [PostgreSQL style](https://www.postgresql.org/docs/current/source.html). Highlights:
 
-  - Code in PostgreSQL should only rely on language features available in the C99 standard
+  - Code in PostgreSQL should only rely on language features available in the C99 standard
   - Do not use `//` for comments
-  - Both, macros with arguments and static inline functions, may be used. The latter is preferred only if the former simplifies coding.
+  - Both macros with arguments and static inline functions may be used. Prefer static inline functions when they simplify the code.
   - Follow BSD C programming conventions
   - C code must be formatted using `pgindent` before committing. The CI pipeline automatically checks code style compliance on all pull requests. Requirements:
     - `pg_bsd_indent` version 2.1.2 must be installed
     - Run `src/tools/pgindent/pgindent` to format your code
     - Ensure all C files pass the pgindent check before pushing
 
-- Programs in shell can follow [Google code conventions](https://google.github.io/styleguide/shellguide.html)
-- Program in Perl can follow official [Perl style](https://perldoc.perl.org/perlstyle)
+- Shell programs can follow [Google code conventions](https://google.github.io/styleguide/shellguide.html)
+- Perl programs can follow the official [Perl style](https://perldoc.perl.org/perlstyle)
 
 ### Code Design and Review
 
 We share the same thought and rules as [Google Open Source Code Review](https://github.com/google/eng-practices/blob/master/review/index.md).
 
-Before submitting code review, please run unit test and pass all tests under `src/test`, such as regress and isolation. Unit tests or function tests should be submitted with code modification.
+Before requesting code review, run unit tests and pass all tests under `src/test`, such as regress and isolation. Submit unit tests or functional tests together with your code changes.
 
-In addition to code review, this document offers instructions for the whole cycle of high-quality development, from design, implementation, testing, documentation to preparing for code review. Many good questions are asked for critical steps during development, such as about design, function, complexity, testing, naming, documentation, and code review. The documentation summarizes rules for code review as follows. During a code review, you should make sure that:
+This section summarizes the full cycle of high-quality development, from design and implementation through testing, documentation, and code review. Consider the following during development and review:
 
 - The code is well-designed.
 - The functionality is good for the users of the code.
 - Any UI changes are sensible and look good.
 - Any parallel programming is done safely.
 - The code isn't more complex than it needs to be.
-- The developer isn't implementing things they might need in the future but don't know they need now.
+- The developer isn't implementing things they might need in the future but don't know they need now.
 - Code has appropriate unit tests.
 - Tests are well-designed.
 - The developer used clear names for everything.
-- Comments are clear and useful, and mostly explain why instead of what.
+- Comments are clear and useful, and mostly explain why instead of what.
 - Code is appropriately documented.
 - The code conforms to our style guides.

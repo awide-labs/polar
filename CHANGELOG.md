@@ -50,4 +50,4 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Port CSN (Commit Sequence Number) feature from PolarDB 11 to improve MVCC
   scalability (XCOM-100)
 
-[unreleased]: https://bitbucket.org/awydex/polardb/branches/compare/POLARDB_15_STABLE..v15.14.5.0
+[unreleased]: https://github.com/awide-labs/polar/compare/255dccfa99c..POLARDB_15_STABLE
