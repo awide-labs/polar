@@ -47,17 +47,23 @@ $node_primary->wait_for_catchup($node_replica);
 #    microsecond sleep. Use a small but measurable value so the test
 #    stays stable on slow CI machines.
 # ---------------------------------------------------------------------
-my $delay_us = 500_000;    # 500ms; well above scheduler jitter under -j load
-my $tolerance_s = 0.400;   # split point: delay-applied >= 400ms; no-delay < 400ms
-                           # CI's worst observed jitter on an empty SELECT was
-                           # ~95ms, so 400ms gives ~300ms of headroom each way.
+my $delay_us = 1_000_000;  # 1s; well above scheduler jitter under -j load
+my $tolerance_s = 0.900;   # split point: delay-applied >= 900ms; no-delay < 900ms
 
 sub timed_select
 {
 	my ($node, $sql) = @_;
+
+	# Use "background" psql to separate auth from query
+	my $conn = $node->background_psql('postgres', on_error_stop => 1);
+
 	my $t0 = [gettimeofday];
-	$node->safe_psql('postgres', $sql);
-	return tv_interval($t0);
+	$conn->query_safe($sql);
+	my $duration = tv_interval($t0);
+
+	$conn->quit;
+
+	return $duration;
 }
 
 my $with_delay = timed_select($node_primary,
