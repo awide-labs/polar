@@ -9,7 +9,7 @@
 #
 #-------------------------------------------------------------------------
 
-EXTRA_INSTALL=contrib/test_decoding
+EXTRA_INSTALL=contrib/test_decoding src/test/modules/test_polar_datamax
 
 subdir = src/test/polar_datamax
 top_builddir = ../../..

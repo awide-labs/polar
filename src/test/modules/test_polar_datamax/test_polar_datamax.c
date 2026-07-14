@@ -14,6 +14,7 @@
 #include "replication/slot.h"
 #include "storage/fd.h"
 #include "storage/polar_fd.h"
+#include "utils/builtins.h"
 #include "utils/guc.h"
 #include "utils/ps_status.h"
 #include "utils/palloc.h"
@@ -601,11 +602,11 @@ test_polar_datamax_prealloc_wal_file()
 }
 
 static void
-test_polar_datamax_create_walfile(bool modify_wal, unsigned long modify_start)
+test_polar_datamax_create_walfile(bool modify_wal, unsigned long modify_start,
+								  const char *readpath)
 {
 #define TEST_WAL_SIZE 16*1024*1024
 	char		path[MAXPGPATH];
-	char		readpath[MAXPGPATH] = "/home/postgres/polardb_pg/src/test/modules/test_polar_datamax/000000010000000000000001";
 	File		fd;
 	FILE	   *readfile;
 	int			nbytes;
@@ -694,7 +695,7 @@ test_polar_datamax_create_walfile(bool modify_wal, unsigned long modify_start)
 }
 
 static void
-test_polar_datamax_parse_xlog()
+test_polar_datamax_parse_xlog(const char *readpath)
 {
 	TimeLineID	tli;
 	XLogRecPtr	received_lsn = InvalidXLogRecPtr;
@@ -709,13 +710,22 @@ test_polar_datamax_parse_xlog()
 	polar_datamax_init_meta(&polar_datamax_ctl->meta, false);
 	polar_datamax_parse_xlog(polar_datamax_ctl);
 
-	/* case 2 xlog is correct, parse xlog */
+	/*
+	 * case 2 xlog is correct, parse xlog.
+	 *
+	 * These LSNs are derived from the checked-in fixture
+	 * 000000010000000000000001 (a real 16 MB-segment WAL image, so the file
+	 * is one whole segment with base LSN 0x1000000): valid_lsn is the end of
+	 * the segment's first record, received_lsn a record boundary near the end
+	 * of the segment. They must be regenerated together with the fixture
+	 * whenever the WAL format changes (XLOG_PAGE_MAGIC bump) -- see README.
+	 */
 	tli = 1;
-	received_lsn = 0x40FFF1F0;
-	valid_lsn = 0x40000098;
+	received_lsn = 0x1FFFBB8;
+	valid_lsn = 0x10000A0;
 	polar_datamax_update_received_info(polar_datamax_ctl, tli, received_lsn);
 	polar_datamax_update_last_valid_received_lsn(polar_datamax_ctl, valid_lsn);
-	test_polar_datamax_create_walfile(false, 0);
+	test_polar_datamax_create_walfile(false, 0, readpath);
 	polar_datamax_parse_xlog(polar_datamax_ctl);
 
 	/* valid_lsn will be updated after parsing xlog */
@@ -723,14 +733,15 @@ test_polar_datamax_parse_xlog()
 	Assert(received_lsn == valid_lsn);
 
 	/* case 3 modify xlog */
-	received_lsn = 0x40FFF1F0;
-	valid_lsn = 0x40000098;
-	last_valid_lsn = 0x40FFD878;
-	modify_start = 16767096;
+	received_lsn = 0x1FFFBB8;
+	valid_lsn = 0x10000A0;
+	last_valid_lsn = 0x1FFF400;
+	modify_start = 16774144;	/* = 0xFFF400, in-segment offset of
+								 * last_valid_lsn */
 	polar_datamax_init_meta(&polar_datamax_ctl->meta, false);
 	polar_datamax_update_received_info(polar_datamax_ctl, tli, received_lsn);
 	polar_datamax_update_last_valid_received_lsn(polar_datamax_ctl, valid_lsn);
-	test_polar_datamax_create_walfile(true, modify_start);
+	test_polar_datamax_create_walfile(true, modify_start, readpath);
 	polar_datamax_parse_xlog(polar_datamax_ctl);
 
 	/* valid_lsn will be updated after parsing xlog */
@@ -802,6 +813,8 @@ PG_FUNCTION_INFO_V1(test_polar_datamax);
 Datum
 test_polar_datamax(PG_FUNCTION_ARGS)
 {
+	char	   *readpath = text_to_cstring(PG_GETARG_TEXT_PP(0));
+
 	if (!polar_enable_shared_storage_mode)
 		PG_RETURN_VOID();
 
@@ -824,7 +837,7 @@ test_polar_datamax(PG_FUNCTION_ARGS)
 	test_polar_datamax_archive_and_remove_archivedone();
 	test_polar_datamax_save_replication_slots();
 	test_polar_datamax_prealloc_wal_file();
-	test_polar_datamax_parse_xlog();
+	test_polar_datamax_parse_xlog(readpath);
 	test_polar_datamax_valid_lsn_list_operation();
 
 	/* detele datamax dirs created for test */
