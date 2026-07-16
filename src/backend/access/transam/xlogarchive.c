@@ -27,6 +27,7 @@
 #include "common/percentrepl.h"
 #include "miscadmin.h"
 #include "pgstat.h"
+#include "polar_datamax/polar_datamax.h"
 #include "postmaster/pgarch.h"
 #include "postmaster/startup.h"
 #include "replication/walsender.h"
@@ -498,7 +499,8 @@ XLogArchiveNotify(const char *xlog)
 		PgArchForceDirScan();
 
 	/* Notify archiver that it's got something to do */
-	if (IsUnderPostmaster)
+	/* POLAR: No need to notify archiver in datamax mode */
+	if (IsUnderPostmaster && !polar_is_datamax_mode)
 		PgArchWakeup();
 }
 

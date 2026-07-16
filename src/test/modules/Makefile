@@ -50,6 +50,7 @@ SUBDIRS = \
 SUBDIRS += test_buffer
 SUBDIRS += test_coredump_handler
 SUBDIRS += test_logindex test_procpool
+SUBDIRS += test_polar_datamax
 SUBDIRS += test_polar_rsc
 SUBDIRS += test_polar_shm_limit
 SUBDIRS += test_wal_pipeline

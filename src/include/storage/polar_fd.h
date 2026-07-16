@@ -77,7 +77,13 @@ typedef enum PolarNodeType
 	POLAR_UNKNOWN = 0,
 	POLAR_PRIMARY = 1,
 	POLAR_REPLICA,
-	POLAR_STANDBY
+	POLAR_STANDBY,
+
+	/*
+	 * datamax mode with independent storage, datamax mode with shared storage
+	 * is not supported
+	 */
+	POLAR_STANDALONE_DATAMAX
 } PolarNodeType;
 
 /* POLAR: string format of node type */
@@ -85,6 +91,7 @@ typedef enum PolarNodeType
 #define POLAR_PRIMARY_STRING	"PRIMARY"
 #define POLAR_REPLICA_STRING	"REPLICA"
 #define POLAR_STANDBY_STRING	"STANDBY"
+#define POLAR_STANDALONE_DATAMAX_STRING	"STANDALONE_DATAMAX"
 
 typedef struct vfs_mount_arg_t
 {

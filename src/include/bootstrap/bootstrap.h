@@ -32,6 +32,9 @@ extern PGDLLIMPORT Relation boot_reldesc;
 extern PGDLLIMPORT Form_pg_attribute attrtypes[MAXATTR];
 extern PGDLLIMPORT int numattr;
 
+/* POLAR: specific system identifier given by initdb -i */
+extern uint64 polar_sysidentifier;
+
 
 extern void BootstrapModeMain(int argc, char *argv[], bool check_only) pg_attribute_noreturn();
 

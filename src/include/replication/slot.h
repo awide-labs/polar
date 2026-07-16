@@ -322,6 +322,7 @@ extern bool polar_enable_persisted_logical_slot;
 extern void polar_reload_replication_slots_from_shared_storage(void);
 extern XLogRecPtr polar_compute_physical_slots_restart_lsn(PolarNodeType node_type);
 extern void polar_replication_slot_set_node_type(PolarNodeType node_type);
+extern XLogRecPtr polar_set_initial_datamax_restart_lsn(ReplicationSlot *slot);
 
 /* POLAR */
 extern void polar_compute_and_set_replica_lsn(bool skip_inactive);

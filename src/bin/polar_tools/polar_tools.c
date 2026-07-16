@@ -35,6 +35,8 @@ usage(void)
 	printf("logindex-bloom\n");
 	printf("logindex-table\n");
 	printf("logindex-page\n");
+	printf("datamax-meta\n");
+	printf("datamax-get-wal\n");
 }
 
 int
@@ -62,6 +64,10 @@ main(int argc, char **argv)
 		return logindex_table_main(--argc, ++argv);
 	else if (strcmp(argv[1], "logindex-page") == 0)
 		return logindex_page_main(--argc, ++argv);
+	else if (strcmp(argv[1], "datamax-meta") == 0)
+		return datamax_meta_main(--argc, ++argv);
+	else if (strcmp(argv[1], "datamax-get-wal") == 0)
+		return datamax_get_wal_main(--argc, ++argv);
 	else
 		usage();
 

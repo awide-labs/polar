@@ -47,6 +47,7 @@
 #include "common/file_utils.h"
 #include "miscadmin.h"
 #include "pgstat.h"
+#include "polar_datamax/polar_datamax.h"
 #include "postmaster/bgwriter.h"
 #include "postmaster/startup.h"
 #include "replication/slot.h"
@@ -1573,6 +1574,15 @@ FinishWalRecovery(void)
 	/* POLAR: set promote mode */
 	result->polar_logindex_promote_ro = LocalPromoteIsTriggered && POLAR_LOGINDEX_ENABLE_ONLINE_PROMOTE();
 	result->polar_logindex_promote_standby = LocalPromoteIsTriggered && POLAR_PARALLEL_REPLAY_IN_STANDBY_RECOVERY();
+
+	/* POLAR: If DataMax mode, we need enter datamax main here */
+	if (polar_is_datamax())
+	{
+		polar_datamax_main();
+		/* do as StartupProcessMain do  */
+		proc_exit(0);
+	}
+	/* POLAR end */
 
 	/*
 	 * Kill WAL receiver, if it's still running, before we continue to write
@@ -3717,7 +3727,7 @@ ReadRecord(XLogPrefetcher *xlogprefetcher, int emode,
 			}
 
 			/* In standby mode, loop back to retry. Otherwise, give up. */
-			if (StandbyMode && !CheckForStandbyTrigger())
+			if (StandbyMode && !CheckForStandbyTrigger() && !polar_is_datamax())
 				continue;
 			else
 				return NULL;
@@ -4682,7 +4692,7 @@ rescanLatestTimeLine(TimeLineID replayTLI, XLogRecPtr replayLSN)
 	 * next timeline was forked off from it *after* the current recovery
 	 * location.
 	 */
-	if (currentTle->end < replayLSN)
+	if (!polar_is_datamax_mode && currentTle->end < replayLSN)
 	{
 		ereport(LOG,
 				(errmsg("new timeline %u forked off current database system timeline %u before current recovery point %X/%X",
@@ -4962,14 +4972,47 @@ SetPromoteIsTriggered(void)
 bool
 CheckForStandbyTrigger(void)
 {
+	struct stat stat_buf;
+
 	if (LocalPromoteIsTriggered)
 		return true;
 
+	/*
+	 * POLAR: CheckPromoteSignal() also detects the force-promote signal file,
+	 * so this guard covers both a normal and a force promote.
+	 */
+	if (IsPromoteSignaled() && CheckPromoteSignal() &&
+		polar_logindex_redo_instance &&
+		POLAR_STARTUP_IN_STATUS(polar_logindex_redo_instance, POLAR_STARTUP_IN_CASCADE_REPLICA))
+		ereport(FATAL, (errmsg("Replica within cascade recovery mode doesn't support promote")));
+
+	/*
+	 * POLAR: force promote takes precedence and bypasses the
+	 * polar_enable_promote_wait_for_walreceive_done wait entirely.
+	 */
+	if (IsPromoteSignaled() &&
+		stat(POLAR_FORCE_PROMOTE_SIGNAL_FILE, &stat_buf) == 0)
+	{
+		ereport(LOG, (errmsg("received force promote request")));
+		/* RemovePromoteSignalFiles() unlinks the force-promote file too */
+		RemovePromoteSignalFiles();
+		ResetPromoteSignaled();
+		SetPromoteIsTriggered();
+		return true;
+	}
+
 	if (IsPromoteSignaled() && CheckPromoteSignal())
 	{
-		if (polar_logindex_redo_instance &&
-			POLAR_STARTUP_IN_STATUS(polar_logindex_redo_instance, POLAR_STARTUP_IN_CASCADE_REPLICA))
-			ereport(FATAL, (errmsg("Replica within cascade recovery mode doesn't support promote")));
+		/*
+		 * POLAR: gate a normal promote on having received all WAL the
+		 * upstream holds.  The 'p'/'l' handshake with the upstream walsender
+		 * is kicked off by the walreceiver once the promote trigger state is
+		 * set from HandleStartupProcInterrupts (deferred from the SIGUSR2
+		 * handler).  While not ready, keep waiting (return false) without
+		 * consuming the signal.
+		 */
+		if (!polar_is_promote_ready())
+			return false;
 
 		ereport(LOG, (errmsg("received promote request")));
 		RemovePromoteSignalFiles();
@@ -4988,6 +5031,8 @@ void
 RemovePromoteSignalFiles(void)
 {
 	unlink(PROMOTE_SIGNAL_FILE);
+	/* POLAR: also remove the force promote signal file */
+	unlink(POLAR_FORCE_PROMOTE_SIGNAL_FILE);
 }
 
 /*
@@ -4999,6 +5044,10 @@ CheckPromoteSignal(void)
 	struct stat stat_buf;
 
 	if (stat(PROMOTE_SIGNAL_FILE, &stat_buf) == 0)
+		return true;
+
+	/* POLAR: a force promote signal file also requests promotion */
+	if (stat(POLAR_FORCE_PROMOTE_SIGNAL_FILE, &stat_buf) == 0)
 		return true;
 
 	return false;

@@ -8,6 +8,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Add DataMax standalone mode, a dedicated log-storage node that streams
+  WAL from an upstream primary and durably retains and archives it
+  without applying it, so it holds no primary data (XCOM-195)
 - Add `'w'` back-pressure marker in ReadyForQuery and switch the
   proxy LSN from the global WAL tip to per-session
   `XactLastRecEnd`/`XactLastCommitEnd`, so the proxy never asks a

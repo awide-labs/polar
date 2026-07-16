@@ -25,6 +25,13 @@
 /* POLAR */
 #include "port/atomics.h"
 
+/* POLAR: promote-wait subsystem */
+#define POLAR_RESET_WALSND_RECEIVE_PROMOTE() (pg_atomic_write_u32(&MyWalSnd->polar_walsender_receive_promote, 0))
+#define POLAR_SET_WALSND_RECEIVE_PROMOTE() (pg_atomic_write_u32(&MyWalSnd->polar_walsender_receive_promote, 1))
+#define POLAR_WALSND_RECEIVE_PROMOTE() (pg_atomic_read_u32(&MyWalSnd->polar_walsender_receive_promote) == 1)
+#define POLAR_WALSNDCTL_RECEIVE_PROMOTE_TRIGGER() (WalSndCtl->polar_receive_promote)
+/* POLAR end */
+
 typedef enum WalSndState
 {
 	WALSNDSTATE_STARTUP = 0,
@@ -92,6 +99,9 @@ typedef struct WalSnd
 
 	/* POLAR: mark whether send to replica or not */
 	bool		to_replica;
+
+	/* POLAR: mark whether received promote request from downstream */
+	pg_atomic_uint32 polar_walsender_receive_promote;
 
 	/*
 	 * POLAR: counters for WAL buffer read hit rate.
@@ -184,6 +194,9 @@ typedef struct
 
 	/* POLAR: Points to the end of the record waiting DDL */
 	pg_atomic_uint64 polar_wait_ddl_lsn;
+
+	/* POLAR: set true when any walsender received promote request */
+	bool		polar_receive_promote;
 
 	WalSnd		walsnds[FLEXIBLE_ARRAY_MEMBER];
 } WalSndCtlData;

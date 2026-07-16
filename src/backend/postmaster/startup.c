@@ -19,13 +19,18 @@
  */
 #include "postgres.h"
 
+#include <sys/stat.h>
+
 #include "access/xlog.h"
 #include "access/xlogrecovery.h"
 #include "access/xlogutils.h"
 #include "libpq/pqsignal.h"
 #include "miscadmin.h"
+#include "polar_datamax/polar_datamax.h"
 #include "postmaster/auxprocess.h"
 #include "postmaster/startup.h"
+#include "replication/walreceiver.h"
+#include "storage/fd.h"
 #include "storage/ipc.h"
 #include "storage/pmsignal.h"
 #include "storage/procsignal.h"
@@ -52,6 +57,13 @@
 static volatile sig_atomic_t got_SIGHUP = false;
 static volatile sig_atomic_t shutdown_requested = false;
 static volatile sig_atomic_t promote_signaled = false;
+
+/*
+ * POLAR: latched by StartupProcTriggerHandler so the recovery main loop can
+ * perform the promote-wait handshake setup (WalRcvStreaming()/stat(), neither
+ * async-signal-safe) at a safe point instead of inside the signal handler.
+ */
+static volatile sig_atomic_t polar_promote_handshake_pending = false;
 
 /*
  * Flag set when executing a restore command, to tell SIGTERM signal handler
@@ -93,6 +105,16 @@ static void
 StartupProcTriggerHandler(SIGNAL_ARGS)
 {
 	promote_signaled = true;
+
+	/*
+	 * POLAR: defer the promote-wait handshake setup to the recovery main loop
+	 * (see HandleStartupProcInterrupts).  It calls WalRcvStreaming() (which
+	 * takes the walreceiver spinlock) and stat(), neither of which is
+	 * async-signal-safe, so we only latch a flag here.  Set unconditionally
+	 * on every signal so a retry restarts the handshake with a fresh state.
+	 */
+	polar_promote_handshake_pending = true;
+
 	WakeupRecovery();
 }
 
@@ -108,6 +130,14 @@ StartupProcSigHupHandler(SIGNAL_ARGS)
 static void
 StartupProcShutdownHandler(SIGNAL_ARGS)
 {
+	/*
+	 * POLAR: request a clean datamax shutdown.  Only polar_datamax_main()'s
+	 * loop reads this flag, and non-datamax nodes never enter that loop, so
+	 * we set it unconditionally.
+	 */
+	polar_datamax_shutdown_requested = true;
+	/* POLAR end */
+
 	if (in_restore_command)
 		proc_exit(1);
 	else
@@ -192,6 +222,31 @@ HandleStartupProcInterrupts(void)
 	/* Perform logging of memory contexts of this process */
 	if (LogMemoryContextPending)
 		ProcessLogMemoryContextInterrupt();
+
+	/*
+	 * POLAR: deferred from StartupProcTriggerHandler.  When a promote signal
+	 * was received, the promote-wait constraint is on, and this is a normal
+	 * (not force) promote of a streaming standby/datamax, notify the
+	 * walreceiver that promote is triggered so it starts the 'p'/'l'
+	 * handshake with the upstream walsender.  The flag is latched once per
+	 * signal, so a retry restarts the handshake with a fresh state.
+	 */
+	if (polar_promote_handshake_pending)
+	{
+		struct stat stat_buf;
+
+		polar_promote_handshake_pending = false;
+
+		if (polar_enable_promote_wait_for_walreceive_done &&
+			stat(POLAR_FORCE_PROMOTE_SIGNAL_FILE, &stat_buf) != 0 &&
+			!polar_is_replica() &&
+			WalRcvStreaming())
+		{
+			POLAR_SET_RECEIVE_PROMOTE_TRIGGER();
+			POLAR_RESET_PROMOTE_ALLOWED_STATE();
+			POLAR_SET_END_LSN_INVALID();
+		}
+	}
 }
 
 
@@ -300,6 +355,80 @@ void
 ResetPromoteSignaled(void)
 {
 	promote_signaled = false;
+}
+
+/*
+ * POLAR: reset the promote signal and leave a polar_promote_not_allowed file
+ * so that pg_ctl can report the refused promote.
+ */
+void
+polar_clear_promote_file(void)
+{
+	struct stat stat_buf;
+	FILE	   *file = NULL;
+
+	/* reset the promote signal and unlink the promote signal file */
+	if (stat(PROMOTE_SIGNAL_FILE, &stat_buf) == 0)
+	{
+		ResetPromoteSignaled();
+		RemovePromoteSignalFiles();
+	}
+
+	/* create the polar_promote_not_allowed file for pg_ctl */
+	file = AllocateFile(POLAR_PROMOTE_NOT_ALLOWED_FILE, "w");
+	if (file == NULL)
+		ereport(LOG,
+				(errcode_for_file_access(),
+				 errmsg("could not create file \"%s\": %m",
+						POLAR_PROMOTE_NOT_ALLOWED_FILE)));
+	else
+		FreeFile(file);
+}
+
+/*
+ * POLAR: decide whether a normal promote is allowed to complete.
+ *
+ * Returns true if the polar_enable_promote_wait_for_walreceive_done constraint
+ * is off, the node is a replica, or the walreceiver confirmed that all WAL has
+ * been received.  Returns false (and writes the polar_promote_not_allowed file)
+ * when the upstream is unreachable or the upstream refused the promote.
+ */
+bool
+polar_is_promote_ready(void)
+{
+	/* promote is allowed when the constraint is off or in replica mode */
+	if (!polar_enable_promote_wait_for_walreceive_done || polar_is_replica())
+		return true;
+
+	/* refuse promote when the upstream node is not alive */
+	if (!polar_upstream_node_is_alive())
+	{
+		ereport(WARNING,
+				(errmsg("promote is not allowed"),
+				 errdetail("Promote is not allowed when polar_enable_promote_wait_for_walreceive_done = on and the primary/datamax/standby node can't be connected. "
+						   "Use promote -f to execute a force promote.")));
+		polar_clear_promote_file();
+		return false;
+	}
+
+	/* upstream is alive: decide based on the walsender's reply */
+	if (POLAR_IS_PROMOTE_ALLOWED())
+	{
+		WakeupRecovery();
+		return true;
+	}
+	if (POLAR_IS_PROMOTE_NOT_ALLOWED())
+	{
+		ereport(WARNING,
+				(errmsg("promote is not allowed"),
+				 errdetail("Promote is not allowed when polar_enable_promote_wait_for_walreceive_done = on and the primary is running normally. "
+						   "Use promote -f to execute a force promote.")));
+		polar_clear_promote_file();
+		return false;
+	}
+
+	/* not decided yet, keep waiting */
+	return false;
 }
 
 /*

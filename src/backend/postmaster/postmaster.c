@@ -102,6 +102,7 @@
 #include "libpq/pqsignal.h"
 #include "pg_getopt.h"
 #include "pgstat.h"
+#include "polar_datamax/polar_datamax.h"
 #include "port/pg_bswap.h"
 #include "postmaster/autovacuum.h"
 #include "postmaster/auxprocess.h"
@@ -347,6 +348,7 @@ typedef enum
 								 * finish */
 	PM_WAIT_DEAD_END,			/* waiting for dead_end children to exit */
 	PM_NO_CHILDREN,				/* all important children have exited */
+	PM_DATAMAX,					/* POLAR: in datamax mode */
 } PMState;
 
 static PMState pmState = PM_INIT;
@@ -984,6 +986,45 @@ PostmasterMain(int argc, char *argv[])
 	 * local node type.
 	 */
 	polar_init_node_type();
+
+	/*
+	 * POLAR: a datamax node must run with hot_standby = on.  The postmaster
+	 * only promotes the node into PM_DATAMAX from PM_HOT_STANDBY (see
+	 * PMSIGNAL_BEGIN_DATAMAX handling in process_pm_pmsignal), and
+	 * PM_HOT_STANDBY is reached only when hot_standby enables the
+	 * standby-snapshot machinery that raises PMSIGNAL_BEGIN_HOT_STANDBY. With
+	 * hot_standby = off the node never leaves PM_RECOVERY:
+	 * PMSIGNAL_BEGIN_DATAMAX is silently dropped, the lockfile status never
+	 * becomes "datamax", and the node refuses the cascade-replication
+	 * connections that are its whole purpose.  Fail fast instead of coming up
+	 * as a half-working datamax.
+	 */
+	if (polar_is_datamax() && !EnableHotStandby)
+		ereport(FATAL,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("datamax mode requires hot_standby = on"),
+				 errhint("Set hot_standby = on, or disable datamax mode by setting polar_datamax_mode = off.")));
+
+	/*
+	 * POLAR: a datamax node keeps its WAL in polar_datamax/pg_wal and never
+	 * replays it, so the WAL summarizer would read nothing useful; and it has
+	 * no catalog to sync slots into.  Neither worker is started in
+	 * PM_DATAMAX, but both could still be launched during the transient
+	 * PM_HOT_STANDBY window before the datamax flip.  Reject the
+	 * configurations outright instead.
+	 */
+	if (polar_is_datamax() && summarize_wal)
+		ereport(FATAL,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("datamax mode cannot be used with summarize_wal = on"),
+				 errhint("Set summarize_wal = off, or disable datamax mode by setting polar_datamax_mode = off.")));
+
+	if (polar_is_datamax() && sync_replication_slots)
+		ereport(FATAL,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("datamax mode cannot be used with sync_replication_slots = on"),
+				 errhint("Set sync_replication_slots = off, or disable datamax mode by setting polar_datamax_mode = off.")));
+	/* POLAR end */
 
 	if (polar_enable_shared_storage_mode)
 	{
@@ -2167,6 +2208,7 @@ canAcceptConnections(int backend_type)
 	 * bgworker_should_start_now() decided whether the DB state allows them.
 	 */
 	if (pmState != PM_RUN && pmState != PM_HOT_STANDBY &&
+		pmState != PM_DATAMAX &&	/* POLAR: datamax accepts connections */
 		backend_type != BACKEND_TYPE_BGWORKER)
 	{
 		if (Shutdown > NoShutdown)
@@ -2538,7 +2580,8 @@ process_pm_shutdown_request(void)
 			 * client backends to exit.  If already in PM_STOP_BACKENDS or a
 			 * later state, do not change it.
 			 */
-			if (pmState == PM_RUN || pmState == PM_HOT_STANDBY)
+			if (pmState == PM_RUN || pmState == PM_HOT_STANDBY ||
+				pmState == PM_DATAMAX)
 				connsAllowed = false;
 			else if (pmState == PM_STARTUP || pmState == PM_RECOVERY)
 			{
@@ -2580,7 +2623,8 @@ process_pm_shutdown_request(void)
 				pmState = PM_STOP_BACKENDS;
 			}
 			else if (pmState == PM_RUN ||
-					 pmState == PM_HOT_STANDBY)
+					 pmState == PM_HOT_STANDBY ||
+					 pmState == PM_DATAMAX)
 			{
 				/* Report that we're about to zap live client sessions */
 				ereport(LOG,
@@ -3510,7 +3554,8 @@ static void
 PostmasterStateMachine(void)
 {
 	/* If we're doing a smart shutdown, try to advance that state. */
-	if (pmState == PM_RUN || pmState == PM_HOT_STANDBY)
+	if (pmState == PM_RUN || pmState == PM_HOT_STANDBY ||
+		pmState == PM_DATAMAX)
 	{
 		if (!connsAllowed)
 		{
@@ -4193,6 +4238,28 @@ process_pm_pmsignal(void)
 		StartWorkerNeeded = true;
 	}
 
+	/* POLAR: add DataMax state */
+	if (CheckPostmasterSignal(PMSIGNAL_BEGIN_DATAMAX) &&
+		pmState == PM_HOT_STANDBY && Shutdown == NoShutdown)
+	{
+		/*
+		 * POLAR: WAL redo done, enter datamax mode when received signal.
+		 * hot_standby is on to enable cascade replication in datamax mode so
+		 * we turn into PM_DATAMAX from PM_HOT_STANDBY
+		 */
+		FatalError = false;
+		Assert(AbortStartTime == 0);
+
+		ereport(LOG,
+				(errmsg("database system is entering datamax mode.")));
+
+		AddToDataDirLockFile(LOCK_FILE_LINE_PM_STATUS, PM_STATUS_DATAMAX);
+		pmState = PM_DATAMAX;
+
+		StartWorkerNeeded = true;
+	}
+	/* POLAR end */
+
 	/* Process background worker state changes. */
 	if (CheckPostmasterSignal(PMSIGNAL_BACKGROUND_WORKER_CHANGE))
 	{
@@ -4509,7 +4576,7 @@ MaybeStartWalReceiver(void)
 {
 	if (WalReceiverPID == 0 &&
 		(pmState == PM_STARTUP || pmState == PM_RECOVERY ||
-		 pmState == PM_HOT_STANDBY) &&
+		 pmState == PM_HOT_STANDBY || pmState == PM_DATAMAX) &&
 		Shutdown <= SmartShutdown)
 	{
 		WalReceiverPID = StartChildProcess(B_WAL_RECEIVER);
@@ -4775,6 +4842,7 @@ bgworker_should_start_now(BgWorkerStartTime start_time)
 			/* fall through */
 
 		case PM_HOT_STANDBY:
+		case PM_DATAMAX:		/* POLAR */
 			if (start_time == BgWorkerStart_ConsistentState)
 				return true;
 			/* fall through */

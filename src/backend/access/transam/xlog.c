@@ -64,6 +64,7 @@
 #include "access/xlogrecovery.h"
 #include "access/xlogutils.h"
 #include "backup/basebackup.h"
+#include "bootstrap/bootstrap.h"	/* POLAR: polar_sysidentifier (initdb -i) */
 #include "catalog/catversion.h"
 #include "catalog/pg_control.h"
 #include "catalog/pg_database.h"
@@ -73,6 +74,7 @@
 #include "miscadmin.h"
 #include "pg_trace.h"
 #include "pgstat.h"
+#include "polar_datamax/polar_datamax.h"
 #include "port/atomics.h"
 #include "port/pg_iovec.h"
 #include "postmaster/bgwriter.h"
@@ -731,6 +733,12 @@ typedef struct XLogCtlData
 
 	/* Used for pipeline statistics */
 	polar_wal_pipeline_stats_t polar_wal_pipeline_stats;
+
+	/*
+	 * POLAR: lock to prevent getting wal being removed while an initial
+	 * datamax computes its replication start lsn
+	 */
+	LWLock		polar_initial_datamax_lock;
 } XLogCtlData;
 
 /*
@@ -874,7 +882,6 @@ static void RemoveOldXlogFiles(XLogSegNo segno, XLogRecPtr lastredoptr,
 static void RemoveXlogFile(const struct dirent *segment_de,
 						   XLogSegNo recycleSegNo, XLogSegNo *endlogSegNo,
 						   TimeLineID insertTLI);
-static void UpdateLastRemovedPtr(char *filename);
 static void ValidateXLOGDirectoryStructure(void);
 static void CleanupBackupHistory(void);
 static void UpdateMinRecoveryPoint(XLogRecPtr lsn, bool force);
@@ -1740,6 +1747,24 @@ XLogRecPtr
 polar_wal_pipeline_get_current_insert_lsn(void)
 {
 	return XLogBytePosToEndRecPtr(pg_atomic_read_u64(&XLogCtl->Insert.CurrBytePos));
+}
+
+/* POLAR: get the end of the last valid record */
+XLogRecPtr
+polar_get_last_valid_lsn(void)
+{
+	XLogRecPtr	polar_last_valid_lsn = InvalidXLogRecPtr;
+
+	/* get last valid lsn from meta when in datamax mode */
+	if (polar_is_datamax())
+		polar_last_valid_lsn = polar_datamax_get_last_valid_received_lsn(polar_datamax_ctl, NULL);
+	else if (polar_is_primary())
+		polar_last_valid_lsn = XLogBytePosToEndRecPtr(pg_atomic_read_u64(&XLogCtl->Insert.CurrBytePos));
+	/* standby mode */
+	else
+		polar_last_valid_lsn = GetXLogReplayRecPtr(NULL);
+
+	return polar_last_valid_lsn;
 }
 
 /*
@@ -4689,7 +4714,7 @@ XLogFileInitInternal(XLogSegNo logsegno, TimeLineID logtli,
 	 */
 	elog(DEBUG2, "creating and filling new WAL file");
 
-	snprintf(polar_tmppath, MAXPGPATH, XLOGDIR "/xlogtemp.%d", (int) getpid());
+	snprintf(polar_tmppath, MAXPGPATH, "%s/xlogtemp.%d", polar_wal_dir(), (int) getpid());
 	polar_make_file_path_level2(tmppath, polar_tmppath);
 
 	polar_unlink(tmppath);
@@ -4935,7 +4960,7 @@ XLogFileCopy(TimeLineID destTLI, XLogSegNo destsegno,
 	/*
 	 * Copy into a temp file name.
 	 */
-	snprintf(polar_tmppath, MAXPGPATH, XLOGDIR "/xlogtemp.%d", (int) getpid());
+	snprintf(polar_tmppath, MAXPGPATH, "%s/xlogtemp.%d", polar_wal_dir(), (int) getpid());
 	polar_make_file_path_level2(tmppath, polar_tmppath);
 	polar_unlink(tmppath);
 
@@ -5319,8 +5344,11 @@ XLogGetOldestSegno(TimeLineID tli)
 /*
  * Update the last removed segno pointer in shared memory, to reflect that the
  * given XLOG file has been removed.
+ *
+ * POLAR: promoted from static so the datamax module can advance
+ * lastRemovedSegNo when it removes WAL itself.
  */
-static void
+void
 UpdateLastRemovedPtr(char *filename)
 {
 	uint32		tli;
@@ -5333,6 +5361,53 @@ UpdateLastRemovedPtr(char *filename)
 		XLogCtl->lastRemovedSegNo = segno;
 	SpinLockRelease(&XLogCtl->info_lck);
 }
+
+/*
+ * POLAR: set the initial restart_lsn of datamax replication slot.
+ *
+ * It is used while establishing initial replication from Datamax.
+ * To ensure the wal data in datamax is not less than that in primary,
+ * replication should start at the smallest lsn in primary.
+ */
+XLogRecPtr
+polar_set_initial_datamax_restart_lsn(ReplicationSlot *slot)
+{
+	XLogRecPtr	restart_lsn;
+	XLogSegNo	last_removed_segno;
+
+	/*
+	 * Hold polar_initial_datamax_lock shared to keep RemoveOldXlogFiles()
+	 * (which takes it exclusively) from removing the WAL file we are about to
+	 * pin: we read the oldest available position and set restart_lsn to it as
+	 * a single atomic step with respect to WAL removal.
+	 */
+	LWLockAcquire(&XLogCtl->polar_initial_datamax_lock, LW_SHARED);
+	last_removed_segno = XLogGetLastRemovedSegno();
+
+	if (last_removed_segno != 0)
+		XLogSegNoOffsetToRecPtr(last_removed_segno + 1, 0, wal_segment_size, restart_lsn);
+	else
+		restart_lsn = polar_get_smallest_walfile_lsn();
+
+	/* set slot restart_lsn to prevent further wal removal */
+	if (slot != NULL)
+	{
+		SpinLockAcquire(&slot->mutex);
+		slot->data.restart_lsn = restart_lsn;
+		SpinLockRelease(&slot->mutex);
+	}
+	ReplicationSlotsComputeRequiredLSN();
+
+	/*
+	 * release lwlock after having set restart_lsn, so that it can be used
+	 * while removing old xlog files
+	 */
+	LWLockRelease(&XLogCtl->polar_initial_datamax_lock);
+
+	return restart_lsn;
+}
+
+/* POLAR end */
 
 /*
  * Remove all temporary log files in pg_wal
@@ -5413,6 +5488,32 @@ RemoveOldXlogFiles(XLogSegNo segno, XLogRecPtr lastredoptr, XLogRecPtr endptr,
 
 	polar_make_file_path_level2(polar_path, XLOGDIR);
 
+	/*
+	 * POLAR: hold polar_initial_datamax_lock exclusively across the whole
+	 * removal batch. A datamax computing its initial replication start LSN
+	 * (polar_set_initial_datamax_restart_lsn) reads lastRemovedSegNo and
+	 * scans pg_wal under the same lock held shared, then pins the result as
+	 * its slot's restart_lsn.
+	 *
+	 * Our removal boundary `segno` was computed by the caller before the lock
+	 * was taken, so a datamax may have pinned an earlier restart_lsn in the
+	 * meantime. Recompute the keep boundary under the lock: if it moved, skip
+	 * this removal cycle so we do not delete WAL the datamax slot now needs.
+	 * The next checkpoint recomputes and removes what is truly safe.
+	 */
+	LWLockAcquire(&XLogCtl->polar_initial_datamax_lock, LW_EXCLUSIVE);
+
+	{
+		XLogSegNo	keepSegNo = segno + 1;
+
+		KeepLogSeg(endptr, XLogGetReplicationSlotMinimumLSN(), &keepSegNo);
+		if (keepSegNo != segno + 1)
+		{
+			LWLockRelease(&XLogCtl->polar_initial_datamax_lock);
+			return;
+		}
+	}
+
 	xldir = AllocateDir(polar_path);
 
 	while ((xlde = ReadDir(xldir, polar_path)) != NULL)
@@ -5446,6 +5547,8 @@ RemoveOldXlogFiles(XLogSegNo segno, XLogRecPtr lastredoptr, XLogRecPtr endptr,
 	}
 
 	FreeDir(xldir);
+
+	LWLockRelease(&XLogCtl->polar_initial_datamax_lock);
 }
 
 /*
@@ -5491,7 +5594,7 @@ RemoveNonParentXlogFiles(XLogRecPtr switchpoint, TimeLineID newTLI)
 	elog(DEBUG2, "attempting to remove WAL segments newer than log file %s",
 		 switchseg);
 
-	polar_make_file_path_level2(polar_path, XLOGDIR);
+	polar_make_file_path_level2(polar_path, polar_wal_dir());
 
 	xldir = AllocateDir(polar_path);
 
@@ -5547,14 +5650,18 @@ RemoveXlogFile(const struct dirent *segment_de,
 #endif
 	const char *segname = segment_de->d_name;
 
-	polar_make_file_path_level3(path, XLOGDIR, (char *) segname);
+	polar_make_file_path_level3(path, polar_wal_dir(), (char *) segname);
 
 	/*
 	 * Before deleting the file, see if it can be recycled as a future log
 	 * segment. Only recycle normal files, because we don't want to recycle
 	 * symbolic links pointing to a separate archive directory.
+	 *
+	 * POLAR: datamax never installs new segments via the regular xlog
+	 * mechanism, so skip the recycle-as-future-segment branch.
 	 */
-	if (wal_recycle &&
+	if (!polar_is_datamax_mode &&
+		wal_recycle &&
 		*endlogSegNo <= recycleSegNo &&
 		XLogCtl->InstallXLogFileSegmentActive &&	/* callee rechecks this */
 		get_dirent_type(path, segment_de, false, DEBUG2) == PGFILETYPE_REG &&
@@ -6544,6 +6651,7 @@ XLOGShmemInit(void)
 	char	   *allocptr;
 	int			i;
 	ControlFileData *localControlFile;
+	int			polar_lock_tranche; /* POLAR: tranche for initial datamax lock */
 
 #ifdef WAL_DEBUG
 
@@ -6647,6 +6755,11 @@ XLOGShmemInit(void)
 	/* POLAR: Init available state. */
 	XLogCtl->polar_available_state = true;
 
+	/* POLAR: Init initial_datamax_lock */
+	polar_lock_tranche = LWLockNewTrancheId();
+	LWLockRegisterTranche(polar_lock_tranche, "initial datamax lock");
+	LWLockInitialize(&XLogCtl->polar_initial_datamax_lock, polar_lock_tranche);
+
 	SpinLockInit(&XLogCtl->Insert.insertpos_lck);
 	SpinLockInit(&XLogCtl->info_lck);
 	pg_atomic_init_u64(&XLogCtl->logInsertResult, InvalidXLogRecPtr);
@@ -6718,10 +6831,23 @@ BootStrapXLOG(void)
 	 * determine the initialization time of the installation, which could
 	 * perhaps be useful sometimes.
 	 */
-	gettimeofday(&tv, NULL);
-	sysidentifier = ((uint64) tv.tv_sec) << 32;
-	sysidentifier |= ((uint64) tv.tv_usec) << 12;
-	sysidentifier |= getpid() & 0xFFF;
+
+	/*
+	 * POLAR: if no system identifier was specified (initdb -i), generate one
+	 * in the origin way; otherwise use the specified one. This lets a datamax
+	 * (or any node) be initialized with the same system identifier as its
+	 * upstream so streaming replication's IDENTIFY_SYSTEM check passes.
+	 */
+	if (!polar_sysidentifier)
+	{
+		gettimeofday(&tv, NULL);
+		sysidentifier = ((uint64) tv.tv_sec) << 32;
+		sysidentifier |= ((uint64) tv.tv_usec) << 12;
+		sysidentifier |= getpid() & 0xFFF;
+	}
+	else
+		sysidentifier = polar_sysidentifier;
+	/* POLAR end */
 
 	/* page buffer must be aligned suitably for O_DIRECT */
 	buffer = (char *) palloc(XLOG_BLCKSZ + XLOG_BLCKSZ);
@@ -9351,6 +9477,21 @@ CreateCheckPoint(int flags)
 	slotsMinReqLSN = Min(slotsMinReqLSN, polar_slot_min_req_lsn);
 	/* POLAR end */
 
+	/*
+	 * POLAR: an initial datamax pins its slot's restart_lsn at the oldest
+	 * available WAL under polar_initial_datamax_lock
+	 * (polar_set_initial_datamax_restart_lsn), possibly below our cutoff.
+	 * That lock protects the WAL files themselves: RemoveOldXlogFiles()
+	 * rechecks the keep boundary under it and skips the batch if the boundary
+	 * moved.  The invalidation below is deliberately NOT covered by the lock:
+	 * InvalidateObsoleteReplicationSlots() may sleep waiting for the slot's
+	 * active user to exit, and that user may itself be blocked
+	 * (uninterruptibly) on the same lock -- a deadlock.  A slot seeded
+	 * between the recomputation above and this call can thus be invalidated
+	 * spuriously even though its WAL is never removed; the walsender is
+	 * terminated and the datamax reconnects and re-seeds.  Same residual
+	 * window as on the PG15 branch.
+	 */
 	KeepLogSeg(recptr, slotsMinReqLSN, &_logSegNo);
 	if (InvalidateObsoleteReplicationSlots(RS_INVAL_WAL_REMOVED,
 										   _logSegNo, InvalidOid,
@@ -9715,6 +9856,14 @@ CreateRestartPoint(int flags)
 	{
 		ereport(DEBUG2,
 				(errmsg_internal("skipping restartpoint, recovery has already ended")));
+		return false;
+	}
+
+	/* Restartpoint is useless in DataMax mode. */
+	if (polar_is_datamax())
+	{
+		ereport(LOG,
+				(errmsg("skipping restartpoint, datamax node has no buffers to flush")));
 		return false;
 	}
 

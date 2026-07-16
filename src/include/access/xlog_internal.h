@@ -416,21 +416,38 @@ static inline void polar_xlog_file_path(char *path, TimeLineID tli, XLogSegNo lo
 #define StatusFilePath(a,b,c)				polar_status_file_path(a,b,c)
 #define BackupHistoryFilePath(a,b,c,d,e)	polar_backup_history_file_path(a,b,c,d,e)
 
+/* POLAR: needed by the inline path helpers below */
+extern PGDLLIMPORT bool polar_is_datamax_mode;
+
+/*
+ * POLAR: Effective WAL directory for this node.  Normal nodes keep WAL in
+ * XLOGDIR (pg_wal); a datamax node streams WAL into polar_datamax/pg_wal
+ * instead.  Reads the polar_is_datamax_mode global (never polar_is_datamax(),
+ * which touches XLogCtl) so it stays safe to call without shared memory.
+ */
+static inline const char *
+polar_wal_dir(void)
+{
+	return polar_is_datamax_mode ? POLAR_DATAMAX_WAL_DIR : XLOGDIR;
+}
+
 /*
  * POLAR: Extend from XLogFilePath
  */
 static inline void
 polar_xlog_file_path(char *path, TimeLineID tli, XLogSegNo logSegNo, int wal_segsz_bytes)
 {
+	const char *waldir = polar_wal_dir();
+
 	if (polar_enable_shared_storage_mode)
 	{
-		snprintf(path, MAXPGPATH, "%s/" XLOGDIR "/%08X%08X%08X", polar_datadir, tli,
+		snprintf(path, MAXPGPATH, "%s/%s/%08X%08X%08X", polar_datadir, waldir, tli,
 				 (uint32) ((logSegNo) / XLogSegmentsPerXLogId(wal_segsz_bytes)),
 				 (uint32) ((logSegNo) % XLogSegmentsPerXLogId(wal_segsz_bytes)));
 	}
 	else
 	{
-		snprintf(path, MAXPGPATH, XLOGDIR "/%08X%08X%08X", tli,
+		snprintf(path, MAXPGPATH, "%s/%08X%08X%08X", waldir, tli,
 				 (uint32) ((logSegNo) / XLogSegmentsPerXLogId(wal_segsz_bytes)),
 				 (uint32) ((logSegNo) % XLogSegmentsPerXLogId(wal_segsz_bytes)));
 	}
@@ -442,10 +459,12 @@ polar_xlog_file_path(char *path, TimeLineID tli, XLogSegNo logSegNo, int wal_seg
 static inline void
 polar_tl_history_file_path(char *path, TimeLineID tli)
 {
+	const char *waldir = polar_wal_dir();
+
 	if (polar_enable_shared_storage_mode)
-		snprintf(path, MAXPGPATH, "%s/" XLOGDIR "/%08X.history", polar_datadir, tli);
+		snprintf(path, MAXPGPATH, "%s/%s/%08X.history", polar_datadir, waldir, tli);
 	else
-		snprintf(path, MAXPGPATH, XLOGDIR "/%08X.history", tli);
+		snprintf(path, MAXPGPATH, "%s/%08X.history", waldir, tli);
 }
 
 /*
@@ -454,10 +473,12 @@ polar_tl_history_file_path(char *path, TimeLineID tli)
 static inline void
 polar_status_file_path(char *path, const char *xlog, char *suffix)
 {
+	const char *waldir = polar_wal_dir();
+
 	if (polar_enable_shared_storage_mode)
-		snprintf(path, MAXPGPATH, "%s/" XLOGDIR "/archive_status/%s%s", polar_datadir, xlog, suffix);
+		snprintf(path, MAXPGPATH, "%s/%s/archive_status/%s%s", polar_datadir, waldir, xlog, suffix);
 	else
-		snprintf(path, MAXPGPATH, XLOGDIR "/archive_status/%s%s", xlog, suffix);
+		snprintf(path, MAXPGPATH, "%s/archive_status/%s%s", waldir, xlog, suffix);
 }
 
 /*

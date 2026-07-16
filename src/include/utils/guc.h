@@ -484,6 +484,29 @@ extern bool polar_csn_xid_snapshot;
 extern int	polar_csnlog_slot_size;
 extern int	polar_csnlog_max_local_cache_segments;
 
+/*
+ * POLAR: datamax mode selector.  PGC_POSTMASTER enum GUC.
+ *
+ * POLAR_DATAMAX_OFF		regular operation, datamax disabled.
+ * POLAR_DATAMAX_STANDALONE	when standby.signal is also present, the node enters
+ *							datamax mode at startup.
+ */
+typedef enum
+{
+	POLAR_DATAMAX_OFF = 0,
+	POLAR_DATAMAX_STANDALONE,
+} polar_datamax_mode_t;
+
+extern int	polar_datamax_mode;
+
+extern int	polar_datamax_remove_archivedone_wal_timeout;
+extern int	polar_datamax_archive_timeout;
+extern int	polar_datamax_save_replication_slots_timeout;
+extern int	polar_datamax_prealloc_walfile_timeout;
+extern int	polar_datamax_prealloc_walfile_num;
+
+extern bool polar_enable_promote_wait_for_walreceive_done;
+
 /* POLAR GUCs end */
 
 

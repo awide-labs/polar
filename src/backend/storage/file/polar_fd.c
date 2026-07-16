@@ -528,9 +528,25 @@ polar_get_node_type_by_file(void)
 
 	if (flag & POLAR_STANDBY_MODE)
 	{
-		polar_node_type = POLAR_STANDBY;
-		elog(LOG,
-			 "found standby.signal, PolarDB in standby mode, use readwrite mode mount pfs");
+		if (polar_datamax_mode == POLAR_DATAMAX_STANDALONE)
+		{
+			polar_node_type = POLAR_STANDALONE_DATAMAX;
+			elog(LOG,
+				 "found standby.signal and polar_datamax_mode=standalone, "
+				 "PolarDB in datamax mode");
+		}
+		else
+		{
+			polar_node_type = POLAR_STANDBY;
+			elog(LOG,
+				 "found standby.signal, PolarDB in standby mode, use readwrite mode mount pfs");
+		}
+	}
+	else if (polar_datamax_mode == POLAR_DATAMAX_STANDALONE)
+	{
+		ereport(FATAL,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("polar_datamax_mode=standalone requires standby.signal")));
 	}
 
 	/*

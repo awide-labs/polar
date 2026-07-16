@@ -175,11 +175,11 @@ precheck-main-install:
 
 precheck-main: precheck-main-check precheck-main-install
 
-precheck: plcheck dccheck-lite precheck-main
+precheck: plcheck dccheck-lite datamax-check-lite precheck-main
 
 precheck-main-ci: precheck-main-check
 
-precheck-ci: precheck-main-ci plcheck
+precheck-ci: precheck-main-ci plcheck datamax-check-lite
 
 covcheck: coverage-html
 	$(top_srcdir)/src/tools/delta_coverage.pl -f coverage/delta_coverage.txt -p $(LAST_COMMIT)
@@ -212,10 +212,20 @@ dccheck-lite: | temp-install
 dccheck: | temp-install
 	$(MAKE) -C src/test/polar_consistency check-all
 
+# Datamax TAP suite. datamax-check-lite runs the smoke subset
+# (001..003) for quick CI; datamax-check runs the full set.
+datamax-check-lite: | temp-install
+	$(MAKE) -C src/test/polar_datamax check \
+		PROVE_FLAGS="$(PROVE_FLAGS)" \
+		PROVE_TESTS="t/001_polar_datamax_feedback_xmin.pl t/002_polar_datamax_streaming_mode.pl t/003_polar_datamax_promote_standby.pl"
+
+datamax-check: | temp-install
+	$(MAKE) -C src/test/polar_datamax check PROVE_FLAGS="$(PROVE_FLAGS)"
+
 #
 # POLAR end
 #
 
 .PHONY: dist distcheck docs install-docs world check-world install-world \
 	installcheck-world headerscheck cpluspluscheck \
-	covcheck precheck stylecheck dccheck
+	covcheck precheck stylecheck dccheck datamax-check datamax-check-lite

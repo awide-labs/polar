@@ -36,5 +36,7 @@ extern int	logindex_meta_main(int argc, char **argv);
 extern int	logindex_bloom_main(int argc, char **argv);
 extern int	logindex_table_main(int argc, char **argv);
 extern int	logindex_page_main(int argc, char **argv);
+extern int	datamax_meta_main(int argc, char **argv);
+extern int	datamax_get_wal_main(int argc, char **argv);
 
 #endif

@@ -104,6 +104,11 @@ static char pid_file[MAXPGPATH];
 static char promote_file[MAXPGPATH];
 static char logrotate_file[MAXPGPATH];
 
+/* POLAR: force promote */
+static bool polar_force_promote = false;
+static char polar_force_promote_file[MAXPGPATH];
+static char polar_promote_not_allowed[MAXPGPATH];
+
 static volatile pid_t postmasterPID = -1;
 
 #ifdef WIN32
@@ -639,7 +644,8 @@ wait_for_postmaster_start(pid_t pm_pid, bool do_checkpoint)
 				char	   *pmstatus = optlines[LOCK_FILE_LINE_PM_STATUS - 1];
 
 				if (strcmp(pmstatus, PM_STATUS_READY) == 0 ||
-					strcmp(pmstatus, PM_STATUS_STANDBY) == 0)
+					strcmp(pmstatus, PM_STATUS_STANDBY) == 0 ||
+					strcmp(pmstatus, PM_STATUS_DATAMAX) == 0)
 				{
 					/* postmaster is done starting up */
 					free_readfile(optlines);
@@ -765,6 +771,21 @@ wait_for_postmaster_promote(void)
 		state = get_control_dbstate();
 		if (state == DB_IN_PRODUCTION)
 			return true;		/* successful promotion */
+
+		/*
+		 * POLAR: the backend refused the promote (constraint
+		 * polar_enable_promote_wait_for_walreceive_done) and left the
+		 * polar_promote_not_allowed file; stop waiting and report failure.
+		 */
+		snprintf(polar_promote_not_allowed, MAXPGPATH, "%s/polar_promote_not_allowed", pg_data);
+		if (access(polar_promote_not_allowed, 0) == 0)
+		{
+			print_msg(_(" promote is not allowed, check the server log for details\n"));
+			if (unlink(polar_promote_not_allowed) != 0)
+				write_stderr(_("%s: could not remove file \"%s\": %m\n"),
+							 progname, polar_promote_not_allowed);
+			return false;
+		}
 
 		if (cnt % WAITS_PER_SEC == 0)
 			print_msg(".");
@@ -1206,18 +1227,28 @@ do_promote(void)
 		exit(1);
 	}
 
-	snprintf(promote_file, MAXPGPATH, "%s/promote", pg_data);
+	/*
+	 * POLAR: a force promote writes the polar_force_promote signal file
+	 * instead of the regular promote file, which makes the backend bypass the
+	 * polar_enable_promote_wait_for_walreceive_done wait.
+	 */
+	if (!polar_force_promote)
+		snprintf(promote_file, MAXPGPATH, "%s/promote", pg_data);
+	else
+		snprintf(polar_force_promote_file, MAXPGPATH, "%s/polar_force_promote", pg_data);
 
-	if ((prmfile = fopen(promote_file, "w")) == NULL)
+	if ((prmfile = fopen(polar_force_promote ? polar_force_promote_file : promote_file, "w")) == NULL)
 	{
 		write_stderr(_("%s: could not create promote signal file \"%s\": %m\n"),
-					 progname, promote_file);
+					 progname,
+					 polar_force_promote ? polar_force_promote_file : promote_file);
 		exit(1);
 	}
 	if (fclose(prmfile))
 	{
 		write_stderr(_("%s: could not write promote signal file \"%s\": %m\n"),
-					 progname, promote_file);
+					 progname,
+					 polar_force_promote ? polar_force_promote_file : promote_file);
 		exit(1);
 	}
 
@@ -1226,9 +1257,10 @@ do_promote(void)
 	{
 		write_stderr(_("%s: could not send promote signal (PID: %d): %m\n"),
 					 progname, (int) pid);
-		if (unlink(promote_file) != 0)
+		if (unlink(polar_force_promote ? polar_force_promote_file : promote_file) != 0)
 			write_stderr(_("%s: could not remove promote signal file \"%s\": %m\n"),
-						 progname, promote_file);
+						 progname,
+						 polar_force_promote ? polar_force_promote_file : promote_file);
 		exit(1);
 	}
 
@@ -1975,7 +2007,7 @@ do_help(void)
 			 "                    [-o OPTIONS] [-c]\n"), progname);
 	printf(_("  %s reload     [-D DATADIR] [-s]\n"), progname);
 	printf(_("  %s status     [-D DATADIR]\n"), progname);
-	printf(_("  %s promote    [-D DATADIR] [-W] [-t SECS] [-s]\n"), progname);
+	printf(_("  %s promote    [-D DATADIR] [-W] [-t SECS] [-s] [-f]\n"), progname);
 	printf(_("  %s logrotate  [-D DATADIR] [-s]\n"), progname);
 	printf(_("  %s kill       SIGNALNAME PID\n"), progname);
 #ifdef WIN32
@@ -2010,6 +2042,11 @@ do_help(void)
 	printf(_("  -p PATH-TO-POSTGRES    normally not necessary\n"));
 	printf(_("\nOptions for stop or restart:\n"));
 	printf(_("  -m, --mode=MODE        MODE can be \"smart\", \"fast\", or \"immediate\"\n"));
+
+	/* POLAR: force promote */
+	printf(_("\nOption for promote:\n"));
+	printf(_("  -f                     force promote, do not wait for the walreceiver\n"
+			 "                         to receive all WAL from the upstream\n"));
 
 	printf(_("\nShutdown modes are:\n"));
 	printf(_("  smart       quit after all clients have disconnected\n"));
@@ -2279,7 +2316,7 @@ main(int argc, char **argv)
 		rr = true;
 
 	/* process command-line options */
-	while ((c = getopt_long(argc, argv, "cD:e:l:m:N:o:p:P:rsS:t:U:wW",
+	while ((c = getopt_long(argc, argv, "cD:e:fl:m:N:o:p:P:rsS:t:U:wW",
 							long_options, &option_index)) != -1)
 	{
 		switch (c)
@@ -2364,6 +2401,10 @@ main(int argc, char **argv)
 				break;
 			case 'c':
 				allow_core_files = true;
+				break;
+				/* POLAR: force promote */
+			case 'f':
+				polar_force_promote = true;
 				break;
 			default:
 				/* getopt_long already issued a suitable error message */

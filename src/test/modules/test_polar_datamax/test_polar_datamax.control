@@ -1,0 +1,4 @@
+comment = 'Test code for polar datamax feature'
+default_version = '1.0'
+module_pathname = '$libdir/test_polar_datamax'
+relocatable = true

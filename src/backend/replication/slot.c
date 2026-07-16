@@ -47,6 +47,7 @@
 #include "common/string.h"
 #include "miscadmin.h"
 #include "pgstat.h"
+#include "polar_datamax/polar_datamax.h"
 #include "postmaster/interrupt.h"
 #include "replication/slotsync.h"
 #include "replication/slot.h"
@@ -1576,29 +1577,46 @@ ReplicationSlotReserveWal(void)
 	 */
 	if (SlotIsPhysical(slot))
 	{
-		/* POLAR */
-		ControlFileData *control_file;
-		bool		crc_ok;
+		if (polar_is_datamax())
+		{
+			/*
+			 * Polar: set restart lsn as the min received lsn when current
+			 * node is datamax so that we can send wal as much as possible.
+			 *
+			 * Lock ordering: we hold ReplicationSlotAllocationLock and take
+			 * the datamax meta lock inside
+			 * polar_datamax_get_min_received_lsn(); the meta lock is a leaf
+			 * lock (the datamax module never acquires
+			 * ReplicationSlotAllocationLock), so no opposite ordering exists.
+			 */
+			restart_lsn = polar_datamax_get_min_received_lsn(polar_datamax_ctl, NULL);
+		}
+		else
+		{
+			/* POLAR */
+			ControlFileData *control_file;
+			bool		crc_ok;
 
-		/*
-		 * POLAR: When creating a new replica, we first create a physical slot
-		 * for the replica, then copy the control file, and finally start the
-		 * replica. These operations can be performed in parallel with a
-		 * checkpoint in primary. To avoid the WAL needed by the replica being
-		 * concurrently deleted by checkpoint, we use the redo point on the
-		 * storage control file rather than that in the memory as the
-		 * restart_lsn of the slot.
-		 */
-		LWLockAcquire(ControlFileLock, LW_SHARED);
-		control_file = get_controlfile(DataDir, &crc_ok);
-		LWLockRelease(ControlFileLock);
-		if (!crc_ok)
-			ereport(ERROR,
-					(errmsg("calculated CRC checksum does not match value stored in file")));
+			/*
+			 * POLAR: When creating a new replica, we first create a physical
+			 * slot for the replica, then copy the control file, and finally
+			 * start the replica. These operations can be performed in
+			 * parallel with a checkpoint in primary. To avoid the WAL needed
+			 * by the replica being concurrently deleted by checkpoint, we use
+			 * the redo point on the storage control file rather than that in
+			 * the memory as the restart_lsn of the slot.
+			 */
+			LWLockAcquire(ControlFileLock, LW_SHARED);
+			control_file = get_controlfile(DataDir, &crc_ok);
+			LWLockRelease(ControlFileLock);
+			if (!crc_ok)
+				ereport(ERROR,
+						(errmsg("calculated CRC checksum does not match value stored in file")));
 
-		restart_lsn = control_file->checkPointCopy.redo;
-		pfree(control_file);
-		/* POLAR end */
+			restart_lsn = control_file->checkPointCopy.redo;
+			pfree(control_file);
+			/* POLAR end */
+		}
 	}
 	else if (RecoveryInProgress())
 		restart_lsn = GetXLogReplayRecPtr(NULL);

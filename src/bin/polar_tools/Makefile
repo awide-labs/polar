@@ -15,6 +15,8 @@ OBJS = polar_tools.o \
 	   logindex_bloom_dump.o \
 	   logindex_table_dump.o \
 	   logindex_page_dump.o \
+	   datamax_meta_dump.o \
+	   datamax_get_wal_from_backup.o \
 	   bloomfilter.o \
 	   xlogreader.o
 

@@ -71,6 +71,7 @@ LOGINDEX_BG_MAIN	"Waiting in main loop of logindex background writer process."
 POLAR_SUB_TASK_MAIN	"Waiting in main loop of polar subtask process."
 LOGINDEX_SAVER_MAIN	"Waiting in main loop of logindex saver process."
 ASYNC_LOCK_REPLAY_MAIN	"Waiting in main loop of async lock replay process."
+DATAMAX_MAIN	"Waiting in main loop of datamax process."
 
 ABI_compatibility:
 

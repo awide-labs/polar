@@ -1,0 +1,72 @@
+test_polar_datamax
+==================
+
+Unit tests for the DataMax subsystem (src/backend/polar_datamax).  The single
+SQL entry point
+
+    SELECT test_polar_datamax(readpath text);
+
+runs a sequence of in-backend checks against the datamax control structure,
+meta file, WAL removal/archive logic and the WAL parser.  The argument is the
+absolute path of the reference WAL image checked in next to this test
+(000000010000000000000001).
+
+
+How it is exercised
+-------------------
+
+The whole body is guarded by
+
+    if (!polar_enable_shared_storage_mode)
+        PG_RETURN_VOID();
+
+and pg_regress spins up a plain local-filesystem cluster, so `make check` only
+proves the module builds and the extension loads -- the body returns
+immediately.  The body is run for real by the TAP test
+src/test/polar_datamax/t/010_polar_datamax_unit.pl, which stands up a
+shared-storage node and executes it as a CI gate (that test is the canonical,
+always-in-sync way to run the body; pg_regress just passes the fixture path via
+PG_ABS_SRCDIR for the no-op path).
+
+
+The WAL fixture and its constants
+---------------------------------
+
+000000010000000000000001 is a real 16 MB-segment WAL image: at a 16 MB
+wal-segsize the file is exactly one whole segment (segment base LSN 0x1000000),
+and test_polar_datamax_create_walfile() writes it verbatim into a segment for
+polar_datamax_parse_xlog() to walk.  The four constants in
+test_polar_datamax_parse_xlog() are derived from that image and MUST be
+regenerated together whenever the WAL format changes (an XLOG_PAGE_MAGIC bump --
+check `od -An -tx2 -N2 000000010000000000000001` against XLOG_PAGE_MAGIC, PG17 =
+0xD116).  A stale fixture makes every WAL page fail validation ("could not find
+a valid record after ...").
+
+To regenerate on the current build:
+
+1. initdb a scratch cluster with `--wal-segsize=16` (full_page_writes=off,
+   fsync=off, a distinct port, unix_socket_directories='/tmp').  A fresh cluster
+   starts in segment 000000010000000000000001, base LSN 0x1000000, already
+   several MB in from bootstrap WAL.
+2. Generate WAL until it passes the end of segment 1
+   (pg_current_wal_lsn() > '0/2000000') with many small inserts
+   (insert into t select g, repeat('x',40) from generate_series(1,N) g; in a
+   loop); do NOT use pg_switch_wal().  CHECKPOINT.
+3. cp $PGDATA/pg_wal/000000010000000000000001 to this directory (copy it before
+   a checkpoint can recycle-rename it, or from a preserved copy).
+4. With `pg_waldump -p <dir> -s 0/1000000 -e 0/2000000`, pick record-start LSNs
+   (each printed `lsn:` is a record start; offset = lsn - 0x1000000,
+   page = offset/8192):
+     valid_lsn      = end of the segment's first record (= the 2nd record's
+                      lsn, e.g. 0x10000A0);
+     received_lsn   = a record start near the end of the segment that is
+                      same-page-contiguous with its predecessor (both records on
+                      the same 8 KB page, so it is the exact EndRecPtr of the
+                      preceding record and the case-2 assert
+                      received_lsn == valid_lsn holds after parsing the intact
+                      image);
+     last_valid_lsn = a same-page-contiguous record start a few KB before
+                      received_lsn;
+     modify_start   = last_valid_lsn - 0x1000000 (its in-segment byte offset).
+   Everything else in the body uses wal_segment_size-relative math and adapts to
+   16 MB automatically; only these four LSNs are segsize-specific.

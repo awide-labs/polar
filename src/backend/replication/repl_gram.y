@@ -354,6 +354,8 @@ opt_polar_repl_mode:
 						$$ = POLAR_REPL_REPLICA;
 					else if (strcmp($2, "standby") == 0)
 						$$ = POLAR_REPL_STANDBY;
+					else if (strcmp($2, "datamax") == 0)
+						$$ = POLAR_REPL_SA_DATAMAX;
 					else
 						ereport(ERROR,
 							(errcode(ERRCODE_SYNTAX_ERROR),
