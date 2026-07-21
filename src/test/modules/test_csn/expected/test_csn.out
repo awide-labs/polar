@@ -82,6 +82,21 @@ INFO:  subxids:
 INFO:  4
 INFO:  5
 INFO:  ------------------------------
+INFO:  test_XidVisibleInSnapshotCSN_overflow
+INFO:  overflow forced: subxcnt=2 suboverflowed=1
+INFO:  retained running xid 100: visible=0 (want 0)
+INFO:  committed-before-snapshot xid 102: visible=1 (want 1)
+INFO:  dropped-then-committed xid 103: visible=0 (want 0)
+INFO:  ------------------------------
+INFO:  test_snapshot_copy_serialize_csn_xid
+INFO:  overflow forced: subxcnt=2 suboverflowed=1
+INFO:  copied: subxcnt=2 subxip_kept=1 (want 2, 1)
+INFO:  copied retained running xid 200: visible=0 (want 0)
+INFO:  copied dropped-then-committed xid 203: visible=0 (want 0)
+INFO:  restored: subxcnt=2 subxip_kept=1 (want 2, 1)
+INFO:  restored retained running xid 200: visible=0 (want 0)
+INFO:  restored dropped-then-committed xid 203: visible=0 (want 0)
+INFO:  ------------------------------
 INFO:  test_polar_csnlog_get_set_csn
 INFO:  case 1
 INFO:  xid2:1023, csn2:10000
