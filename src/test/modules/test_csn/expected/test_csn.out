@@ -97,6 +97,10 @@ INFO:  restored: subxcnt=2 subxip_kept=1 (want 2, 1)
 INFO:  restored retained running xid 200: visible=0 (want 0)
 INFO:  restored dropped-then-committed xid 203: visible=0 (want 0)
 INFO:  ------------------------------
+INFO:  test_takenDuringRecovery_csn
+INFO:  csn snapshot: takenDuringRecovery=0 (want 0)
+INFO:  csn xid snapshot: takenDuringRecovery=0 (want 0)
+INFO:  ------------------------------
 INFO:  test_polar_csnlog_get_set_csn
 INFO:  case 1
 INFO:  xid2:1023, csn2:10000

@@ -533,6 +533,58 @@ test_snapshot_copy_serialize_csn_xid()
 	pfree(buf);
 }
 
+/*
+ * Regression test: GetSnapshotDataCSN() must set
+ * snapshot->takenDuringRecovery.
+ *
+ * The non-CSN GetSnapshotData() assigns takenDuringRecovery =
+ * RecoveryInProgress() near its end, but the CSN path dispatches to
+ * GetSnapshotDataCSN() and returns before reaching that line, leaving the field
+ * at whatever stale value the reused snapshot struct held.  On a standby that
+ * makes heap scans wrongly trust a page's PD_ALL_VISIBLE flag.
+ *
+ * We catch the missing assignment on an ordinary (primary) test backend, where
+ * RecoveryInProgress() is false: poison the field with true before the call and
+ * assert the builder normalizes it back to false.  Both a plain csn snapshot and
+ * a csn xid snapshot dispatch through GetSnapshotDataCSN(), so we check both.
+ */
+static void
+test_takenDuringRecovery_csn()
+{
+	TransactionId xid1;
+	TransactionId xid3;
+	CommitSeqNo csn1;
+
+	elog(INFO, "------------------------------");
+	elog(INFO, "%s", __FUNCTION__);
+
+	xid1 = FirstNormalTransactionId;
+	xid3 = xid1 + 2;
+	csn1 = POLAR_CSN_FIRST_NORMAL;
+
+	/* plain csn snapshot */
+	polar_csn_mvcc_var_cache_set(xid1, csn1, FullTransactionIdFromEpochAndXid(0, xid3));
+	set_xmin_info(MyProc, InvalidTransactionId, InvalidTransactionId, InvalidTransactionId, InvalidTransactionId);
+	set_pgxact_info(MyProc, InvalidTransactionId, InvalidTransactionId, InvalidCommitSeqNo, 0, DELAY_CHKPT_START);
+	set_snapshot_info(&TestSnapshotDataMVCC);
+	TestSnapshotDataMVCC.takenDuringRecovery = true;	/* poison */
+	GetSnapshotData(&TestSnapshotDataMVCC);
+	elog(INFO, "csn snapshot: takenDuringRecovery=%d (want 0)",
+		 TestSnapshotDataMVCC.takenDuringRecovery ? 1 : 0);
+
+	/* csn xid snapshot */
+	polar_csn_xid_snapshot = true;
+	polar_csn_mvcc_var_cache_set(xid1, csn1, FullTransactionIdFromEpochAndXid(0, xid3));
+	set_xmin_info(MyProc, InvalidTransactionId, InvalidTransactionId, InvalidTransactionId, InvalidTransactionId);
+	set_pgxact_info(MyProc, InvalidTransactionId, InvalidTransactionId, InvalidCommitSeqNo, 0, DELAY_CHKPT_START);
+	set_snapshot_info(&TestSnapshotDataMVCC);
+	TestSnapshotDataMVCC.takenDuringRecovery = true;	/* poison */
+	GetSnapshotData(&TestSnapshotDataMVCC);
+	polar_csn_xid_snapshot = false;
+	elog(INFO, "csn xid snapshot: takenDuringRecovery=%d (want 0)",
+		 TestSnapshotDataMVCC.takenDuringRecovery ? 1 : 0);
+}
+
 static void
 test_polar_csnlog_get_set_csn()
 {
@@ -761,6 +813,8 @@ test_snapshot_mgr()
 	test_XidVisibleInSnapshotCSN_overflow();
 
 	test_snapshot_copy_serialize_csn_xid();
+
+	test_takenDuringRecovery_csn();
 }
 
 PG_FUNCTION_INFO_V1(test_csn);

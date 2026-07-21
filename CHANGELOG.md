@@ -96,6 +96,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Fixed incorrect query results on a hot standby when CSN-based
+  snapshots were enabled. Under some conditions a query on the standby
+  could treat rows as visible when they should not yet have been,
+  returning data that its snapshot should not have seen. (XCOM-195)
 - Fixed a snapshot-isolation violation with CSN xid snapshots (both
   `polar_csn_enable` and `polar_csn_xid_snapshot` on) under high
   concurrency. When more transactions were running than the snapshot's
