@@ -3288,6 +3288,16 @@ GetSnapshotDataCSN(Snapshot snapshot)
 	snapshot->xcnt = 0;
 	snapshot->subxcnt = 0;
 	snapshot->suboverflowed = false;
+
+	/*
+	 * The non-CSN GetSnapshotData() sets takenDuringRecovery near its end,
+	 * but the CSN path returns through here and never reaches it, which would
+	 * leave the field at a stale value from the reused snapshot struct.  On a
+	 * standby that stale value lets heap scans wrongly trust a page's
+	 * PD_ALL_VISIBLE flag and skip the per-tuple visibility test.  Set it
+	 * here, matching the non-CSN path.
+	 */
+	snapshot->takenDuringRecovery = RecoveryInProgress();
 	snapshot->curcid = GetCurrentCommandId(false);
 
 	/*
