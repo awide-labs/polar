@@ -645,11 +645,15 @@ CopySnapshot(Snapshot snapshot)
 	/*
 	 * Setup subXID array. Don't bother to copy it if it had overflowed,
 	 * though, because it's not used anywhere in that case. Except if it's a
-	 * snapshot taken during recovery; all the top-level XIDs are in subxip as
-	 * well in that case, so we mustn't lose them.
+	 * snapshot taken during recovery, or a CSN xid snapshot: both keep all
+	 * their running XIDs in subxip (with xcnt == 0), and for a CSN xid
+	 * snapshot the overflow path (XidInMVCCSnapshotCSN) still searches that
+	 * truncated list, so we mustn't lose it -- dropping it here would leave
+	 * subxcnt > 0 with subxip == NULL and crash that search.
 	 */
 	if (snapshot->subxcnt > 0 &&
-		(!snapshot->suboverflowed || snapshot->takenDuringRecovery))
+		(!snapshot->suboverflowed || snapshot->takenDuringRecovery ||
+		 snapshot->polar_csn_xid_snapshot))
 	{
 		newsnap->subxip = (TransactionId *) ((char *) newsnap + subxipoff);
 		memcpy(newsnap->subxip, snapshot->subxip,
@@ -2183,7 +2187,8 @@ EstimateSnapshotSpace(Snapshot snap)
 	size = add_size(sizeof(SerializedSnapshotData),
 					mul_size(snap->xcnt, sizeof(TransactionId)));
 	if (snap->subxcnt > 0 &&
-		(!snap->suboverflowed || snap->takenDuringRecovery))
+		(!snap->suboverflowed || snap->takenDuringRecovery ||
+		 snap->polar_csn_xid_snapshot))
 		size = add_size(size,
 						mul_size(snap->subxcnt, sizeof(TransactionId)));
 
@@ -2220,10 +2225,12 @@ SerializeSnapshot(Snapshot snapshot, char *start_address)
 
 	/*
 	 * Ignore the SubXID array if it has overflowed, unless the snapshot was
-	 * taken during recovery - in that case, top-level XIDs are in subxip as
-	 * well, and we mustn't lose them.
+	 * taken during recovery, or is a CSN xid snapshot - in both cases the
+	 * running XIDs live in subxip and the CSN overflow path still reads that
+	 * truncated list, so we mustn't lose them.
 	 */
-	if (serialized_snapshot.suboverflowed && !snapshot->takenDuringRecovery)
+	if (serialized_snapshot.suboverflowed && !snapshot->takenDuringRecovery &&
+		!snapshot->polar_csn_xid_snapshot)
 		serialized_snapshot.subxcnt = 0;
 
 	/* Copy struct to possibly-unaligned buffer */
@@ -2458,14 +2465,11 @@ XidInMVCCSnapshot(TransactionId xid, Snapshot snapshot)
 bool
 XidInMVCCSnapshotCSN(TransactionId xid, Snapshot snapshot)
 {
-	uint32		i;
+	Assert(snapshot->xcnt == 0);
 
 	/*
 	 * Make a quick range check to eliminate most XIDs without looking at the
-	 * xip arrays.  Note that this is OK even if we convert a subxact XID to
-	 * its parent below, because a subxact with XID < xmin has surely also got
-	 * a parent with XID < xmin, while one with XID >= xmax must belong to a
-	 * parent that was not yet committed at the time of this snapshot.
+	 * subxip array.
 	 */
 
 	/* Any xid < xmin is not in-progress */
@@ -2475,94 +2479,8 @@ XidInMVCCSnapshotCSN(TransactionId xid, Snapshot snapshot)
 	if (TransactionIdFollowsOrEquals(xid, snapshot->xmax))
 		return true;
 
-	/*
-	 * Snapshot information is stored slightly differently in snapshots taken
-	 * during recovery.
-	 */
-	if (snapshot->xcnt != 0)
-	{
-		/*
-		 * If the snapshot contains full subxact data, the fastest way to
-		 * check things is just to compare the given XID against both subxact
-		 * XIDs and top-level XIDs.  If the snapshot overflowed, we have to
-		 * use pg_subtrans to convert a subxact XID to its parent XID, but
-		 * then we need only look at top-level XIDs not subxacts.
-		 */
-		if (!snapshot->suboverflowed)
-		{
-			/* we have full data, so search subxip */
-			int32		j;
-
-			for (j = 0; j < snapshot->subxcnt; j++)
-			{
-				if (TransactionIdEquals(xid, snapshot->subxip[j]))
-					return true;
-			}
-
-			/* not there, fall through to search xip[] */
-		}
-		else
-		{
-			/*
-			 * Snapshot overflowed, so convert xid to top-level.  This is safe
-			 * because we eliminated too-old XIDs above.
-			 */
-			xid = SubTransGetTopmostTransaction(xid);
-
-			/*
-			 * If xid was indeed a subxact, we might now have an xid < xmin,
-			 * so recheck to avoid an array scan.  No point in rechecking
-			 * xmax.
-			 */
-			if (TransactionIdPrecedes(xid, snapshot->xmin))
-				return false;
-		}
-
-		for (i = 0; i < snapshot->xcnt; i++)
-		{
-			if (TransactionIdEquals(xid, snapshot->xip[i]))
-				return true;
-		}
-	}
-	else
-	{
-		int32		j;
-
-		/*
-		 * In recovery we store all xids in the subxact array because it is by
-		 * far the bigger array, and we mostly don't know which xids are
-		 * top-level and which are subxacts. The xip array is empty.
-		 *
-		 * We start by searching subtrans, if we overflowed.
-		 */
-		if (snapshot->suboverflowed)
-		{
-			/*
-			 * Snapshot overflowed, so convert xid to top-level.  This is safe
-			 * because we eliminated too-old XIDs above.
-			 */
-			xid = SubTransGetTopmostTransaction(xid);
-
-			/*
-			 * If xid was indeed a subxact, we might now have an xid < xmin,
-			 * so recheck to avoid an array scan.  No point in rechecking
-			 * xmax.
-			 */
-			if (TransactionIdPrecedes(xid, snapshot->xmin))
-				return false;
-		}
-
-		/*
-		 * We now have either a top-level xid higher than xmin or an
-		 * indeterminate xid. We don't know whether it's top level or subxact
-		 * but it doesn't matter. If it's present, the xid is visible.
-		 */
-		for (j = 0; j < snapshot->subxcnt; j++)
-		{
-			if (TransactionIdEquals(xid, snapshot->subxip[j]))
-				return true;
-		}
-	}
+	if (pg_lfind32(xid, snapshot->subxip, snapshot->subxcnt))
+		return true;
 
 	return false;
 }

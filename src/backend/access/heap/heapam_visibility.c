@@ -1972,20 +1972,36 @@ XidVisibleInSnapshotCSN(TransactionId xid, Snapshot snapshot,
 
 	*hintstatus = XID_IN_PROGRESS;
 
-	/* If overflowed, we do not use xid snapshot */
-	if (snapshot->polar_csn_xid_snapshot)
-	{
-		bool		is_running;
+	/*
+	 * With a CSN xid snapshot, first consult the precomputed running-xid
+	 * list.  Every entry is an xid that was running when the snapshot was
+	 * taken, so a hit means the xid is in-progress relative to the snapshot
+	 * and is not visible -- this holds even for an overflowed list, whose
+	 * entries are all genuinely running (overflow only drops entries, it
+	 * never adds spurious ones).
+	 */
+	if (snapshot->polar_csn_xid_snapshot &&
+		XidInMVCCSnapshotCSN(xid, snapshot))
+		return false;
 
-		is_running = XidInMVCCSnapshotCSN(xid, snapshot);
-		if (!is_running)
-		{
-			if (TransactionIdDidCommit(xid))
-				*hintstatus = XID_COMMITTED;
-			else
-				*hintstatus = XID_ABORTED;
-		}
-		return (!is_running && (*hintstatus == XID_COMMITTED));
+	/*
+	 * A miss against a complete (non-overflowed) list means the xid had
+	 * already finished before the snapshot, so its current commit status is
+	 * its status as of the snapshot: committed => visible, aborted => not.
+	 *
+	 * A miss against an overflowed list is inconclusive -- the xid may be a
+	 * running xid that was dropped past the cutoff -- so we cannot trust the
+	 * current commit status and fall through to the CSN-log path below, which
+	 * compares the commit CSN against the snapshot CSN and is correct
+	 * regardless of how many xids were running.
+	 */
+	if (snapshot->polar_csn_xid_snapshot && !snapshot->suboverflowed)
+	{
+		if (TransactionIdDidCommit(xid))
+			*hintstatus = XID_COMMITTED;
+		else
+			*hintstatus = XID_ABORTED;
+		return (*hintstatus == XID_COMMITTED);
 	}
 
 	/*
@@ -2030,10 +2046,20 @@ CommittedXidVisibleInSnapshotCSN(TransactionId xid, Snapshot snapshot)
 {
 	CommitSeqNo csn;
 
-	/* If overflowed, we do not use xid snapshot */
+	/*
+	 * With a CSN xid snapshot, consult the precomputed running-xid list.  A
+	 * hit means the xid was running as of the snapshot and is not visible.  A
+	 * miss against a complete list means it committed before the snapshot and
+	 * is visible.  A miss against an overflowed list is inconclusive -- the
+	 * xid may be a running xid dropped past the cutoff -- so fall through to
+	 * the always-correct CSN-log path below.
+	 */
 	if (snapshot->polar_csn_xid_snapshot)
 	{
-		return !XidInMVCCSnapshotCSN(xid, snapshot);
+		if (XidInMVCCSnapshotCSN(xid, snapshot))
+			return false;
+		if (!snapshot->suboverflowed)
+			return true;
 	}
 
 	/*

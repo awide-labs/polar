@@ -6,6 +6,7 @@
 #include "storage/lwlock.h"
 #include "storage/procarray.h"
 #include "storage/proc.h"
+#include "access/heapam.h"
 #include "access/transam.h"
 #include "access/polar_csn_mvcc_vars.h"
 #include "access/polar_csnlog.h"
@@ -342,6 +343,210 @@ test_GetSnapshotData()
 		 (&TestSnapshotDataMVCC)->whenTaken ? 1 : 0, (&TestSnapshotDataMVCC)->lsn ? 1 : 0);
 }
 
+/*
+ * Regression for the overflowed CSN xid snapshot / snapshot-isolation
+ * violation.
+ *
+ * When polar_csn_xid_snapshot is on, GetSnapshotDataCSN() precomputes the
+ * running-xid set into subxip via polar_csnlog_get_running_xids().  If more
+ * xids are running than the array can hold, that scan stops at the budget and
+ * returns a truncated *prefix* of the lowest-numbered running xids -- every
+ * running xid above the cutoff is silently dropped and suboverflowed is set.
+ */
+static void
+test_XidVisibleInSnapshotCSN_overflow()
+{
+	struct SnapshotData snap;
+	TransactionId subxip_buf[2];	/* budget: holds only the 2 lowest running
+									 * xids, so the 3rd running xid is dropped */
+	TransactionId xid_retained1;
+	TransactionId xid_retained2;
+	TransactionId xid_committed_before;
+	TransactionId xid_dropped;
+	CommitSeqNo snapshot_csn;
+	CommitSeqNo csn_before;
+	CommitSeqNo csn_after;
+	XidCommitStatus status;
+	int			nxids = 0;
+
+	/* bool		overflowed = false; */
+	bool		visible;
+
+	elog(INFO, "------------------------------");
+	elog(INFO, "%s", __FUNCTION__);
+
+	xid_retained1 = 100;
+	xid_retained2 = 101;
+	xid_committed_before = 102;
+	xid_dropped = 103;
+
+	snapshot_csn = POLAR_CSN_FIRST_NORMAL + 100;
+	csn_before = POLAR_CSN_FIRST_NORMAL + 50;	/* commits before the snapshot */
+	csn_after = POLAR_CSN_FIRST_NORMAL + 200;	/* commits after the snapshot */
+
+	/*
+	 * With TransactionXmin set at/below our xids, polar_xact_get_csn() (and
+	 * hence TransactionIdDidCommit() under csn mode) resolves them from the
+	 * csnlog rather than the clog.
+	 */
+	set_xmin_info(MyProc, xid_retained1, xid_retained1, InvalidTransactionId, InvalidTransactionId);
+	set_next_xid_info(FullTransactionIdFromEpochAndXid(0, xid_dropped + 1));
+
+	/*
+	 * State as of snapshot time: three transactions in progress
+	 * (xid_retained1, xid_retained2, xid_dropped) plus one that already
+	 * committed before the snapshot (xid_committed_before).
+	 */
+	polar_csnlog_set_csn(xid_retained1, 0, NULL, POLAR_CSN_INPROGRESS, InvalidXLogRecPtr);
+	polar_csnlog_set_csn(xid_retained2, 0, NULL, POLAR_CSN_INPROGRESS, InvalidXLogRecPtr);
+	polar_csnlog_set_csn(xid_committed_before, 0, NULL, csn_before, InvalidXLogRecPtr);
+	polar_csnlog_set_csn(xid_dropped, 0, NULL, POLAR_CSN_INPROGRESS, InvalidXLogRecPtr);
+
+	/*
+	 * Build the CSN xid snapshot the way GetSnapshotDataCSN() does, but with
+	 * a budget of only 2.  The ascending scan records xid_retained1 and
+	 * xid_retained2, then overflows on the 3rd running xid (xid_dropped),
+	 * dropping it.  xid_committed_before committed before snapshot_csn, so it
+	 * is correctly not "running" and never enters the list.  Result: subxip =
+	 * {xid_retained1, xid_retained2}, suboverflowed = true.
+	 */
+	MemSet(&snap, 0, sizeof(snap));
+	snap.xip = NULL;
+	snap.xcnt = 0;
+	snap.subxip = subxip_buf;
+	snap.xmin = xid_retained1;
+	snap.xmax = xid_dropped + 1;
+	snap.polar_snapshot_csn = snapshot_csn;
+	snap.polar_csn_xid_snapshot = true;
+
+	polar_csnlog_get_running_xids(snap.xmin, snap.xmax, snapshot_csn,
+								  lengthof(subxip_buf), &nxids,
+								  snap.subxip, &snap.suboverflowed);
+	snap.subxcnt = nxids;
+
+	elog(INFO, "overflow forced: subxcnt=%d suboverflowed=%d",
+		 snap.subxcnt, snap.suboverflowed);
+
+	/*
+	 * Now xid_dropped commits, *after* the snapshot was taken, with a csn
+	 * past the snapshot csn.  Rows it wrote must remain invisible to this
+	 * snapshot.
+	 */
+	polar_csnlog_set_csn(xid_dropped, 0, NULL, csn_after, InvalidXLogRecPtr);
+
+	/* Control: a retained, still-running xid is correctly not visible. */
+	visible = XidVisibleInSnapshotCSN(xid_retained1, &snap, &status);
+	elog(INFO, "retained running xid %d: visible=%d (want 0)", xid_retained1, visible);
+
+	/* Control: an xid that committed before the snapshot is visible. */
+	visible = XidVisibleInSnapshotCSN(xid_committed_before, &snap, &status);
+	elog(INFO, "committed-before-snapshot xid %d: visible=%d (want 1)", xid_committed_before, visible);
+
+	/*
+	 * The bug: xid_dropped was in-flight when the snapshot was taken but was
+	 * dropped from the overflowed list, so the truncated-list check reports
+	 * it "not running"; having since committed, it is then wrongly judged
+	 * visible. The correct answer, resolved from the csnlog, is invisible.
+	 */
+	visible = XidVisibleInSnapshotCSN(xid_dropped, &snap, &status);
+	elog(INFO, "dropped-then-committed xid %d: visible=%d (want 0)", xid_dropped, visible);
+}
+
+/*
+ * With polar_csn_xid_snapshot the running-xid list lives in subxip, and the
+ * overflow path above reads that (truncated) list.  CopySnapshot() and
+ * SerializeSnapshot() must therefore preserve subxip even when suboverflowed is
+ * set -- exactly as they do for a recovery snapshot.  Without that, on a primary
+ * (takenDuringRecovery == false) CopySnapshot() leaves subxcnt > 0 with
+ * subxip == NULL, and the first visibility check on the copy dereferences NULL
+ * in pg_lfind32().
+ *
+ * Build the same overflowed snapshot as above (distinct xids so the two tests
+ * don't interfere), round-trip it through copy and serialize/restore, and assert
+ * subxip survives and visibility is still answered correctly.
+ */
+static void
+test_snapshot_copy_serialize_csn_xid()
+{
+	struct SnapshotData snap;
+	TransactionId subxip_buf[2];	/* budget of 2: the 3rd running xid is
+									 * dropped */
+	Snapshot	copy;
+	Snapshot	restored;
+	char	   *buf;
+	Size		sz;
+	TransactionId xid_retained = 200;
+	TransactionId xid_retained2 = 201;
+	TransactionId xid_committed_before = 202;
+	TransactionId xid_dropped = 203;
+	CommitSeqNo snapshot_csn = POLAR_CSN_FIRST_NORMAL + 100;
+	CommitSeqNo csn_before = POLAR_CSN_FIRST_NORMAL + 50;
+	CommitSeqNo csn_after = POLAR_CSN_FIRST_NORMAL + 200;
+	XidCommitStatus status;
+	int			nxids = 0;
+	bool		visible;
+
+	elog(INFO, "------------------------------");
+	elog(INFO, "%s", __FUNCTION__);
+
+	set_xmin_info(MyProc, xid_retained, xid_retained, InvalidTransactionId, InvalidTransactionId);
+	set_next_xid_info(FullTransactionIdFromEpochAndXid(0, xid_dropped + 1));
+
+	polar_csnlog_set_csn(xid_retained, 0, NULL, POLAR_CSN_INPROGRESS, InvalidXLogRecPtr);
+	polar_csnlog_set_csn(xid_retained2, 0, NULL, POLAR_CSN_INPROGRESS, InvalidXLogRecPtr);
+	polar_csnlog_set_csn(xid_committed_before, 0, NULL, csn_before, InvalidXLogRecPtr);
+	polar_csnlog_set_csn(xid_dropped, 0, NULL, POLAR_CSN_INPROGRESS, InvalidXLogRecPtr);
+
+	/* takenDuringRecovery stays false: this is the primary case. */
+	MemSet(&snap, 0, sizeof(snap));
+	snap.snapshot_type = SNAPSHOT_MVCC;
+	snap.xip = NULL;
+	snap.xcnt = 0;
+	snap.subxip = subxip_buf;
+	snap.xmin = xid_retained;
+	snap.xmax = xid_dropped + 1;
+	snap.polar_snapshot_csn = snapshot_csn;
+	snap.polar_csn_xid_snapshot = true;
+
+	polar_csnlog_get_running_xids(snap.xmin, snap.xmax, snapshot_csn,
+								  lengthof(subxip_buf), &nxids,
+								  snap.subxip, &snap.suboverflowed);
+	snap.subxcnt = nxids;
+	elog(INFO, "overflow forced: subxcnt=%d suboverflowed=%d",
+		 snap.subxcnt, snap.suboverflowed);
+
+	/* xid_dropped commits after the snapshot csn. */
+	polar_csnlog_set_csn(xid_dropped, 0, NULL, csn_after, InvalidXLogRecPtr);
+
+	/*
+	 * Copy path (CopySnapshot, reached via PushCopiedSnapshot).  The
+	 * retained- xid check reaches pg_lfind32() over subxip and crashes if the
+	 * copy dropped it.
+	 */
+	PushCopiedSnapshot(&snap);
+	copy = GetActiveSnapshot();
+	elog(INFO, "copied: subxcnt=%d subxip_kept=%d (want 2, 1)",
+		 copy->subxcnt, copy->subxip != NULL ? 1 : 0);
+	visible = XidVisibleInSnapshotCSN(xid_retained, copy, &status);
+	elog(INFO, "copied retained running xid %d: visible=%d (want 0)", xid_retained, visible);
+	visible = XidVisibleInSnapshotCSN(xid_dropped, copy, &status);
+	elog(INFO, "copied dropped-then-committed xid %d: visible=%d (want 0)", xid_dropped, visible);
+	PopActiveSnapshot();
+
+	/* Serialize/restore path (parallel workers). */
+	sz = EstimateSnapshotSpace(&snap);
+	buf = palloc(sz);
+	SerializeSnapshot(&snap, buf);
+	restored = RestoreSnapshot(buf);
+	elog(INFO, "restored: subxcnt=%d subxip_kept=%d (want 2, 1)",
+		 restored->subxcnt, restored->subxip != NULL ? 1 : 0);
+	visible = XidVisibleInSnapshotCSN(xid_retained, restored, &status);
+	elog(INFO, "restored retained running xid %d: visible=%d (want 0)", xid_retained, visible);
+	visible = XidVisibleInSnapshotCSN(xid_dropped, restored, &status);
+	elog(INFO, "restored dropped-then-committed xid %d: visible=%d (want 0)", xid_dropped, visible);
+	pfree(buf);
+}
+
 static void
 test_polar_csnlog_get_set_csn()
 {
@@ -566,6 +771,10 @@ test_snapshot_mgr()
 	/* test_GetRecentGlobalDataXminCSN(); */
 
 	test_GetSnapshotData();
+
+	test_XidVisibleInSnapshotCSN_overflow();
+
+	test_snapshot_copy_serialize_csn_xid();
 }
 
 PG_FUNCTION_INFO_V1(test_csn);

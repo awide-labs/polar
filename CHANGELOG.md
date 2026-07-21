@@ -73,6 +73,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Fixed a snapshot-isolation violation with CSN xid snapshots (both
+  `polar_csn_enable` and `polar_csn_xid_snapshot` on) under high
+  concurrency. When more transactions were running than the snapshot's
+  xid list could hold, the list overflowed and dropped the
+  higher-numbered running xids, but visibility checks kept trusting the
+  truncated list instead of the CSN log. A transaction that was in
+  flight when the snapshot was taken could then have its rows wrongly
+  become visible once it committed, with no crash or error. (XCOM-193)
 - Fix NULL-deref in `polar_stat_proxy_info_rt()` and stuck-zero
   counters in `polar_stat_proxy` by restoring shmem allocation and
   writer-side flag flips (XCOM-193)
