@@ -27,6 +27,7 @@
 
 #include "access/polar_logindex.h"
 #include "access/polar_logindex_redo.h"
+#include "access/xlogrecovery.h"
 #include "libpq/pqsignal.h"
 #include "miscadmin.h"
 #include "postmaster/bgworker.h"
@@ -310,20 +311,16 @@ polar_logindex_bg_worker_main(void)
 			 * POLAR_BG_REDO_NOT_START (which additionally requires
 			 * backend_min_replay_lsn to be invalid, see
 			 * polar_logindex_bg_online_promote()). Exiting while the state is
-			 * still POLAR_BG_ONLINE_PROMOTE leaves bg_redo_state stuck
-			 * forever, so polar_cal_cur_consistent_lsn() keeps returning the
-			 * now-frozen replayed_oldest_lsn instead of
+			 * still in a parallel/online-promote state leaves bg_redo_state
+			 * stuck forever, so polar_cal_cur_consistent_lsn() keeps
+			 * returning the now-frozen replayed_oldest_lsn instead of
 			 * polar_max_valid_lsn(), and the shutdown checkpoint hangs
-			 * waiting for consistent_lsn to reach checkpoint.redo. So during
-			 * an online promote keep looping until it is fully done. Note
-			 * this must be limited to POLAR_BG_ONLINE_PROMOTE and not all
-			 * parallel states: a steady-state standby stays in
-			 * POLAR_BG_PARALLEL_REPLAYING and its bg worker must still exit
-			 * on shutdown as before.
+			 * waiting for consistent_lsn to reach checkpoint.redo.
 			 */
 			if (polar_is_replica() ||
 				(replay_done &&
-				 polar_get_bg_redo_state(polar_logindex_redo_instance) != POLAR_BG_ONLINE_PROMOTE))
+				 !(polar_bg_redo_state_is_parallel(polar_logindex_redo_instance) &&
+				   PromoteIsTriggered())))
 			{
 				if (bg_redo_ctl)
 					polar_release_bg_redo_ctl(bg_redo_ctl);
