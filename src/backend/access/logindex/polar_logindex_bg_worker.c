@@ -27,6 +27,7 @@
 #include <unistd.h>
 
 #include "access/polar_logindex_redo.h"
+#include "access/xlogrecovery.h"
 #include "libpq/pqsignal.h"
 #include "miscadmin.h"
 #include "postmaster/auxprocess.h"
@@ -145,14 +146,13 @@ parallel_replay_should_exit(polar_logindex_redo_ctl_t instance)
 	 * the promote has finished: it only means the latest dispatch pass
 	 * drained, not that bg_redo_state has advanced to POLAR_BG_REDO_NOT_START
 	 * (which additionally requires backend_min_replay_lsn to be invalid, see
-	 * polar_logindex_bg_online_promote()). Exiting while the state is still
-	 * POLAR_BG_ONLINE_PROMOTE leaves bg_redo_state stuck forever, so
+	 * polar_logindex_bg_online_promote()). Exiting while the state is still a
+	 * parallel/online-promote one leaves bg_redo_state stuck forever, so
 	 * polar_cal_cur_consistent_lsn() keeps returning the now-frozen
 	 * replayed_oldest_lsn instead of polar_max_valid_lsn(), and the shutdown
 	 * checkpoint hangs waiting for consistent_lsn to reach checkpoint.redo.
-	 * So keep looping until the promote is fully done.
 	 */
-	if (state == POLAR_BG_ONLINE_PROMOTE)
+	if (polar_bg_redo_state_is_parallel(instance) && PromoteIsTriggered())
 		return false;
 
 	/*
