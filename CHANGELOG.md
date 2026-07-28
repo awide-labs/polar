@@ -15,6 +15,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Fixed `postgres -C shared_memory_size_in_huge_pages` (and
+  `-C shared_memory_size`) aborting at startup on a shared-storage node
+  with `PANIC: control file ".../global/pg_control" not exist`. These
+  values are computed from the control file on shared storage, which is
+  now mounted read-only before it is read. (XCOM-235)
+- Fixed incorrect operation of the XLog queue when it becomes
+  completely full: a reader could mistake a stale entry for a new one
+  and consume invalid WAL data instead of waiting (XCOM-235)
 - Fixed `pg_ctl promote` of a standby returning before recovery finished,
   so a query right after promote could still fail or see the server in
   recovery (XCOM-240)

@@ -123,6 +123,7 @@ typedef struct pfsd_mount_arg_t
 
 extern PolarNodeType polar_local_node_type;
 extern bool polar_mount_pfs_readonly_mode;
+extern bool polar_vfs_force_readonly_mount;
 extern uint32 polar_local_vfs_state;
 extern int	polar_vfs_switch;
 extern char *polar_datadir;
