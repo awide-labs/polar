@@ -20,6 +20,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Fixed `postgres -C shared_memory_size_in_huge_pages` (and
+  `-C shared_memory_size`) aborting at startup on a shared-storage node
+  with `PANIC: control file ".../global/pg_control" not exist`. These
+  values are computed from the control file on shared storage, which is
+  now mounted read-only before it is read. (XCOM-235)
 - Fixed a rare failure of the in-memory WAL queue when sessions waiting
   for queue space had reserved most of it. The primary could restart with
   `PANIC: For xlog send queue there should be only WAL META`, all writing

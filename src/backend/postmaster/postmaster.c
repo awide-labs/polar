@@ -684,6 +684,7 @@ PostmasterMain(int argc, char *argv[])
 	bool		listen_addr_saved = false;
 	int			i;
 	char	   *output_config_variable = NULL;
+	bool		runtime_computed_variable = false;
 
 	InitProcessGlobals();
 
@@ -993,10 +994,24 @@ PostmasterMain(int argc, char *argv[])
 	}
 
 	/*
+	 * Decide up front whether "-C guc" names a runtime-computed GUC: ordinary
+	 * GUCs print and exit right after SelectConfigFiles() and never touch
+	 * shared storage, but a runtime-computed one reaches ReadControlFile(),
+	 * which reads pg_control from shared storage.  For those the VFS gets
+	 * mounted, read-only.  GetConfigOptionFlags() is safe this early: it only
+	 * consults the GUC table built by InitializeGUCOptions() above.
+	 */
+	if (output_config_variable != NULL)
+		runtime_computed_variable =
+			(GetConfigOptionFlags(output_config_variable, true) & GUC_RUNTIME_COMPUTED) != 0;
+	polar_vfs_force_readonly_mount = runtime_computed_variable;
+
+	/*
 	 * Locate the proper configuration files and data directory, and read
 	 * postgresql.conf for the first time.
 	 */
-	if (!SelectConfigFiles(userDoption, progname, output_config_variable != NULL))
+	if (!SelectConfigFiles(userDoption, progname,
+						   output_config_variable != NULL && !runtime_computed_variable))
 		ExitPostmaster(2);
 
 	if (output_config_variable != NULL)
@@ -1012,9 +1027,7 @@ PostmasterMain(int argc, char *argv[])
 		 * on running servers for those GUCs, but using this option now would
 		 * lead to incorrect results for them.
 		 */
-		int			flags = GetConfigOptionFlags(output_config_variable, true);
-
-		if ((flags & GUC_RUNTIME_COMPUTED) == 0)
+		if (!runtime_computed_variable)
 		{
 			/*
 			 * "-C guc" was specified, so print GUC's value and exit.  No
