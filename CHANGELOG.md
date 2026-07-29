@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- Increase the default value of `polar_wal_buffer_insert_locks` from 8 to
+  256. A higher number of WAL insertion locks can improve throughput when
+  many sessions commit at once, particularly with WAL pipelining enabled and
+  fast storage. Changing the setting requires a server restart. (XCOM-238)
+
 ### Fixed
 
 - Fixed `pg_ctl promote` of a standby returning before recovery finished,

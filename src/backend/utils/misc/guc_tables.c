@@ -75,6 +75,7 @@
 #include "storage/bufmgr.h"
 #include "storage/fd.h"
 #include "storage/large_object.h"
+#include "storage/lwlock.h"
 #include "storage/pg_shmem.h"
 #include "storage/predicate.h"
 #include "storage/standby.h"
@@ -3223,7 +3224,12 @@ struct config_int ConfigureNamesInt[] =
 			POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_CHANGEABLE
 		},
 		&polar_wal_buffer_insert_locks,
-		8, 1, INT_MAX,
+
+		/*
+		 * Keep below MAX_SIMUL_LWLOCKS: WALInsertLockAcquireExclusive() takes
+		 * them all at once.
+		 */
+		256, 1, MAX_SIMUL_LWLOCKS / 2,
 		NULL, NULL, NULL
 	},
 

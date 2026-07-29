@@ -108,6 +108,15 @@ extern PGDLLIMPORT int NamedLWLockTrancheRequests;
 /* POLAR */
 #define NUM_SYSLOGGER_LOCK_PARTITIONS 16
 
+/*
+ * Maximum number of LWLocks a single backend may hold at once.  The
+ * per-process held_lwlocks[] array uses this to track locks for release during
+ * error recovery.  Normally only a few locks are held at once, but the number
+ * can be much higher; for example, pg_buffercache locks all buffer partitions
+ * simultaneously.
+ */
+#define MAX_SIMUL_LWLOCKS	1024
+
 /* Offsets for various chunks of preallocated lwlocks. */
 #define BUFFER_MAPPING_LWLOCK_OFFSET	NUM_INDIVIDUAL_LWLOCKS
 #define LOCK_MANAGER_LWLOCK_OFFSET		\

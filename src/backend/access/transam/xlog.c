@@ -170,7 +170,7 @@ bool		XLOG_DEBUG = false;
 int			wal_segment_size = DEFAULT_XLOG_SEG_SIZE;
 
 /* POLAR */
-int			polar_wal_buffer_insert_locks = 8;
+int			polar_wal_buffer_insert_locks = 256;
 
 /* POLAR end */
 

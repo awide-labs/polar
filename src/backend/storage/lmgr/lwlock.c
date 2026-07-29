@@ -227,14 +227,6 @@ static int	LWLockTrancheNamesAllocated = 0;
 LWLockPadded *MainLWLockArray = NULL;
 LWLockPadded *SysLoggerWriterLWLockArray = NULL;
 
-/*
- * We use this structure to keep track of locked LWLocks for release
- * during error recovery.  Normally, only a few will be held at once, but
- * occasionally the number can be much higher; for example, the pg_buffercache
- * extension locks all buffer partitions simultaneously.
- */
-#define MAX_SIMUL_LWLOCKS	200
-
 /* struct representing the LWLocks we're holding */
 typedef struct LWLockHandle
 {
