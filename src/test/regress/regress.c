@@ -799,6 +799,30 @@ test_atomic_uint32(void)
 	EXPECT_EQ_U32(pg_atomic_fetch_and_u32(&var, ~0), 0);
 }
 
+#ifdef PG_HAVE_ATOMIC_U128_SUPPORT
+static void
+test_atomic_uint128(void)
+{
+	pg_atomic_uint128 var;
+	uint128		initial = ((uint128) 1 << 96) | 1;
+	uint128		replacement = ((uint128) 2 << 96) | 2;
+	uint128		expected = 0;
+
+	pg_atomic_init_u128(&var, initial);
+
+	/* A failed CAS must replace expected with the observed value. */
+	EXPECT_TRUE(!pg_atomic_compare_exchange_u128(&var, &expected,
+												 replacement));
+	EXPECT_TRUE(expected == initial);
+
+	EXPECT_TRUE(pg_atomic_compare_exchange_u128(&var, &expected,
+												replacement));
+	expected = initial;
+	EXPECT_TRUE(!pg_atomic_compare_exchange_u128(&var, &expected, initial));
+	EXPECT_TRUE(expected == replacement);
+}
+#endif
+
 static void
 test_atomic_uint64(void)
 {
@@ -1008,6 +1032,10 @@ test_atomic_ops(PG_FUNCTION_ARGS)
 	test_atomic_uint32();
 
 	test_atomic_uint64();
+
+#ifdef PG_HAVE_ATOMIC_U128_SUPPORT
+	test_atomic_uint128();
+#endif
 
 	/*
 	 * Arguably this shouldn't be tested as part of this function, but it's

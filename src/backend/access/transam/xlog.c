@@ -444,6 +444,135 @@ typedef union WALInsertLockPadded
 	char		pad[PG_CACHE_LINE_SIZE];
 } WALInsertLockPadded;
 
+/*
+ * WAL reservation counter (ReserveXLogInsertLocation)
+ */
+
+/*
+ * The reservation path requires a lock-free 128-bit compare-and-swap.  The
+ * port/atomics API intentionally provides no locking fallback for this width.
+ */
+#if !defined(PG_HAVE_ATOMIC_U128_SUPPORT)
+#error "PolarDB WAL reservation needs lock-free 128-bit atomic support"
+#endif
+
+/*
+ * Packed WAL reservation counter.
+ *
+ * One 128-bit compare-and-swap advances three fields together, so a reserver
+ * gets its byte range, its queue position and its predecessor's size from a
+ * single atomic -- no ticket, no cell ring, no backward walk, and no waiting
+ * on the backend ahead of it.
+ *
+ *   [ last_size:32 ][ queue_bytes:48 ][ wal_bytes:48 ]
+ *     bits 96..127     bits 48..95      bits 0..47
+ *
+ * What makes three full-width counters fit in 128 bits is rebasing them only
+ * when no reservation can be in flight: normally while every insertion lock is
+ * held, or during startup before WAL insertion is enabled.
+ *
+ * The field widths: wal_bytes and queue_bytes get 48 bits, which is 256TB per
+ * epoch and re-seeds with a terabyte of slack.  last_size gets 32, which covers
+ * everything -- ReserveXLogInsertLocation takes an int size, and the largest gap
+ * a re-seed can describe is one xlog switch's segment remainder, bounded by
+ * WalSegMaxSize (1GB).
+ *
+ * wal_bytes deliberately occupies the low field: readers that only want the
+ * frontier (polar_xlog_current_bytepos) can then take it from a plain aligned
+ * 64-bit load instead of tearing a 128-bit read.
+ */
+#define POLAR_RESERVE_FIELD_BITS		48
+#define POLAR_RESERVE_FIELD_MASK		((UINT64CONST(1) << POLAR_RESERVE_FIELD_BITS) - 1)
+#define POLAR_RESERVE_WAL_BYTES(v)		((uint64) ((v) & POLAR_RESERVE_FIELD_MASK))
+#define POLAR_RESERVE_QUEUE_BYTES(v)	((uint64) (((v) >> POLAR_RESERVE_FIELD_BITS) & POLAR_RESERVE_FIELD_MASK))
+#define POLAR_RESERVE_LAST_SIZE(v)		((uint32) ((v) >> (2 * POLAR_RESERVE_FIELD_BITS)))
+#define POLAR_RESERVE_PACK(w, q, s) \
+	(((uint128) (uint32) (s) << (2 * POLAR_RESERVE_FIELD_BITS)) | \
+	 ((uint128) (uint64) (q) << POLAR_RESERVE_FIELD_BITS) | \
+	 (uint128) (uint64) (w))
+
+/*
+ * Re-seed once either field is within 1TB of overflowing into its neighbour.
+ *
+ * The slack has a floor as well as a ceiling: polar_xlog_reserve_claim() runs
+ * its overflow check on a read that may be torn, which can overstate
+ * queue_bytes by just under 64kB, so anything at or below that would let the
+ * check fire on a counter that had not actually overflowed.  See the tearing
+ * argument there before narrowing this.
+ */
+#define POLAR_RESERVE_RESEED_AT		(POLAR_RESERVE_FIELD_MASK - (UINT64CONST(1) << 40))
+
+typedef struct XLogReserveCounter
+{
+	/* The one contended line on this path. */
+	pg_atomic_uint128 packed;
+	char		packed_pad[PG_CACHE_LINE_SIZE - sizeof(pg_atomic_uint128)];
+
+	/*
+	 * Written during startup before WAL insertion is enabled, or while every
+	 * insertion lock is held.  Read on every reservation, so these stay in
+	 * shared state in each core's cache and cost no coherence traffic.  Kept
+	 * off the packed counter's line for that reason.
+	 */
+	uint64		base_bytes;		/* WAL byte position the low field counts from */
+	uint64		base_queue;		/* queue position at the last re-seed */
+
+	/*
+	 * Pairs base_bytes with the packed counter for readers that hold no
+	 * insertion lock.  A re-seed moves both, and the frontier is their sum,
+	 * so a reader that catches one word from before the re-seed and the other
+	 * from after computes a position off by a whole epoch.  Reservers are
+	 * excluded from a re-seed by the insertion locks; these readers are not.
+	 * Lives on the base line, which is written only at a re-seed, so the
+	 * reader's load of it costs nothing extra.
+	 */
+	pg_seqlock	base_seq;
+	char		base_pad[PG_CACHE_LINE_SIZE - 2 * sizeof(uint64) - sizeof(pg_seqlock)];
+} XLogReserveCounter;
+
+/* Points to the reservation counter in shared memory (NULL until init). */
+static XLogReserveCounter *polar_xlog_reserve_counter = NULL;
+
+/* Return the numeric low 64 bits with one aligned plain load. */
+static inline uint64
+polar_xlog_reserve_low64(XLogReserveCounter *ct)
+{
+	volatile uint64 *words = (volatile uint64 *) &ct->packed.value;
+
+#ifdef WORDS_BIGENDIAN
+	return words[1];
+#else
+	return words[0];
+#endif
+}
+
+/*
+ * How far WAL has been reserved.  The packed counter is the allocation itself,
+ * so the frontier is read from it rather than from a position someone had to
+ * publish, and callers need not hold an insertion lock.
+ *
+ * wal_bytes lives in the low 64 bits, so a plain aligned load reads it
+ * coherently without a 128-bit access -- but the frontier is base_bytes + that
+ * field, and a re-seed moves both, so the pair still needs the seqlock.
+ */
+static inline uint64
+polar_xlog_current_bytepos(void)
+{
+	XLogReserveCounter *ct = polar_xlog_reserve_counter;
+	uint64		seq;
+	uint64		base;
+	uint64		lo;
+
+	do
+	{
+		seq = pg_seqlock_read_begin(&ct->base_seq);
+		base = ct->base_bytes;
+		lo = polar_xlog_reserve_low64(ct);
+	} while (pg_seqlock_read_retry(&ct->base_seq, seq));
+
+	return base + (lo & POLAR_RESERVE_FIELD_MASK);
+}
+
 /* PolarDB wal pipeline begin */
 
 #include "postmaster/polar_wal_pipeliner.h"
@@ -527,30 +656,14 @@ static SessionBackupState sessionBackupState = SESSION_BACKUP_NONE;
 
 /*
  * Shared state data for WAL insertion.
+ *
+ * The end of reserved WAL and the start of the preceding record are stored in
+ * XLogReserveCounter.  Read the first with polar_xlog_current_bytepos() and the
+ * pair with polar_xlog_reserve_tail(); there is no second copy here to keep in
+ * step.
  */
 typedef struct XLogCtlInsert
 {
-	slock_t		insertpos_lck;	/* protects CurrBytePos and PrevBytePos */
-
-	/*
-	 * CurrBytePos is the end of reserved WAL. The next record will be
-	 * inserted at that position. PrevBytePos is the start position of the
-	 * previously inserted (or rather, reserved) record - it is copied to the
-	 * prev-link of the next record. These are stored as "usable byte
-	 * positions" rather than XLogRecPtrs (see XLogBytePosToRecPtr()).
-	 */
-	pg_atomic_uint64 CurrBytePos;
-	pg_atomic_uint64 PrevBytePos;
-
-	/*
-	 * Make sure the above heavily-contended spinlock and byte positions are
-	 * on their own cache line. In particular, the RedoRecPtr and full page
-	 * write variables below should be on a different cache line. They are
-	 * read on every WAL insertion, but updated rarely, and we don't want
-	 * those reads to steal the cache line containing Curr/PrevBytePos.
-	 */
-	char		pad[PG_CACHE_LINE_SIZE];
-
 	/*
 	 * fullPageWrites is the authoritative value used by all backends to
 	 * determine whether to write full-page image to WAL. This shared value,
@@ -1747,7 +1860,7 @@ polar_wal_pipeline_notify(int ident)
 XLogRecPtr
 polar_wal_pipeline_get_current_insert_lsn(void)
 {
-	return XLogBytePosToEndRecPtr(pg_atomic_read_u64(&XLogCtl->Insert.CurrBytePos));
+	return XLogBytePosToEndRecPtr(polar_xlog_current_bytepos());
 }
 
 /* POLAR: get the end of the last valid record */
@@ -1760,7 +1873,7 @@ polar_get_last_valid_lsn(void)
 	if (polar_is_datamax())
 		polar_last_valid_lsn = polar_datamax_get_last_valid_received_lsn(polar_datamax_ctl, NULL);
 	else if (polar_is_primary())
-		polar_last_valid_lsn = XLogBytePosToEndRecPtr(pg_atomic_read_u64(&XLogCtl->Insert.CurrBytePos));
+		polar_last_valid_lsn = XLogBytePosToEndRecPtr(polar_xlog_current_bytepos());
 	/* standby mode */
 	else
 		polar_last_valid_lsn = GetXLogReplayRecPtr(NULL);
@@ -1931,8 +2044,8 @@ XLogInsertRecord(XLogRecData *rdata,
 	 * record to the shared WAL buffer cache is a two-step process:
 	 *
 	 * 1. Reserve the right amount of space from the WAL. The current head of
-	 *	  reserved space is kept in Insert->CurrBytePos, and is protected by
-	 *	  insertpos_lck.
+	 *	  reserved space is kept in the packed reservation counter, which hands
+	 *	  it out with a single CAS.
 	 *
 	 * 2. Copy the record to the reserved WAL space. This involves finding the
 	 *	  correct WAL buffer containing the reserved space, and copying the
@@ -2266,15 +2379,253 @@ XLogInsertRecord(XLogRecData *rdata,
 }
 
 /*
+ * Is it safe to read or restart the counter as a whole -- that is, can no other
+ * process be part-way through claiming a reservation?
+ *
+ * Current callers exclude reservers in one of two ways.  Normal runtime callers
+ * hold every insertion lock.  StartupXLOG's unlocked callers run before it
+ * enables WAL insertion locally, while other processes are still excluded by
+ * recovery.
+ *
+ * The recovery-state half of POLAR_RESERVE_QUIET() is only a partial assertion
+ * for those StartupXLOG callers; being in recovery does not by itself make the
+ * counter idle.  StartupXLOG later enables insertion before publishing
+ * RECOVERY_STATE_DONE, and the end-of-recovery checkpointer also enables it
+ * temporarily (while holding every insertion lock).  A new caller reached from
+ * any other process, or from inside a reservation, must hold every insertion
+ * lock.
+ *
+ * The assertion reads SharedRecoveryState rather than calling
+ * XLogInsertAllowed(), which caches its answer, can run InitXLOGAccess(), and
+ * can spin waiting for the WAL pipeliner -- none of it acceptable here.
+ */
+#define POLAR_RESERVE_QUIET() \
+	(holdingAllLocks || XLogCtl->SharedRecoveryState != RECOVERY_STATE_DONE)
+
+/*
+ * The tail of the counter: the start of the last record reserved, and the
+ * queue position just past the last packet claimed.  A reservation in flight
+ * would move both, so callers must exclude them -- see POLAR_RESERVE_QUIET().
+ */
+static void
+polar_xlog_reserve_tail(uint64 *prev_start, uint64 *qend)
+{
+	XLogReserveCounter *ct = polar_xlog_reserve_counter;
+	uint128		v = ct->packed.value;
+
+	Assert(POLAR_RESERVE_QUIET());
+
+	*prev_start = ct->base_bytes + POLAR_RESERVE_WAL_BYTES(v) - POLAR_RESERVE_LAST_SIZE(v);
+	*qend = ct->base_queue + POLAR_RESERVE_QUEUE_BYTES(v);
+}
+
+/*
+ * Restart both byte fields from a known position.  No reservation may be in
+ * flight -- see POLAR_RESERVE_QUIET().
+ *
+ * last_size is seeded with the gap between the record we are restarting from
+ * and the frontier, which is what lets the first reservation of the new epoch
+ * derive its xl_prev by the ordinary subtraction instead of a special case --
+ * including the very first one after startup.
+ */
+static void
+polar_xlog_reserve_reseed(uint64 end, uint64 prev_start, uint64 qend)
+{
+	XLogReserveCounter *ct = polar_xlog_reserve_counter;
+
+	Assert(POLAR_RESERVE_QUIET());
+
+	/*
+	 * last_size is 32 bits wide, so a gap that did not fit would truncate and
+	 * hand the first record of the new epoch a wrong xl_prev -- a broken WAL
+	 * chain that nothing downstream would notice.  Checked rather than
+	 * asserted: the guarantee lives in the callers, not here.  Each passes
+	 * either a segment remainder (bounded by wal_segment_size) or one
+	 * record's length (bounded by xl_tot_len, or by last_size itself, both
+	 * uint32), and a future caller could break that without ever looking at
+	 * this function. On a path this cold the compare is worth knowing it
+	 * still holds.  An end < prev_start that wrapped the subtraction lands
+	 * here too.
+	 */
+	if (unlikely(end < prev_start || end - prev_start > PG_UINT32_MAX))
+		elog(PANIC, "WAL reservation re-seed gap out of range: end is 0x%lX, prev_start is 0x%lX",
+			 end, prev_start);
+
+	/*
+	 * The insertion locks keep reservers out, but not the lock-free readers
+	 * in polar_xlog_current_bytepos(); the seqlock is what stops them pairing
+	 * the old base with the new byte field, or the reverse.  The frontier the
+	 * caller passes in as 'end' was read *before* this bracket opened --
+	 * reading it in here would spin against ourselves.
+	 */
+	pg_seqlock_write_begin(&ct->base_seq);
+
+	ct->base_bytes = end;
+	ct->base_queue = qend;
+	ct->packed.value = POLAR_RESERVE_PACK(0, 0, (uint32) (end - prev_start));
+
+	pg_seqlock_write_end(&ct->base_seq);
+}
+
+/*
+ * Where the xlog queue's claim marker currently stands, or 0 when there is no
+ * queue.  The qend to seed a fresh epoch with, for the callers in recovery that
+ * have no earlier epoch to carry one over from.
+ */
+static uint64
+polar_xlog_queue_pwrite(void)
+{
+	if (polar_logindex_redo_instance == NULL ||
+		polar_logindex_redo_instance->xlog_queue == NULL)
+		return 0;
+
+	return pg_atomic_read_u64(&polar_logindex_redo_instance->xlog_queue->pwrite);
+}
+
+/*
+ * Called where every insertion lock is held, to restart the byte fields before
+ * either can overflow into its neighbour.  Normally a compare and a return.
+ */
+static void
+polar_xlog_reserve_maybe_reseed(void)
+{
+	uint128		v = polar_xlog_reserve_counter->packed.value;
+	uint64		prev_start;
+	uint64		qend;
+
+	if (likely(POLAR_RESERVE_WAL_BYTES(v) < POLAR_RESERVE_RESEED_AT &&
+			   POLAR_RESERVE_QUEUE_BYTES(v) < POLAR_RESERVE_RESEED_AT))
+		return;
+
+	polar_xlog_reserve_tail(&prev_start, &qend);
+	polar_xlog_reserve_reseed(polar_xlog_current_bytepos(), prev_start, qend);
+}
+
+/*
+ * Claim a reservation: one 128-bit CAS yields the byte range, the queue
+ * position and the previous record's size, so nothing has to be published to a
+ * side structure and nothing has to be read back from one.
+ *
+ * The loop retries where a fetch_add would not, which is the trade: a retry
+ * costs one more read of a line we already hold, where the walk it replaces
+ * cost a chain of lines other cores were dirtying.
+ *
+ * Retries back off through perform_spin_delay() rather than spinning flat out.
+ * Without it the loop issues back-to-back compare-and-swaps without a spin
+ * delay and never yields the CPU.  On an oversubscribed machine the losers can
+ * starve the processes that consume what they are producing (the WAL
+ * pipeliner and saver).
+ * The status is initialized only once we have actually lost a race, so the
+ * uncontended path is unchanged.
+ */
+static inline void
+polar_xlog_reserve_claim(int size, size_t pkt_size, polar_ringbuf_t xlog_queue,
+						 uint64 *start, uint64 *end, uint64 *prev, uint64 *idx)
+{
+	XLogReserveCounter *ct = polar_xlog_reserve_counter;
+	uint64		add_q = (xlog_queue != NULL) ? (uint64) pkt_size : 0;
+	SpinDelayStatus delayStatus;
+	bool		contended = false;
+	uint128		oldv;
+	uint128		newv;
+	uint64		wal;
+	uint64		qb;
+	uint32		last;
+	int			delays_before;
+
+	/*
+	 * A plain 128-bit load, not an atomic one: on x86-64 this is two 64-bit
+	 * loads and can tear against a concurrent CAS.  That is deliberate, but
+	 * the reasoning constrains edits to both this line and
+	 * POLAR_RESERVE_RESEED_AT, so it is written out here.
+	 *
+	 * wal_bytes (packed bits 0..47) and last_size (96..127) each sit wholly
+	 * within one 64-bit half and so cannot tear internally.  Only queue_bytes
+	 * straddles the boundary, with just its low 16 bits in the other half --
+	 * so a torn queue_bytes differs from a value the counter genuinely held
+	 * by less than 64kB.  That bound does not depend on how many reservations
+	 * landed between the two loads: whichever half was read second
+	 * contributes a real snapshot, and the composite can differ from it only
+	 * in those 16 bits.
+	 *
+	 * Nothing torn escapes to the caller.  wal, qb and last are consumed only
+	 * after the CAS below succeeds, and it succeeds only if all 128 bits
+	 * still equalled oldv -- which is proof that oldv was a consistent
+	 * snapshot after all.
+	 *
+	 * The overflow check is the one consumer that runs *before* the CAS, and
+	 * therefore the only place tearing could do harm.  It cannot: 64kB of
+	 * slop cannot carry a field across a threshold sitting a terabyte below
+	 * it.  Keep the re-seed slack far above 64kB and that stays true.
+	 *
+	 * After a failed CAS, oldv contains the atomic value observed by the CAS
+	 * and is reused while actively spinning.  If backoff sleeps, refresh oldv
+	 * with another plain load so the first attempt after the sleep does not
+	 * use a predictably stale value; that load is protected by the same
+	 * argument.
+	 */
+	oldv = *((volatile uint128 *) &ct->packed.value);
+
+	for (;;)
+	{
+		wal = POLAR_RESERVE_WAL_BYTES(oldv);
+		qb = POLAR_RESERVE_QUEUE_BYTES(oldv);
+		last = POLAR_RESERVE_LAST_SIZE(oldv);
+
+		/*
+		 * Neither field may carry into its neighbour.  Re-seeding happens
+		 * wherever all insertion locks are held, with a terabyte of slack; if
+		 * that somehow never ran, stop before publishing a value that would
+		 * hand out corrupt positions to everyone after us.
+		 */
+		if (unlikely(wal + (uint64) size > POLAR_RESERVE_FIELD_MASK ||
+					 qb + add_q > POLAR_RESERVE_FIELD_MASK))
+			elog(PANIC, "WAL reservation counter overflowed");
+
+		newv = POLAR_RESERVE_PACK(wal + (uint64) size, qb + add_q, (uint32) size);
+		if (likely(pg_atomic_compare_exchange_u128(&ct->packed, &oldv, newv)))
+			break;
+
+		if (unlikely(!contended))
+		{
+			init_local_spin_delay(&delayStatus);
+			contended = true;
+		}
+		delays_before = delayStatus.delays;
+		perform_spin_delay(&delayStatus);
+		if (delayStatus.delays != delays_before)
+			oldv = *((volatile uint128 *) &ct->packed.value);
+	}
+
+	if (unlikely(contended))
+		finish_spin_delay(&delayStatus);
+
+	*start = ct->base_bytes + wal;
+	*end = *start + size;
+	*prev = *start - last;
+	*idx = ct->base_queue + qb;
+
+	/*
+	 * Account our packet in the queue's claim marker.  Our position came from
+	 * the packed counter, so this add orders nothing -- it only keeps pwrite
+	 * tracking what has been claimed, which is what consumers use to bound
+	 * how far they may look before confirming each packet with its READY
+	 * flag. Addition commutes, so the frontier lands in the same place
+	 * whatever order reservations finish in.
+	 */
+	if (xlog_queue != NULL)
+		pg_atomic_fetch_add_u64(&xlog_queue->pwrite, (uint64) pkt_size);
+}
+
+/*
  * Reserves the right amount of space for a record of given size from the WAL.
  * *StartPos is set to the beginning of the reserved section, *EndPos to
  * its end+1. *PrevPtr is set to the beginning of the previous record; it is
  * used to set the xl_prev of this record.
  *
- * This is the performance critical part of XLogInsert that must be serialized
- * across backends. The rest can happen mostly in parallel. Try to keep this
- * section as short as possible, insertpos_lck can be heavily contended on a
- * busy system.
+ * This is the performance critical part of XLogInsert.  Concurrent reservations
+ * contend on the atomic reservation counter; the rest can happen mostly in
+ * parallel.
  *
  * NB: The space calculation here must match the code in CopyXLogRecordToWAL,
  * where we actually copy the record to the reserved space.
@@ -2287,7 +2638,6 @@ static pg_always_inline void
 ReserveXLogInsertLocation(int size, XLogRecPtr *StartPos, XLogRecPtr *EndPos,
 						  XLogRecPtr *PrevPtr, uint32 polar_rbuf_len, uint64 *polar_rbuf_pos)
 {
-	XLogCtlInsert *Insert = &XLogCtl->Insert;
 	uint64		startbytepos;
 	uint64		endbytepos;
 	uint64		prevbytepos;
@@ -2307,44 +2657,27 @@ ReserveXLogInsertLocation(int size, XLogRecPtr *StartPos, XLogRecPtr *EndPos,
 	Assert(size > SizeOfXLogRecord);
 
 	/*
-	 * The duration the spinlock needs to be held is minimized by minimizing
-	 * the calculations that have to be done while holding the lock. The
-	 * current tip of reserved WAL is kept in CurrBytePos, as a byte position
-	 * that only counts "usable" bytes in WAL, that is, it excludes all WAL
-	 * page headers. The mapping between "usable" byte positions and physical
-	 * positions (XLogRecPtrs) can be done outside the locked region, and
-	 * because the usable byte position doesn't include any headers, reserving
-	 * X bytes from WAL is almost as simple as "CurrBytePos += X".
+	 * The work done before the compare-and-swap is minimized by limiting the
+	 * calculations needed to construct the new packed value. The current tip
+	 * of reserved WAL is a byte position that only counts "usable" bytes in
+	 * WAL, that is, it excludes all WAL page headers. The mapping between
+	 * "usable" byte positions and physical positions (XLogRecPtrs) can be
+	 * done afterwards, and because the usable byte position doesn't include
+	 * any headers, reserving X bytes from WAL is almost as simple as adding
+	 * X.
 	 *
-	 * The xlog queue reservation is optimistic: inside the spinlock we only
-	 * advance pwrite (and CurrBytePos/PrevBytePos), without checking whether
-	 * the queue actually has free space.  pread is not read inside the lock,
-	 * so there is no cross-cache-line contention with readers.  pwrite may
+	 * The xlog queue reservation is optimistic: the same atomic that hands
+	 * out the byte range hands out the queue position, without checking
+	 * whether the queue actually has free space.  pread is not read here, so
+	 * there is no cross-cache-line contention with readers.  pwrite may
 	 * temporarily run ahead of what readers have consumed; backpressure is
 	 * applied later by polar_ringbuf_wait_for_space() in XLogInsertRecord,
 	 * after all WAL insert locks are released.  Because that wait holds no
 	 * insert locks, walwriter and the logindex saver can make progress and
 	 * the queue can drain — no deadlock with walwriter+logindex writer.
 	 */
-	SpinLockAcquire(&Insert->insertpos_lck);
-
-	if (likely(xlog_queue))
-	{
-		/*
-		 * Reserve queue space: just advance pwrite, no free-space check. The
-		 * spinlock serializes producers; no need for an atomic RMW.
-		 */
-		idx = pg_atomic_read_u64(&xlog_queue->pwrite);
-		pg_atomic_write_u64(&xlog_queue->pwrite, idx + polar_rbuf_len);
-	}
-
-	startbytepos = pg_atomic_read_u64(&Insert->CurrBytePos);
-	endbytepos = startbytepos + size;
-	prevbytepos = pg_atomic_read_u64(&Insert->PrevBytePos);
-	pg_atomic_write_u64(&Insert->CurrBytePos, endbytepos);
-	pg_atomic_write_u64(&Insert->PrevBytePos, startbytepos);
-
-	SpinLockRelease(&Insert->insertpos_lck);
+	polar_xlog_reserve_claim(size, polar_rbuf_len, xlog_queue,
+							 &startbytepos, &endbytepos, &prevbytepos, &idx);
 
 	if (likely(xlog_queue))
 		*polar_rbuf_pos = idx;
@@ -2375,11 +2708,11 @@ static bool
 ReserveXLogSwitch(XLogRecPtr *StartPos, XLogRecPtr *EndPos, XLogRecPtr *PrevPtr,
 				  uint32 polar_rbuf_len, uint64 *polar_rbuf_pos)
 {
-	XLogCtlInsert *Insert = &XLogCtl->Insert;
 	uint64		startbytepos;
 	uint64		endbytepos;
 	uint64		prevbytepos;
 	uint64		idx = 0;
+	uint64		qend;
 	uint32		size = MAXALIGN(SizeOfXLogRecord);
 	XLogRecPtr	ptr;
 	uint32		segleft;
@@ -2393,35 +2726,28 @@ ReserveXLogSwitch(XLogRecPtr *StartPos, XLogRecPtr *EndPos, XLogRecPtr *PrevPtr,
 	}
 
 	/*
-	 * These calculations are a bit heavy-weight to be done while holding a
-	 * spinlock, but since we're holding all the WAL insertion locks, there
-	 * are no other inserters competing for it. GetXLogInsertRecPtr() does
-	 * compete for it, but that's not called very frequently.
+	 * These calculations are a bit heavy-weight to be done inline, but since
+	 * we're holding all the WAL insertion locks there are no other inserters
+	 * competing for the counter, and its readers are lock-free.
 	 */
-	SpinLockAcquire(&Insert->insertpos_lck);
-
-	startbytepos = pg_atomic_read_u64(&Insert->CurrBytePos);
+	startbytepos = polar_xlog_current_bytepos();
 
 	ptr = XLogBytePosToEndRecPtr(startbytepos);
 	if (XLogSegmentOffset(ptr, wal_segment_size) == 0)
 	{
-		SpinLockRelease(&Insert->insertpos_lck);
 		*EndPos = *StartPos = ptr;
 		return false;
 	}
 
+	endbytepos = startbytepos + size;
+
+	polar_xlog_reserve_tail(&prevbytepos, &qend);
+	idx = qend;
 	if (likely(xlog_queue))
 	{
-		/*
-		 * Reserve queue space: just advance pwrite, no free-space check. The
-		 * spinlock serializes producers; no need for an atomic RMW.
-		 */
-		idx = pg_atomic_read_u64(&xlog_queue->pwrite);
-		pg_atomic_write_u64(&xlog_queue->pwrite, idx + polar_rbuf_len);
+		Assert(pg_atomic_read_u64(&xlog_queue->pwrite) == qend);
+		pg_atomic_write_u64(&xlog_queue->pwrite, qend + polar_rbuf_len);
 	}
-
-	endbytepos = startbytepos + size;
-	prevbytepos = pg_atomic_read_u64(&Insert->PrevBytePos);
 
 	*StartPos = XLogBytePosToRecPtr(startbytepos);
 	*EndPos = XLogBytePosToEndRecPtr(endbytepos);
@@ -2433,10 +2759,15 @@ ReserveXLogSwitch(XLogRecPtr *StartPos, XLogRecPtr *EndPos, XLogRecPtr *PrevPtr,
 		*EndPos += segleft;
 		endbytepos = XLogRecPtrToBytePos(*EndPos);
 	}
-	pg_atomic_write_u64(&Insert->CurrBytePos, endbytepos);
-	pg_atomic_write_u64(&Insert->PrevBytePos, startbytepos);
 
-	SpinLockRelease(&Insert->insertpos_lck);
+	/*
+	 * We consumed the rest of the segment, whose size depends on our own
+	 * start, so the new frontier cannot be published before the position is
+	 * known. Re-seed the counter from it now.  We hold every insertion lock,
+	 * so no reservation is in flight.
+	 */
+	polar_xlog_reserve_reseed(endbytepos, startbytepos,
+							  qend + (xlog_queue != NULL ? polar_rbuf_len : 0));
 
 	if (likely(xlog_queue))
 		*polar_rbuf_pos = idx;
@@ -2711,6 +3042,14 @@ WALInsertLockRelease(void)
 	{
 		int			i;
 
+		/*
+		 * Perform the periodic overflow check while every insertion lock is
+		 * still held.  Once they are released, backends can claim positions
+		 * again, so re-seeding the packed counter would corrupt their
+		 * positions.  Normally this is just a compare and a return.
+		 */
+		polar_xlog_reserve_maybe_reseed();
+
 		for (i = 0; i < NUM_XLOGINSERT_LOCKS; i++)
 			LWLockReleaseClearVar(&WALInsertLocks[i].l.lock,
 								  &WALInsertLocks[i].l.insertingAt,
@@ -2770,7 +3109,6 @@ WaitXLogInsertionsToFinish(XLogRecPtr upto)
 	XLogRecPtr	inserted;
 	XLogRecPtr	reservedUpto;
 	XLogRecPtr	finishedUpto;
-	XLogCtlInsert *Insert = &XLogCtl->Insert;
 	int			i;
 
 	if (MyProc == NULL)
@@ -2785,7 +3123,7 @@ WaitXLogInsertionsToFinish(XLogRecPtr upto)
 		return inserted;
 
 	/* Read the current insert position */
-	bytepos = pg_atomic_read_u64(&Insert->CurrBytePos);
+	bytepos = polar_xlog_current_bytepos();
 	reservedUpto = XLogBytePosToEndRecPtr(bytepos);
 
 	/*
@@ -6586,11 +6924,9 @@ GetActiveWalLevelOnStandby(void)
 	return ControlFile->wal_level;
 }
 
-/*
- * Initialization of shared memory for XLOG
- */
-Size
-XLOGShmemSize(void)
+/* Size of the XLOG Ctl allocation itself. */
+static Size
+XLOGCtlShmemSize(void)
 {
 	Size		size;
 
@@ -6632,8 +6968,8 @@ XLOGShmemSize(void)
 
 	/*
 	 * Note: we don't count ControlFileData, it comes out of the "slop factor"
-	 * added by CreateSharedMemoryAndSemaphores.  This lets us use this
-	 * routine again below to compute the actual allocation size.
+	 * added by CreateSharedMemoryAndSemaphores.  This lets us use this helper
+	 * again below to compute the actual allocation size.
 	 */
 
 	/*
@@ -6644,11 +6980,24 @@ XLOGShmemSize(void)
 	return size;
 }
 
+/* Total shared memory required for XLOG. */
+Size
+XLOGShmemSize(void)
+{
+	Size		size = XLOGCtlShmemSize();
+
+	/* The reservation counter is allocated as a separate shared-memory block. */
+	size = add_size(size, sizeof(XLogReserveCounter));
+
+	return size;
+}
+
 void
 XLOGShmemInit(void)
 {
 	bool		foundCFile,
-				foundXLog;
+				foundXLog,
+				foundCounter;
 	char	   *allocptr;
 	int			i;
 	ControlFileData *localControlFile;
@@ -6672,16 +7021,28 @@ XLOGShmemInit(void)
 
 
 	XLogCtl = (XLogCtlData *)
-		ShmemInitStruct("XLOG Ctl", XLOGShmemSize(), &foundXLog);
+		ShmemInitStruct("XLOG Ctl", XLOGCtlShmemSize(), &foundXLog);
 
 	localControlFile = ControlFile;
 	ControlFile = (ControlFileData *)
 		ShmemInitStruct("Control File", sizeof(ControlFileData), &foundCFile);
 
-	if (foundCFile || foundXLog)
+	/*
+	 * Packed WAL reservation counter.  The CAS requires the counter to be
+	 * 16-byte aligned; ShmemInitStruct hands out cache-line aligned blocks,
+	 * and packed sits at offset 0.  Allocated as its own shmem block so it
+	 * cannot perturb the Insert cache line.
+	 */
+	polar_xlog_reserve_counter = ShmemInitStruct("XLOG reserve counter",
+												 sizeof(XLogReserveCounter),
+												 &foundCounter);
+	AssertPointerAlignment(&polar_xlog_reserve_counter->packed,
+						   sizeof(pg_atomic_uint128));
+
+	if (foundCFile || foundXLog || foundCounter)
 	{
-		/* both should be present or neither */
-		Assert(foundCFile && foundXLog);
+		/* all three should be present or none of them */
+		Assert(foundCFile && foundXLog && foundCounter);
 
 		/* Initialize local copy of WALInsertLocks */
 		WALInsertLocks = XLogCtl->Insert.WALInsertLocks;
@@ -6761,7 +7122,6 @@ XLOGShmemInit(void)
 	LWLockRegisterTranche(polar_lock_tranche, "initial datamax lock");
 	LWLockInitialize(&XLogCtl->polar_initial_datamax_lock, polar_lock_tranche);
 
-	SpinLockInit(&XLogCtl->Insert.insertpos_lck);
 	SpinLockInit(&XLogCtl->info_lck);
 	pg_atomic_init_u64(&XLogCtl->logInsertResult, InvalidXLogRecPtr);
 	pg_atomic_init_u64(&XLogCtl->logWriteResult, InvalidXLogRecPtr);
@@ -6790,6 +7150,14 @@ XLOGShmemInit(void)
 		}
 	}
 	/* POLAR end */
+
+	/*
+	 * Initialize the reservation counter.  polar_xlog_reserve_reseed()
+	 * installs the base once recovery sets the insert position.
+	 */
+	Assert(!foundCounter);
+	pg_atomic_init_u128(&polar_xlog_reserve_counter->packed, 0);
+	pg_seqlock_init(&polar_xlog_reserve_counter->base_seq);
 
 	/*
 	 * POLAR wal pipeline
@@ -7871,8 +8239,11 @@ StartupXLOG(void)
 	 * previous incarnation.
 	 */
 	Insert = &XLogCtl->Insert;
-	pg_atomic_write_u64(&Insert->PrevBytePos, XLogRecPtrToBytePos(endOfRecoveryInfo->lastRec));
-	pg_atomic_write_u64(&Insert->CurrBytePos, XLogRecPtrToBytePos(EndOfLog));
+
+	/* Hand the insert position to the reservation counter. */
+	polar_xlog_reserve_reseed(XLogRecPtrToBytePos(EndOfLog),
+							  XLogRecPtrToBytePos(endOfRecoveryInfo->lastRec),
+							  polar_xlog_queue_pwrite());
 
 	/*
 	 * Tricky point here: lastPage contains the *last* block that the LastRec
@@ -7918,24 +8289,37 @@ StartupXLOG(void)
 	XLogCtl->LogwrtRqst.Write = EndOfLog;
 	XLogCtl->LogwrtRqst.Flush = EndOfLog;
 
-	/* POLAR: make sure some important LSNs are expected. */
 	RefreshXLogWriteResult(LogwrtResult);
-	if (unlikely(pg_atomic_read_u64(&Insert->PrevBytePos) < XLogRecPtrToBytePos(endOfRecoveryInfo->lastRec) ||
-				 pg_atomic_read_u64(&Insert->CurrBytePos) <= XLogRecPtrToBytePos(endOfRecoveryInfo->lastRec) ||
-				 pg_atomic_read_u64(&XLogCtl->logFlushResult) <= endOfRecoveryInfo->lastRec ||
-				 pg_atomic_read_u64(&XLogCtl->logWriteResult) <= endOfRecoveryInfo->lastRec ||
-				 XLogCtl->LogwrtRqst.Flush <= endOfRecoveryInfo->lastRec ||
-				 XLogCtl->LogwrtRqst.Write <= endOfRecoveryInfo->lastRec))
-		elog(PANIC, "Something wrong for these important LSNs: " \
-			 "PrevBytePos is 0x%lX, CurrBytePos is 0x%lX, " \
-			 "LogwrtResult.Flush is %X/%X, LogwrtResult.Write is %X/%X, " \
-			 "LogwrtRqst.Flush is %X/%X, LogwrtRqst.Write is %X/%X, " \
-			 "LastRec is %X/%X, last usable byte position is 0x%lX",
-			 pg_atomic_read_u64(&Insert->PrevBytePos), pg_atomic_read_u64(&Insert->CurrBytePos),
-			 LSN_FORMAT_ARGS(pg_atomic_read_u64(&XLogCtl->logFlushResult)),
-			 LSN_FORMAT_ARGS(pg_atomic_read_u64(&XLogCtl->logWriteResult)), LSN_FORMAT_ARGS(XLogCtl->LogwrtRqst.Flush),
-			 LSN_FORMAT_ARGS(XLogCtl->LogwrtRqst.Write), LSN_FORMAT_ARGS(endOfRecoveryInfo->lastRec),
-			 XLogRecPtrToBytePos(endOfRecoveryInfo->lastRec));
+
+	/*
+	 * Make sure some important LSNs are expected.  The byte positions are
+	 * read back out of the reservation counter rather than from the values
+	 * fed to it, so this also checks that the seed round-tripped.
+	 */
+	{
+		uint64		curr_bytepos = polar_xlog_current_bytepos();
+		uint64		prev_bytepos;
+		uint64		qend;
+
+		polar_xlog_reserve_tail(&prev_bytepos, &qend);
+
+		if (unlikely(prev_bytepos < XLogRecPtrToBytePos(endOfRecoveryInfo->lastRec) ||
+					 curr_bytepos <= XLogRecPtrToBytePos(endOfRecoveryInfo->lastRec) ||
+					 pg_atomic_read_u64(&XLogCtl->logFlushResult) <= endOfRecoveryInfo->lastRec ||
+					 pg_atomic_read_u64(&XLogCtl->logWriteResult) <= endOfRecoveryInfo->lastRec ||
+					 XLogCtl->LogwrtRqst.Flush <= endOfRecoveryInfo->lastRec ||
+					 XLogCtl->LogwrtRqst.Write <= endOfRecoveryInfo->lastRec))
+			elog(PANIC, "Something wrong for these important LSNs: " \
+				 "PrevBytePos is 0x%lX, CurrBytePos is 0x%lX, " \
+				 "LogwrtResult.Flush is %X/%X, LogwrtResult.Write is %X/%X, " \
+				 "LogwrtRqst.Flush is %X/%X, LogwrtRqst.Write is %X/%X, " \
+				 "LastRec is %X/%X, last usable byte position is 0x%lX",
+				 prev_bytepos, curr_bytepos,
+				 LSN_FORMAT_ARGS(pg_atomic_read_u64(&XLogCtl->logFlushResult)),
+				 LSN_FORMAT_ARGS(pg_atomic_read_u64(&XLogCtl->logWriteResult)), LSN_FORMAT_ARGS(XLogCtl->LogwrtRqst.Flush),
+				 LSN_FORMAT_ARGS(XLogCtl->LogwrtRqst.Write), LSN_FORMAT_ARGS(endOfRecoveryInfo->lastRec),
+				 XLogRecPtrToBytePos(endOfRecoveryInfo->lastRec));
+	}
 
 	/*
 	 * Invalidate all sinval-managed caches before READ WRITE transactions
@@ -8035,6 +8419,24 @@ StartupXLOG(void)
 		polar_logindex_promote_xlog_queue(polar_logindex_redo_instance);
 	else if (POLAR_PARALLEL_REPLAY_IN_PRIMARY_ASYNC_INSTANT_RECOVERY())
 		polar_primary_promote_data(polar_logindex_redo_instance);
+
+	/*
+	 * Every branch above resets the xlog queue, so the queue position the
+	 * reservation counter cached when it was seeded above no longer describes
+	 * it.  Re-seed before any reservation hands out a position from a base
+	 * the ring no longer agrees with.  WAL insertion is still disallowed
+	 * here, so the counter holds exactly what the seed above put there; a
+	 * start that takes no promote branch feeds those same positions straight
+	 * back and only picks up pwrite afresh.
+	 */
+	{
+		uint64		prev_bytepos;
+		uint64		qend;
+
+		polar_xlog_reserve_tail(&prev_bytepos, &qend);
+		polar_xlog_reserve_reseed(polar_xlog_current_bytepos(), prev_bytepos,
+								  polar_xlog_queue_pwrite());
+	}
 
 	/* Enable WAL writes for this backend only. */
 	LocalSetXLogInsertAllowed();
@@ -8165,7 +8567,7 @@ StartupXLOG(void)
 
 	if (POLAR_WAL_PIPELINER_ENABLE())
 	{
-		pg_atomic_write_u64(&XLogCtl->polar_wal_pipeline_recent_written_position_buffer.ready_write_position, pg_atomic_read_u64(&Insert->CurrBytePos));
+		pg_atomic_write_u64(&XLogCtl->polar_wal_pipeline_recent_written_position_buffer.ready_write_position, polar_xlog_current_bytepos());
 	}
 
 	/*
@@ -9064,7 +9466,7 @@ CreateCheckPoint(int flags)
 
 	if (shutdown)
 	{
-		uint64		curBytePos = pg_atomic_read_u64(&Insert->CurrBytePos);
+		uint64		curBytePos = polar_xlog_current_bytepos();
 		XLogRecPtr	curInsert = XLogBytePosToRecPtr(curBytePos);
 
 		/*
@@ -12007,10 +12409,9 @@ register_persistent_abort_backup_handler(void)
 XLogRecPtr
 GetXLogInsertRecPtr(void)
 {
-	XLogCtlInsert *Insert = &XLogCtl->Insert;
 	uint64		current_bytepos;
 
-	current_bytepos = pg_atomic_read_u64(&Insert->CurrBytePos);
+	current_bytepos = polar_xlog_current_bytepos();
 
 	return XLogBytePosToRecPtr(current_bytepos);
 }
@@ -12021,10 +12422,9 @@ GetXLogInsertRecPtr(void)
 XLogRecPtr
 GetXLogInsertEndRecPtr(void)
 {
-	XLogCtlInsert *Insert = &XLogCtl->Insert;
 	uint64		current_bytepos;
 
-	current_bytepos = pg_atomic_read_u64(&Insert->CurrBytePos);
+	current_bytepos = polar_xlog_current_bytepos();
 
 	return XLogBytePosToEndRecPtr(current_bytepos);
 }
@@ -12472,10 +12872,9 @@ XLogRecPtr
 polar_get_fake_latest_lsn(void)
 {
 	uint64		bytepos;
-	XLogCtlInsert *insert = &XLogCtl->Insert;
 
 	/* Read the current insert position */
-	bytepos = pg_atomic_read_u64(&insert->CurrBytePos);
+	bytepos = polar_xlog_current_bytepos();
 
 	return XLogBytePosToEndRecPtr(bytepos);
 }

@@ -110,6 +110,17 @@ typedef struct pg_atomic_uint64
 
 #endif /* defined(HAVE_GCC__ATOMIC_INT64_CAS) || defined(HAVE_GCC__SYNC_INT64_CAS) */
 
+/* There is deliberately no locking fallback for 128-bit atomics. */
+#if !defined(PG_HAVE_ATOMIC_U128_SUPPORT) \
+	&& defined(HAVE_INT128) \
+	&& defined(__GCC_HAVE_SYNC_COMPARE_AND_SWAP_16)
+#define PG_HAVE_ATOMIC_U128_SUPPORT
+typedef struct pg_atomic_uint128
+{
+	volatile uint128 value pg_attribute_aligned(16);
+} pg_atomic_uint128;
+#endif
+
 #ifdef PG_HAVE_ATOMIC_FLAG_SUPPORT
 
 #if defined(HAVE_GCC__SYNC_CHAR_TAS) || defined(HAVE_GCC__SYNC_INT32_TAS)
@@ -327,5 +338,22 @@ pg_atomic_fetch_or_u64_impl(volatile pg_atomic_uint64 *ptr, uint64 or_)
 #endif
 
 #endif /* !defined(PG_DISABLE_64_BIT_ATOMICS) */
+
+#if defined(PG_HAVE_ATOMIC_U128_SUPPORT) \
+	&& !defined(PG_HAVE_ATOMIC_COMPARE_EXCHANGE_U128)
+#define PG_HAVE_ATOMIC_COMPARE_EXCHANGE_U128
+static inline bool
+pg_atomic_compare_exchange_u128_impl(volatile pg_atomic_uint128 *ptr,
+									 uint128 *expected, uint128 newval)
+{
+	uint128		current;
+	bool		ret;
+
+	current = __sync_val_compare_and_swap(&ptr->value, *expected, newval);
+	ret = current == *expected;
+	*expected = current;
+	return ret;
+}
+#endif
 
 #endif /* defined(HAVE_ATOMICS) */
