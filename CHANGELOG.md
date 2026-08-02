@@ -8,6 +8,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Add `polar_send_xlog_meta_size`, the cap on how much xlog meta a
+  walsender puts into one message to a shared-storage replica. It
+  defaults to 128kB, the batch size of the file-based path it replaces,
+  and takes effect on reload (XCOM-239)
 - Add `polar_wal_buffer_insert_locks` to configure the number of WAL
   insertion locks. The default is raised from 64 to 256, which improves
   throughput when many sessions commit at once, particularly with WAL
@@ -40,6 +44,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Performance
 
+- Speed up catch-up for shared-storage replicas by sending WAL metadata
+  in larger batches: up to 128kB instead of 1kB (XCOM-239)
 - Reduce CPU overhead for WAL streaming to shared-storage replicas
   and logindex saving on the primary by avoiding repeated parsing of
   WAL queue headers (XCOM-239)

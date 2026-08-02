@@ -48,6 +48,7 @@ extern PGDLLIMPORT bool log_replication_commands;
 
 /* POLAR: GUC */
 extern PGDLLIMPORT int polar_max_non_super_wal_snd;
+extern PGDLLIMPORT int polar_send_xlog_meta_size;
 extern PGDLLIMPORT int polar_logical_repl_xlog_bulk_read_size;
 
 /* POLAR end */

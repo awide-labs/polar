@@ -139,6 +139,20 @@ bool		log_replication_commands = false;
 int			polar_max_non_super_wal_snd = -1;
 int			polar_logical_repl_xlog_bulk_read_size;
 
+/*
+ * POLAR: Maximum XLOG meta in a WAL data message.
+ *
+ * Defaults to MAX_SEND_SIZE, the batch size of the file based path this
+ * replaces: the per-message costs are the same ones described there, and the
+ * queue path pays them per iteration of WalSndLoop, which sends at most one
+ * message.  A larger value only takes effect when the replica is behind:
+ * polar_xlog_send_queue_raw_data_pop() stops at the first packet that is not
+ * ready or not yet flushed, so it costs nothing in latency when caught up.
+ * guc.c spells the same default XLOG_BLCKSZ * 16, since MAX_SEND_SIZE is
+ * private to this file.
+ */
+int			polar_send_xlog_meta_size = MAX_SEND_SIZE;
+
 /* POLAR end */
 
 /*
@@ -299,8 +313,6 @@ static bool TransactionIdInRecentPast(TransactionId xid, uint32 epoch);
 static void WalSndSegmentOpen(XLogReaderState *state, XLogSegNo nextSegNo,
 							  TimeLineID *tli_p);
 
-/* POLAR: Maximum XLOG meta in a WAL data message */
-#define POLAR_QUEUE_MAX_SEND_SIZE 1024
 static polar_ringbuf_ref_t xlog_queue_ref =
 {
 	0
@@ -4716,9 +4728,9 @@ polar_replication_mode_str(polar_repl_mode_t mode)
 /*
  * POLAR: Send out the XLOG meta or CLOG in its normal physical/stored form.
  *
- * Read up to POLAR_QUEUE_MAX_SEND_SIZE or one whole packet bytes of XLOG meta or CLOG  that's been flushed to disk,
- * but not yet sent to the client, and buffer it in the libpq output
- * buffer.
+ * Read up to polar_send_xlog_meta_size or one whole packet bytes of XLOG meta
+ * or CLOG that's been flushed to disk, but not yet sent to the client, and
+ * buffer it in the libpq output buffer.
  *
  * If there is no unsent WAL remaining, WalSndCaughtUp is set to true,
  * otherwise WalSndCaughtUp is set to false.
@@ -4778,7 +4790,7 @@ polar_send_physical_by_queue(polar_ringbuf_ref_t *ref)
 
 	/*
 	 * Figure out how much to send in one message. If packet length is larger
-	 * than POLAR_QUEUE_MAX_SEND_SIZE then set max_send_size to be packet
+	 * than polar_send_xlog_meta_size then set max_send_size to be packet
 	 * length. If there's no more than max_send_size bytes to send, send
 	 * everything. Otherwise send packets while total bytes is less than
 	 * max_send_size.
@@ -4810,7 +4822,7 @@ polar_send_physical_by_queue(polar_ringbuf_ref_t *ref)
 	 * data, so buffer must have space to save packet data and one more
 	 * uint32, which save packet length.
 	 */
-	max_send_size = Max((pktlen + sizeof(uint32)), POLAR_QUEUE_MAX_SEND_SIZE);
+	max_send_size = Max((pktlen + sizeof(uint32)), polar_send_xlog_meta_size);
 	enlargeStringInfo(&output_message, max_send_size);
 
 	send_bytes = polar_xlog_send_queue_raw_data_pop(ref,

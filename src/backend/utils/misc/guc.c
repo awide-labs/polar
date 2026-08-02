@@ -3617,6 +3617,18 @@ static struct config_int ConfigureNamesInt[] =
 	},
 
 	{
+		{"polar_send_xlog_meta_size", PGC_SIGHUP, REPLICATION_SENDING,
+			gettext_noop("The max size(bytes) of xlog meta to send for walsender."),
+			NULL,
+			GUC_UNIT_BYTE | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_CHANGABLE
+		},
+		&polar_send_xlog_meta_size,
+		/* MAX_SEND_SIZE, spelled out because walsender.c keeps it private */
+		XLOG_BLCKSZ * 16, 0, 16 * 1024 * 1024,
+		NULL, NULL, NULL
+	},
+
+	{
 		{"polar_recovery_bulk_read_size", PGC_SIGHUP, WAL_RECOVERY,
 			gettext_noop("Number of WAL pages to read from storage in one I/O during recovery."),
 			NULL,
