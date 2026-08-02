@@ -3858,7 +3858,8 @@ struct config_int ConfigureNamesInt[] =
 			GUC_UNIT_BYTE | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_CHANGEABLE
 		},
 		&polar_send_xlog_meta_size,
-		1024, 0, 16 * 1024 * 1024,
+		/* MAX_SEND_SIZE, spelled out because walsender.c keeps it private */
+		XLOG_BLCKSZ * 16, 0, 16 * 1024 * 1024,
 		NULL, NULL, NULL
 	},
 

@@ -142,8 +142,19 @@ int			polar_logical_repl_xlog_bulk_read_size = 128;
 bool		polar_enable_read_from_wal_buffers = true;
 int			polar_replica_max_wal_sender_timeout = 100;
 
-/* POLAR: Maximum XLOG meta in a WAL data message */
-int			polar_send_xlog_meta_size = 1024;
+/*
+ * POLAR: Maximum XLOG meta in a WAL data message.
+ *
+ * Defaults to MAX_SEND_SIZE, the batch size of the file based path this
+ * replaces: the per-message costs are the same ones described there, and the
+ * queue path pays them per iteration of WalSndLoop, which sends at most one
+ * message.  A larger value only takes effect when the replica is behind:
+ * polar_xlog_send_queue_raw_data_pop() stops at the first packet that is not
+ * ready or not yet flushed, so it costs nothing in latency when caught up.
+ * guc_tables.c spells the same default XLOG_BLCKSZ * 16, since MAX_SEND_SIZE is
+ * private to this file.
+ */
+int			polar_send_xlog_meta_size = MAX_SEND_SIZE;
 
 /* POLAR end */
 
@@ -323,8 +334,6 @@ static bool TransactionIdInRecentPast(TransactionId xid, uint32 epoch);
 static void WalSndSegmentOpen(XLogReaderState *state, XLogSegNo nextSegNo,
 							  TimeLineID *tli_p);
 
-/* POLAR: Maximum XLOG meta in a WAL data message */
-#define POLAR_QUEUE_MAX_SEND_SIZE 1024
 static polar_ringbuf_ref_t xlog_queue_ref =
 {
 	0

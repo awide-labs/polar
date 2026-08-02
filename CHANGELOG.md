@@ -52,6 +52,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Performance
 
+- Speed up catch-up for shared-storage replicas by sending WAL metadata
+  in larger batches: up to 128kB instead of 1kB (XCOM-239)
 - Reduce CPU overhead for WAL streaming to shared-storage replicas
   and logindex saving on the primary by avoiding repeated parsing of
   WAL queue headers (XCOM-239)
