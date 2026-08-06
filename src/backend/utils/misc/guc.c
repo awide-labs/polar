@@ -3526,7 +3526,7 @@ static struct config_int ConfigureNamesInt[] =
 		{"polar_logical_repl_xlog_bulk_read_size", PGC_SIGHUP, REPLICATION_SENDING,
 			gettext_noop("Number of WAL block reading from storage once during logical replication."),
 			NULL,
-			GUC_UNIT_BLOCKS | POLAR_GUC_IS_VISIBLE | POLAR_GUC_IS_CHANGABLE
+			GUC_UNIT_XBLOCKS | POLAR_GUC_IS_VISIBLE | POLAR_GUC_IS_CHANGABLE
 		},
 		&polar_logical_repl_xlog_bulk_read_size,
 		128, 1, 512,
@@ -3537,7 +3537,7 @@ static struct config_int ConfigureNamesInt[] =
 		{"polar_recovery_bulk_read_size", PGC_SIGHUP, WAL_RECOVERY,
 			gettext_noop("Number of WAL pages to read from storage in one I/O during recovery."),
 			NULL,
-			GUC_UNIT_BLOCKS | POLAR_GUC_IS_VISIBLE | POLAR_GUC_IS_CHANGABLE
+			GUC_UNIT_XBLOCKS | POLAR_GUC_IS_VISIBLE | POLAR_GUC_IS_CHANGABLE
 		},
 		&polar_recovery_bulk_read_size,
 		128, 1, 512,
