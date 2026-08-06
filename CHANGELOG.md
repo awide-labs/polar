@@ -99,6 +99,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Fixed logical decoding on a cascading standby failing with an error
+  ("invalid record length at ..." / "requested WAL segment has already
+  been removed") during the upstream standby's promotion. This was a
+  race in WAL-page timeline selection: in the promotion window where
+  `RecoveryInProgress()` still returned true but the old timeline's WAL
+  segments had already been removed, logical decoding could pick the old
+  timeline and fail to read. Now the WAL insertion timeline is used as
+  soon as it is set. (XCOM-195)
 - Fixed another case where a standby or replica could hang on shutdown
   when it was stopped right after being promoted to primary, failing to
   shut down and requiring a forced stop. It was timing-dependent and
