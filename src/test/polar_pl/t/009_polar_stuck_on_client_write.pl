@@ -66,6 +66,12 @@ ok($pid_new == $backend, "backend can't be canceled");
 @res = `kill -cont $client`;
 $node_primary->psql_close(_psql => $psql);
 
+# VACUUM sets test_table's visibility-map and hint bits below the basebackup
+# checkpoint redo point.  Otherwise autovacuum sweeps the freshly-inserted
+# table after the checkpoint (WAL-logged under wal_log_hints), and the standby's
+# initial redo must replay it -- enough to blow the pg_ctl startup window.
+$node_primary->safe_psql('postgres', 'VACUUM test_table');
+
 # standby node
 my $node_standby = PostgreSQL::Test::Cluster->new('standby');
 $node_standby->polar_init_standby($node_primary);
