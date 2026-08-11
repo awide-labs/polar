@@ -99,6 +99,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Fixed logical replication from a cascading standby breaking when the
+  standby it follows is promoted. Subscribers and other clients reading
+  from a replication slot on such a node were disconnected with "invalid
+  record length at ..." and did not receive changes made after the
+  promotion, until they reconnected. Only affected setups with the
+  read-ahead of WAL enabled, which is the default
+  (`polar_logical_repl_xlog_bulk_read_size`). (XCOM-205)
 - Fixed a bug in the in-memory WAL queue that could cause previously
   consumed records to be read again when the queue became full, leading
   to replication errors (XCOM-199)

@@ -1188,6 +1188,10 @@ StartReplication(StartReplicationCmd *cmd)
  * bulk buffer in XLogReaderState which acts like a page cache of file system,
  * for optimizing the inefficiency of direct I/O model.
  *
+ * One batch always covers a single timeline, state->currTLI as determined by
+ * our caller: the buffer is dropped whenever that changes, and the batch is
+ * never read past the point where that timeline ends.
+ *
  * Return false to use original logic, because the I/O unit is too small.
  */
 static bool
@@ -1199,6 +1203,14 @@ polar_logical_read_xlog_page_bulk(XLogReaderState *state,
 	WALReadError errinfo;
 	XLogSegNo	segno;
 	Size		nbytes;
+
+	/*
+	 * The buffer holds raw bytes read for one timeline.  A promotion upstream
+	 * maps the very same LSN range onto a different segment file, so throw
+	 * away what we have instead of serving it for the new timeline.
+	 */
+	if (state->bulk_read_buffer_tli != state->currTLI)
+		POLAR_XLOG_BULK_READ_BUFFER_INVALIDATE(state);
 
 	/*
 	 * Oh yeah, directly consume from our buffer, no need to I/O.
@@ -1216,6 +1228,15 @@ polar_logical_read_xlog_page_bulk(XLogReaderState *state,
 
 		return true;
 	}
+
+	/*
+	 * When reading from a historic timeline, stop at the point where it ends:
+	 * beyond the switchpoint its segments hold no valid WAL, the records
+	 * there belong to the next timeline.
+	 */
+	if (state->currTLIValidUntil != InvalidXLogRecPtr &&
+		flush_ptr > state->currTLIValidUntil)
+		flush_ptr = state->currTLIValidUntil;
 
 	/*
 	 * Now we are sure real I/O is needed. If there is no more than one block
@@ -1258,7 +1279,11 @@ polar_logical_read_xlog_page_bulk(XLogReaderState *state,
 				 state->bulk_read_buffer,
 				 target_page_ptr,
 				 nbytes,
-				 state->seg.ws_tli,
+				 state->currTLI,	/* The TLI of the WAL we want, which is
+									 * what WalSndSegmentOpen opens for this
+									 * segment.  Passing the TLI of the
+									 * segment we happen to have open would
+									 * keep us on it across a timeline switch. */
 				 &errinfo))
 		WALReadRaiseError(&errinfo);
 
@@ -1268,6 +1293,7 @@ polar_logical_read_xlog_page_bulk(XLogReaderState *state,
 	WAL_SND_END_WRITE_STAT(MyWalSnd);
 
 	state->bulk_read_buffer_start = target_page_ptr;
+	state->bulk_read_buffer_tli = state->currTLI;
 
 	/*
 	 * At least one page has been read to the bulk read buffer. Copy out the

@@ -295,6 +295,7 @@ struct XLogReaderState
 	uint32		bulk_read_buffer_size;	/* # of capacity for the page buffer */
 	uint32		bulk_read_buffer_len;	/* # of valid pages in the page buffer */
 	XLogRecPtr	bulk_read_buffer_start; /* LSN of the first page in buffer */
+	TimeLineID	bulk_read_buffer_tli;	/* timeline the buffer was filled for */
 	/* POLAR end */
 
 	/* last read XLOG position for data currently in readBuf */
@@ -364,6 +365,7 @@ struct XLogReaderState
 	{														\
 		state->bulk_read_buffer_len = 0;					\
 		state->bulk_read_buffer_start = InvalidXLogRecPtr;	\
+		state->bulk_read_buffer_tli = 0;					\
 	} while (0)
 
 /*
