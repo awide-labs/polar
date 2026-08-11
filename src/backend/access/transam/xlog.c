@@ -10016,7 +10016,43 @@ issue_xlog_fsync(int fd, XLogSegNo segno, TimeLineID tli)
 	/* POLAR: use fsync to make sure data flush to disk */
 	if (polar_enable_shared_storage_mode)
 	{
-		(void) polar_fsync(fd);
+		/* Measure I/O timing to sync the WAL file */
+		if (track_wal_io_timing)
+			INSTR_TIME_SET_CURRENT(start);
+
+		pgstat_report_wait_start(WAIT_EVENT_WAL_SYNC);
+
+		/* PANIC if failed to fsync */
+		if (polar_fsync(fd) != 0)
+		{
+			char		xlogfname[MAXFNAMELEN];
+			int			save_errno = errno;
+
+			msg = _("could not fsync file \"%s\": %m");
+
+			XLogFileName(xlogfname, tli, segno, wal_segment_size);
+			errno = save_errno;
+			ereport(PANIC,
+					(errcode_for_file_access(),
+					 errmsg(msg, xlogfname)));
+		}
+
+		pgstat_report_wait_end();
+
+		/*
+		 * Increment the I/O timing and the number of times WAL files were
+		 * synced.
+		 */
+		if (track_wal_io_timing)
+		{
+			instr_time	duration;
+
+			INSTR_TIME_SET_CURRENT(duration);
+			INSTR_TIME_SUBTRACT(duration, start);
+			PendingWalStats.wal_sync_time += INSTR_TIME_GET_MICROSEC(duration);
+		}
+
+		PendingWalStats.wal_sync++;
 		return;
 	}
 

@@ -73,6 +73,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Fixed ignored fsync errors during WAL file sync on shared storage —
+  fsync failures now trigger a PANIC. Added proper WAL fsync statistics
+  collection (wait events, I/O timing, sync counter). (XCOM-193)
 - Fixed another case where a standby or replica could hang on shutdown
   when it was stopped right after being promoted to primary, failing to
   shut down and requiring a forced stop. It was timing-dependent and
