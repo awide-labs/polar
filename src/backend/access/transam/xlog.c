@@ -11128,7 +11128,20 @@ issue_xlog_fsync(int fd, XLogSegNo segno, TimeLineID tli)
 	/* POLAR: use fsync to make sure data flush to disk */
 	if (polar_enable_shared_storage_mode)
 	{
-		(void) polar_fsync(fd);
+		/* PANIC if failed to fsync */
+		if (polar_fsync(fd) != 0)
+		{
+			char		xlogfname[MAXFNAMELEN];
+			int			save_errno = errno;
+
+			msg = _("could not fsync file \"%s\": %m");
+
+			XLogFileName(xlogfname, tli, segno, wal_segment_size);
+			errno = save_errno;
+			ereport(PANIC,
+					(errcode_for_file_access(),
+					 errmsg(msg, xlogfname)));
+		}
 		goto fsync_end;
 	}
 

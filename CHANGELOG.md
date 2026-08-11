@@ -99,6 +99,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Fixed ignored fsync errors during WAL file sync on shared storage —
+  fsync failures now trigger a PANIC. Added proper WAL fsync statistics
+  collection (wait events, I/O timing, sync counter). (XCOM-195)
 - Fixed logical decoding on a cascading standby failing with an error
   ("invalid record length at ..." / "requested WAL segment has already
   been removed") during the upstream standby's promotion. This was a
