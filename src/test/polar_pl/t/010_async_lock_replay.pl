@@ -51,6 +51,23 @@ $node_replica2->append_conf('postgresql.conf',
 $node_replica2->append_conf('postgresql.conf',
 	"max_standby_archive_delay = 2s");
 
+# Wait until a reader is genuinely parked on $table: holding AccessShareLock
+# and asleep in pg_sleep.
+sub wait_for_reader
+{
+	my ($node, $table) = @_;
+
+	$node->poll_query_until(
+		$regress_db, "select count(*) from pg_locks l
+			  join pg_stat_activity a on a.pid = l.pid
+			  where l.relation = '$table'::regclass
+				and l.mode = 'AccessShareLock' and l.granted
+				and a.wait_event = 'PgSleep'", 1)
+	  or BAIL_OUT("reader never took AccessShareLock on $table on "
+		  . $node->name);
+	return;
+}
+
 $node_primary->start;
 $node_primary->polar_create_slot($node_replica1->name);
 $node_primary->polar_create_slot($node_replica2->name);
@@ -73,7 +90,7 @@ Task::start_new_task(
 	[ $regress_db, "select * from t1, pg_sleep($inf)" ],
 	Task::EXEC_UNTIL_FAIL,
 	$inf);
-sleep 1;
+wait_for_reader($node_replica1, "t1");
 is($node_primary->psql($regress_db, $lock_t1), 0, "xlock t1");
 Task::wait_all_task;
 
@@ -84,7 +101,8 @@ Task::start_new_task(
 	[ $regress_db, "select * from t1, pg_sleep($inf)" ],
 	Task::EXEC_UNTIL_FAIL,
 	$inf);
-sleep 1;
+wait_for_reader($node_replica1, "t1");
+wait_for_reader($node_replica2, "t1");
 is($node_primary->psql($regress_db, $lock_t1),
 	0, "xlock t1 wait for two replica");
 Task::wait_all_task;
@@ -103,7 +121,8 @@ Task::start_new_task(
 	[ $regress_db, "select * from t2, pg_sleep($inf)" ],
 	Task::EXEC_UNTIL_FAIL,
 	$inf);
-sleep 1;
+wait_for_reader($node_replica1, "t1");
+wait_for_reader($node_replica2, "t2");
 is($node_primary->psql($regress_db, $lock_t1t2),
 	0, "xlock t1 t2 wait for two replica");
 Task::wait_all_task;
@@ -115,7 +134,7 @@ Task::start_new_task(
 	[ $regress_db, "select * from t1, pg_sleep($inf)" ],
 	Task::EXEC_UNTIL_FAIL,
 	$inf);
-sleep 1;
+wait_for_reader($node_replica1, "t1");
 $node_primary->psql($regress_db,
 	"begin; truncate t1; insert into t1 select 1; end;");
 Task::wait_all_task;
