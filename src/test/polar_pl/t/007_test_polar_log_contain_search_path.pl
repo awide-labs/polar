@@ -27,9 +27,6 @@ use PostgreSQL::Test::Utils;
 use Test::More;
 use DBI;
 
-# Temporarily disabled due to instability
-plan skip_all => 'Test temporarily disabled due to instability';
-
 my $node_primary = PostgreSQL::Test::Cluster->new('primary');
 $node_primary->init(allows_streaming => 1);
 
