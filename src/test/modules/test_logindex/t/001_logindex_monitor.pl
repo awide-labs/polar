@@ -106,8 +106,12 @@ is($result, qq(t|t|t|t), 'check 1');
 
 $node_primary->teardown_node();
 
-$node_replica->promote;
-$node_replica->polar_wait_for_startup(60);
+{
+	local $ENV{PGCTLTIMEOUT} = 300;
+	$node_replica->promote;
+}
+$node_replica->poll_query_until('postgres', "SELECT NOT pg_is_in_recovery()")
+  or die "replica did not leave recovery after promote";
 
 $node_replica->safe_psql('postgres',
 	"insert into test_logindex select generate_series(1,1000000);");
@@ -118,8 +122,14 @@ is($result, qq(t|t|t|t), 'check 1');
 $node_replica->polar_drop_all_slots;
 $node_replica->stop;
 
-$node_standby->promote;
-$node_standby->polar_wait_for_startup(60);
+# promote standby
+{
+	local $ENV{PGCTLTIMEOUT} = 300;
+	$node_standby->promote;
+}
+$node_standby->poll_query_until('postgres', "SELECT NOT pg_is_in_recovery()")
+  or die "standby did not leave recovery after promote";
+
 $node_standby->safe_psql('postgres',
 	"insert into test_logindex select generate_series(1,1000000);");
 
