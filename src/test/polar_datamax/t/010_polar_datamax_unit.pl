@@ -17,6 +17,31 @@ use PostgreSQL::Test::Cluster;
 use PostgreSQL::Test::Utils;
 use Test::More;
 
+# TRAP:/PANIC:/FATAL: lines that are expected here and must not fail the run.
+# $node->stop uses mode fast, which terminates whatever backends and background
+# workers are still busy; each one logs a FATAL on its way out.
+my @ignored_errors = (
+	# Autovacuum worker, logical replication worker, walreceiver, or a plain
+	# backend killed by the fast shutdown.
+	qr{FATAL:\s+terminating \w[\w ]* due to administrator command},
+	# Same thing for a background worker, whose bgw_type is quoted in the
+	# message: terminating background worker "polar worker" due to ...
+	qr{FATAL:\s+terminating background worker "[^"]*" due to administrator command},
+);
+
+# True if $line is one of the known-harmless TRAP:/PANIC:/FATAL: messages.
+sub error_is_ignored
+{
+	my ($line) = @_;
+
+	foreach my $re (@ignored_errors)
+	{
+		return 1 if $line =~ $re;
+	}
+
+	return 0;
+}
+
 # Absolute path of the reference WAL image shipped with the test module.  The
 # suite runs with cwd = its source dir and __FILE__ = t/010_...; resolve the
 # module dir relative to this script so it works both in- and out-of-tree.
@@ -64,7 +89,11 @@ my $log = slurp_file($node->logfile);
 my $logdir = $node->data_dir . '/log';
 $log .= slurp_file($_) foreach (sort glob("$logdir/*.log"));
 
-unlike($log, qr/TRAP:|PANIC:|FATAL:/, 'no crash in server log');
+my @errors = grep { /TRAP:|PANIC:|FATAL:/ and not error_is_ignored($_) }
+  split(/\n/, $log, -1);
+
+is(scalar @errors, 0, 'no crash in server log')
+  or diag("unexpected error line(s) in server log:\n" . join("\n", @errors));
 like(
 	$log,
 	qr{last received valid record of primary is: 0/1FFFBC8},
