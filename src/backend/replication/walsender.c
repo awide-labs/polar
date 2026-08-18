@@ -3211,7 +3211,7 @@ WalSndComputeSleeptime(TimestampTz now)
 	long		sleeptime = 10000;	/* 10 s */
 
 	/* POLAR */
-	long		polar_backoff_sleeptime;
+	int64_t		polar_backoff_sleeptime;
 	static int	polar_backoff_counter = 0;
 
 	/* POLAR end */
@@ -3254,7 +3254,7 @@ WalSndComputeSleeptime(TimestampTz now)
 			polar_backoff_counter = 0;
 			polar_replica_send_wal = false;
 		}
-		polar_backoff_sleeptime = 1 << polar_backoff_counter;
+		polar_backoff_sleeptime = 1LL << polar_backoff_counter;
 		polar_backoff_counter++;
 		if (polar_backoff_sleeptime >= polar_replica_max_wal_sender_timeout)
 		{
