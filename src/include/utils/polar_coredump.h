@@ -39,4 +39,6 @@ typedef struct StackInfoOnDisk
 
 extern int	backtrace(void **buffer, int size);
 extern bool polar_read_core_pattern(const char *core_pattern_path, char *buf);
+#ifdef USE_LIBUNWIND
 extern void polar_program_error_handler(SIGNAL_ARGS);
+#endif

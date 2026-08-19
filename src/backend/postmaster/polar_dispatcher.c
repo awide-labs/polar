@@ -2401,7 +2401,7 @@ dispatcher_main(int argc, char *argv[])
 	/* POLAR end */
 	pqsignal(SIGFPE, FloatExceptionHandler);
 	
-#ifndef _WIN32
+#if !defined(_WIN32) && defined(USE_LIBUNWIND)
 #ifdef SIGILL
 	pqsignal(SIGILL, polar_program_error_handler);
 #endif
@@ -2411,7 +2411,7 @@ dispatcher_main(int argc, char *argv[])
 #ifdef SIGBUS
 	pqsignal(SIGBUS, polar_program_error_handler);
 #endif
-#endif	/* _WIN32 */
+#endif	/* !_WIN32 && USE_LIBUNWIND */
 
 	/*
 	 * Create a per-backend PGPROC struct in shared memory, except in the
