@@ -49,8 +49,6 @@ static bool
 write_control_data(char *file_path, ControlFileData *data)
 {
 	FILE	   *fp;
-	bool		succeed = false;
-
 	pg_crc32c	crc;
 
 	/* Check the CRC. */
@@ -63,16 +61,21 @@ write_control_data(char *file_path, ControlFileData *data)
 	data->crc = crc;
 
 	fp = fopen(file_path, "w");
-	if (!fp || fwrite(data, 1, sizeof(ControlFileData), fp) != sizeof(ControlFileData))
+	if (!fp)
 	{
-		fprintf(stderr, "Failed to open or write control data\n");
+		fprintf(stderr, _("Failed to open \"%s\": %s\n"), file_path, strerror(errno));
+		return false;
 	}
-	else
-		succeed = true;
+
+	if (fwrite(data, 1, sizeof(ControlFileData), fp) != sizeof(ControlFileData))
+	{
+		fprintf(stderr, _("Failed to write \"%s\": %s\n"), file_path, strerror(errno));
+		fclose(fp);
+		return false;
+	}
 
 	fclose(fp);
-
-	return succeed;
+	return true;
 }
 
 static ControlFileData *
