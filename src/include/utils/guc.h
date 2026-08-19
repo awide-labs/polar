@@ -254,8 +254,8 @@ typedef enum
 #define GUC_UNIT				(GUC_UNIT_MEMORY | GUC_UNIT_TIME)
 
 /* POLAR: Shared Server */
-#define GUC_SESSION_DEDICATED   0x800000	/* guc need in dedicated mode */
-#define GUC_ASSIGN_IN_TRANS		0x1000000	/* assign need in trans */
+#define GUC_SESSION_DEDICATED   0x10000000	/* guc need in dedicated mode */
+#define GUC_ASSIGN_IN_TRANS		0x20000000	/* assign need in trans */
 /* POLAR end */
 
 /* POLAR defines start */
