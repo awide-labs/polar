@@ -44,6 +44,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Performance
 
+- Speed up logindex saving on a busy primary: the saver reads the WAL
+  flush position once per group of records that a single flush covers,
+  instead of once per record, taking a contended shared-memory read off
+  the per-record path (XCOM-239)
 - Speed up catch-up for shared-storage replicas by sending WAL metadata
   in larger batches: up to 128kB instead of 1kB (XCOM-239)
 - Reduce CPU overhead for WAL streaming to shared-storage replicas

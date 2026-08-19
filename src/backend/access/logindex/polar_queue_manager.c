@@ -1357,6 +1357,7 @@ polar_xlog_send_queue_record_pop(polar_ringbuf_t queue, XLogReaderState *state)
 	uint8		pkt_type;
 	char	   *errormsg = NULL;
 	DecodedXLogRecord *decoded = NULL;
+	static XLogRecPtr flush_lsn = InvalidXLogRecPtr;
 	static polar_ringbuf_ref_t ref =
 	{
 		.slot = -1
@@ -1388,8 +1389,13 @@ polar_xlog_send_queue_record_pop(polar_ringbuf_t queue, XLogReaderState *state)
 		polar_xlog_queue_read_head(&ref, &end_rec_ptr, &xlog_len);
 
 		/* Primary save logindex when xlog is flushed */
-		if (end_rec_ptr > GetFlushRecPtr(NULL))
-			return NULL;
+		if (XLogRecPtrIsInvalid(flush_lsn) || end_rec_ptr > flush_lsn)
+		{
+			flush_lsn = GetFlushRecPtr(NULL);
+
+			if (end_rec_ptr > flush_lsn)
+				return NULL;
+		}
 
 		XLogReleasePreviousRecord(state);
 		POLAR_ASSERT_PANIC(!XLogReaderHasQueuedRecordOrError(state));
