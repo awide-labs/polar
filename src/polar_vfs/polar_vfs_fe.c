@@ -447,6 +447,19 @@ polar_vfs_init_fe(bool is_pfs, char *fname, char *storage_cluster_name, char *po
 
 	/* pfsd_mount could redirect stderr, so dup and dup2 it. */
 	old_stderr = dup(fileno(stderr));
+
+	/*
+	 * This is a highly unlikely situation and we do not want to lose our
+	 * stderr stream and route all logging to the pfsd log file.
+	 *
+	 * Therefore, it seems reasonable to panic here.
+	 */
+	if (old_stderr < 0)
+	{
+		fprintf(stderr, "could not duplicate stderr: %m\n");
+		exit(EXIT_FAILURE);
+	}
+
 	if (polar_mount(&polar_mount_arg) != 0)
 	{
 		dup2(old_stderr, fileno(stderr));
@@ -455,7 +468,11 @@ polar_vfs_init_fe(bool is_pfs, char *fname, char *storage_cluster_name, char *po
 				polar_disk_name, hostid, flag);
 		exit(EXIT_FAILURE);
 	}
-	dup2(old_stderr, fileno(stderr));
+	if (dup2(old_stderr, fileno(stderr)) < 0)
+	{
+		dprintf(old_stderr, "could not restore stderr: %m\n");
+		exit(EXIT_FAILURE);
+	}
 	close(old_stderr);
 	polar_local_vfs_state = flag;
 }
@@ -539,12 +556,25 @@ polar_get_config(const char *name, char *value, int value_len, const char *pgcon
 		exit(EXIT_FAILURE);
 	}
 	old_stderr = dup(fileno(stderr));
-	(void) dup2(fd, fileno(stderr));
+	if (old_stderr < 0)
+	{
+		fprintf(stderr, "could not duplicate stderr: %m\n");
+		exit(EXIT_FAILURE);
+	}
+	if (dup2(fd, fileno(stderr)) < 0)
+	{
+		fprintf(stderr, "could not redirect stderr: %s\n", strerror(errno));
+		exit(EXIT_FAILURE);
+	}
 	close(fd);
 	output = popen(cmd, "r");
 	if (output && fgets(cmd_output, sizeof(cmd_output) - 1, output) != NULL)
 		strncpy(value, trim(cmd_output), value_len > MAX_STRING ? MAX_STRING : value_len);
-	(void) dup2(old_stderr, fileno(stderr));
+	if (dup2(old_stderr, fileno(stderr)) < 0)
+	{
+		dprintf(old_stderr, "could not restore stderr: %m\n");
+		exit(EXIT_FAILURE);
+	}
 	close(old_stderr);
 	if (output)
 		pclose(output);
