@@ -234,8 +234,8 @@ extern int   ifdef_level;
 struct parser_state {
     int         last_token;
     int         p_stack[256];	/* this is the parsers stack */
-    int         il[64];		/* this stack stores indentation levels */
-    float       cstk[32];	/* used to store case stmt indentation levels */
+    int         il[256];		/* this stack stores indentation levels */
+    float       cstk[256];	/* used to store case stmt indentation levels */
     int         box_com;	/* set to true when we are in a "boxed"
 				 * comment. In that case, the first non-blank
 				 * char should be lined up with the / in / followed by * */
