@@ -101,6 +101,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Fixed severe replay slowdown on a standby with parallel replay when
+  `polar_logindex_replay_delay_threshold` was set to 2 TB or more, including
+  its maximum value (XCOM-215).
+- Fixed `polar_tools block-header-dump` failing or silently printing the
+  header of the wrong block for block numbers at or beyond the 2 GB offset
+  within a data file (XCOM-215).
 - Fixed checkpoints on an idle shared-storage primary taking up to 10
   seconds instead of about 0.1 second, and logging "Checkpoint blocked"
   warnings every 100 ms meanwhile, because they waited for the

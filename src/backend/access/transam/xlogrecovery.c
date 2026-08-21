@@ -6334,7 +6334,7 @@ polar_logindex_delay_replay_if_need(void)
 			XLogRecPtrIsInvalid(logindex_cur_parsed_lsn))
 			return;
 
-		if (logindex_cur_parsed_lsn > logindex_bg_replayed_lsn + polar_logindex_replay_delay_threshold * 1024 * 1024L)
+		if (logindex_cur_parsed_lsn > logindex_bg_replayed_lsn + (XLogRecPtr) polar_logindex_replay_delay_threshold * 1024 * 1024L)
 		{
 			HandleStartupProcInterrupts();
 
