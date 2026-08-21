@@ -93,7 +93,7 @@ block_header_dump_main(int argc, char **argv)
 		goto end;
 	}
 
-	if (fseek(fp, block * BLCKSZ, SEEK_SET) != 0)
+	if (fseeko(fp, (pgoff_t) block * BLCKSZ, SEEK_SET) != 0)
 	{
 		fprintf(stderr, "Failed to seek %s block %d\n", file_path, block);
 		goto end;
