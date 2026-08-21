@@ -496,7 +496,7 @@ polar_flush_generate_task(XLogRecPtr consistent_lag, int lru_ahead_lap, int *flu
 
 	idle_workers = current_works - (flush_works[FLUSHLIST_TASK] + flush_works[FLUSHLRU_TASK]);
 
-	threshold_lag = polar_parallel_new_bgwriter_threshold_lag * 1024 * 1024L;
+	threshold_lag = (uint64) polar_parallel_new_bgwriter_threshold_lag * 1024 * 1024L;
 
 	flushlist_behind = consistent_lag >= threshold_lag;
 	lru_behind = lru_ahead_lap == LRU_BUFFER_BEHIND;
