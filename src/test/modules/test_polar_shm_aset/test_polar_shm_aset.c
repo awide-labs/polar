@@ -29,6 +29,8 @@
 #include "miscadmin.h"
 #include "postmaster/bgworker.h"
 #include "storage/ipc.h"
+#include "storage/lwlock.h"
+#include "storage/polar_memutils.h"
 #include "storage/shmem.h"
 #include "utils/builtins.h"
 #include "utils/memutils.h"

@@ -7,6 +7,14 @@
 /results/
 /log/
 /tmp_cluster_log/
+/tmp_check_ss_fifo/
+/tmp_check_ss_disposable/
+/tmp_check_ss_dedicated/
+/tmp_check_ss_oom/
+/output_ss_fifo/
+/output_ss_disposable/
+/output_ss_dedicated/
+/output_ss_oom/
 
 # Note: regression.* are only left behind on a failure; that's why they're not ignored
 #/regression.diffs
