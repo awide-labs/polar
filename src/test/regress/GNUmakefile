@@ -119,42 +119,31 @@ REGRESS_OPTS = --dlpath=. --max-concurrent-tests=20 \
 check: all
 	$(pg_regress_check) $(REGRESS_OPTS) --schedule=$(srcdir)/parallel_schedule $(MAXCONNOPT) $(EXTRA_TESTS)
 
-check_ss_fifo: all
-	echo polar_enable_shm_aset=true >> temp_config
-	echo polar_enable_shared_server=true >> temp_config
-	echo polar_ss_session_schedule_policy='fifo' >> temp_config
-	$(pg_regress_check) $(REGRESS_OPTS) --temp-config=temp_config --schedule=$(srcdir)/ss_schedule  $(MAXCONNOPT) $(EXTRA_TESTS)
-	rm -f temp_config
+check_ss_fifo: all | temp-install
+	$(pg_regress_check) $(REGRESS_OPTS) \
+		--temp-instance=./tmp_check_ss_fifo --outputdir=./output_ss_fifo \
+		--temp-config=$(srcdir)/ss_fifo.conf \
+		--schedule=$(srcdir)/ss_schedule $(MAXCONNOPT) $(EXTRA_TESTS)
 
-check_ss_disposable: all
-	echo polar_enable_shm_aset=true >> temp_config
-	echo polar_enable_shared_server=true >> temp_config
-	echo polar_ss_client_schedule_policy='load-balancing' >> temp_config
-	echo polar_ss_session_schedule_policy='disposable' >> temp_config
-	$(pg_regress_check) $(REGRESS_OPTS) --temp-config=temp_config --schedule=$(srcdir)/parallel_schedule  --schedule=$(srcdir)/ss_schedule  $(MAXCONNOPT) $(EXTRA_TESTS)
-	rm -f temp_config
+check_ss_disposable: all | temp-install
+	$(pg_regress_check) $(REGRESS_OPTS) \
+		--temp-instance=./tmp_check_ss_disposable --outputdir=./output_ss_disposable \
+		--temp-config=$(srcdir)/ss_disposable.conf \
+		--schedule=$(srcdir)/parallel_schedule --schedule=$(srcdir)/ss_schedule \
+		$(MAXCONNOPT) $(EXTRA_TESTS)
 
-check_ss_dedicated: all
-	echo polar_enable_shm_aset=true >> temp_config
-	echo polar_enable_shared_server=true >> temp_config
-	echo polar_ss_client_schedule_policy='random' >> temp_config
-	echo polar_ss_session_schedule_policy='dedicated' >> temp_config
-	$(pg_regress_check) $(REGRESS_OPTS) --temp-config=temp_config --schedule=$(srcdir)/parallel_schedule  $(MAXCONNOPT) $(EXTRA_TESTS)
-	rm -f temp_config
+check_ss_dedicated: all | temp-install
+	$(pg_regress_check) $(REGRESS_OPTS) \
+		--temp-instance=./tmp_check_ss_dedicated --outputdir=./output_ss_dedicated \
+		--temp-config=$(srcdir)/ss_dedicated.conf \
+		--schedule=$(srcdir)/parallel_schedule $(MAXCONNOPT) $(EXTRA_TESTS)
 
-check_ss_oom: all
-	echo polar_enable_shm_aset=true >> temp_config
-	echo polar_enable_shared_server=true >> temp_config
-	echo polar_ss_client_schedule_policy='random' >> temp_config
-	echo polar_ss_session_schedule_policy='disposable' >> temp_config
-	echo polar_ss_backend_idle_timeout='1s' >> temp_config
-	echo polar_ss_dispatcher_count='1' >> temp_config
-	echo polar_ss_session_wait_timeout='1s' >> temp_config
-	echo polar_ss_backend_pool_min_size='1' >> temp_config
-	echo polar_ss_backend_keepalive_timeout='60s' >> temp_config
-	echo polar_ss_shared_memory_size='80kB' >> temp_config
-	$(pg_regress_check) $(REGRESS_OPTS) --temp-config=temp_config --schedule=$(srcdir)/parallel_schedule --schedule=$(srcdir)/ss_schedule $(MAXCONNOPT) $(EXTRA_TESTS)
-	rm -f temp_config
+check_ss_oom: all | temp-install
+	$(pg_regress_check) $(REGRESS_OPTS) \
+		--temp-instance=./tmp_check_ss_oom --outputdir=./output_ss_oom \
+		--temp-config=$(srcdir)/ss_oom.conf \
+		--schedule=$(srcdir)/parallel_schedule --schedule=$(srcdir)/ss_schedule \
+		$(MAXCONNOPT) $(EXTRA_TESTS)
 
 polar-px-check: all run-temp-cluster
 	$(with_temp_install) $(MAKE) bindir=$(temp_install_bindir) PGHOST=$(temp_sock_dir) polar-px-installcheck-plans && \
@@ -218,3 +207,4 @@ clean distclean maintainer-clean: clean-lib
 	rm -f pg_regress_main.o pg_regress.o pg_regress$(X)
 # things created by various check targets
 	rm -rf $(pg_regress_clean_files)
+	rm -rf tmp_check_ss_* output_ss_*
