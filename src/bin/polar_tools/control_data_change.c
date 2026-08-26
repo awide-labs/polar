@@ -93,7 +93,9 @@ read_control_data(char *file_path)
 	if (fread(data, 1, sizeof(ControlFileData), fp) != sizeof(ControlFileData))
 	{
 		fprintf(stderr, "Failed to read ControlFileData\n");
-		data = NULL;
+		pfree(data);
+		fclose(fp);
+		return NULL;
 	}
 
 	fclose(fp);
