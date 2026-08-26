@@ -135,8 +135,6 @@ typedef struct Latch
 #define WL_SOCKET_CONNECTED  WL_SOCKET_WRITEABLE
 #endif
 #define WL_SOCKET_CLOSED 	 (1 << 7)
-/* POLAR: Shared Server - edge-triggered mode for dispatcher sockets */
-#define WL_SOCKET_EDGE_TRIGGERED (1 << 8)
 #define WL_SOCKET_MASK		(WL_SOCKET_READABLE | \
 							 WL_SOCKET_WRITEABLE | \
 							 WL_SOCKET_CONNECTED | \

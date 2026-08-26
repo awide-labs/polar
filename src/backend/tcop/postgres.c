@@ -5557,20 +5557,20 @@ PostgresMain(const char *dbname, const char *username)
 						}
 					}
 
-					pq_putemptymessage('X');
-					pq_flush();
-
 					polar_delete_local_memory_context(polar_session()->memory_context);
 					current_session->will_close = 1;
 					polar_switch_to_session(polar_private_session);
 
 					/*
-					 * barrier keep order between sending 'X' reply and
-					 * changing status PSSE_CLOSED.
+					 * Close the session before answering 'X'.  The dispatcher
+					 * frees it once it has the 'X'.
 					 */
 					SpinLockAcquire(&current_session->holding_lock);
 					pg_atomic_write_u32(&current_session->status, PSSE_CLOSED);
 					SpinLockRelease(&current_session->holding_lock);
+
+					pq_putemptymessage('X');
+					pq_flush();
 					break;
 				}
 

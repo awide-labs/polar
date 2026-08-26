@@ -1147,13 +1147,6 @@ WaitEventAdjustEpoll(WaitEventSet *set, WaitEvent *event, int action)
 			epoll_ev.events |= EPOLLOUT;
 		if (event->events & WL_SOCKET_CLOSED)
 			epoll_ev.events |= EPOLLRDHUP;
-
-		/*
-		 * POLAR: Shared Server - use edge-triggered mode for dispatcher
-		 * sockets
-		 */
-		if (event->events & WL_SOCKET_EDGE_TRIGGERED)
-			epoll_ev.events |= EPOLLET;
 	}
 
 	/*

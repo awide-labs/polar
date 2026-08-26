@@ -97,7 +97,17 @@ static PT_THREAD(client_channel_write_self(ClientChannel* client));
 static PT_THREAD(backend_channel_write(BackendChannel* backend));
 static PT_THREAD(postmaster_channel_write(PostmasterChannel* post));
 static void client_channel_hangout(ClientChannel* client);
+static void client_channel_read_done(ClientChannel* client);
+static void client_channel_disarm(ClientChannel* client);
+static void client_channel_read_pause(ClientChannel* client);
+static void client_channel_read_resume(ClientChannel* client);
+static void client_channel_write_done(ClientChannel* client);
+static bool client_channel_send_replies(ClientChannel* client);
+static bool backend_take_replies(BackendChannel* backend);
 static void backend_channel_hangout(BackendChannel* backend);
+static void backend_channel_apply_events(BackendChannel* backend);
+static void backend_channel_read_pause(BackendChannel* backend);
+static void backend_channel_read_resume(BackendChannel* backend);
 
 static void report_error_to_client(struct Port *client_port, char const* error);
 static bool process_startup_packet(ClientChannel* client, int startup_packet_size,
@@ -137,6 +147,7 @@ typedef enum PolarChannelType {
 static void
 bind_client_backend(ClientChannel* client, BackendChannel* backend)
 {
+	client_channel_read_resume(client);
 	backend->client = client;
 	if (backend->backend_proc)
 		backend->backend_proc->polar_shared_session = client->session;
@@ -154,6 +165,9 @@ backend_reschedule(BackendChannel* backend)
 	SessionPool* pool = backend->pool;
 	backend->backend_is_ready = false;
 	backend->n_transactions += 1;
+
+	/* reading is paused only while a client has output pending */
+	backend_channel_read_resume(backend);
 
 	/* If backend is not storing some session context */
 	if (!backend->is_private &&
@@ -563,13 +577,13 @@ PT_THREAD(fiber_client_main(ClientChannel* client, ScheduleSource schedule_sourc
 		 */
 		if (likely(schedule_source == CLIENT_READABLE))
 		{
+			/*
+			 * EOF or error.  The epilogue sends queued input ahead of its
+			 * Terminate.  Don't wait for it here: read interest is off now
+			 * (client_channel_read_done()), so nothing would wake us.
+			 */
 			if (unlikely(client_channel_read(client, 0) == PT_EXITED_ERROR))
-			{
-				if (client->tx_pos < client->tx_size)
-					goto wait_next_schedule;
-				else
-					goto error;
-			}
+				goto error;
 
 			if (unlikely(client->is_terminating))
 				goto wait_next_schedule;
@@ -780,6 +794,13 @@ PT_THREAD(fiber_client_main(ClientChannel* client, ScheduleSource schedule_sourc
 		client, client->session ? client->session->id : -1, 
 		client->session ? client->session->session_id : -1);
 
+	/*
+	 * The client socket is not read from here on.  Drop all interest, which
+	 * paths other than a failed read still have armed.  Write interest comes
+	 * back only while the backend's last answers are pending.
+	 */
+	client_channel_disarm(client);
+
 	if (client->is_backend_error)
 	{
 		ELOG_PSS(DEBUG5, "%p is_backend_error  %d,%d", 
@@ -826,6 +847,14 @@ PT_THREAD(fiber_client_main(ClientChannel* client, ScheduleSource schedule_sourc
 			client->rx_pos = client->tx_size;
 		}
 
+		/*
+		 * Send the queued input and the Terminate, and pass the backend's
+		 * answers on until its own 'X'.  The backend reads in order, so by
+		 * then everything is answered.  A half-closed client still reads and
+		 * gets them; for a gone one the write fails and the rest is dropped.
+		 * Wait for the 'X', not the command counters: they don't see input
+		 * read outside the main loop, e.g. COPY data.
+		 */
 		do
 		{
 			/*  ELOG_PSS(DEBUG5, "%p arrive is_terminating  %d",  */
@@ -841,13 +870,29 @@ PT_THREAD(fiber_client_main(ClientChannel* client, ScheduleSource schedule_sourc
 			if (client->backend == NULL)
 				goto error;
 
+			/* the client has not taken the last answers yet */
+			if (!client_channel_send_replies(client))
+			{
+				PT_YIELD(&client->pt);
+				continue;
+			}
+
 			if (backend_channel_read(client->backend) == PT_EXITED_ERROR)
 				goto error;
-			/* drop all backend read */
-			client->backend->rx_pos = client->backend->tx_pos = client->backend->tx_size = 0;
+			if (backend_take_replies(client->backend))
+				client->is_backend_closed = true;
 
-			if (pg_atomic_read_u32(&client->session->status) == PSSE_CLOSED)
+			if (!client_channel_send_replies(client))
 			{
+				PT_YIELD(&client->pt);
+				continue;
+			}
+
+			if (client->is_backend_closed)
+			{
+				/* the backend closes the session before it sends 'X' */
+				Assert(pg_atomic_read_u32(&client->session->status) == PSSE_CLOSED);
+
 				/* cleanup the socket */
 				do {
 					if (client->backend == NULL)
@@ -1215,6 +1260,17 @@ client_attach_register(ClientChannel* client)
 	{
 		/* Postpone handshake until some backend is available */
 		ELOG_PSS(DEBUG1, "Client %p %d is waiting for available backends", client, client->session->session_id);
+		/*
+		 * A client queued for a free backend is not going to look at its
+		 * socket until it gets one, but the socket can be permanently ready
+		 * in the meantime -- the client may have disconnected, or pipelined
+		 * more input behind the message we already took.  Either way epoll
+		 * would report it on every iteration and the fiber would refuse it
+		 * every time, spinning the dispatcher for as long as the pool stays
+		 * busy.  So drop the read interest while queued and take it back on
+		 * bind_client_backend().
+		 */
+		client_channel_read_pause(client);
 		list_add_tail(&client->pending_list_node, &client->pool->pending_clients_list);
 		client->pool->n_pending_clients += 1;
 		client->pool->dispatcher->proc->n_pending_clients += 1;
@@ -1242,6 +1298,7 @@ client_channel_hangout(ClientChannel* client)
 		DeleteWaitEventFromSet(client->dispatcher->wait_events, client->event_pos);
 		client->event_pos = -1;
 	}
+	client->events = 0;
 
 	if (!list_empty(&client->pending_list_node))
 	{
@@ -1295,6 +1352,234 @@ backend_channel_hangout(BackendChannel* backend)
 	ELOG_PSS(DEBUG5, "backend_channel_hangout %p, %d", backend, backend->backend_pid);
 }
 
+/*
+ * Apply client->events to the dispatcher's wait event set.
+ *
+ * The latch API cannot express "still registered, but interested in nothing":
+ * every event must carry at least one WL_SOCKET_* bit.  An empty mask is
+ * therefore represented by dropping the socket from the set, and interest is
+ * restored by adding it back.  Re-adding always succeeds, because the slot
+ * freed by the removal is still on the set's free list.
+ */
+static void
+client_channel_apply_events(ClientChannel* client)
+{
+	if (client->events == 0)
+	{
+		if (client->event_pos >= 0)
+		{
+			DeleteWaitEventFromSet(client->dispatcher->wait_events, client->event_pos);
+			client->event_pos = -1;
+		}
+	}
+	else if (unlikely(client->event_pos < 0))
+	{
+		client->event_pos = AddWaitEventToSet(client->dispatcher->wait_events,
+											  client->events,
+											  client->session->info->client_port->sock,
+											  NULL, client);
+		Assert(client->event_pos >= 0);
+	}
+	else
+		ModifyWaitEvent(client->dispatcher->wait_events, client->event_pos,
+						client->events, NULL);
+}
+
+/*
+ * The client socket has hit EOF or an error: stop waiting for it to be
+ * readable.
+ */
+static void
+client_channel_read_done(ClientChannel* client)
+{
+	client->is_read_finished = true;
+
+	if (!(client->events & WL_SOCKET_READABLE))
+		return;
+
+	ELOG_PSS(DEBUG5, "client_channel_read_done %p, %d", client, client->session->id);
+	client->events &= ~WL_SOCKET_READABLE;
+	client_channel_apply_events(client);
+}
+
+/*
+ * Temporarily stop / resume waiting for client input.
+ */
+static void
+client_channel_read_pause(ClientChannel* client)
+{
+	if (client->is_read_finished || !(client->events & WL_SOCKET_READABLE))
+		return;
+
+	ELOG_PSS(DEBUG5, "client_channel_read_pause %p, %d", client, client->session->id);
+	client->events &= ~WL_SOCKET_READABLE;
+	client_channel_apply_events(client);
+}
+
+static void
+client_channel_read_resume(ClientChannel* client)
+{
+	if (client->is_read_finished || (client->events & WL_SOCKET_READABLE))
+		return;
+
+	ELOG_PSS(DEBUG5, "client_channel_read_resume %p, %d", client, client->session->id);
+	client->events |= WL_SOCKET_READABLE;
+	client_channel_apply_events(client);
+}
+
+/*
+ * Stop waiting on the client socket altogether.
+ */
+static void
+client_channel_disarm(ClientChannel* client)
+{
+	client->is_read_finished = true;
+
+	if (client->events == 0)
+		return;
+
+	ELOG_PSS(DEBUG5, "client_channel_disarm %p, %d", client, client->session->id);
+	client->events = 0;
+	client_channel_apply_events(client);
+}
+
+/*
+ * A client write failed; never write to it again.  Drop write interest too:
+ * after an error, EPOLLERR keeps reporting the socket writable.
+ */
+static void
+client_channel_write_done(ClientChannel* client)
+{
+	client->is_write_finished = true;
+
+	if (!(client->events & WL_SOCKET_WRITEABLE))
+		return;
+
+	ELOG_PSS(DEBUG5, "client_channel_write_done %p, %d", client, client->session->id);
+	client->events &= ~WL_SOCKET_WRITEABLE;
+	client_channel_apply_events(client);
+}
+
+/*
+ * Epilogue: send the client the backend's answers taken so far.  Returns
+ * false while a write is pending, true once all is sent or dropped because
+ * the client is gone.
+ */
+static bool
+client_channel_send_replies(ClientChannel* client)
+{
+	BackendChannel* backend = client->backend;
+
+	if (backend->tx_size == 0)
+		return true;
+
+	if (!client->is_write_finished)
+	{
+		PT_RESULT	rc = client_channel_write(client);
+
+		if (rc == PT_ENDED)
+			return true;
+		if (rc != PT_EXITED_ERROR)
+			return false;
+		client_channel_write_done(client);
+	}
+
+	/* the client is gone: drop its output */
+	memmove(backend->buf, backend->buf + backend->tx_size, backend->rx_pos - backend->tx_size);
+	backend->rx_pos -= backend->tx_size;
+	backend->tx_pos = backend->tx_size = 0;
+	return true;
+}
+
+/*
+ * Epilogue: mark complete backend messages for the client, up to the 'X'
+ * answering our Terminate.  Returns true once the 'X' is in; it and anything
+ * after it are dropped.
+ */
+static bool
+backend_take_replies(BackendChannel* backend)
+{
+	int32		msg_start = backend->tx_size;
+
+	while (backend->rx_pos - msg_start >= 5) /* has message code + length */
+	{
+		int32		msg_len;
+
+		memcpy(&msg_len, backend->buf + msg_start + 1, sizeof(msg_len));
+		msg_len = pg_ntoh32(msg_len) + 1;
+
+		if (msg_start + msg_len > backend->buf_size)
+		{
+			/* Reallocate buffer to fit complete message body */
+			backend->buf_size = msg_start + msg_len;
+			backend->buf = repalloc(backend->buf, backend->buf_size);
+		}
+		if (backend->rx_pos - msg_start < msg_len)
+			break;				/* Incomplete message. */
+
+		if (backend->buf[msg_start] == 'X')
+		{
+			backend->rx_pos = msg_start;
+			backend->tx_size = msg_start;
+			return true;
+		}
+		msg_start += msg_len;
+	}
+	backend->tx_size = msg_start;
+	return false;
+}
+
+/*
+ * As client_channel_apply_events(): an empty mask drops the socket from the
+ * wait set, adding interest back re-adds it.
+ */
+static void
+backend_channel_apply_events(BackendChannel* backend)
+{
+	if (backend->events == 0)
+	{
+		if (backend->event_pos >= 0)
+		{
+			DeleteWaitEventFromSet(backend->dispatcher->wait_events, backend->event_pos);
+			backend->event_pos = -1;
+		}
+	}
+	else if (unlikely(backend->event_pos < 0))
+	{
+		backend->event_pos = AddWaitEventToSet(backend->dispatcher->wait_events,
+											   backend->events,
+											   backend->backend_socket,
+											   NULL, backend);
+		Assert(backend->event_pos >= 0);
+	}
+	else
+		ModifyWaitEvent(backend->dispatcher->wait_events, backend->event_pos,
+						backend->events, NULL);
+}
+
+/* Stop/resume reading the backend while the client lags behind. */
+static void
+backend_channel_read_pause(BackendChannel* backend)
+{
+	if (backend->is_disconnected || !(backend->events & WL_SOCKET_READABLE))
+		return;
+
+	ELOG_PSS(DEBUG5, "backend_channel_read_pause %p, %d", backend, backend->backend_pid);
+	backend->events &= ~WL_SOCKET_READABLE;
+	backend_channel_apply_events(backend);
+}
+
+static void
+backend_channel_read_resume(BackendChannel* backend)
+{
+	if (backend->is_disconnected || (backend->events & WL_SOCKET_READABLE))
+		return;
+
+	ELOG_PSS(DEBUG5, "backend_channel_read_resume %p, %d", backend, backend->backend_pid);
+	backend->events |= WL_SOCKET_READABLE;
+	backend_channel_apply_events(backend);
+}
+
 static
 PT_THREAD(client_channel_write_self(ClientChannel* client))
 {
@@ -1322,7 +1607,7 @@ PT_THREAD(client_channel_write_self(ClientChannel* client))
 				if (!(client->events & WL_SOCKET_WRITEABLE))
 				{  
 					client->events |= WL_SOCKET_WRITEABLE;
-					ModifyWaitEvent(client->dispatcher->wait_events, client->event_pos, client->events, NULL);
+					client_channel_apply_events(client);
 				}
 				return PT_WAITING;
 			}
@@ -1336,7 +1621,7 @@ PT_THREAD(client_channel_write_self(ClientChannel* client))
 	if (unlikely(client->events & WL_SOCKET_WRITEABLE))
 	{
 		client->events &= ~WL_SOCKET_WRITEABLE;
-		ModifyWaitEvent(client->dispatcher->wait_events, client->event_pos, client->events, NULL);
+		client_channel_apply_events(client);
 	}
 
 	if (likely(client->tx_size != 0))
@@ -1381,16 +1666,23 @@ PT_THREAD(client_channel_write(ClientChannel* client))
 			{
 				/* register event WL_SOCKET_WRITEABLE only when needed. */
 				if (!(client->events & WL_SOCKET_WRITEABLE))
-				{  
+				{
 					client->events |= WL_SOCKET_WRITEABLE;
-					ModifyWaitEvent(client->dispatcher->wait_events, client->event_pos, client->events, NULL);
+					client_channel_apply_events(client);
 				}
+				/*
+				 * The client lags: stop reading the backend so that it blocks
+				 * in send() instead of filling our buffer.  Resumed below.
+				 */
+				backend_channel_read_pause(peer);
 				return PT_WAITING;
 			}
+			/* the error path still has to read the backend */
+			backend_channel_read_resume(peer);
 			return PT_EXITED_ERROR;
 		}
 
-		ELOG_PSS(DEBUG5, "Send reply %c to client %d from backend %d (%p:ready=%d)", 
+		ELOG_PSS(DEBUG5, "Send reply %c to client %d from backend %d (%p:ready=%d)",
 			peer->buf[peer->tx_pos], client->session->info->client_port->sock,
 			peer->backend_pid, peer, peer->backend_is_ready);
 
@@ -1402,7 +1694,7 @@ PT_THREAD(client_channel_write(ClientChannel* client))
 	if (unlikely(client->events & WL_SOCKET_WRITEABLE))
 	{
 		client->events &= ~WL_SOCKET_WRITEABLE;
-		ModifyWaitEvent(client->dispatcher->wait_events, client->event_pos, client->events, NULL);
+		client_channel_apply_events(client);
 	}
 
 	if (likely(peer->tx_size != 0))
@@ -1414,6 +1706,9 @@ PT_THREAD(client_channel_write(ClientChannel* client))
 		peer->tx_pos = peer->tx_size = 0;
 	}
 	ELOG_PSS(DEBUG5, "client_channel_write 1 %p", client);
+
+	/* the client has caught up */
+	backend_channel_read_resume(peer);
 
 	return PT_ENDED;
 }
@@ -1442,8 +1737,13 @@ PT_THREAD(backend_channel_write(BackendChannel* backend))
 				if (!(backend->events & WL_SOCKET_WRITEABLE))
 				{
 					backend->events |= WL_SOCKET_WRITEABLE;
-					ModifyWaitEvent(backend->dispatcher->wait_events, backend->event_pos, backend->events, NULL);
+					backend_channel_apply_events(backend);
 				}
+				/*
+				 * The backend lags: stop reading the client so that it blocks
+				 * in send() instead of filling our buffer.  Resumed below.
+				 */
+				client_channel_read_pause(client);
 				return PT_WAITING;
 			}
 			client->is_backend_error = true;
@@ -1463,7 +1763,7 @@ PT_THREAD(backend_channel_write(BackendChannel* backend))
 	if (unlikely(backend->events & WL_SOCKET_WRITEABLE))
 	{
 		backend->events &= ~WL_SOCKET_WRITEABLE;
-		ModifyWaitEvent(backend->dispatcher->wait_events, backend->event_pos, backend->events, NULL);
+		backend_channel_apply_events(backend);
 	}
 
 	if (likely(client->tx_size != 0))
@@ -1475,6 +1775,9 @@ PT_THREAD(backend_channel_write(BackendChannel* backend))
 		client->tx_pos = client->tx_size = 0;
 	}
 	ELOG_PSS(DEBUG5, "backend_channel_write 1 %p", backend);
+
+	/* the backend has caught up */
+	client_channel_read_resume(client);
 
 	return PT_ENDED;
 }
@@ -1591,6 +1894,14 @@ PT_THREAD(client_channel_read(ClientChannel* client, size_t max_len))
 {
 	ssize_t rc;
 	size_t read_len = client->buf_size - client->rx_pos;
+	/*
+	 * A zero-length recv() returns 0, i.e. EOF.  The buffer fills only while
+	 * reading is paused (backend_channel_write(), client_attach_register()),
+	 * so this is a stale event: wait.
+	 */
+	if (unlikely(read_len == 0))
+		return PT_WAITING;
+
 	if (unlikely(max_len != 0))
 		read_len = Min(read_len, max_len);
 
@@ -1611,11 +1922,17 @@ PT_THREAD(client_channel_read(ClientChannel* client, size_t max_len))
 		if (rc < 0 && (errno == EAGAIN || errno == EWOULDBLOCK))
 			return PT_WAITING;
 		/*
-		 * rc == 0 means EOF (client closed connection).
-		 * rc < 0 with other errno means error.
-		 * In both cases, treat as error to close the channel.
+		 * rc == 0 is EOF, rc < 0 a real error.  Level-triggered epoll reports
+		 * such a socket as readable on every single iteration, forever, and
+		 * nothing can clear that condition -- a further recv() just returns 0
+		 * again.  The client fiber, meanwhile, still has cleanup to do (flush
+		 * buffered input to the backend, send Terminate, wait for the session
+		 * to close), and it parks on the *backend* while doing so.  Leaving
+		 * the client socket armed would therefore spin dispatcher_loop() at
+		 * full CPU for as long as that cleanup takes -- which is as long as
+		 * any query still running on the backend.
 		 */
-		ELOG_PSS(DEBUG1, "%p: client_channel_read EOF or error: rc=%d: %m", client, (int)rc);
+		client_channel_read_done(client);
 		return PT_EXITED_ERROR;
 	}
 
@@ -1639,7 +1956,13 @@ static
 PT_THREAD(backend_channel_read(BackendChannel* backend))
 {
 	ssize_t rc;
-	rc = recv(backend->backend_socket, backend->buf + backend->rx_pos, backend->buf_size - backend->rx_pos, 0);
+	size_t read_len = backend->buf_size - backend->rx_pos;
+
+	/* as in client_channel_read(); client_channel_write() pauses reading */
+	if (unlikely(read_len == 0))
+		return PT_WAITING;
+
+	rc = recv(backend->backend_socket, backend->buf + backend->rx_pos, read_len, 0);
 
 	if (unlikely(rc <= 0))
 	{
@@ -1730,10 +2053,16 @@ static bool
 client_channel_register(PolarDispatcher* dispatcher, ClientChannel* client)
 {
 	pgsocket sock = client->session->info->client_port->sock;
-	/* Using non-blocking sockets for async I/O */
+	/* Fibers must never block on a socket, so all I/O is non-blocking. */
 	pg_set_noblock(sock);
-	/* Use level-triggered mode with WL_SOCKET_CLOSED to detect client disconnect */
-	client->events = WL_SOCKET_READABLE | WL_SOCKET_CLOSED;
+	/*
+	 * Level-triggered readability is the only socket interest we register.
+	 * EOF and error conditions are reported as readable (see the comment on
+	 * AddWaitEventToSet), so the client fiber learns about them from the
+	 * recv() in client_channel_read() and can drain any data still queued
+	 * ahead of them before tearing the channel down.
+	 */
+	client->events = WL_SOCKET_READABLE;
 	client->event_pos = AddWaitEventToSet(polar_my_dispatcher->wait_events, client->events, sock, NULL, client);
 	if (client->event_pos < 0)
 	{
@@ -1753,8 +2082,8 @@ backend_channel_register(PolarDispatcher* dispatcher, BackendChannel* backend)
 {
 	pgsocket sock = backend->backend_socket;
 	pg_set_noblock(sock);
-	/* Use level-triggered mode with WL_SOCKET_CLOSED to detect backend disconnect */
-	backend->events = WL_SOCKET_READABLE | WL_SOCKET_CLOSED;
+	/* Level-triggered readable only, as for client channels. */
+	backend->events = WL_SOCKET_READABLE;
 	backend->event_pos = AddWaitEventToSet(polar_my_dispatcher->wait_events, backend->events, sock, NULL, backend);
 	if (backend->event_pos < 0)
 	{
@@ -2176,13 +2505,6 @@ dispatcher_loop()
 				case PCT_Client:
 				{
 					client = (ClientChannel*)ready[i].user_data;
-					/* Handle client socket close/error - remove channel */
-					if (unlikely(ready[i].events & WL_SOCKET_CLOSED))
-					{
-						ELOG_PSS(DEBUG1, "Client socket closed: %p", client);
-						client_channel_hangout(client);
-						break;
-					}
 					if (unlikely(ready[i].events & WL_SOCKET_WRITEABLE))
 						fiber_client_main(client, CLIENT_WRITEABLE);
 					if (likely(ready[i].events & WL_SOCKET_READABLE))
@@ -2193,13 +2515,6 @@ dispatcher_loop()
 				case PCT_Backend:
 				{
 					backend = (BackendChannel*)ready[i].user_data;
-					/* Handle backend socket close/error - remove channel */
-					if (unlikely(ready[i].events & WL_SOCKET_CLOSED))
-					{
-						ELOG_PSS(DEBUG1, "Backend socket closed: %p (pid %d)", backend, backend->backend_pid);
-						backend_channel_hangout(backend);
-						break;
-					}
 					if (unlikely(ready[i].events & WL_SOCKET_WRITEABLE))
 						fiber_backend_main(backend, BACKEND_WRITEABLE);
 					if (likely(ready[i].events & WL_SOCKET_READABLE))
