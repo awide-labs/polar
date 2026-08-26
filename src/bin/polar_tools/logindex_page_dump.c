@@ -159,6 +159,12 @@ logindex_page_main(int argc, char **argv)
 		}
 	}
 
+	if (!table_path)
+	{
+		usage();
+		goto end;
+	}
+
 	fp = fopen(table_path, "r");
 
 	if (!fp)
