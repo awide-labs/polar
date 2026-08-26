@@ -185,6 +185,12 @@ typedef struct ClientChannel
 	bool		is_idle;		/* no activity on this channel */
 	bool		is_backend_error;
 	bool		is_terminating;
+	bool		is_read_finished;	/* client socket will never be read again;
+									 * read interest must stay off */
+	bool		is_write_finished;	/* a client write failed; never write
+									 * again */
+	bool		is_backend_closed;	/* epilogue: the backend answered our
+									 * Terminate with 'X' */
 	bool		is_wait_send_to_postmaster; /* this conn is returned back to
 											 * postmaster. waiting send. */
 
