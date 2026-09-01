@@ -13,6 +13,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   with `SHOW huge_pages_status;`. Backported from PostgreSQL 17
   (XCOM-236)
 
+### Fixed
+
+- Fixed a rare failure of the in-memory WAL queue when sessions waiting
+  for queue space had reserved most of it. The primary could restart with
+  `PANIC: For xlog send queue there should be only WAL META`, all writing
+  sessions could hang, or a replica could stop replaying WAL and fail
+  queries with `Read a future page due to timeout` (XCOM-237).
+
 ### Performance
 
 - Prefault huge-page shared memory in a background worker during startup to

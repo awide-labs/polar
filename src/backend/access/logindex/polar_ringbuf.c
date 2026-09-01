@@ -403,7 +403,17 @@ polar_ringbuf_update_ref(polar_ringbuf_ref_t *ref)
 {
 	polar_ringbuf_t rbuf = ref->rbuf;
 	uint64		idx = rbuf->slot[ref->slot].pread;
-	uint32		pktlen = polar_ringbuf_pkt_len(rbuf, idx);
+	uint32		pktlen;
+
+	/*
+	 * The length below comes straight out of the packet header, so the packet
+	 * must already be published; callers check polar_ringbuf_next_ready_pkt()
+	 * first.
+	 */
+	Assert((rbuf->data[POLAR_RINGBUF_IDX(rbuf, idx)] & POLAR_RINGBUF_PKT_STATE_MASK)
+		   == POLAR_RINGBUF_PKT_READY);
+
+	pktlen = polar_ringbuf_pkt_len(rbuf, idx);
 
 	LWLockAcquire(&rbuf->lock, LW_SHARED);
 	rbuf->slot[ref->slot].pread = idx + POLAR_RINGBUF_PKTHDRSIZE + pktlen;
@@ -552,14 +562,25 @@ polar_ringbuf_free_up(polar_ringbuf_t rbuf, size_t len, polar_interrupt_callback
 	pgstat_report_wait_end();
 }
 
+/*
+ * Skip this reference forward so it holds back at most ratio of the ring.
+ *
+ * Only walks over packets the producer has actually published.  Bounding the
+ * walk with polar_ringbuf_avail() alone is not enough: it measures against
+ * pwrite, which is a claim marker since the optimistic reservation, so the
+ * bytes above the last published packet are claimed but unwritten.  Stop at
+ * the publish frontier, read from the packet header.
+ */
 void
 polar_ringbuf_ref_keep_data(polar_ringbuf_ref_t *ref, float ratio)
 {
 	polar_ringbuf_t rbuf = ref->rbuf;
 	ssize_t		keep_size = rbuf->size * ratio;
 	bool		updated = false;
+	uint32		pktlen;
 
-	while (polar_ringbuf_avail(ref) > keep_size)
+	while (polar_ringbuf_avail(ref) > keep_size
+		   && polar_ringbuf_next_ready_pkt(ref, &pktlen) != POLAR_RINGBUF_PKT_INVALID_TYPE)
 	{
 		polar_ringbuf_update_ref(ref);
 		updated = true;
