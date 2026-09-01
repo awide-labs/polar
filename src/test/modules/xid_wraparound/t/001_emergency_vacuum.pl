@@ -82,7 +82,8 @@ SELECT datname,
        age(datfrozenxid) > current_setting('vacuum_failsafe_age')::int as old
 FROM pg_database ORDER BY 1
 ]);
-is( $ret, "postgres|t
+is( $ret, "polardb_admin|t
+postgres|t
 template0|t
 template1|t", "all tables became old");
 
