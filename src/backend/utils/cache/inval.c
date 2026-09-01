@@ -1689,6 +1689,25 @@ CacheRegisterSyscacheCallback(int cacheid,
 {
 	if (cacheid < 0 || cacheid >= SysCacheSize)
 		elog(FATAL, "invalid cache ID: %d", cacheid);
+
+	/*
+	 * A pooled backend re-runs part of session startup on every client
+	 * handover, so it can reach this point once per session with a
+	 * registration it already holds.
+	 */
+	if (POLAR_SHARED_SERVER_RUNNING())
+	{
+		int			j;
+
+		for (j = syscache_callback_links[cacheid] - 1; j >= 0;
+			 j = syscache_callback_list[j].link - 1)
+		{
+			if (syscache_callback_list[j].function == func &&
+				syscache_callback_list[j].arg == arg)
+				return;
+		}
+	}
+
 	if (syscache_callback_count >= MAX_SYSCACHE_CALLBACKS)
 		elog(FATAL, "out of syscache_callback_list slots");
 
@@ -1728,6 +1747,22 @@ void
 CacheRegisterRelcacheCallback(RelcacheCallbackFunction func,
 							  Datum arg)
 {
+	/*
+	 * Same duplicate registration hazard as in
+	 * CacheRegisterSyscacheCallback() above.
+	 */
+	if (POLAR_SHARED_SERVER_RUNNING())
+	{
+		int			i;
+
+		for (i = 0; i < relcache_callback_count; i++)
+		{
+			if (relcache_callback_list[i].function == func &&
+				relcache_callback_list[i].arg == arg)
+				return;
+		}
+	}
+
 	if (relcache_callback_count >= MAX_RELCACHE_CALLBACKS)
 		elog(FATAL, "out of relcache_callback_list slots");
 
