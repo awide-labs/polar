@@ -170,6 +170,7 @@ extern bool polar_ringbuf_new_ref(polar_ringbuf_t rbuf, bool strong, polar_ringb
 extern void polar_ringbuf_release_ref(polar_ringbuf_ref_t *ref);
 extern bool polar_ringbuf_set_ref_strong_property(polar_ringbuf_ref_t *ref, bool strong);
 extern void polar_ringbuf_update_ref(polar_ringbuf_ref_t *ref);
+extern void polar_ringbuf_advance_ref(polar_ringbuf_ref_t *ref, uint32 pktlen);
 
 extern ssize_t polar_ringbuf_pkt_write(polar_ringbuf_t rbuf, size_t idx, int offset, uint8 *buf, size_t len);
 extern ssize_t polar_ringbuf_read_next_pkt(polar_ringbuf_ref_t *ref,
@@ -205,23 +206,30 @@ polar_ringbuf_get_pkt_length(polar_ringbuf_t rbuf, uint64 idx)
 {
 	uint32		len;
 	uint8	   *buf = (uint8 *) &len;
-	size_t		phys,
-				split,
-				todo = sizeof(len);
+	const size_t todo = sizeof(len);
+	size_t		phys;
 
 	/* packet len is saved from idx+1 */
 	phys = POLAR_RINGBUF_IDX(rbuf, idx + 1);
-	split = ((phys + todo) > rbuf->size) ? rbuf->size - phys : 0;
 
-	if (unlikely(split > 0))
+	/*
+	 * The copy is duplicated into both branches rather than shared: a single
+	 * call site reached with a runtime size cannot be inlined, even when the
+	 * size is a constant four on the path that matters.  Given its own site,
+	 * the common path folds to a load instead of a call into memcpy(); this
+	 * runs several times per packet, and a four byte call is nearly all call
+	 * overhead.  The wrapping path keeps its two runtime-sized calls; the
+	 * length field straddles the end of the ring only once per wrap.
+	 */
+	if (unlikely(phys + todo > rbuf->size))
 	{
-		memcpy(buf, rbuf->data + phys, split);
-		buf += split;
-		todo -= split;
-		phys = 0;
-	}
+		size_t		split = rbuf->size - phys;
 
-	memcpy(buf, rbuf->data + phys, todo);
+		memcpy(buf, rbuf->data + phys, split);
+		memcpy(buf + split, rbuf->data, todo - split);
+	}
+	else
+		memcpy(buf, rbuf->data + phys, todo);
 
 	return len;
 }

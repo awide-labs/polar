@@ -52,6 +52,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Performance
 
+- Reduce CPU overhead for WAL streaming to shared-storage replicas
+  and logindex saving on the primary by avoiding repeated parsing of
+  WAL queue headers (XCOM-239)
 - Reduce contention when many sessions insert WAL concurrently by removing
   the global spinlock from WAL space reservation. (XCOM-238)
 - Eliminated multi-second transaction commit stalls under heavy write

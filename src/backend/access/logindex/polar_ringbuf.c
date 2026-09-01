@@ -397,7 +397,10 @@ polar_ringbuf_update_pread(polar_ringbuf_t rbuf)
 }
 
 /*
- * Update the reference's read position
+ * Update the reference's read position, for a caller that already knows the
+ * length of the packet it consumed.  polar_ringbuf_next_pkt_type() hands that
+ * length to every drain loop, and decoding it again here would mean another
+ * pass over the packet header.
  *
  * This is the only way space is ever handed back to writers, and it runs once
  * per consumed packet.  A slot that is strong publishes its position without
@@ -414,20 +417,19 @@ polar_ringbuf_update_pread(polar_ringbuf_t rbuf)
  * set_ref_strong_property(..., true/false).
  */
 void
-polar_ringbuf_update_ref(polar_ringbuf_ref_t *ref)
+polar_ringbuf_advance_ref(polar_ringbuf_ref_t *ref, uint32 pktlen)
 {
 	polar_ringbuf_t rbuf = ref->rbuf;
 	uint64		idx = pg_atomic_read_u64(&rbuf->slot[ref->slot].pread);
-	size_t		pktlen;
 
 	/*
-	 * The length below comes straight out of the packet header, so the packet
-	 * must already be published; callers check polar_ringbuf_next_pkt_type()
+	 * pktlen comes straight out of the packet header, so the packet must
+	 * already be published; callers check polar_ringbuf_next_pkt_type()
 	 * first.
 	 */
 	Assert((rbuf->data[POLAR_RINGBUF_IDX(rbuf, idx)] & POLAR_RINGBUF_PKT_STATE_MASK)
 		   == POLAR_RINGBUF_PKT_READY);
-	pktlen = polar_ringbuf_get_pkt_length(rbuf, idx);
+	Assert(pktlen == polar_ringbuf_get_pkt_length(rbuf, idx));
 
 	/* must be a strong ref so that pread can be updated without lock */
 	Assert(ref->strong || ref->promoted);
@@ -441,6 +443,18 @@ polar_ringbuf_update_ref(polar_ringbuf_ref_t *ref)
 	pg_memory_barrier();
 	pg_atomic_write_u64(&rbuf->slot[ref->slot].pread,
 						idx + POLAR_RINGBUF_PKTHDRSIZE + pktlen);
+}
+
+/*
+ * Same, for a caller that does not have the packet length at hand.
+ */
+void
+polar_ringbuf_update_ref(polar_ringbuf_ref_t *ref)
+{
+	polar_ringbuf_t rbuf = ref->rbuf;
+	uint64		idx = pg_atomic_read_u64(&rbuf->slot[ref->slot].pread);
+
+	polar_ringbuf_advance_ref(ref, polar_ringbuf_get_pkt_length(rbuf, idx));
 }
 
 /*
