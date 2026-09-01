@@ -274,6 +274,103 @@ test_promoted_ringbuf_ref(void)
 	free(data);
 }
 
+/* keep_data() leaves the ring's read position alone when the keeper stays. */
+#define KEEP_DATA_CHECK(rbuf, keeper, ratio, keeper_pread, ring_pread) \
+	do { \
+		polar_ringbuf_ref_keep_data((keeper), (ratio)); \
+		Assert(pg_atomic_read_u64(&(rbuf)->slot[(keeper)->slot].pread) == (keeper_pread)); \
+		polar_ringbuf_update_keep_data(rbuf); \
+		Assert(pg_atomic_read_u64(&(rbuf)->pread) == (ring_pread)); \
+	} while (0)
+
+/* A reader still pins the ring after the data-keep reference skips past it. */
+static void
+test_keep_data_consumed_position(void)
+{
+	uint8	   *data = calloc(1, RINGBUF_SIZE);
+	polar_ringbuf_t rbuf;
+	polar_ringbuf_ref_t keeper;
+	polar_ringbuf_ref_t reader;
+	uint64		first;
+	uint64		pending;
+	uint64		later;
+	uint32		pktlen;
+	const uint32 payload_size = 16;
+	const size_t pkt_size = POLAR_RINGBUF_PKT_SIZE(payload_size);
+	int			i;
+
+	rbuf = polar_ringbuf_init(data, RINGBUF_SIZE, LWTRANCHE_POLAR_XLOG_QUEUE);
+	Assert(polar_ringbuf_new_ref(rbuf, true, &reader, "test_keep_reader"));
+
+	/* The reader consumes a few packets before the keeper exists. */
+	for (i = 0; i < 3; i++)
+	{
+		uint64		idx = polar_ringbuf_pkt_reserve(rbuf, pkt_size);
+
+		polar_ringbuf_set_pkt_length(rbuf, idx, payload_size);
+		polar_ringbuf_set_pkt_flag(rbuf, idx,
+								   POLAR_RINGBUF_PKT_WAL_META | POLAR_RINGBUF_PKT_READY);
+		Assert(polar_ringbuf_next_ready_pkt(&reader, &pktlen) == POLAR_RINGBUF_PKT_WAL_META);
+		polar_ringbuf_update_ref(&reader);
+	}
+	polar_ringbuf_update_keep_data(rbuf);
+	Assert(polar_ringbuf_new_ref(rbuf, true, &keeper, "test_keep_jump"));
+
+	pg_atomic_write_u64(&rbuf->slot[keeper.slot].visit, 0);
+
+	first = polar_ringbuf_pkt_reserve(rbuf, pkt_size);
+	polar_ringbuf_set_pkt_length(rbuf, first, payload_size);
+	polar_ringbuf_set_pkt_flag(rbuf, first,
+							   POLAR_RINGBUF_PKT_WAL_META | POLAR_RINGBUF_PKT_READY);
+	pending = polar_ringbuf_pkt_reserve(rbuf, pkt_size);
+	Assert(pg_atomic_read_u64(&rbuf->slot[keeper.slot].pread) == first);
+	Assert(pg_atomic_read_u64(&rbuf->pread) == first);
+
+	/* Keeper level with the reader; it stops at the unpublished packet. */
+	KEEP_DATA_CHECK(rbuf, &keeper, 1.0f, first, first);
+	KEEP_DATA_CHECK(rbuf, &keeper, 0.0f, pending, first);
+	Assert(pg_atomic_read_u64(&rbuf->slot[keeper.slot].visit)
+		   < pg_atomic_read_u64(&rbuf->slot[reader.slot].visit));
+
+	/* Keeper ahead of the reader, which still pins the first packet. */
+	KEEP_DATA_CHECK(rbuf, &keeper, 1.0f, pending, first);
+	KEEP_DATA_CHECK(rbuf, &keeper, 0.0f, pending, first);
+
+	Assert(polar_ringbuf_next_ready_pkt(&reader, &pktlen) == POLAR_RINGBUF_PKT_WAL_META);
+	polar_ringbuf_update_ref(&reader);
+	Assert(pg_atomic_read_u64(&rbuf->slot[reader.slot].pread) == pending);
+	polar_ringbuf_set_pkt_length(rbuf, pending, payload_size);
+	polar_ringbuf_set_pkt_flag(rbuf, pending,
+							   POLAR_RINGBUF_PKT_WAL_META | POLAR_RINGBUF_PKT_READY);
+
+	/* Level again, with the next packet published. */
+	KEEP_DATA_CHECK(rbuf, &keeper, 1.0f, pending, pending);
+	KEEP_DATA_CHECK(rbuf, &keeper, 0.0f, pending + pkt_size, pending);
+
+	/* Ahead again, the reader pins the newly published packet. */
+	KEEP_DATA_CHECK(rbuf, &keeper, 1.0f, pending + pkt_size, pending);
+
+	later = polar_ringbuf_pkt_reserve(rbuf, pkt_size);
+	Assert(later == pending + pkt_size);
+	polar_ringbuf_set_pkt_length(rbuf, later, payload_size);
+	polar_ringbuf_set_pkt_flag(rbuf, later,
+							   POLAR_RINGBUF_PKT_WAL_META | POLAR_RINGBUF_PKT_READY);
+	for (i = 0; i < 2; i++)
+	{
+		Assert(polar_ringbuf_next_ready_pkt(&reader, &pktlen) == POLAR_RINGBUF_PKT_WAL_META);
+		polar_ringbuf_update_ref(&reader);
+	}
+	Assert(pg_atomic_read_u64(&rbuf->slot[reader.slot].pread) == later + pkt_size);
+
+	/* Keeper behind the reader pins the ring itself. */
+	KEEP_DATA_CHECK(rbuf, &keeper, 1.0f, later, later);
+	KEEP_DATA_CHECK(rbuf, &keeper, 0.0f, later + pkt_size, later + pkt_size);
+
+	polar_ringbuf_release_ref(&reader);
+	polar_ringbuf_release_ref(&keeper);
+	free(data);
+}
+
 static void
 test_ringbuf_sigterm(SIGNAL_ARGS)
 {
@@ -512,6 +609,7 @@ test_ringbuf(PG_FUNCTION_ARGS)
 	test_single_ringbuf();
 	test_keep_data_publish_frontier();
 	test_promoted_ringbuf_ref();
+	test_keep_data_consumed_position();
 	test_stat_counters();
 	test_ringbuf_bgworker();
 	PG_RETURN_VOID();

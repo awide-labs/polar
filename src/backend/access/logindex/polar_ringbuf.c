@@ -665,29 +665,52 @@ polar_ringbuf_free_up(polar_ringbuf_t rbuf, size_t len, polar_interrupt_callback
 /*
  * Skip this reference forward so it holds back at most ratio of the ring.
  *
- * Only walks over packets the producer has actually published.  Bounding the
- * walk with polar_ringbuf_avail() alone is not enough: it measures against
- * pwrite, which is a claim marker since the optimistic reservation, so the
- * bytes above the last published packet are claimed but unwritten.  Stop at
- * the publish frontier, read from the packet header.
+ * Only walks over packets the producer has actually published.  How far we
+ * would like to go is measured against pwrite, but that is a claim marker
+ * since the optimistic reservation, so the bytes above the last published
+ * packet are claimed but unwritten.  Stop at the publish frontier, read from
+ * each header's state byte before trusting its length.
+ *
+ * This is discard, not read: nothing consumes the packets we step over, so the
+ * position is tracked in a local and published once at the end rather than
+ * through polar_ringbuf_update_ref() per packet.  Catching up across a large
+ * queue is tens of millions of packets; paying a barrier and two atomics on
+ * the slot's cache line for each of them costs seconds, and every writer is
+ * blocked on this reference the whole time.
  */
 void
 polar_ringbuf_ref_keep_data(polar_ringbuf_ref_t *ref, float ratio)
 {
 	polar_ringbuf_t rbuf = ref->rbuf;
 	ssize_t		keep_size = rbuf->size * ratio;
-	bool		updated = false;
-	uint32		pktlen;
+	uint64		pos = pg_atomic_read_u64(&rbuf->slot[ref->slot].pread);
+	uint64		pwrite = pg_atomic_read_u64(&rbuf->pwrite);
+	uint64		skipped = 0;
 
-	while (polar_ringbuf_avail(ref) > keep_size
-		   && polar_ringbuf_next_ready_pkt(ref, &pktlen) != POLAR_RINGBUF_PKT_INVALID_TYPE)
+	Assert(ref->strong || ref->promoted);
+
+	while ((ssize_t) (pwrite - pos) > keep_size)
 	{
-		polar_ringbuf_update_ref(ref);
-		updated = true;
+		size_t		phys = POLAR_RINGBUF_IDX(rbuf, pos);
+
+		/* Stop at the publish frontier, see above */
+		if ((rbuf->data[phys] & POLAR_RINGBUF_PKT_STATE_MASK) != POLAR_RINGBUF_PKT_READY)
+			break;
+
+		/* Don't read the length before the flag that publishes it */
+		pg_read_barrier();
+
+		pos += POLAR_RINGBUF_PKTHDRSIZE + polar_ringbuf_pkt_len(rbuf, pos);
+		skipped++;
 	}
 
-	if (updated)
-		polar_ringbuf_update_keep_data(rbuf);
+	if (skipped == 0)
+		return;
+
+	pg_atomic_write_u64(&rbuf->slot[ref->slot].pread, pos);
+	pg_atomic_fetch_add_u64(&rbuf->slot[ref->slot].visit, skipped);
+
+	polar_ringbuf_update_keep_data(rbuf);
 }
 
 void

@@ -23,6 +23,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Performance
 
+- Eliminated multi-second transaction commit stalls under heavy write
+  load when the in-memory WAL queue is full (XCOM-237).
 - Prefault huge-page shared memory in a background worker during startup to
   reduce memory-allocation work during query processing without blocking the
   postmaster. Enabled by default with `polar_shmem_prefault` (XCOM-236)
