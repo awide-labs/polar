@@ -43,14 +43,26 @@ typedef struct polar_ringbuf_slot_t
 {
 	/* Is this a strong reference? */
 	bool		strong;
-	/* The read position of the ring buffer */
-	uint64		pread;
 
 	/*
-	 * The times of read operation And compare visit times to get least read
-	 * position
+	 * The read position of the ring buffer.
+	 *
+	 * Published by the owning reference in polar_ringbuf_update_ref() and
+	 * read by polar_ringbuf_update_pread()/polar_ringbuf_evict_ref() while
+	 * holding rbuf->lock exclusively.  The owner also reads it without that
+	 * lock; monitoring reads it under the shared lock.
+	 *
+	 * A strong reference publishes it without taking the lock at all (it can
+	 * never be evicted, so nobody else writes this slot), hence the atomic.
 	 */
-	uint64		visit;
+	pg_atomic_uint64 pread;
+
+	/*
+	 * The times of read operation.  Statistics only: the least read position
+	 * is the minimum over the slots' pread, which is monotonic and therefore
+	 * directly comparable.
+	 */
+	pg_atomic_uint64 visit;
 	/* Each reference has one identity number */
 	uint64		ref_num;
 	char		ref_name[POLAR_RINGBUF_MAX_REF_NAME + 1];
@@ -65,8 +77,17 @@ typedef struct polar_ringbuf_ref_t
 	uint64		ref_num;
 	/* The slot number this reference occupied */
 	int			slot;
-	/* Is this a strong reference? */
+	/* Was this reference created strong, and so never evictable? */
 	bool		strong;
+
+	/*
+	 * Is the slot currently promoted to strong by this reference?  Set
+	 * between polar_ringbuf_get_ref() and polar_ringbuf_clear_ref(); always
+	 * false for a reference that is already strong.  While it is set the slot
+	 * cannot be evicted, so the owner may publish its read position without
+	 * the lock; see polar_ringbuf_update_ref().
+	 */
+	bool		promoted;
 	char		ref_name[POLAR_RINGBUF_MAX_REF_NAME + 1];
 } polar_ringbuf_ref_t;
 
@@ -239,6 +260,16 @@ polar_ringbuf_free_size(polar_ringbuf_t rbuf)
 }
 
 /*
+ * Is the reservation ending at end safe to write?  Use the caller's pread
+ * snapshot so readiness and backoff decisions can observe the same progress.
+ */
+static inline bool
+polar_ringbuf_reservation_ready(polar_ringbuf_t rbuf, uint64 end, uint64 pread)
+{
+	return (ssize_t) (end - pread) <= (ssize_t) (rbuf->size - 1);
+}
+
+/*
  * The data that is available or reserved for read.
  * With monotonic counters: avail = pwrite - slot_pread (always >= 0).
  */
@@ -248,7 +279,7 @@ polar_ringbuf_avail(polar_ringbuf_ref_t *ref)
 	polar_ringbuf_t rbuf = ref->rbuf;
 
 	return (ssize_t) (pg_atomic_read_u64(&rbuf->pwrite) -
-					  rbuf->slot[ref->slot].pread);
+					  pg_atomic_read_u64(&rbuf->slot[ref->slot].pread));
 }
 
 /*
@@ -287,7 +318,7 @@ static inline uint8
 polar_ringbuf_next_ready_pkt(polar_ringbuf_ref_t *ref, uint32 *pktlen)
 {
 	polar_ringbuf_t rbuf = ref->rbuf;
-	uint64		idx = rbuf->slot[ref->slot].pread;
+	uint64		idx = pg_atomic_read_u64(&rbuf->slot[ref->slot].pread);
 	size_t		phys = POLAR_RINGBUF_IDX(rbuf, idx);
 
 	*pktlen = 0;
@@ -346,7 +377,6 @@ polar_ringbuf_set_pkt_flag(polar_ringbuf_t rbuf, uint64 idx, uint8 flag)
 	rbuf->data[POLAR_RINGBUF_IDX(rbuf, idx)] = flag;
 }
 
-extern polar_ringbuf_slot_t *polar_get_min_visit_slot_except_keep(polar_ringbuf_t rbuf, int keep_slot);
 extern void polar_prs_stat_reset(polar_ringbuf_t rbuf);
 
 #endif

@@ -54,12 +54,33 @@ static bool polar_ringbuf_update_pread(polar_ringbuf_t rbuf);
 	 && (ref)->rbuf->slot[(ref)->slot].ref_num == (ref)->ref_num)
 
 /*
+ * Minimum and maximum sleep, in microseconds, between reclaim attempts in
+ * polar_ringbuf_wait_for_space().
+ */
+#define RINGBUF_WAIT_MIN_US 10
+#define RINGBUF_WAIT_MAX_US 1000
+
+/*
+ * Reset a slot to its unused state.  Must be called with rbuf->lock held
+ * exclusively.  The atomics need re-initializing after the MemSet because
+ * pg_atomic_uint64 is not guaranteed to be plain memory on every platform.
+ */
+static void
+polar_ringbuf_slot_clear(polar_ringbuf_slot_t *slot)
+{
+	MemSet(slot, 0, sizeof(polar_ringbuf_slot_t));
+	pg_atomic_init_u64(&slot->pread, 0);
+	pg_atomic_init_u64(&slot->visit, 0);
+}
+
+/*
  * Initialize ring buffer from allocated memory.
  */
 polar_ringbuf_t
 polar_ringbuf_init(uint8 *data, size_t len, int tranche_id)
 {
 	polar_ringbuf_t rbuf = (polar_ringbuf_t) data;
+	int			i;
 
 	LWLockInitialize(&rbuf->lock, tranche_id);
 
@@ -74,7 +95,8 @@ polar_ringbuf_init(uint8 *data, size_t len, int tranche_id)
 	pg_atomic_init_u64(&rbuf->prs.prev_pop_cnt, 0);
 	pg_atomic_init_u64(&rbuf->prs.evict_ref_cnt, 0);
 
-	MemSet(rbuf->slot, 0, sizeof(polar_ringbuf_slot_t) * POLAR_RINGBUF_MAX_SLOT);
+	for (i = 0; i < POLAR_RINGBUF_MAX_SLOT; i++)
+		polar_ringbuf_slot_clear(&rbuf->slot[i]);
 
 	rbuf->size = len - offsetof(polar_ringbuf_data_t, data);
 	rbuf->occupied = 0;
@@ -107,13 +129,14 @@ polar_ringbuf_new_ref(polar_ringbuf_t rbuf, bool strong,
 		POLAR_BIT_OCCUPY(rbuf->occupied, i);
 		i--;
 		rbuf->slot[i].strong = strong;
-		rbuf->slot[i].pread = pg_atomic_read_u64(&rbuf->pread);
-		rbuf->slot[i].visit = rbuf->min_visit;
+		pg_atomic_write_u64(&rbuf->slot[i].pread, pg_atomic_read_u64(&rbuf->pread));
+		pg_atomic_write_u64(&rbuf->slot[i].visit, rbuf->min_visit);
 		rbuf->slot[i].ref_num = ++rbuf->ref_num;
 		ref->rbuf = rbuf;
 		ref->ref_num = rbuf->slot[i].ref_num;
 		ref->slot = i;
 		ref->strong = strong;
+		ref->promoted = false;
 
 		if (ref_name != NULL)
 		{
@@ -149,7 +172,7 @@ polar_ringbuf_release_ref(polar_ringbuf_ref_t *ref)
 	if (RINGBUF_REF_MATCH(ref))
 	{
 		POLAR_BIT_RELEASE_OCCUPIED(rbuf->occupied, ref->slot + 1);
-		MemSet(&rbuf->slot[ref->slot], 0, sizeof(polar_ringbuf_slot_t));
+		polar_ringbuf_slot_clear(&rbuf->slot[ref->slot]);
 		polar_ringbuf_update_pread(rbuf);
 	}
 
@@ -199,6 +222,7 @@ polar_ringbuf_get_ref(polar_ringbuf_ref_t *ref)
 	if (RINGBUF_REF_MATCH(ref))
 	{
 		rbuf->slot[ref->slot].strong = true;
+		ref->promoted = !ref->strong;
 		got = true;
 	}
 
@@ -228,13 +252,17 @@ polar_ringbuf_valid_ref(polar_ringbuf_ref_t *ref)
 }
 
 /*
- * Change strong reference to weak reference
+ * Undo temporary promotion of a reference created weak.  References created
+ * strong must remain strong until released, since their owners publish read
+ * positions without locking and rely on the slot never being evicted.
  */
 bool
 polar_ringbuf_clear_ref(polar_ringbuf_ref_t *ref)
 {
 	bool		cleared = false;
 	polar_ringbuf_t rbuf = ref->rbuf;
+
+	Assert(!ref->strong);
 
 	/*
 	 * The strong reference property is changed in the same process, and it's
@@ -245,6 +273,7 @@ polar_ringbuf_clear_ref(polar_ringbuf_ref_t *ref)
 	if (RINGBUF_REF_MATCH(ref))
 	{
 		rbuf->slot[ref->slot].strong = false;
+		ref->promoted = false;
 		cleared = true;
 	}
 
@@ -266,7 +295,7 @@ polar_ringbuf_read_next_pkt(polar_ringbuf_ref_t *ref,
 	size_t		pktlen;
 	size_t		phys;
 	polar_ringbuf_t rbuf = ref->rbuf;
-	uint64		idx = rbuf->slot[ref->slot].pread;
+	uint64		idx = pg_atomic_read_u64(&rbuf->slot[ref->slot].pread);
 
 	pktlen = polar_ringbuf_pkt_len(rbuf, idx);
 
@@ -327,12 +356,24 @@ polar_ringbuf_pkt_write(polar_ringbuf_t rbuf, uint64 idx, int offset, uint8 *buf
 
 /*
  * Update the ring buffer least read position and to get more free space
+ *
+ * Since positions are monotonic, the least read position is simply the
+ * minimum over the live slots' pread - no need to go through the visit
+ * counters.  That matters because a strong reference publishes its pread
+ * without taking rbuf->lock (see polar_ringbuf_update_ref): a (visit, pread)
+ * pair read here would not be coherent, and pairing a stale visit with a
+ * fresh pread would let us free data another reference has not consumed yet.
+ * Any value we read from a slot is an under-estimate of its current position,
+ * so taking the minimum of those is always safe.
+ *
+ * Caller must hold rbuf->lock exclusively.
  */
 bool
 polar_ringbuf_update_pread(polar_ringbuf_t rbuf)
 {
 	int			i;
 	uint64		min_slot = POLAR_RINGBUF_MAX_SLOT;
+	uint64		min_pread = UINT64_MAX;
 	uint64		min_visit = UINT64_MAX;
 	bool		updated = false;
 	uint64		occupied = rbuf->occupied;
@@ -340,56 +381,64 @@ polar_ringbuf_update_pread(polar_ringbuf_t rbuf)
 
 	while (occupied)
 	{
+		uint64		slot_pread;
+		uint64		slot_visit;
+
 		POLAR_BIT_LEAST_POS(occupied, i);
 		i--;
 
-		if (min_visit > rbuf->slot[i].visit)
+		slot_pread = pg_atomic_read_u64(&rbuf->slot[i].pread);
+		slot_visit = pg_atomic_read_u64(&rbuf->slot[i].visit);
+
+		if (min_pread > slot_pread)
 		{
-			min_visit = rbuf->slot[i].visit;
+			min_pread = slot_pread;
 			min_slot = i;
 		}
+
+		/* Statistics only, see polar_prs_stat_reset() */
+		if (min_visit > slot_visit)
+			min_visit = slot_visit;
 
 		POLAR_BIT_CLEAR_LEAST(occupied);
 	}
 
-	if (min_slot != POLAR_RINGBUF_MAX_SLOT && rbuf->min_visit != min_visit)
-	{
-		uint64		pre_pread = pg_atomic_read_u64(&rbuf->pread);
-		uint64		new_pread = rbuf->slot[min_slot].pread;
-		uint64		bytes_to_free = new_pread - last_pread;
-
+	if (min_slot != POLAR_RINGBUF_MAX_SLOT)
 		rbuf->min_visit = min_visit;
+
+	if (min_slot != POLAR_RINGBUF_MAX_SLOT && min_pread > last_pread)
+	{
+		uint64		new_pread = min_pread;
+		uint64		bytes_to_free = new_pread - last_pread;
+		size_t		phys_start = POLAR_RINGBUF_IDX(rbuf, last_pread);
+		size_t		phys_end = POLAR_RINGBUF_IDX(rbuf, new_pread);
+
+		Assert(bytes_to_free > 0);
 
 		/*
 		 * Clear freed region in the physical data array.  With monotonic
-		 * counters, new_pread >= last_pread always, but the physical region
-		 * may wrap around the buffer boundary.
+		 * counters, new_pread > last_pread here, but the physical region may
+		 * wrap around the buffer boundary.
 		 */
-		if (bytes_to_free > 0)
+		if (phys_start < phys_end)
 		{
-			size_t		phys_start = POLAR_RINGBUF_IDX(rbuf, last_pread);
-			size_t		phys_end = POLAR_RINGBUF_IDX(rbuf, new_pread);
-
-			if (phys_start < phys_end)
-			{
-				MemSet(&rbuf->data[phys_start], POLAR_RINGBUF_PKT_FREE,
-					   phys_end - phys_start);
-			}
-			else
-			{
-				/* Wraps around the buffer boundary */
-				MemSet(&rbuf->data[phys_start], POLAR_RINGBUF_PKT_FREE,
-					   rbuf->size - phys_start);
-				if (phys_end > 0)
-					MemSet(&rbuf->data[0], POLAR_RINGBUF_PKT_FREE, phys_end);
-			}
+			MemSet(&rbuf->data[phys_start], POLAR_RINGBUF_PKT_FREE,
+				   phys_end - phys_start);
+		}
+		else
+		{
+			/* Wraps around the buffer boundary */
+			MemSet(&rbuf->data[phys_start], POLAR_RINGBUF_PKT_FREE,
+				   rbuf->size - phys_start);
+			if (phys_end > 0)
+				MemSet(&rbuf->data[0], POLAR_RINGBUF_PKT_FREE, phys_end);
 		}
 
 		pg_write_barrier();
 		pg_atomic_write_u64(&rbuf->pread, new_pread);
 		updated = true;
 
-		pg_atomic_fetch_add_u64(&rbuf->prs.total_read, new_pread - pre_pread);
+		pg_atomic_fetch_add_u64(&rbuf->prs.total_read, bytes_to_free);
 	}
 
 	return updated;
@@ -397,12 +446,25 @@ polar_ringbuf_update_pread(polar_ringbuf_t rbuf)
 
 /*
  * Update the reference's read position
+ *
+ * This is the only way space is ever handed back to writers, and it runs once
+ * per consumed packet.  A slot that is strong publishes its position without
+ * touching rbuf->lock: a strong slot is never evicted (see
+ * polar_ringbuf_evict_ref) and is only released by its own owner, so nobody
+ * else ever writes it.  That keeps the consumer off the lock the blocked
+ * writers contend for in polar_ringbuf_wait_for_space() - otherwise a queue
+ * full of waiting writers starves the very readers that would drain it.
+ *
+ * That covers a reference created strong, and equally one that promoted its
+ * slot with polar_ringbuf_get_ref() and has not cleared it yet, which is how
+ * every sustained drain runs: polar_send_physical_by_queue() and
+ * polar_xlog_send_queue_check() both wrap their pop loop in get_ref/clear_ref.
  */
 void
 polar_ringbuf_update_ref(polar_ringbuf_ref_t *ref)
 {
 	polar_ringbuf_t rbuf = ref->rbuf;
-	uint64		idx = rbuf->slot[ref->slot].pread;
+	uint64		idx = pg_atomic_read_u64(&rbuf->slot[ref->slot].pread);
 	uint32		pktlen;
 
 	/*
@@ -415,10 +477,19 @@ polar_ringbuf_update_ref(polar_ringbuf_ref_t *ref)
 
 	pktlen = polar_ringbuf_pkt_len(rbuf, idx);
 
-	LWLockAcquire(&rbuf->lock, LW_SHARED);
-	rbuf->slot[ref->slot].pread = idx + POLAR_RINGBUF_PKTHDRSIZE + pktlen;
-	rbuf->slot[ref->slot].visit++;
-	LWLockRelease(&rbuf->lock);
+	/* must be a strong ref so that pread can be updated without lock */
+	Assert(ref->strong || ref->promoted);
+
+	/*
+	 * The caller has already copied the packet out
+	 * (polar_ringbuf_read_next_pkt); advancing pread is what releases that
+	 * space to writers, so make sure those loads have completed before a
+	 * writer can overwrite the bytes.
+	 */
+	pg_memory_barrier();
+	pg_atomic_write_u64(&rbuf->slot[ref->slot].pread,
+						idx + POLAR_RINGBUF_PKTHDRSIZE + pktlen);
+	pg_atomic_fetch_add_u64(&rbuf->slot[ref->slot].visit, 1);
 }
 
 /*
@@ -430,7 +501,7 @@ polar_ringbuf_evict_ref(polar_ringbuf_t rbuf)
 	int			i;
 	bool		evicted = false;
 	uint8		min_slot = POLAR_RINGBUF_MAX_SLOT;
-	uint64		min_visit = UINT64_MAX;
+	uint64		min_pread = UINT64_MAX;
 	uint64		occupied = rbuf->occupied;
 
 	while (occupied)
@@ -439,9 +510,9 @@ polar_ringbuf_evict_ref(polar_ringbuf_t rbuf)
 		i--;
 
 		if (!rbuf->slot[i].strong
-			&& min_visit > rbuf->slot[i].visit)
+			&& min_pread > pg_atomic_read_u64(&rbuf->slot[i].pread))
 		{
-			min_visit = rbuf->slot[i].visit;
+			min_pread = pg_atomic_read_u64(&rbuf->slot[i].pread);
 			min_slot = i;
 		}
 
@@ -449,11 +520,11 @@ polar_ringbuf_evict_ref(polar_ringbuf_t rbuf)
 	}
 
 	if (min_slot != POLAR_RINGBUF_MAX_SLOT
-		&& pg_atomic_read_u64(&rbuf->pread) == rbuf->slot[min_slot].pread)
+		&& pg_atomic_read_u64(&rbuf->pread) == pg_atomic_read_u64(&rbuf->slot[min_slot].pread))
 	{
 		elog(LOG, "polar evict slot=%d,name=%s which is weak reference", min_slot, rbuf->slot[min_slot].ref_name);
 		POLAR_BIT_RELEASE_OCCUPIED(rbuf->occupied, min_slot + 1);
-		MemSet(&rbuf->slot[min_slot], 0, sizeof(polar_ringbuf_slot_t));
+		polar_ringbuf_slot_clear(&rbuf->slot[min_slot]);
 		evicted = true;
 		pg_atomic_fetch_add_u64(&rbuf->prs.evict_ref_cnt, 1);
 	}
@@ -484,34 +555,63 @@ polar_ringbuf_update_keep_data(polar_ringbuf_t rbuf)
  * here would re-create the walwriter+logindex-writer deadlock (walwriter
  * blocks on WaitXLogInsertionsToFinish, the logindex writer can't drain,
  * the queue stays full).
+ *
+ * Reclaiming is a single-writer job, so we only ever try the lock
+ * conditionally: whoever holds it is already doing the work for everybody.
+ * Queueing up behind it instead would put every blocked inserter on the same
+ * wait list, which collapses into a convoy on the wait list spinlock and
+ * starves polar_ringbuf_new_ref()/polar_ringbuf_release_ref() as well.
  */
 void
 polar_ringbuf_wait_for_space(polar_ringbuf_t rbuf, uint64 idx, size_t len)
 {
 	uint64		end = idx + len;
+	uint64		last_pread = pg_atomic_read_u64(&rbuf->pread);
+	long		delay = RINGBUF_WAIT_MIN_US;
 
 	/*
 	 * Fast path: our region is already free.  This is the common case when
 	 * the queue is large relative to the write rate.
 	 */
-	if ((ssize_t) (end - pg_atomic_read_u64(&rbuf->pread)) <= (ssize_t) (rbuf->size - 1))
+	if (polar_ringbuf_reservation_ready(rbuf, end, last_pread))
 		return;
 
 	pgstat_report_wait_start(WAIT_EVENT_LOGINDEX_QUEUE_SPACE);
 	pg_atomic_fetch_add_u64(&rbuf->prs.free_up_cnt, 1);
 
-	while ((ssize_t) (end - pg_atomic_read_u64(&rbuf->pread)) > (ssize_t) (rbuf->size - 1))
+	while (!polar_ringbuf_reservation_ready(rbuf, end,
+											pg_atomic_read_u64(&rbuf->pread)))
 	{
-		LWLockAcquire(&rbuf->lock, LW_EXCLUSIVE);
-		if (!polar_ringbuf_update_pread(rbuf) &&
-			!polar_ringbuf_evict_ref(rbuf))
+		bool		progress = false;
+		uint64		current_pread;
+
+		if (LWLockConditionalAcquire(&rbuf->lock, LW_EXCLUSIVE))
 		{
+			progress = (polar_ringbuf_update_pread(rbuf) ||
+						polar_ringbuf_evict_ref(rbuf));
 			LWLockRelease(&rbuf->lock);
-			CHECK_FOR_INTERRUPTS();
-			pg_usleep(10);
-			continue;
 		}
-		LWLockRelease(&rbuf->lock);
+
+		/*
+		 * Another waiter may have reclaimed our region even if we failed to
+		 * acquire the lock.  Check before sleeping, and reset the backoff on
+		 * shared progress rather than only on our own reclaim attempts.
+		 */
+		current_pread = pg_atomic_read_u64(&rbuf->pread);
+		if (polar_ringbuf_reservation_ready(rbuf, end, current_pread))
+			break;
+
+		if (current_pread != last_pread || progress)
+			delay = RINGBUF_WAIT_MIN_US;
+		last_pread = current_pread;
+
+		/* Retry immediately after reclaiming space or evicting a reference. */
+		if (progress)
+			continue;
+
+		CHECK_FOR_INTERRUPTS();
+		pg_usleep(delay);
+		delay = Min(delay * 2, RINGBUF_WAIT_MAX_US);
 	}
 
 	pgstat_report_wait_end();

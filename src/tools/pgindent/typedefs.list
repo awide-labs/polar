@@ -4209,6 +4209,7 @@ xl_xact_stats_items
 xl_xact_subxacts
 xl_xact_twophase
 xl_xact_xinfo
+xlog_queue_slot_info
 xmlBuffer
 xmlBufferPtr
 xmlChar
