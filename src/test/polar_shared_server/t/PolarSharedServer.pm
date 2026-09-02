@@ -10,6 +10,8 @@ use PostgreSQL::Test::Utils;
 use Test::More;
 
 our @EXPORT = qw(
+  backend_pid
+  query_fails
   ss_conf
 );
 
@@ -55,6 +57,61 @@ SS_CONF
 	$conf .= "$opt{extra}\n" if exists $opt{extra};
 
 	return $conf;
+}
+
+# Opens a psql session against this node.
+#
+# Every client in this suite wants the same two things: the postgres database,
+# and on_error_stop off, so that a statement meant to fail is an assertion
+# rather than the end of the file.  Anything else -- another database, a
+# different role, a timeout -- is passed straight through to background_psql().
+sub psql_session
+{
+	my ($self, %opt) = @_;
+	my $dbname = 'postgres';
+
+	$dbname = delete $opt{dbname} if exists $opt{dbname};
+
+	return $self->{node}->background_psql($dbname, on_error_stop => 0, %opt);
+}
+
+# Returns the pid of the backend currently serving this session.
+#
+# The built-in pg_backend_pid() is polar_get_session_id(MyProcPid), the same
+# value polar_monitor's polar_session_backend_pid() returns, and reading it
+# loads no library -- loading one with a _PG_init() would dedicate the pooled
+# backend and destroy the co-location every file in this suite depends on.
+sub backend_pid
+{
+	my ($session) = @_;
+	my $pid = $session->query_safe('SELECT pg_backend_pid()');
+
+	chomp $pid;
+	return $pid;
+}
+
+# Runs a statement that is meant to fail, and checks that it did.
+#
+# A background psql accumulates stderr across statements, so the buffer has to
+# be emptied before the statement and again after it, or the next test to look
+# at it reads an error left by some earlier one.  That bookkeeping is why this
+# is a helper: getting it wrong leaves a check that passes without looking at
+# anything.
+#
+# $pattern and $pattern_name are optional; without them only the failure
+# itself is asserted.
+sub query_fails
+{
+	my ($session, $sql, $name, $pattern, $pattern_name) = @_;
+
+	$session->{stderr} = '';
+	my (undef, $failed) = $session->query($sql);
+
+	ok($failed, $name);
+	like($session->{stderr}, $pattern, $pattern_name) if defined $pattern;
+	$session->{stderr} = '';
+
+	return;
 }
 
 # How many times $pattern appears in everything this node has logged.

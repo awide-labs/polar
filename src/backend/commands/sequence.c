@@ -79,13 +79,18 @@ typedef struct SeqTableData
 
 typedef SeqTableData *SeqTable;
 
-static HTAB *seqhashtab = NULL; /* hash table for SeqTable items */
+/*
+ * The sequence cache belongs to the session, not to the backend process.
+ *
+ * seqhashtab is the hash table for SeqTable items.
+ */
+#define seqhashtab		POLAR_SESSION(seqhashtab)
 
 /*
  * last_used_seq is updated by nextval() to point to the last used
  * sequence.
  */
-static SeqTableData *last_used_seq = NULL;
+#define last_used_seq	POLAR_SESSION(last_used_seq)
 
 static void fill_seq_with_data(Relation rel, HeapTuple tuple);
 static void fill_seq_fork_with_data(Relation rel, HeapTuple tuple, ForkNumber forkNum);
@@ -1126,8 +1131,9 @@ create_seq_hashtable(void)
 	ctl.keysize = sizeof(Oid);
 	ctl.entrysize = sizeof(SeqTableData);
 
+	/* Allocate in the session memory context */
 	seqhashtab = hash_create("Sequence values", 16, &ctl,
-							 HASH_ELEM | HASH_BLOBS);
+							 HASH_ELEM | HASH_BLOBS | PSS_HASH_FLAG);
 }
 
 /*
@@ -1150,7 +1156,7 @@ init_sequence(Oid relid, SeqTable *p_elm, Relation *p_rel)
 	/*
 	 * Initialize the new hash table entry if it did not exist already.
 	 *
-	 * NOTE: seqhashtab entries are stored for the life of a backend (unless
+	 * NOTE: seqhashtab entries are stored for the life of a session (unless
 	 * explicitly discarded with DISCARD). If the sequence itself is deleted
 	 * then the entry becomes wasted memory, but it's small enough that this
 	 * should not matter.
