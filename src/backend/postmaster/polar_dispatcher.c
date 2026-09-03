@@ -3124,7 +3124,10 @@ inval_all(void)
 static void
 local_execute_invalidation_message(SharedInvalidationMessage *msg)
 {
-	/* be careful, the processing method must correspond to InitPlanCache()*/
+	/*
+	 * be careful, the processing method must correspond to InitPlanCache()
+	 * and to InitializeSearchPath()
+	 */
 	if (msg->id >= 0)
 	{
 		switch(msg->cc.id)
@@ -3135,6 +3138,11 @@ local_execute_invalidation_message(SharedInvalidationMessage *msg)
 			case AMOPOPID:
 			case FOREIGNSERVEROID:
 			case FOREIGNDATAWRAPPEROID:
+			/*
+			 * AUTHOID is not a plan cache dependency; the search path needs
+			 * it, because renaming a role changes what "$user" resolves to.
+			 */
+			case AUTHOID:
 				add_a_invalidation_message(msg);
 				break;
 		};

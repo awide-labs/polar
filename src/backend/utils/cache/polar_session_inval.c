@@ -151,11 +151,28 @@ polar_ss_cache_register_syscache_callback(int cacheid,
 										  SyscacheCallbackFunction func,
 										  Datum arg)
 {
+	int			i;
+
 	if (!POLAR_SHARED_SERVER_RUNNING())
 		return;
 
 	if (cacheid < 0 || cacheid >= SysCacheSize)
 		elog(FATAL, "invalid cache ID: %d", cacheid);
+
+	/*
+	 * A pooled backend re-runs the client half of session startup on every
+	 * handover, so it reaches this point once per session with a registration
+	 * it already holds.
+	 */
+	for (i = syscache_callback_links[cacheid] - 1; i >= 0;
+		 i = syscache_callback_list[i].link - 1)
+	{
+		if (syscache_callback_list[i].function == func &&
+			syscache_callback_list[i].arg == arg)
+			/* already existed, ignore */
+			return;
+	}
+
 	if (syscache_callback_count >= MAX_SYSCACHE_CALLBACKS)
 		elog(FATAL, "out of syscache_callback_list slots");
 
@@ -167,18 +184,11 @@ polar_ss_cache_register_syscache_callback(int cacheid,
 	else
 	{
 		/* add to end of chain, so that older callbacks are called first */
-		int			i = syscache_callback_links[cacheid] - 1;
+		i = syscache_callback_links[cacheid] - 1;
 
 		while (syscache_callback_list[i].link > 0)
-		{
-			if (syscache_callback_list[i].id == cacheid &&
-				syscache_callback_list[i].function == func &&
-				syscache_callback_list[i].arg == arg)
-				/* already existed, ignore */
-				return;
-
 			i = syscache_callback_list[i].link - 1;
-		}
+
 		syscache_callback_list[i].link = syscache_callback_count + 1;
 	}
 
