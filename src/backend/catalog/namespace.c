@@ -4472,6 +4472,21 @@ InitializeSearchPath(void)
 		CacheRegisterSyscacheCallback(AUTHOID,
 									  NamespaceCallback,
 									  (Datum) 0);
+
+		/*
+		 * A detached session has no process, so it cannot read the shared
+		 * invalidation queue while it waits for a backend. Register the same
+		 * callback on the per-session queue, which the session drains itself
+		 * once it is given one. A pooled backend reaches this point once per
+		 * session.
+		 */
+		polar_ss_cache_register_syscache_callback(NAMESPACEOID,
+												  NamespaceCallback,
+												  (Datum) 0);
+		polar_ss_cache_register_syscache_callback(AUTHOID,
+												  NamespaceCallback,
+												  (Datum) 0);
+
 		/* Force search path to be recomputed on next use */
 		baseSearchPathValid = false;
 	}
