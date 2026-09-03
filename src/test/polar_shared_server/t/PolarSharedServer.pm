@@ -8,6 +8,7 @@ use warnings;
 use Exporter 'import';
 use PostgreSQL::Test::Utils;
 use Test::More;
+use Time::HiRes qw(usleep);
 
 our @EXPORT = qw(
   backend_pid
@@ -154,6 +155,85 @@ sub assert_clean_log
 		is($self->log_count($pattern), 0, $name);
 	}
 	return;
+}
+
+# How long the wait_* helpers poll before giving up and letting the caller's
+# assertion fail: a hundred tries a tenth of a second apart, ten seconds.
+my $poll_tries = 100;
+my $poll_delay = 100_000;
+
+# Serial number for the markers log_barrier() writes.  One test file is one
+# process, so it only has to be unique within that.
+my $barrier_seq = 0;
+
+# The collector writes what the backend sent down a pipe, so a line can be a
+# moment late.  Wait for it rather than sampling once.
+sub wait_log_count
+{
+	my ($self, $pattern, $want) = @_;
+	my $n = 0;
+
+	foreach my $i (1 .. $poll_tries)
+	{
+		$n = $self->log_count($pattern);
+		return $n if $n >= $want;
+		usleep($poll_delay);
+	}
+	return $n;
+}
+
+# Ordering barrier for the "must not escalate" checks.  The given session logs
+# a marker of its own; once that marker has arrived, anything the same backend
+# logged earlier has arrived too, so a count taken afterwards cannot be short
+# by a line that is merely late.  A failing statement is used because it logs
+# from a pooled backend without dedicating it, which LISTEN or a plpgsql DO
+# block would not.
+sub log_barrier
+{
+	my ($self, $session) = @_;
+	my $marker = 'ss_log_barrier_' . ++$barrier_seq;
+
+	$session->{stderr} = '';
+	$session->query("SELECT $marker");
+	$session->{stderr} = '';
+	$self->wait_log_count(qr/\Q$marker\E/, 1);
+	return;
+}
+
+# Applies a SIGHUP setting and waits until a new session reports it, so that
+# whatever runs next cannot run against the old value.  $value is given as
+# SHOW prints it and quoted here for the file, which suits the string and enum
+# settings this is used for; one with units would print differently.
+sub reload_setting
+{
+	my ($self, $name, $value) = @_;
+	my $node = $self->{node};
+
+	(my $quoted = $value) =~ s/'/''/g;
+	$node->append_conf('postgresql.conf', "$name = '$quoted'\n");
+	$node->reload;
+
+	is($self->wait_for("SHOW $name", $value),
+		$value, "reload: $name = '$value'");
+	return;
+}
+
+# Polls $sql until it answers $want, and returns whatever it last answered so
+# that the caller can assert on it.  Disconnect cleanup is asynchronous -- the
+# dispatcher may still be fetching a backend to run it on -- so a test that
+# sampled once would be racing it.
+sub wait_for
+{
+	my ($self, $sql, $want) = @_;
+	my $got = '';
+
+	foreach my $i (1 .. $poll_tries)
+	{
+		$got = $self->{node}->safe_psql('postgres', $sql);
+		return $got if $got eq $want;
+		usleep($poll_delay);
+	}
+	return $got;
 }
 
 1;

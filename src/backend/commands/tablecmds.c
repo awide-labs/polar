@@ -88,6 +88,7 @@
 #include "storage/lmgr.h"
 #include "storage/lock.h"
 #include "storage/predicate.h"
+#include "storage/proc.h"
 #include "storage/smgr.h"
 #include "tcop/utility.h"
 #include "utils/acl.h"
@@ -766,6 +767,23 @@ DefineRelation(CreateStmt *stmt, char relkind, Oid ownerId,
 		ereport(ERROR,
 				(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
 				 errmsg("cannot create temporary table within security-restricted operation")));
+
+	/*
+	 * A temporary table lives in the backend's temporary schema, which is
+	 * named after MyBackendId and therefore cannot follow the session to
+	 * another backend.  Take this backend out of the pool so that no other
+	 * client can ever land on it.
+	 *
+	 * ON COMMIT DROP tables are exempt: they are gone before the transaction
+	 * ends, and a backend only changes client between transactions.
+	 */
+	if (stmt->relation->relpersistence == RELPERSISTENCE_TEMP &&
+		stmt->oncommit != ONCOMMIT_DROP &&
+		POLAR_SS_NOT_DEDICATED())
+	{
+		MyProc->polar_is_backend_dedicated = true;
+		elog(LOG, "polar shared server set dedicated from non ONCOMMIT_DROP temp table");
+	}
 
 	/*
 	 * Determine the lockmode to use when scanning parents.  A self-exclusive
