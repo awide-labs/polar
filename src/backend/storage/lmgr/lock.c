@@ -843,6 +843,20 @@ LockAcquireExtended(const LOCKTAG *locktag,
 		owner = CurrentResourceOwner;
 
 	/*
+	 * A session-level advisory lock is held until the client releases it, so
+	 * it can still be held when the backend is handed to the next client.
+	 * Take the backend out of the pool.  The session locks the server takes
+	 * itself (VACUUM, CREATE INDEX CONCURRENTLY) never outlive their command.
+	 */
+	if (sessionLock && locktag->locktag_type == LOCKTAG_ADVISORY &&
+		POLAR_SS_NOT_DEDICATED())
+	{
+		MyProc->polar_is_backend_dedicated = true;
+		elog(LOG, "polar shared server set dedicated from LockAcquireExtended lockmode %s",
+			 lockMethodTable->lockModeNames[lockmode]);
+	}
+
+	/*
 	 * Find or create a LOCALLOCK entry for this lock and lockmode
 	 */
 	MemSet(&localtag, 0, sizeof(localtag)); /* must clear padding */

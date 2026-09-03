@@ -778,6 +778,17 @@ Async_Listen(const char *channel)
 		elog(DEBUG1, "Async_Listen(%s,%d)", channel, MyProcPid);
 
 	queue_listen(LISTEN_LISTEN, channel);
+
+	/*
+	 * The set of channels a backend listens on is process state that outlives
+	 * the transaction, so it would be inherited by the next client of a
+	 * pooled backend.  Take the backend out of the pool.
+	 */
+	if (POLAR_SS_NOT_DEDICATED())
+	{
+		MyProc->polar_is_backend_dedicated = true;
+		elog(LOG, "polar shared server set dedicated from Async_Listen");
+	}
 }
 
 /*

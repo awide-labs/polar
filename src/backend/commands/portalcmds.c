@@ -34,6 +34,8 @@
 #include "utils/memutils.h"
 #include "utils/snapmgr.h"
 
+#include "storage/proc.h"
+
 
 /*
  * PerformCursorOpen
@@ -58,6 +60,17 @@ PerformCursorOpen(ParseState *pstate, DeclareCursorStmt *cstmt, ParamListInfo pa
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_CURSOR_NAME),
 				 errmsg("invalid cursor name: must not be empty")));
+
+	/*
+	 * A WITH HOLD cursor survives the transaction that declared it, so it
+	 * would still be there when the backend is handed to the next client.
+	 * Take the backend out of the pool.
+	 */
+	if ((cstmt->options & CURSOR_OPT_HOLD) && POLAR_SS_NOT_DEDICATED())
+	{
+		MyProc->polar_is_backend_dedicated = true;
+		elog(LOG, "polar shared server set dedicated from PerformCursorOpen");
+	}
 
 	/*
 	 * If this is a non-holdable cursor, we require that this statement has
