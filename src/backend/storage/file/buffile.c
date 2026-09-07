@@ -97,10 +97,15 @@ struct BufFile
 	int			nbytes;			/* total # of valid bytes in buffer */
 
 	/*
-	 * XXX Should ideally us PGIOAlignedBlock, but might need a way to avoid
-	 * wasting per-file alignment padding when some users create many files.
+	 * Do not waste padding on page-aligned PGAlignedBlock here: temp pages IO
+	 * is buffered anyway.
 	 */
-	PGAlignedBlock buffer;
+	union
+	{
+		char		data[BLCKSZ];
+		double		force_align_d;
+		int64		force_align_i64;
+	}			buffer;
 };
 
 static BufFile *makeBufFileCommon(int nfiles);
