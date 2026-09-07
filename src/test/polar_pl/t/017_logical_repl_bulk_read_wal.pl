@@ -85,7 +85,7 @@ while (1)
 # Start logical replication to consume WALs.
 $node_subscriber->safe_psql('postgres',
 	"ALTER SUBSCRIPTION $sub_name ENABLE");
-$node_publisher->wait_for_catchup($sub_name);
+$node_publisher->wait_for_catchup_with_progress($sub_name);
 
 # Check consistency.
 my $source = $node_publisher->safe_psql('postgres',
