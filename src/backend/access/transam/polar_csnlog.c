@@ -208,7 +208,8 @@ polar_csnlog_set_csn(TransactionId xid, int sub_xid_num,
 			top_xid = xid;
 		}
 
-		polar_csnlog_set_csn_by_page(top_xid, sub_xid_num_on_page, sub_xids + sub_xid_idx + 1,
+		polar_csnlog_set_csn_by_page(top_xid, sub_xid_num_on_page,
+									 sub_xid_num_on_page > 0 ? &sub_xids[sub_xid_idx + 1] : NULL,
 									 csn, lsn, current_pageno);
 	}
 	while (sub_xid_idx >= 0);
