@@ -454,6 +454,7 @@ polar_parallel_bgwriter_worker_main(Datum main_arg)
 				break;
 
 			default:
+				can_hibernate = true;
 				break;
 		}
 
