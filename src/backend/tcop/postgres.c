@@ -5461,14 +5461,21 @@ PostgresMain(const char *dbname, const char *username)
 
 					/* recovery backend state to idle */
 					AbortOutOfAnyTransaction();
-					if (polar_session_has_temp_namespace())
+					if (polar_session_has_temp_namespace(polar_session()))
 					{
 						/*
 						 * Remove all temp tables from the temporary
 						 * namespace.
+						 *
+						 * The deletion reaches catalogs with toastable
+						 * columns, which insist on an active snapshot, so
+						 * this has to set one up the same way
+						 * RemoveTempRelationsCallback() does.
 						 */
 						StartTransactionCommand();
+						PushActiveSnapshot(GetTransactionSnapshot());
 						ResetTempTableNamespace();
+						PopActiveSnapshot();
 						CommitTransactionCommand();
 					}
 					/* we don't send_ready_for_query. update process display */

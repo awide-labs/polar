@@ -54,6 +54,7 @@
 
 /* POLAR */
 #include "access/polar_logindex_redo.h"
+#include "catalog/namespace.h"
 #include "postmaster/polar_async_lock_replay.h"
 #include "postmaster/polar_dispatcher.h"
 #include "storage/polar_memutils.h"
@@ -213,6 +214,7 @@ CalculateShmemSize(int *num_semaphores)
 	size = add_size(size, polar_ss_db_role_setting_shmem_size());
 	size = add_size(size, polar_ss_dispatcher_shmem_size());
 	size = add_size(size, polar_ss_session_context_shmem_size());
+	size = add_size(size, polar_ss_path_generation_shmem_size());
 	/* POLAR end */
 
 	/* POLAR: add shared memory size for flashback log */
@@ -509,6 +511,7 @@ CreateSharedMemoryAndSemaphores(void)
 	polar_ss_db_role_setting_shmem_init();
 	polar_ss_dispatcher_shmem_init();
 	polar_ss_session_context_shmem_init();
+	polar_ss_path_generation_shmem_init();
 	/* POLAR end */
 
 #ifdef EXEC_BACKEND

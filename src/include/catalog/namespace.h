@@ -188,8 +188,13 @@ extern List *fetch_search_path(bool includeImplicit);
 extern int	fetch_search_path_array(Oid *sarray, int sarray_len);
 
 /* POLAR: Shared Server */
+struct PolarSessionContext;
+
 extern void polar_inval_namespace_path(void);
-extern bool polar_session_has_temp_namespace(void);
+extern bool polar_session_has_temp_namespace(struct PolarSessionContext *session);
+extern void polar_ss_settle_temp_namespace(void);
+extern Size polar_ss_path_generation_shmem_size(void);
+extern void polar_ss_path_generation_shmem_init(void);
 
 /* POLAR end */
 

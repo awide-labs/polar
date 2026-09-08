@@ -813,8 +813,17 @@ PT_THREAD(fiber_client_main(ClientChannel* client, ScheduleSource schedule_sourc
 		client->rx_pos = client->tx_pos = client->tx_size = 0;
 	}
 
+	/*
+	 * The client vanished without sending a Terminate message, so if its
+	 * session still owns temporary tables, fetch a backend to remove them on.
+	 * The question is about the client's session, not the dispatcher's own:
+	 * this process never runs one.  Sessions that are already closed had their
+	 * temporary tables removed by the Terminate handling.
+	 */
 	if (NULL == client->backend &&
-		polar_session_has_temp_namespace())
+		client->session != NULL &&
+		pg_atomic_read_u32(&client->session->status) < PSSE_CLOSED &&
+		polar_session_has_temp_namespace(client->session))
 	{
 		/* get a backend to send 'X' command, to delete temp table. */
 		client_attach_register(client);
