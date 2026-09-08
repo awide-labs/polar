@@ -69,9 +69,6 @@ static void on_after_exec(pgutConn *conn);
 static void on_interrupt(void);
 static void on_cleanup(void);
 static void exit_or_abort(int exitcode);
-static int pgut_errcode(int sqlerrcode);
-static int pgut_errmsg(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
-static int pgut_errdetail(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 
 void
 pgut_init(int argc, char **argv)
@@ -1019,7 +1016,7 @@ parse_elevel(const char *value)
 	return ERROR;		/* unknown value; just return ERROR */
 }
 
-static int
+int
 pgut_errcode(int sqlerrcode)
 {
 	pgutErrorData  *edata = getErrorData();
@@ -1027,7 +1024,7 @@ pgut_errcode(int sqlerrcode)
 	return 0;
 }
 
-static int
+int
 pgut_errmsg(const char *fmt,...)
 {
 	pgutErrorData  *edata = getErrorData();
@@ -1048,7 +1045,7 @@ pgut_errmsg(const char *fmt,...)
 	return 0;	/* return value does not matter */
 }
 
-static int
+int
 pgut_errdetail(const char *fmt,...)
 {
 	pgutErrorData  *edata = getErrorData();
