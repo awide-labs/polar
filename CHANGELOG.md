@@ -17,6 +17,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Fixed pg_bulkload client errors reporting a bare "ERROR:" with no message text (XCOM-186)
 - Fixed primary hanging during shutdown when replicas were already stopped,
   repeatedly logging "Checkpoint blocked" warnings until killed (XCOM-153)
 - Fixed deadlock when WAL exceeds xlog queue capacity by releasing WALInsertLock

@@ -112,6 +112,31 @@ extern void pgut_errfinish(int dummy, ...);
 extern void pgut_error(int elevel, int code, const char *msg, const char *detail);
 
 /*
+ * Error data accessors.  These must be used instead of the server's
+ * errcode()/errmsg()/errdetail(): the CLI links libpolarvfs, whose
+ * polar_vfs_fe.c exports stubs with those names that swallow the message.
+ */
+extern int pgut_errcode(int sqlerrcode);
+extern int pgut_errmsg(const char *fmt, ...)
+__attribute__((format(PG_BULKLOAD_PRINTF_ATTRIBUTE, 1, 2)));
+extern int pgut_errdetail(const char *fmt, ...)
+__attribute__((format(PG_BULKLOAD_PRINTF_ATTRIBUTE, 1, 2)));
+
+/*
+ * Redirect the server-side elog accessor names to the pgut versions so
+ * that client code can keep writing upstream-style ereport(ERROR,
+ * (errcode(...), errmsg(...), errdetail(...))).  This redirection is
+ * mandatory: the CLI links libpolarvfs, whose polar_vfs_fe.c exports
+ * global errcode()/errmsg() stubs that store the text in a private
+ * buffer which is never printed on the pgut error path, silently
+ * swallowing the message.  Mapping the names here makes such mistakes
+ * impossible at preprocessing time instead of at every call site.
+ */
+#define errcode		pgut_errcode
+#define errmsg		pgut_errmsg
+#define errdetail		pgut_errdetail
+
+/*
  * CHECK_FOR_INTERRUPTS
  */
 #undef CHECK_FOR_INTERRUPTS
