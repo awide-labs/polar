@@ -2314,6 +2314,14 @@ CommitTransaction(void)
 	PreCommit_on_commit_actions();
 
 	/*
+	 * Decide whether this session may hand its backend back to the pool while
+	 * it owns a temporary schema.  Has to be after
+	 * PreCommit_on_commit_actions(), so that ON COMMIT DROP relations are
+	 * already gone, and while catalog access is still legal.
+	 */
+	polar_ss_settle_temp_namespace();
+
+	/*
 	 * Synchronize files that are created and not WAL-logged during this
 	 * transaction. This must happen before AtEOXact_RelationMap(), so that we
 	 * don't see committed-but-broken files after a crash.

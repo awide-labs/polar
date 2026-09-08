@@ -13,6 +13,7 @@ use Time::HiRes qw(usleep);
 our @EXPORT = qw(
   backend_pid
   query_fails
+  run_per_path_generation
   ss_conf
 );
 
@@ -234,6 +235,77 @@ sub wait_for
 		usleep($poll_delay);
 	}
 	return $got;
+}
+
+# Which backend a client that does nothing special is served by right now.
+# Ask again after anything that dedicates a backend: that one is out of the
+# pool for good, and the pool then settles on a different one.
+sub pooled_backend_pid
+{
+	my ($self, %opt) = @_;
+	my $probe = $self->psql_session(%opt);
+	my $pid = backend_pid($probe);
+
+	$probe->quit;
+	return $pid;
+}
+
+# For each name, creates that schema with a table t holding the schema name,
+# so a query on unqualified t shows where it resolved.
+sub create_path_tables
+{
+	my ($self, @schemas) = @_;
+
+	$self->{node}->safe_psql(
+		'postgres',
+		join(
+			'',
+			map {
+				"CREATE SCHEMA $_; CREATE TABLE $_.t(v text); "
+				  . "INSERT INTO $_.t VALUES ('$_');\n"
+			} @schemas));
+	return;
+}
+
+# Runs $stmt->($i) for $i in 1..$count, each under a new path generation, and
+# returns the output lines.  The path alternates between "$schema" and
+# "$schema, public": it changes every time, and t still resolves to
+# $schema.t.  The generation moves on the first name lookup after SET, so
+# $stmt must do one.
+sub run_per_path_generation
+{
+	my ($session, $schema, $count, $stmt) = @_;
+	my @sql;
+
+	foreach my $i (1 .. $count)
+	{
+		push @sql,
+		  'SET search_path = ' . ($i % 2 ? $schema : "$schema, public");
+		push @sql, $stmt->($i);
+	}
+	return split(/\n/, $session->query_safe(join(";\n", @sql) . ';'));
+}
+
+# Opens clients until one holds backend $pid in an open transaction.  The
+# others are rolled back, freeing their backends, but stay connected.
+# Returns the holder first; the caller rolls it back and quits them all.
+sub hold_backend
+{
+	my ($self, $pid) = @_;
+	my @clients;
+
+	foreach my $i (1 .. 5)
+	{
+		my $h = $self->psql_session();
+
+		$h->query_safe('BEGIN');
+		push @clients, $h;
+		last if backend_pid($h) eq $pid;
+	}
+
+	my $holder = pop @clients;
+	$_->query_safe('ROLLBACK') foreach @clients;
+	return ($holder, @clients);
 }
 
 1;

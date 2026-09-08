@@ -19,15 +19,19 @@
  */
 #include "postgres.h"
 
+#include "access/genam.h"
 #include "access/htup_details.h"
 #include "access/parallel.h"
+#include "access/table.h"
 #include "access/xact.h"
 #include "access/xlog.h"
 #include "catalog/dependency.h"
+#include "catalog/indexing.h"
 #include "catalog/objectaccess.h"
 #include "catalog/pg_authid.h"
 #include "catalog/pg_collation.h"
 #include "catalog/pg_conversion.h"
+#include "catalog/pg_depend.h"
 #include "catalog/pg_namespace.h"
 #include "catalog/pg_opclass.h"
 #include "catalog/pg_operator.h"
@@ -45,12 +49,15 @@
 #include "miscadmin.h"
 #include "nodes/makefuncs.h"
 #include "parser/parse_func.h"
+#include "port/atomics.h"
 #include "storage/ipc.h"
 #include "storage/lmgr.h"
+#include "storage/shmem.h"
 #include "storage/sinvaladt.h"
 #include "utils/acl.h"
 #include "utils/builtins.h"
 #include "utils/catcache.h"
+#include "utils/fmgroids.h"
 #include "utils/guc.h"
 #include "utils/inval.h"
 #include "utils/lsyscache.h"
@@ -62,6 +69,7 @@
 /* POLAR: Shared Server */
 #include "utils/polar_session_inval.h"
 #include "storage/polar_session_context.h"
+#include "storage/proc.h"
 
 /*
  * POLAR: Shared Server - Session namespace state structure
@@ -107,10 +115,17 @@ polar_session_namespace_create(MemoryContext mctx)
 	return self;
 }
 
+/*
+ * Does the given session own a temporary schema?
+ */
 bool
-polar_session_has_temp_namespace(void)
+polar_session_has_temp_namespace(PolarSessionContext *session)
 {
-	return OidIsValid(polar_session_info()->ns->m_myTempNamespace);
+	Assert(session != NULL &&
+		   session->info != NULL &&
+		   session->info->ns != NULL);
+
+	return OidIsValid(session->info->ns->m_myTempNamespace);
 }
 
 void
@@ -187,7 +202,9 @@ polar_inval_namespace_path(void)
  * we have to be willing to recompute the path when current userid changes.
  * namespaceUser is the userid the path has been computed for.
  *
- * Note: all data pointed to by these List variables is in TopMemoryContext.
+ * Note: all data pointed to by these List variables is in TopMemoryContext,
+ * or, under Shared Server, in the session's own memory context -- see
+ * POLAR_NAMESPACE_TOP_CONTEXT() below.
  *
  * activePathGeneration is incremented whenever the effective values of
  * activeSearchPath/activeCreationNamespace/activeTempCreationPending change.
@@ -195,31 +212,45 @@ polar_inval_namespace_path(void)
  * a previous examination of the search path state.
  */
 
+/*
+ * These values belong to the client's session, not to the backend process
+ * serving it.
+ */
+#define POLAR_SESSION_NS(name)		(polar_session()->info->ns->m_##name)
+
+/*
+ * TopMemoryContext is not swapped per session, so a shared session's search
+ * path lists would be freed by whichever session recomputed next.  Keep them
+ * in the session's own context instead.
+ */
+#define POLAR_NAMESPACE_TOP_CONTEXT() \
+	(POLAR_SS_NOT_DEDICATED() ? polar_session()->memory_context : TopMemoryContext)
+
 /* These variables define the actually active state: */
 
-static List *activeSearchPath = NIL;
+#define activeSearchPath			POLAR_SESSION_NS(activeSearchPath)
 
 /* default place to create stuff; if InvalidOid, no default */
-static Oid	activeCreationNamespace = InvalidOid;
+#define activeCreationNamespace		POLAR_SESSION_NS(activeCreationNamespace)
 
 /* if true, activeCreationNamespace is wrong, it should be temp namespace */
-static bool activeTempCreationPending = false;
+#define activeTempCreationPending	POLAR_SESSION_NS(activeTempCreationPending)
 
 /* current generation counter; make sure this is never zero */
-static uint64 activePathGeneration = 1;
+#define activePathGeneration		POLAR_SESSION_NS(activePathGeneration)
 
 /* These variables are the values last derived from namespace_search_path: */
 
-static List *baseSearchPath = NIL;
+#define baseSearchPath				POLAR_SESSION_NS(baseSearchPath)
 
-static Oid	baseCreationNamespace = InvalidOid;
+#define baseCreationNamespace		POLAR_SESSION_NS(baseCreationNamespace)
 
-static bool baseTempCreationPending = false;
+#define baseTempCreationPending		POLAR_SESSION_NS(baseTempCreationPending)
 
-static Oid	namespaceUser = InvalidOid;
+#define namespaceUser				POLAR_SESSION_NS(namespaceUser)
 
 /* The above four values are valid only if baseSearchPathValid */
-static bool baseSearchPathValid = true;
+#define baseSearchPathValid			POLAR_SESSION_NS(baseSearchPathValid)
 
 /* Override requests are remembered in a stack of OverrideStackEntry structs */
 
@@ -230,7 +261,7 @@ typedef struct
 	int			nestLevel;		/* subtransaction nesting level */
 } OverrideStackEntry;
 
-static List *overrideStack = NIL;
+#define overrideStack				POLAR_SESSION_NS(overrideStack)
 
 /*
  * myTempNamespace is InvalidOid until and unless a TEMP namespace is set up
@@ -247,11 +278,61 @@ static List *overrideStack = NIL;
  * we either haven't made the TEMP namespace yet, or have successfully
  * committed its creation, depending on whether myTempNamespace is valid.
  */
-static Oid	myTempNamespace = InvalidOid;
+#define myTempNamespace				POLAR_SESSION_NS(myTempNamespace)
 
-static Oid	myTempToastNamespace = InvalidOid;
+#define myTempToastNamespace		POLAR_SESSION_NS(myTempToastNamespace)
 
-static SubTransactionId myTempNamespaceSubID = InvalidSubTransactionId;
+#define myTempNamespaceSubID		POLAR_SESSION_NS(myTempNamespaceSubID)
+
+/*
+ * Source of activePathGeneration values.
+ *
+ * Cached plans store the generation and trust it without comparing paths.
+ * Backend-local plans are seen by every session on the backend, and a
+ * session's prepared statements move with it between backends, so a value
+ * must be unique across all backends, not just within one.  Without Shared
+ * Server a process has only its private session, so incrementing the
+ * session's own value is enough, as upstream does.
+ */
+static pg_atomic_uint64 *polar_shared_path_generation = NULL;
+
+static inline uint64
+polar_next_path_generation(void)
+{
+	if (polar_shared_path_generation)
+		return pg_atomic_add_fetch_u64(polar_shared_path_generation, 1);
+	return activePathGeneration + 1;
+}
+
+Size
+polar_ss_path_generation_shmem_size(void)
+{
+	if (!POLAR_SHARED_SERVER_RUNNING())
+		return 0;
+	return sizeof(pg_atomic_uint64);
+}
+
+void
+polar_ss_path_generation_shmem_init(void)
+{
+	bool		found;
+
+	if (!POLAR_SHARED_SERVER_RUNNING())
+		return;
+
+	polar_shared_path_generation = (pg_atomic_uint64 *)
+		ShmemInitStruct("pss path generation", sizeof(pg_atomic_uint64),
+						&found);
+	if (!found)
+		pg_atomic_init_u64(polar_shared_path_generation, 1);
+}
+
+/*
+ * Set once RemoveTempRelationsCallback() has been registered.  Unlike
+ * everything above, this really is process state: before_shmem_exit() is a
+ * process-wide array.  See AtEOXact_Namespace().
+ */
+static bool RemoveTempRelationsCallbackRegistered = false;
 
 /*
  * This is the user's textual search path specification --- it's the value
@@ -264,6 +345,7 @@ char	   *namespace_search_path = NULL;
 static void recomputeNamespacePath(void);
 static void AccessTempTableNamespace(bool force);
 static void InitTempTableNamespace(void);
+static bool polar_temp_namespace_is_empty(Oid namespaceId);
 static void RemoveTempRelations(Oid tempNamespaceId);
 static void RemoveTempRelationsCallback(int code, Datum arg);
 static void NamespaceCallback(Datum arg, int cacheid, uint32 hashvalue);
@@ -3434,6 +3516,11 @@ GetTempNamespaceState(Oid *tempNamespaceId, Oid *tempToastNamespaceId)
  * general-purpose access.  By transferring these namespace OIDs to workers,
  * we ensure they will have the same notion of the search path as their leader
  * does.
+ *
+ * Under Shared Server, a parallel worker never serves a client, so
+ * polar_session() there is its own process' private session and these
+ * assignments stay inside it.  The asserts still hold: that session is freshly
+ * zeroed and IsParallelWorker() keeps InitTempTableNamespace() out.
  */
 void
 SetTempNamespaceState(Oid tempNamespaceId, Oid tempToastNamespaceId)
@@ -3612,7 +3699,7 @@ PushOverrideSearchPath(OverrideSearchPath *newpath)
 	 * Copy the list for safekeeping, and insert implicitly-searched
 	 * namespaces as needed.  This code should track recomputeNamespacePath.
 	 */
-	oldcxt = MemoryContextSwitchTo(TopMemoryContext);
+	oldcxt = MemoryContextSwitchTo(POLAR_NAMESPACE_TOP_CONTEXT());
 
 	oidlist = list_copy(newpath->schemas);
 
@@ -3656,7 +3743,7 @@ PushOverrideSearchPath(OverrideSearchPath *newpath)
 	 * effective path state, so there's no value in checking to see if it
 	 * didn't change.
 	 */
-	activePathGeneration++;
+	activePathGeneration = polar_next_path_generation();
 
 	MemoryContextSwitchTo(oldcxt);
 }
@@ -3701,7 +3788,7 @@ PopOverrideSearchPath(void)
 	}
 
 	/* As above, the generation always increments. */
-	activePathGeneration++;
+	activePathGeneration = polar_next_path_generation();
 }
 
 
@@ -3981,7 +4068,7 @@ recomputeNamespacePath(void)
 		pathChanged = true;
 
 		/* Must save OID list in permanent storage. */
-		oldcxt = MemoryContextSwitchTo(TopMemoryContext);
+		oldcxt = MemoryContextSwitchTo(POLAR_NAMESPACE_TOP_CONTEXT());
 		newpath = list_copy(oidlist);
 		MemoryContextSwitchTo(oldcxt);
 
@@ -4009,7 +4096,7 @@ recomputeNamespacePath(void)
 	 * we rely on the override-popping logic to have bumped the generation.)
 	 */
 	if (pathChanged)
-		activePathGeneration++;
+		activePathGeneration = polar_next_path_generation();
 
 	/* Clean up. */
 	pfree(rawname);
@@ -4100,6 +4187,14 @@ InitTempTableNamespace(void)
 				(errcode(ERRCODE_READ_ONLY_SQL_TRANSACTION),
 				 errmsg("cannot create temporary tables during a parallel operation")));
 
+	/*
+	 * The schema is named after the process, and has to be: the backend id in
+	 * the name is how everything else works out who owns it.  A session that
+	 * owns temporary objects therefore has to stay on the backend that named
+	 * them, which DefineRelation() arranges by taking that backend out of the
+	 * pool.  That is also what stops the RemoveTempRelations() call below
+	 * from clearing out a schema a live session is still using.
+	 */
 	snprintf(namespaceName, sizeof(namespaceName), "pg_temp_%d", MyBackendId);
 
 	namespaceId = get_namespace_oid(namespaceName, true);
@@ -4183,12 +4278,26 @@ AtEOXact_Namespace(bool isCommit, bool parallel)
 	 * forget the namespace entirely until next time.  On the other hand, if
 	 * we commit then register an exit callback to clean out the temp tables
 	 * at backend shutdown.  (We only want to register the callback once per
-	 * session, so this is a good place to do it.)
+	 * process, so this is a good place to do it.)
+	 *
+	 * Upstream reaches this once per process, because a process is a session.
+	 * Under Shared Server it is once per session, and before_shmem_exit()
+	 * holds only MAX_ON_EXITS entries, so registering unconditionally would
+	 * kill the backend on the twenty-first client that used a temporary
+	 * schema.  One registration is enough: a session that leaves before the
+	 * process does is cleaned out by its own teardown, in the Terminate
+	 * handler in PostgresMain().
 	 */
 	if (myTempNamespaceSubID != InvalidSubTransactionId && !parallel)
 	{
 		if (isCommit)
-			before_shmem_exit(RemoveTempRelationsCallback, 0);
+		{
+			if (!RemoveTempRelationsCallbackRegistered)
+			{
+				before_shmem_exit(RemoveTempRelationsCallback, 0);
+				RemoveTempRelationsCallbackRegistered = true;
+			}
+		}
 		else
 		{
 			myTempNamespace = InvalidOid;
@@ -4230,7 +4339,7 @@ AtEOXact_Namespace(bool isCommit, bool parallel)
 		activeCreationNamespace = baseCreationNamespace;
 		activeTempCreationPending = baseTempCreationPending;
 		/* Always bump generation --- see note in recomputeNamespacePath */
-		activePathGeneration++;
+		activePathGeneration = polar_next_path_generation();
 	}
 }
 
@@ -4287,7 +4396,7 @@ AtEOSubXact_Namespace(bool isCommit, SubTransactionId mySubid,
 		list_free(entry->searchPath);
 		pfree(entry);
 		/* Always bump generation --- see note in recomputeNamespacePath */
-		activePathGeneration++;
+		activePathGeneration = polar_next_path_generation();
 	}
 
 	/* Activate the next level down. */
@@ -4302,7 +4411,7 @@ AtEOSubXact_Namespace(bool isCommit, SubTransactionId mySubid,
 		 * It's probably unnecessary to bump generation here, but this should
 		 * not be a performance-critical case, so better to be over-cautious.
 		 */
-		activePathGeneration++;
+		activePathGeneration = polar_next_path_generation();
 	}
 	else
 	{
@@ -4316,6 +4425,83 @@ AtEOSubXact_Namespace(bool isCommit, SubTransactionId mySubid,
 		 * generation above.  If we did not, then the above assignments did
 		 * nothing and we need not bump the generation.
 		 */
+	}
+}
+
+/*
+ * Does this temporary schema still hold anything?
+ *
+ * An object placed in a schema records a pg_depend row on it, and that is what
+ * RemoveTempRelations() follows to decide what to drop, so finding one row is
+ * all this has to do.  Looking through the same index on the same key is what
+ * keeps the two from disagreeing about what an empty schema is.
+ */
+static bool
+polar_temp_namespace_is_empty(Oid namespaceId)
+{
+	Relation	depRel;
+	ScanKeyData key[2];
+	SysScanDesc scan;
+	bool		empty;
+
+	Assert(OidIsValid(namespaceId));
+
+	depRel = table_open(DependRelationId, AccessShareLock);
+
+	ScanKeyInit(&key[0],
+				Anum_pg_depend_refclassid,
+				BTEqualStrategyNumber, F_OIDEQ,
+				ObjectIdGetDatum(NamespaceRelationId));
+	ScanKeyInit(&key[1],
+				Anum_pg_depend_refobjid,
+				BTEqualStrategyNumber, F_OIDEQ,
+				ObjectIdGetDatum(namespaceId));
+
+	scan = systable_beginscan(depRel, DependReferenceIndexId, true,
+							  NULL, 2, key);
+	empty = !HeapTupleIsValid(systable_getnext(scan));
+	systable_endscan(scan);
+
+	table_close(depRel, AccessShareLock);
+
+	return empty;
+}
+
+/*
+ * Settle what happens to this session's temporary schema now that its
+ * transaction is ending.
+ *
+ * Empty is the common case and the one worth keeping pooled: a client that
+ * works through ON COMMIT DROP tables owns nothing between transactions, so it
+ * gives the schema up here and picks a new one up next time.  A client that
+ * owns something -- a temporary type or function, or a relation that
+ * DefineRelation() did not already dedicate for -- takes the backend out of
+ * the pool and keeps it.
+ *
+ * Called from CommitTransaction() after PreCommit_on_commit_actions(), so that
+ * ON COMMIT DROP relations are already gone and catalog access is still legal.
+ */
+void
+polar_ss_settle_temp_namespace(void)
+{
+	if (!POLAR_SS_NOT_DEDICATED() || !OidIsValid(myTempNamespace))
+		return;
+
+	/* make this transaction's own deletions visible to the scan */
+	CommandCounterIncrement();
+
+	if (polar_temp_namespace_is_empty(myTempNamespace))
+	{
+		myTempNamespace = InvalidOid;
+		myTempToastNamespace = InvalidOid;
+		myTempNamespaceSubID = InvalidSubTransactionId;
+		MyProc->tempNamespaceId = InvalidOid;
+		baseSearchPathValid = false;	/* need to rebuild list */
+	}
+	else
+	{
+		MyProc->polar_is_backend_dedicated = true;
+		elog(LOG, "polar shared server set dedicated from temp namespace");
 	}
 }
 
@@ -4352,6 +4538,10 @@ RemoveTempRelations(Oid tempNamespaceId)
 
 /*
  * Callback to remove temp relations at backend exit.
+ *
+ * Under Shared Server it is registered once per process (see
+ * AtEOXact_Namespace), so it cleans out whichever session is loaded at exit.
+ * The rest clean themselves out when their client goes away.
  */
 static void
 RemoveTempRelationsCallback(int code, Datum arg)
@@ -4447,7 +4637,7 @@ InitializeSearchPath(void)
 		 */
 		MemoryContext oldcxt;
 
-		oldcxt = MemoryContextSwitchTo(TopMemoryContext);
+		oldcxt = MemoryContextSwitchTo(POLAR_NAMESPACE_TOP_CONTEXT());
 		baseSearchPath = list_make1_oid(PG_CATALOG_NAMESPACE);
 		MemoryContextSwitchTo(oldcxt);
 		baseCreationNamespace = PG_CATALOG_NAMESPACE;
@@ -4457,7 +4647,7 @@ InitializeSearchPath(void)
 		activeSearchPath = baseSearchPath;
 		activeCreationNamespace = baseCreationNamespace;
 		activeTempCreationPending = baseTempCreationPending;
-		activePathGeneration++; /* pro forma */
+		activePathGeneration = polar_next_path_generation();	/* pro forma */
 	}
 	else
 	{

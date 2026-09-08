@@ -11,12 +11,15 @@
 #
 # A client may also stop writing without Terminate: shutdown(SHUT_WR), or
 # just going away.  A half-closed client still reads, so it must get every
-# answer, then EOF:
+# answer, then EOF, and the session must be closed.  A temporary function
+# going away proves the latter; it also dedicates the backend, so 7 repeats 6
+# on a pooled one:
 #
 #  4. idle;
 #  5. a query still running;
 #  6. a write to the backend still pending at EOF;
-#  7. mid COPY FROM STDIN, with neither CopyDone nor CopyFail.
+#  7. the same on a pooled backend;
+#  8. mid COPY FROM STDIN, with neither CopyDone nor CopyFail.
 
 use strict;
 use warnings;
@@ -188,6 +191,31 @@ sub raw_query_safe
 	return;
 }
 
+# A raw connection whose session owns temporary function $name, which goes
+# away when the session is closed.  The temporary schema also dedicates the
+# backend (polar_ss_settle_temp_namespace()).
+sub raw_session_with_temp
+{
+	my ($name) = @_;
+	my $sock = raw_connect($name);
+
+	raw_query_safe($sock, $name,
+		"CREATE FUNCTION pg_temp.$name() RETURNS int AS 'SELECT 1' LANGUAGE sql"
+	);
+	return $sock;
+}
+
+# Temporary functions named $name, in any temporary schema.
+sub temp_function_count
+{
+	my ($name) = @_;
+
+	return
+	    q{SELECT count(*) FROM pg_proc p JOIN pg_namespace n }
+	  . q{ON n.oid = p.pronamespace }
+	  . qq{WHERE n.nspname LIKE 'pg\\_temp%' AND p.proname = '$name'};
+}
+
 #
 # 1. ~4 MB pipelined behind pg_sleep(3): far more than the client buffer and
 #    the socket pair hold.
@@ -262,10 +290,12 @@ close($sock);
 #
 # 4. Half-close on an idle session.
 #
-$sock = raw_connect('hc_idle');
+$sock = raw_session_with_temp('hc_idle');
 $res = pump($sock, '', half_close => 1);
 
 ok($res->{closed}, 'hc_idle: the server closed the connection');
+is($ss->wait_for(temp_function_count('hc_idle'), '0'),
+	'0', 'hc_idle: the session was closed');
 
 close($sock);
 
@@ -274,7 +304,7 @@ close($sock);
 #
 $node->safe_psql('postgres', 'CREATE TABLE hc_rows (i int)');
 
-$sock = raw_connect('hc_inflight');
+$sock = raw_session_with_temp('hc_inflight');
 $res = pump($sock, fe_query('INSERT INTO hc_rows SELECT 1 FROM pg_sleep(1)'),
 	half_close => 1);
 
@@ -283,6 +313,8 @@ is($res->{count}{Z} // 0, 1, 'hc_inflight: ReadyForQuery followed it');
 ok($res->{closed}, 'hc_inflight: then the server closed the connection');
 is($node->safe_psql('postgres', 'SELECT count(*) FROM hc_rows'),
 	'1', 'hc_inflight: the INSERT committed');
+is($ss->wait_for(temp_function_count('hc_inflight'), '0'),
+	'0', 'hc_inflight: the session was closed');
 
 close($sock);
 
@@ -296,7 +328,7 @@ my $pending = 1000;
 $batch = fe_query('SELECT pg_sleep(2)');
 $batch .= fe_query("SELECT $_ /* $pad */") foreach 1 .. $pending;
 
-$sock = raw_connect('hc_pending');
+$sock = raw_session_with_temp('hc_pending');
 raw_query_safe($sock, 'hc_pending', $big_query);
 
 $res = pump($sock, $batch, half_close => 1);
@@ -306,15 +338,34 @@ is($res->{written}, length($batch),
 is($res->{count}{Z} // 0, $pending + 1,
 	'hc_pending: every query was answered');
 ok($res->{closed}, 'hc_pending: then the server closed the connection');
+is($ss->wait_for(temp_function_count('hc_pending'), '0'),
+	'0', 'hc_pending: the session was closed');
 
 close($sock);
 
 #
-# 7. Half-close mid COPY FROM STDIN: two CopyData rows, then nothing.
+# 7. As 6 on a pooled backend; only the closed connection is observable.
+#
+$sock = raw_connect('hc_pending_pooled');
+raw_query_safe($sock, 'hc_pending_pooled', $big_query);
+
+$res = pump($sock, $batch, half_close => 1);
+
+is($res->{written}, length($batch),
+	'hc_pending_pooled: the dispatcher took the whole batch');
+is($res->{count}{Z} // 0, $pending + 1,
+	'hc_pending_pooled: every query was answered');
+ok($res->{closed},
+	'hc_pending_pooled: then the server closed the connection');
+
+close($sock);
+
+#
+# 8. Half-close mid COPY FROM STDIN: two CopyData rows, then nothing.
 #
 $node->safe_psql('postgres', 'CREATE TABLE hc_copy (i int)');
 
-$sock = raw_connect('hc_copy');
+$sock = raw_session_with_temp('hc_copy');
 $res = pump($sock, fe_query('COPY hc_copy FROM STDIN'), want => [ 'G', 1 ]);
 is($res->{count}{G}, 1, 'hc_copy: the server is in COPY IN');
 
@@ -324,11 +375,13 @@ $res = pump($sock, fe_message('d', "1\n") . fe_message('d', "2\n"),
 ok($res->{closed}, 'hc_copy: the server closed the connection');
 is($node->safe_psql('postgres', 'SELECT count(*) FROM hc_copy'),
 	'0', 'hc_copy: the unfinished COPY loaded nothing');
+is($ss->wait_for(temp_function_count('hc_copy'), '0'),
+	'0', 'hc_copy: the session was closed');
 
 close($sock);
 
 #
-# 8. No crashes.
+# 9. No crashes.
 #
 $ss->assert_clean_log;
 
