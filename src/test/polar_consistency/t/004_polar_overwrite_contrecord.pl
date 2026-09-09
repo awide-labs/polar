@@ -99,8 +99,8 @@ $node_primary->safe_psql('postgres',
 # make sure that all wals have been flushed
 $result = $node_primary->safe_psql('postgres', 'checkpoint;');
 my $old_primary_lsn =
-  $node_primary->safe_psql('postgres', 'select pg_current_wal_insert_lsn();');
-print "old primary's current insert lsn is $old_primary_lsn\n";
+  $node_primary->safe_psql('postgres', 'select pg_current_wal_flush_lsn();');
+print "old primary's current flush lsn is $old_primary_lsn\n";
 # shutdown primary node immediately
 $node_primary->stop('i');
 # promote replica node
