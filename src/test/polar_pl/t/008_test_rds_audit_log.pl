@@ -50,8 +50,7 @@ $node_primary->safe_psql('postgres', "BEGIN;");
 $node_primary->safe_psql('postgres', "SELECT 1;");
 $node_primary->safe_psql('postgres', "COMMIT;");
 
-my $result =
-  qx{/bin/bash -c "if [ `ls $log_dir | wc -l` != \'0\' ] ; then cat `ls -t $log_dir/*audit* | head -1` | tail -1 | head -1; fi"};
+my $result = $node_primary->wait_for_log_entry("COMMIT;", "audit");
 print($result);
 
 my @array = split(/\t/, $result);
@@ -68,6 +67,11 @@ $node_primary->append_conf(
 );
 $node_primary->restart;
 $node_primary->safe_psql('postgres', "SELECT 1;");
+
+# The assertion below checks for the absence of a log line, therefore there
+# is no reasonable target to wait for. However, by shutting down the server
+# here, and not below, we introduce a delay that makes the sync more probable.
+$node_primary->stop;
 $result =
   qx{/bin/bash -c "if [ `ls $log_dir | wc -l` != \'0\' ] ; then cat `ls -t $log_dir/*audit* | head -1` | tail -1 | head -1; fi"};
 print("flag off result" . $result);
@@ -84,8 +88,7 @@ $node_primary->restart;
 $node_primary->safe_psql('postgres', "SELECT 1;");
 $node_primary->safe_psql('postgres',
 	"create user test_password_user password \'12345678\'");
-$result =
-  qx{/bin/bash -c "if [ `ls $log_dir | wc -l` != \'0\' ] ; then cat `ls -t $log_dir/*audit* | head -1` | tail -1 | head -1; fi"};
+$result = $node_primary->wait_for_log_entry("create user", "audit");
 print($result);
 ok(index($result, "password") == -1, "audit log hide password");
 ok(index($result, "12345678") == -1, "audit log hide password");
@@ -93,8 +96,7 @@ ok(index($result, "12345678") == -1, "audit log hide password");
 my $substring = "123";
 my $long_text_sql = "SELECT " . (($substring . ",") x 1024) . $substring;
 $node_primary->safe_psql('postgres', $long_text_sql);
-$result =
-  qx{/bin/bash -c "if [ `ls $log_dir | wc -l` != \'0\' ] ; then cat `ls -t $log_dir/*audit* | head -1` | tail -1 | head -1; fi"};
+$result = $node_primary->wait_for_log_entry("SELECT 123", "audit");
 print($result);
 
 my $count = 0;
@@ -111,8 +113,7 @@ $node_primary->restart;
 $substring = "1";
 $long_text_sql = "SELECT " . (($substring . ",") x 1024) . $substring;
 $node_primary->safe_psql('postgres', $long_text_sql);
-$result =
-  qx{/bin/bash -c "if [ `ls $log_dir | wc -l` != \'0\' ] ; then cat `ls -t $log_dir/*slow* | head -1` | tail -1 | head -1; fi"};
+$result = $node_primary->wait_for_log_entry("duration", "slow");
 print($result);
 ok(index($result, "duration") > 0, "slow log find sql pass");
 
@@ -127,8 +128,7 @@ $node_primary->psql(
 	'postgres',
 	"SELECT * FROM non_exist_table",
 	on_error_stop => 0);
-$result =
-  qx{/bin/bash -c "if [ `ls $log_dir | wc -l` != \'0\' ] ; then cat `ls -t $log_dir/*audit* | head -1` | tail -1 | head -1; fi"};
+$result = $node_primary->wait_for_log_entry("non_exist_table", "audit");
 print("error log find in audit result: " . $result);
 ok(index($result, "non_exist_table") > 0, "error log find in audit");
 
@@ -142,8 +142,7 @@ $node_primary->restart;
 $substring = "1";
 $long_text_sql = "SELECT " . ($substring x 2048);
 $node_primary->safe_psql('postgres', $long_text_sql);
-$result =
-  qx{/bin/bash -c "if [ `ls $log_dir | wc -l` != \'0\' ] ; then cat `ls -t $log_dir/*audit* | head -1` | tail -1 | head -1; fi"};
+$result = $node_primary->wait_for_log_entry("SELECT 1", "audit");
 
 $count = 0;
 $count++ while $result =~ /\Q$substring\E/g;
@@ -159,8 +158,7 @@ $node_primary->append_conf(
 $node_primary->restart;
 $long_text_sql = "SELECT " . ($substring x 32000);
 $node_primary->safe_psql('postgres', $long_text_sql);
-$result =
-  qx{/bin/bash -c "if [ `ls $log_dir | wc -l` != \'0\' ] ; then cat `ls -t $log_dir/*audit* | head -1` | tail -1 | head -1; fi"};
+$result = $node_primary->wait_for_log_entry("SELECT 1", "audit");
 
 $count = 0;
 $count++ while $result =~ /\Q$substring\E/g;
