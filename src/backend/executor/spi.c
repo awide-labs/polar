@@ -2255,12 +2255,20 @@ _SPI_prepare_plan(const char *src, SPIPlanPtr plan)
 		/*
 		 * Create the CachedPlanSource before we do parse analysis, since it
 		 * needs to see the unmodified raw parse tree.
+		 *
+		 * Under Shared Server, this one stays with the process.  Its owner is
+		 * an SPI plan, which _SPI_save_plan() puts under CacheMemoryContext
+		 * and hands to a caller -- a PL function's plan cache, say -- that is
+		 * process-wide itself.  A session plan under a process-wide owner is
+		 * the mismatch this whole change is about, only the other way round:
+		 * the owner would outlive the plan.  Moving those owners into the
+		 * session is a change of its own; until then both halves belong in
+		 * the process.
 		 */
 		plansource = CreateCachedPlan(parsetree,
 									  src,
 									  CreateCommandTag(parsetree->stmt),
-									  false);	/* POLAR: Shared Server - SPI
-												 * uses local context */
+									  false);
 
 		/*
 		 * Parameter datatypes are driven by parserSetup hook if provided,
