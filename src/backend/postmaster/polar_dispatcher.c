@@ -3142,6 +3142,7 @@ local_execute_invalidation_message(SharedInvalidationMessage *msg)
 		switch(msg->cc.id)
 		{
 			case PROCOID:
+			case TYPEOID:
 			case NAMESPACEOID:
 			case OPEROID:
 			case AMOPOPID:

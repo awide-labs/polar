@@ -37,14 +37,17 @@
 #include "utils/snapmgr.h"
 #include "utils/timestamp.h"
 
+#include "storage/polar_session_context.h"
+#include "storage/proc.h"
+
 
 /*
  * The hash table in which prepared queries are stored. This is
- * per-backend: query plans are not shared between backends.
+ * per-session: query plans are not shared between sessions.
  * The keys for this hash table are the arguments to PREPARE and EXECUTE
  * (statement names); the entries are PreparedStatement structs.
  */
-static HTAB *prepared_queries = NULL;
+#define prepared_queries	POLAR_SESSION(prepared_queries)
 
 static void InitQueryHashTable(void);
 static ParamListInfo EvaluateParams(ParseState *pstate,
@@ -86,11 +89,15 @@ PrepareQuery(ParseState *pstate, PrepareStmt *stmt,
 	/*
 	 * Create the CachedPlanSource before we do parse analysis, since it needs
 	 * to see the unmodified raw parse tree.
+	 *
+	 * Under Shared Server, the hash table that will own this plan is the
+	 * session's, so the plan itself has to live in the session's memory too.
+	 * Leaving it in the process would leave the session holding a pointer
+	 * into the memory of whichever backend happened to run the PREPARE.
 	 */
 	plansource = CreateCachedPlan(rawstmt, pstate->p_sourcetext,
 								  CreateCommandTag(stmt->query),
-								  false);	/* POLAR: Shared Server - PREPARE
-											 * uses local context */
+								  POLAR_SS_NOT_DEDICATED());
 
 	/* Transform list of TypeNames to array of type OIDs */
 	nargs = list_length(stmt->argtypes);
@@ -378,10 +385,11 @@ InitQueryHashTable(void)
 	hash_ctl.keysize = NAMEDATALEN;
 	hash_ctl.entrysize = sizeof(PreparedStatement);
 
+	/* Allocate in the session memory context */
 	prepared_queries = hash_create("Prepared Queries",
 								   32,
 								   &hash_ctl,
-								   HASH_ELEM | HASH_STRINGS);
+								   HASH_ELEM | HASH_STRINGS | PSS_HASH_FLAG);
 }
 
 /*
