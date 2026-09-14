@@ -29,6 +29,7 @@
 
 /* POLAR: Shared Server */
 #include "storage/polar_session_context.h"
+#include "utils/polar_session_inval.h"
 
 /*
  * In common cases the same roleid (ie, the session or current ID) will
@@ -115,6 +116,16 @@ superuser_arg(Oid roleid)
 		CacheRegisterSyscacheCallback(AUTHOID,
 									  RoleidCallback,
 									  (Datum) 0);
+
+		/*
+		 * last_roleid is per session, so the callback above clears only the
+		 * session the reading backend is serving.  Register on the
+		 * per-session queue too, which a session drains for itself.
+		 */
+		polar_ss_cache_register_syscache_callback(AUTHOID,
+												  RoleidCallback,
+												  (Datum) 0);
+
 		roleid_callback_registered = true;
 	}
 
@@ -133,5 +144,17 @@ static void
 RoleidCallback(Datum arg, int cacheid, uint32 hashvalue)
 {
 	/* Invalidate our local cache in case role's superuserness changed */
+	polar_inval_superuser_cache();
+}
+
+/*
+ * Invalidate this session's superuser cache.
+ *
+ * The per-session invalidation queue calls this when it has to report a reset
+ * instead of the individual messages.
+ */
+void
+polar_inval_superuser_cache(void)
+{
 	last_roleid = InvalidOid;
 }

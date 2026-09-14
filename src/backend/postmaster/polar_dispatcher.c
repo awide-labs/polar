@@ -3134,8 +3134,8 @@ static void
 local_execute_invalidation_message(SharedInvalidationMessage *msg)
 {
 	/*
-	 * be careful, the processing method must correspond to InitPlanCache()
-	 * and to InitializeSearchPath()
+	 * be careful, the processing method must correspond to InitPlanCache(),
+	 * to InitializeSearchPath(), to initialize_acl() and to superuser_arg()
 	 */
 	if (msg->id >= 0)
 	{
@@ -3150,9 +3150,17 @@ local_execute_invalidation_message(SharedInvalidationMessage *msg)
 			case FOREIGNDATAWRAPPEROID:
 			/*
 			 * AUTHOID is not a plan cache dependency; the search path needs
-			 * it, because renaming a role changes what "$user" resolves to.
+			 * it, because renaming a role changes what "$user" resolves to,
+			 * and acl.c and superuser.c need it for rolinherit and rolsuper.
 			 */
 			case AUTHOID:
+			/*
+			 * The role membership cache in acl.c: pg_auth_members is what it
+			 * walks, and pg_database carries the datdba that decides implicit
+			 * membership in pg_database_owner.
+			 */
+			case AUTHMEMROLEMEM:
+			case DATABASEOID:
 				add_a_invalidation_message(msg);
 				break;
 		};
