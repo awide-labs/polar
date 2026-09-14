@@ -1,0 +1,382 @@
+--
+-- NULL_CHARACTER
+-- Test the polar_skip_null_char_in_string GUC parameter
+--
+\pset null '(null)'
+\set prevdb :DBNAME
+-- Create test tables
+CREATE TABLE null_char_test (
+    id serial PRIMARY KEY,
+    txt text,
+    description varchar(100)
+);
+--
+-- Test 1: GUC off - null characters should cause errors
+--
+SET polar_skip_null_char_in_string = off;
+SHOW polar_skip_null_char_in_string;
+ polar_skip_null_char_in_string 
+--------------------------------
+ off
+(1 row)
+
+-- These should all fail with encoding errors
+INSERT INTO null_char_test (txt, description) VALUES (E'abc\000def', 'embedded null');
+ERROR:  invalid byte sequence for encoding "SQL_ASCII": 0x00
+INSERT INTO null_char_test (txt, description) VALUES (E'Hello\x00World', 'hex null');
+ERROR:  invalid byte sequence for encoding "SQL_ASCII": 0x00
+INSERT INTO null_char_test (txt, description) VALUES (E'\000start', 'null at start');
+ERROR:  invalid byte sequence for encoding "SQL_ASCII": 0x00
+INSERT INTO null_char_test (txt, description) VALUES (E'end\000', 'null at end');
+ERROR:  invalid byte sequence for encoding "SQL_ASCII": 0x00
+INSERT INTO null_char_test (txt, description) VALUES (E'\000\000\000', 'all nulls');
+ERROR:  invalid byte sequence for encoding "SQL_ASCII": 0x00
+INSERT INTO null_char_test (txt, description) VALUES (E'中文\000测试', 'chinese with null');
+ERROR:  invalid byte sequence for encoding "SQL_ASCII": 0x00
+-- Verify table is still empty
+SELECT count(*) FROM null_char_test;
+ count 
+-------
+     0
+(1 row)
+
+--
+-- Test 2: Enable GUC - null characters should be stripped silently
+--
+SET polar_skip_null_char_in_string = on;
+SHOW polar_skip_null_char_in_string;
+ polar_skip_null_char_in_string 
+--------------------------------
+ on
+(1 row)
+
+-- Test various positions of null bytes
+INSERT INTO null_char_test (txt, description) VALUES (E'abc\000def', 'embedded null');
+INSERT INTO null_char_test (txt, description) VALUES (E'Hello\x00World', 'hex null');
+INSERT INTO null_char_test (txt, description) VALUES (E'\000start', 'null at start');
+INSERT INTO null_char_test (txt, description) VALUES (E'end\000', 'null at end');
+INSERT INTO null_char_test (txt, description) VALUES (E'mid\000dle\x00test', 'multiple nulls');
+-- Test all null bytes (should result in empty string)
+INSERT INTO null_char_test (txt, description) VALUES (E'\000', 'single null');
+INSERT INTO null_char_test (txt, description) VALUES (E'\000\000\000', 'all nulls');
+INSERT INTO null_char_test (txt, description) VALUES (E'\x00\x00\x00\x00', 'all hex nulls');
+-- Test with actual NULL value (should remain NULL, not empty string)
+INSERT INTO null_char_test (txt, description) VALUES (NULL, 'SQL NULL');
+-- Test empty string (should remain empty)
+INSERT INTO null_char_test (txt, description) VALUES ('', 'empty string');
+-- Test Chinese characters with null bytes
+INSERT INTO null_char_test (txt, description) VALUES (E'你好\000世界', 'chinese greeting');
+INSERT INTO null_char_test (txt, description) VALUES (E'\000中文测试\000', 'chinese with nulls');
+INSERT INTO null_char_test (txt, description) VALUES (E'开头\000中间\000结尾', 'chinese multiple nulls');
+-- Test with varchar type
+INSERT INTO null_char_test (txt, description) VALUES (E'text field', E'varchar\000test');
+-- Verify results: null bytes should be stripped
+SELECT id, txt, description, length(txt) as txt_len, length(description) as desc_len 
+FROM null_char_test 
+ORDER BY id;
+ id |        txt         |      description       | txt_len | desc_len 
+----+--------------------+------------------------+---------+----------
+  1 | abcdef             | embedded null          |       6 |       13
+  2 | HelloWorld         | hex null               |      10 |        8
+  3 | start              | null at start          |       5 |       13
+  4 | end                | null at end            |       3 |       11
+  5 | middletest         | multiple nulls         |      10 |       14
+  6 |                    | single null            |       0 |       11
+  7 |                    | all nulls              |       0 |        9
+  8 |                    | all hex nulls          |       0 |       13
+  9 | (null)             | SQL NULL               |  (null) |        8
+ 10 |                    | empty string           |       0 |       12
+ 11 | 你好世界       | chinese greeting       |      12 |       16
+ 12 | 中文测试       | chinese with nulls     |      12 |       18
+ 13 | 开头中间结尾 | chinese multiple nulls |      18 |       22
+ 14 | text field         | varchartest            |      10 |       11
+(14 rows)
+
+-- Verify specific cases
+SELECT id, txt, txt IS NULL as is_null, length(txt) as len 
+FROM null_char_test 
+WHERE description IN ('single null', 'all nulls', 'SQL NULL', 'empty string')
+ORDER BY id;
+ id |  txt   | is_null |  len   
+----+--------+---------+--------
+  6 |        | f       |      0
+  7 |        | f       |      0
+  9 | (null) | t       | (null)
+ 10 |        | f       |      0
+(4 rows)
+
+--
+-- Test 4: PreparedStatement simulation (parameters via EXECUTE)
+--
+PREPARE insert_stmt (text, text) AS 
+    INSERT INTO null_char_test (txt, description) VALUES ($1, $2) RETURNING id, txt, length(txt);
+-- These go through the bind parameter path
+EXECUTE insert_stmt(E'param\000test', 'prepared stmt');
+ id |    txt    | length 
+----+-----------+--------
+ 15 | paramtest |      9
+(1 row)
+
+EXECUTE insert_stmt(E'\000\000param\000\000', 'prepared multiple nulls');
+ id |  txt  | length 
+----+-------+--------
+ 16 | param |      5
+(1 row)
+
+--
+-- Test 5: Disable GUC again - should revert to error behavior
+--
+SET polar_skip_null_char_in_string = off;
+SHOW polar_skip_null_char_in_string;
+ polar_skip_null_char_in_string 
+--------------------------------
+ off
+(1 row)
+
+-- This should fail again
+INSERT INTO null_char_test (txt, description) VALUES (E'abc\000def', 'should fail');
+ERROR:  invalid byte sequence for encoding "SQL_ASCII": 0x00
+-- But data without null bytes should still work
+INSERT INTO null_char_test (txt, description) VALUES ('normal text', 'no null bytes');
+SELECT txt FROM null_char_test WHERE description = 'no null bytes';
+     txt     
+-------------
+ normal text
+(1 row)
+
+--
+-- Test 6: Transaction rollback test
+--
+SET polar_skip_null_char_in_string = on;
+BEGIN;
+INSERT INTO null_char_test (txt, description) VALUES (E'transaction\000test', 'in transaction');
+SELECT count(*) FROM null_char_test WHERE description = 'in transaction';
+ count 
+-------
+     1
+(1 row)
+
+ROLLBACK;
+-- Should be 0 after rollback
+SELECT count(*) FROM null_char_test WHERE description = 'in transaction';
+ count 
+-------
+     0
+(1 row)
+
+--
+-- Test 7: Edge cases
+--
+SET polar_skip_null_char_in_string = on;
+-- Very long string with null bytes
+INSERT INTO null_char_test (txt, description) 
+VALUES (E'a\000b\000c\000d\000e\000f\000g\000h\000i\000j\000k\000l\000m\000n\000o\000p\000q\000r\000s\000t\000u\000v\000w\000x\000y\000z', 'alphabet nulls');
+SELECT txt, length(txt) FROM null_char_test WHERE description = 'alphabet nulls';
+            txt             | length 
+----------------------------+--------
+ abcdefghijklmnopqrstuvwxyz |     26
+(1 row)
+
+-- Mixed escapes
+INSERT INTO null_char_test (txt, description) VALUES (E'tab\there\nnewline\000null', 'mixed escapes');
+SELECT txt, length(txt) FROM null_char_test WHERE description = 'mixed escapes';
+     txt      | length 
+--------------+--------
+ tab     here+|     20
+ newlinenull  | 
+(1 row)
+
+--
+-- Test 8: Text operations on stripped data
+--
+SET polar_skip_null_char_in_string = on;
+CREATE TEMP TABLE text_ops_test (original text, expected text);
+INSERT INTO text_ops_test VALUES (E'Hello\000World', 'HelloWorld');
+INSERT INTO text_ops_test VALUES (E'\000test', 'test');
+INSERT INTO text_ops_test VALUES (E'test\000', 'test');
+-- Verify string operations work correctly
+SELECT 
+    original = expected as matches,
+    length(original) as orig_len,
+    length(expected) as exp_len,
+    original,
+    expected
+FROM text_ops_test;
+ matches | orig_len | exp_len |  original  |  expected  
+---------+----------+---------+------------+------------
+ t       |       10 |      10 | HelloWorld | HelloWorld
+ t       |        4 |       4 | test       | test
+ t       |        4 |       4 | test       | test
+(3 rows)
+
+-- Test concatenation
+SELECT E'Hello\000' || E'\000World' as concat_result, length(E'Hello\000' || E'\000World') as len;
+ concat_result | len 
+---------------+-----
+ HelloWorld    |  10
+(1 row)
+
+-- Test substring
+SELECT substring(E'Hello\000World\000Test' from 1 for 20) as substr_result;
+ substr_result  
+----------------
+ HelloWorldTest
+(1 row)
+
+-- Test LIKE with stripped nulls
+SELECT E'test\000data' LIKE 'testdata' as like_match;
+ like_match 
+------------
+ t
+(1 row)
+
+--
+-- Test 9: Client encoding with null bytes (simple cases)
+--
+SET polar_skip_null_char_in_string = on;
+-- Test with SQL_ASCII (no conversion)
+SET client_encoding = 'SQL_ASCII';
+SHOW client_encoding;
+ client_encoding 
+-----------------
+ SQL_ASCII
+(1 row)
+
+CREATE TEMP TABLE sql_ascii_test (id int, data text);
+INSERT INTO sql_ascii_test VALUES (1, E'test\000data');
+INSERT INTO sql_ascii_test VALUES (2, E'\x00\x00\x00');
+INSERT INTO sql_ascii_test VALUES (3, E'\x00start\x00end\x00');
+SELECT id, data, length(data) as len FROM sql_ascii_test ORDER BY id;
+ id |   data   | len 
+----+----------+-----
+  1 | testdata |   8
+  2 |          |   0
+  3 | startend |   8
+(3 rows)
+
+DROP TABLE sql_ascii_test;
+-- Test with UTF8 client encoding (same as server, no conversion)
+RESET client_encoding;
+SHOW client_encoding;
+ client_encoding 
+-----------------
+ SQL_ASCII
+(1 row)
+
+CREATE TEMP TABLE utf8_test (id int, data text);
+INSERT INTO utf8_test VALUES (1, E'test\000data');
+INSERT INTO utf8_test VALUES (2, E'中文\x00测试');  -- Chinese with null
+INSERT INTO utf8_test VALUES (3, E'\x00UTF8\x00test\x00');
+SELECT id, data, length(data) as len FROM utf8_test ORDER BY id;
+ id |     data     | len 
+----+--------------+-----
+  1 | testdata     |   8
+  2 | 中文测试 |  12
+  3 | UTF8test     |   8
+(3 rows)
+
+DROP TABLE utf8_test;
+-- Note: We don't test encoding conversion with embedded nulls (like GBK -> UTF8)
+-- because it's ambiguous whether nulls should be stripped before or after conversion,
+-- and inserting nulls in the middle of multi-byte characters is not a valid use case.
+--
+-- Test 10: Different database encodings with null bytes
+--
+SET polar_skip_null_char_in_string = on;
+-- Test with SQL_ASCII database encoding
+CREATE DATABASE test_sql_ascii_db ENCODING 'SQL_ASCII' LC_COLLATE 'C' LC_CTYPE 'C' TEMPLATE template0;
+\c test_sql_ascii_db postgres
+SHOW server_encoding;
+ server_encoding 
+-----------------
+ SQL_ASCII
+(1 row)
+
+show client_encoding;
+ client_encoding 
+-----------------
+ SQL_ASCII
+(1 row)
+
+SET polar_skip_null_char_in_string = on;
+CREATE TABLE ascii_null_test (id serial PRIMARY KEY, data text, description varchar(100));
+-- Test null bytes in SQL_ASCII database
+INSERT INTO ascii_null_test (data, description) VALUES (E'abc\000def', 'embedded null');
+INSERT INTO ascii_null_test (data, description) VALUES (E'\000start', 'null at start');
+INSERT INTO ascii_null_test (data, description) VALUES (E'end\000', 'null at end');
+INSERT INTO ascii_null_test (data, description) VALUES (E'\000\000\000', 'all nulls');
+SELECT id, data, description, length(data) as len FROM ascii_null_test ORDER BY id;
+ id |  data  |  description  | len 
+----+--------+---------------+-----
+  1 | abcdef | embedded null |   6
+  2 | start  | null at start |   5
+  3 | end    | null at end   |   3
+  4 |        | all nulls     |   0
+(4 rows)
+
+DROP TABLE ascii_null_test;
+-- Test EUC_CN database (Simplified Chinese encoding)
+\c :prevdb
+CREATE DATABASE test_gbk_db WITH ENCODING 'GBK' LC_COLLATE='zh_CN.GBK' LC_CTYPE='zh_CN.GBK' TEMPLATE=template0;
+\c test_gbk_db
+SHOW server_encoding;
+ server_encoding 
+-----------------
+ GBK
+(1 row)
+
+show client_encoding;
+ client_encoding 
+-----------------
+ GBK
+(1 row)
+
+set client_encoding to UTF8;
+SET polar_skip_null_char_in_string = on;
+CREATE TABLE gbk_client_test (id serial PRIMARY KEY, data text, description varchar(100));
+INSERT INTO gbk_client_test (data, description) VALUES (E'abc\000def', 'ASCII with null');
+INSERT INTO gbk_client_test (data, description) VALUES (E'\x00test', 'null at start');
+INSERT INTO gbk_client_test (data, description) VALUES (E'test\x00', 'null at end');
+INSERT INTO gbk_client_test (data, description) VALUES (E'\xD6\xD0\xCE\xC4', 'GBK: 中文 (no null)');
+INSERT INTO gbk_client_test (data, description) VALUES (E'\x00\xD6\xD0\xCE\xC4', 'null before GBK: 中文');
+INSERT INTO gbk_client_test (data, description) VALUES (E'\xD6\xD0\xCE\xC4\x00', 'GBK: 中文 then null');
+INSERT INTO gbk_client_test (data, description) VALUES (E'\xD6\xD0\x00\xCE\xC4', 'GBK: 中 + null + 文');
+-- error
+INSERT INTO gbk_client_test (data, description) VALUES (E'test\x00\xD6\xD0\xCE\xC4\x00end', 'Mixed: test+null+中文+null+end');
+-- ok
+INSERT INTO gbk_client_test (data, description)
+VALUES (
+    E'test\000'      -- avoid \x00
+    || '中文'
+    || E'\000end',
+    'Mixed: test+null+中文+null+end'
+);
+INSERT INTO gbk_client_test (data, description) VALUES (E'\x00\x00\x00', 'only nulls');
+SELECT id, data, description, length(data) as char_len, octet_length(data) as byte_len 
+FROM gbk_client_test ORDER BY id;
+ id |    data     |          description           | char_len | byte_len 
+----+-------------+--------------------------------+----------+----------
+  1 | abcdef      | ASCII with null                |        6 |        6
+  2 | test        | null at start                  |        4 |        4
+  3 | test        | null at end                    |        4 |        4
+  4 | 中文        | GBK: 中文 (no null)            |        2 |        4
+  5 | 中文        | null before GBK: 中文          |        2 |        4
+  6 | 中文        | GBK: 中文 then null            |        2 |        4
+  7 | 中文        | GBK: 中 + null + 文            |        2 |        4
+  8 | test中文end | Mixed: test+null+中文+null+end |        9 |       11
+  9 | test中文end | Mixed: test+null+中文+null+end |        9 |       11
+ 10 |             | only nulls                     |        0 |        0
+(10 rows)
+
+DROP TABLE gbk_client_test;
+--
+-- Cleanup
+--
+-- Cleanup test databases
+\c :prevdb
+DROP DATABASE test_sql_ascii_db;
+DROP DATABASE test_gbk_db;
+DROP TABLE null_char_test;
+DROP TABLE text_ops_test;
+ERROR:  table "text_ops_test" does not exist
+\! rm -f /tmp/null_char_test.dat /tmp/test_gbk_null_utf8.dat
