@@ -225,6 +225,7 @@ extern void select_best_grantor(Oid roleId, AclMode privileges,
 								Oid *grantorId, AclMode *grantOptions);
 
 extern void initialize_acl(void);
+extern void polar_inval_role_membership_cache(void);
 
 /*
  * prototypes for functions in aclchk.c

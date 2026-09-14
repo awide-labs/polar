@@ -16,6 +16,7 @@
 #include "miscadmin.h"
 #include "postmaster/polar_dispatcher.h"
 #include "storage/polar_session_context.h"
+#include "utils/acl.h"
 #include "utils/plancache.h"
 #include "utils/polar_session_inval.h"
 #include "utils/syscache.h"
@@ -104,6 +105,12 @@ polar_session_invalid_all(void)
 	/* namespace */
 	/* Force search path to be recomputed on next use */
 	polar_inval_namespace_path();
+
+	/* acl: force the role membership caches to be recomputed on next use */
+	polar_inval_role_membership_cache();
+
+	/* superuser: forget whether the last role asked about was a superuser */
+	polar_inval_superuser_cache();
 }
 
 void

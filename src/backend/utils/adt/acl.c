@@ -48,15 +48,18 @@
 /* POLAR: Shared Server */
 #include "storage/polar_session_context.h"
 #include "storage/proc.h"
+#include "utils/polar_session_inval.h"
 
 /*
  * POLAR: Shared Server - Session ACL cache structure
+ *
+ * The role membership cache, indexed by RoleRecurseType below.  cached_db_hash
+ * is deliberately not part of it; see the note on that variable.
  */
 typedef struct PolarSessionAcl
 {
 	Oid			m_cached_role[2];
 	List	   *m_cached_roles[2];
-	uint32		m_cached_db_hash;
 } PolarSessionAcl;
 
 PolarSessionAcl *
@@ -105,8 +108,39 @@ enum RoleRecurseType
 	ROLERECURSE_PRIVS = 0,		/* recurse if rolinherit */
 	ROLERECURSE_MEMBERS = 1		/* recurse unconditionally */
 };
-static Oid	cached_role[] = {InvalidOid, InvalidOid};
-static List *cached_roles[] = {NIL, NIL};
+
+/*
+ * This cache belongs to the client's session, not to the backend process
+ * serving it.
+ *
+ * What it holds is a property of the catalog and of MyDatabaseId, and every
+ * session on one pooled backend agrees on both, so the process-wide statics
+ * this replaces happened to give the right answer.
+ */
+#define POLAR_SESSION_ACL(name)		(polar_session()->info->acl->m_##name)
+
+#define cached_role					POLAR_SESSION_ACL(cached_role)
+#define cached_roles				POLAR_SESSION_ACL(cached_roles)
+
+/*
+ * TopMemoryContext belongs to the backend process and is not reset between the
+ * clients it serves, so a list left there would outlive the session holding
+ * the only pointer to it and never be freed.
+ */
+#define POLAR_ACL_TOP_CONTEXT() \
+	(POLAR_SS_NOT_DEDICATED() ? polar_session()->memory_context : TopMemoryContext)
+
+/*
+ * Under Shared Server, this one stays process-wide.  It is the syscache hash
+ * of MyDatabaseId, and a shared backend serves a single database: the
+ * dispatcher keys its backend pools on database and role, so every session
+ * that reaches this process has the same MyDatabaseId.  It is also set once
+ * per process by initialize_acl(), which the per-session startup path does not
+ * run and must not, so a per-session copy would stay zero for every session
+ * but the first -- and a zero here makes the test in
+ * RoleMembershipCacheCallback() discard every pg_database message that is not
+ * a cache reset.
+ */
 static uint32 cached_db_hash;
 
 
@@ -4828,6 +4862,24 @@ initialize_acl(void)
 		CacheRegisterSyscacheCallback(DATABASEOID,
 									  RoleMembershipCacheCallback,
 									  (Datum) 0);
+
+		/*
+		 * Under Shared Server, the callbacks above run in whichever backend
+		 * reads the shared queue, and the cache they clear is now the one of
+		 * the session that backend happens to be serving.  A detached session
+		 * has no process at all and cannot read that queue.  Register the
+		 * same callback on the per-session queue, which the session drains
+		 * itself once it is given a backend again.
+		 */
+		polar_ss_cache_register_syscache_callback(AUTHMEMROLEMEM,
+												  RoleMembershipCacheCallback,
+												  (Datum) 0);
+		polar_ss_cache_register_syscache_callback(AUTHOID,
+												  RoleMembershipCacheCallback,
+												  (Datum) 0);
+		polar_ss_cache_register_syscache_callback(DATABASEOID,
+												  RoleMembershipCacheCallback,
+												  (Datum) 0);
 	}
 }
 
@@ -4846,6 +4898,19 @@ RoleMembershipCacheCallback(Datum arg, int cacheid, uint32 hashvalue)
 	}
 
 	/* Force membership caches to be recomputed on next use */
+	polar_inval_role_membership_cache();
+}
+
+/*
+ * Force this session's membership caches to be recomputed on next use.
+ *
+ * The per-session invalidation queue calls this when it has to report a reset
+ * instead of the individual messages, the same way it resets the plan cache
+ * and the search path.
+ */
+void
+polar_inval_role_membership_cache(void)
+{
 	cached_role[ROLERECURSE_PRIVS] = InvalidOid;
 	cached_role[ROLERECURSE_MEMBERS] = InvalidOid;
 }
@@ -4974,8 +5039,12 @@ roles_is_member_of(Oid roleid, enum RoleRecurseType type,
 
 	/*
 	 * Copy the completed list into TopMemoryContext so it will persist.
+	 *
+	 * Under Shared Server, copy it into the session's own context while the
+	 * session is shared and the backend is not dedicated, because the cache
+	 * that will point at it is the session's.
 	 */
-	oldctx = MemoryContextSwitchTo(TopMemoryContext);
+	oldctx = MemoryContextSwitchTo(POLAR_ACL_TOP_CONTEXT());
 	new_cached_roles = list_copy(roles_list);
 	MemoryContextSwitchTo(oldctx);
 	list_free(roles_list);
