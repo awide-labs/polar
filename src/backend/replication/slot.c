@@ -1655,13 +1655,16 @@ ReplicationSlotReserveWal(void)
 	 *
 	 * POLAR: For physical slots, since we obtain the redo point from the
 	 * control file as the restart_lsn of the slot, the restart_lsn may be
-	 * less than the current checkpoint.redo in memory, so the WAL required by
-	 * the slot may still be removed by checkpoint. However, the probability
-	 * of this scenario is relatively low (it requires that the checkpoint
-	 * completes its log removal operation before the current process finishes
-	 * calling ReplicationSlotsComputeRequiredLSN), and at this point the
-	 * control file on storage has already been updated, so the WAL needed by
-	 * new replica will not be removed. Therefore, we don't handle it for now.
+	 * less than the current checkpoint.redo in memory, so the lock-protected
+	 * minimum LSN read at the start of a checkpoint is not enough to protect
+	 * it.  CreateCheckPoint() and CreateRestartPoint() therefore read the
+	 * minimum LSN a second time, under ReplicationSlotAllocationLock, after
+	 * updating the control file and before removing any WAL.  Since we hold
+	 * the lock exclusively from reading the control file until
+	 * ReplicationSlotsComputeRequiredLSN() above, that second read either
+	 * sees this slot or happens before we read the control file, in which
+	 * case restart_lsn is the new redo point and its WAL is kept anyway. The
+	 * check below remains as a safety net.
 	 */
 	XLByteToSeg(slot->data.restart_lsn, segno, wal_segment_size);
 	if (XLogGetLastRemovedSegno() >= segno)

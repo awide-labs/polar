@@ -9278,6 +9278,30 @@ update_checkpoint_display(int flags, bool restartpoint, bool reset)
 
 
 /*
+ * Fold a freshly read replication slot minimum into the one a checkpoint or
+ * restartpoint started out with.
+ *
+ * InvalidXLogRecPtr from XLogGetReplicationSlotMinimumLSN() means "no slot
+ * needs any WAL", not "every slot needs all of it", so it must lose to any
+ * valid LSN rather than win as the numerically smaller value.  A plain Min()
+ * gets this backwards: on a node that had no slot at all when the checkpoint
+ * began, the invalid first reading cancels the slot found by the second one,
+ * KeepLogSeg() then skips slot protection entirely, and the slot that was
+ * created meanwhile is invalidated with its WAL recycled underneath it.
+ */
+static XLogRecPtr
+polar_merge_slot_min_req_lsn(XLogRecPtr cur_lsn, XLogRecPtr new_lsn)
+{
+	if (XLogRecPtrIsInvalid(cur_lsn))
+		return new_lsn;
+
+	if (XLogRecPtrIsInvalid(new_lsn))
+		return cur_lsn;
+
+	return Min(cur_lsn, new_lsn);
+}
+
+/*
  * Perform a checkpoint --- either during shutdown, or on-the-fly
  *
  * flags is a bitwise OR of the following:
@@ -9687,8 +9711,18 @@ CreateCheckPoint(int flags)
 	pfree(vxids);
 
 #ifdef USE_INJECTION_POINTS
-	while (polar_injection_point_find("polar_delay_checkpoint_guts"))
-		pg_usleep(1000000);
+	if (polar_injection_point_find("polar_delay_checkpoint_guts"))
+	{
+		/*
+		 * Announce the stall the way polar_delay_checkpoint above does, so a
+		 * test can wait for this line instead of guessing how long it takes
+		 * to get here.  It marks a point the checkpoint has already read the
+		 * replication slot minimum at.
+		 */
+		elog(LOG, "inject delay before checkpoint guts");
+		while (polar_injection_point_find("polar_delay_checkpoint_guts"))
+			pg_usleep(1000000);
+	}
 #endif
 
 	CheckPointGuts(checkPoint.redo, flags);
@@ -9737,6 +9771,14 @@ CreateCheckPoint(int flags)
 	 */
 	if (!shutdown && XLogStandbyInfoActive())
 		LogStandbySnapshot();
+
+	/*
+	 * Past CheckPointGuts(), which takes ReplicationSlotAllocationLock, and
+	 * before the control file gets the new redo point; the counterpart of
+	 * create-restart-point in CreateRestartPoint().  Kept out of the critical
+	 * section below, since attaching to it may allocate memory.
+	 */
+	INJECTION_POINT("polar-checkpoint-before-record");
 
 	START_CRIT_SECTION();
 
@@ -9869,11 +9911,23 @@ CreateCheckPoint(int flags)
 	XLByteToSeg(RedoRecPtr, _logSegNo, wal_segment_size);
 
 	/*
-	 * POLAR: recalculate the current minimum LSN to avoid invalidating and
-	 * cleaning the WAL segment used by the slot newly created.
+	 * Recalculate the current minimum LSN to avoid invalidating and cleaning
+	 * the WAL segment used by the slot newly created.
+	 *
+	 * A physical slot reserves WAL at the redo point in the on-storage
+	 * control file, not at RedoRecPtr, so the read at the start does not
+	 * cover a slot reserved after it, and this read needs the Allocation lock
+	 * just the same.  ReplicationSlotReserveWal() holds that lock exclusively
+	 * from reading the control file until the slot is folded into the minimum
+	 * LSN.  The control file already carries our redo point or a later one,
+	 * so a reservation either completes before this read and is included in
+	 * it, or starts after it and lands at or beyond RedoRecPtr.
 	 */
+	LWLockAcquire(ReplicationSlotAllocationLock, LW_SHARED);
 	polar_slot_min_req_lsn = XLogGetReplicationSlotMinimumLSN();
-	slotsMinReqLSN = Min(slotsMinReqLSN, polar_slot_min_req_lsn);
+	LWLockRelease(ReplicationSlotAllocationLock);
+	slotsMinReqLSN = polar_merge_slot_min_req_lsn(slotsMinReqLSN,
+												  polar_slot_min_req_lsn);
 	/* POLAR end */
 
 	/*
@@ -10451,11 +10505,23 @@ CreateRestartPoint(int flags)
 	endptr = (receivePtr < replayPtr) ? replayPtr : receivePtr;
 
 	/*
-	 * POLAR: recalculate the current minimum LSN to avoid invalidating and
-	 * cleaning the WAL segment used by the slot newly created.
+	 * Recalculate the current minimum LSN to avoid invalidating and cleaning
+	 * the WAL segment used by the slot newly created.
+	 *
+	 * A physical slot reserves WAL at the redo point in the on-storage
+	 * control file, not at RedoRecPtr, so the read at the start does not
+	 * cover a slot reserved after it, and this read needs the Allocation lock
+	 * just the same.  ReplicationSlotReserveWal() holds that lock exclusively
+	 * from reading the control file until the slot is folded into the minimum
+	 * LSN.  The control file already carries our redo point or a later one,
+	 * so a reservation either completes before this read and is included in
+	 * it, or starts after it and lands at or beyond RedoRecPtr.
 	 */
+	LWLockAcquire(ReplicationSlotAllocationLock, LW_SHARED);
 	polar_slot_min_req_lsn = XLogGetReplicationSlotMinimumLSN();
-	slotsMinReqLSN = Min(slotsMinReqLSN, polar_slot_min_req_lsn);
+	LWLockRelease(ReplicationSlotAllocationLock);
+	slotsMinReqLSN = polar_merge_slot_min_req_lsn(slotsMinReqLSN,
+												  polar_slot_min_req_lsn);
 	/* POLAR end */
 
 	KeepLogSeg(endptr, slotsMinReqLSN, &_logSegNo);

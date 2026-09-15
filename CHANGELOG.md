@@ -15,6 +15,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Fixed query failures on replicas when a node created a replication slot
+  during a checkpoint that started with no existing slots. The checkpoint
+  could invalidate the new slot and remove required WAL, causing
+  "requested WAL segment ... has already been removed" errors. (XCOM-240)
 - Fixed false crash reports during smart and fast shutdown: the WAL
   pipeliner's normal exit after the shutdown checkpoint was treated as a
   crash, causing the postmaster to report an abnormal shutdown and exit
