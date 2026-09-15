@@ -13,6 +13,7 @@
 
 #include "postgres.h"
 
+#include "fmgr.h"
 #include "storage/polar_session_context.h"
 #include "storage/polar_memutils.h"
 #include "catalog/namespace.h"
@@ -702,6 +703,13 @@ polar_switch_to_session(PolarSessionContext *session)
 					MyProc->polar_is_backend_dedicated = true;
 					elog(LOG, "polar shared server set dedicated from polar_ss_session_schedule_policy");
 				}
+
+				/*
+				 * A library preloaded at backend startup could not be acted
+				 * on when it was loaded, because the backend had no client
+				 * yet.  This is the first moment it has one.
+				 */
+				polar_ss_dedicate_for_preloaded_library();
 			}
 			if (old_session->is_shared)
 				SpinLockRelease(&old_session->holding_lock);

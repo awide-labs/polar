@@ -1722,6 +1722,15 @@ char	   *polar_internal_shared_preload_libraries = NULL;
 bool		process_shared_preload_libraries_in_progress = false;
 bool		process_shared_preload_libraries_done = false;
 
+/*
+ * Flag telling that we are loading session_preload_libraries or
+ * local_preload_libraries.  Those are loaded from InitPostgres(), before the
+ * backend has been given its first shared session, so the tests that decide
+ * whether a load has to take the backend out of the pool cannot look at the
+ * session; see internal_load_library().
+ */
+bool		polar_session_preload_libraries_in_progress = false;
+
 shmem_request_hook_type shmem_request_hook = NULL;
 bool		process_shmem_requests_in_progress = false;
 
@@ -1813,12 +1822,16 @@ process_shared_preload_libraries(void)
 void
 process_session_preload_libraries(void)
 {
+	polar_session_preload_libraries_in_progress = true;
+
 	load_libraries(session_preload_libraries_string,
 				   "session_preload_libraries",
 				   false);
 	load_libraries(local_preload_libraries_string,
 				   "local_preload_libraries",
 				   true);
+
+	polar_session_preload_libraries_in_progress = false;
 }
 
 /*

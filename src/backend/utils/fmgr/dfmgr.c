@@ -80,6 +80,14 @@ char	   *Dynamic_library_path;
 /* POLAR: GUC */
 bool		polar_suppress_preload_error;
 
+/*
+ * Name of the first library with a _PG_init() that this process preloaded
+ * through session_preload_libraries or local_preload_libraries, or NULL.  It
+ * points into that library's file_list entry, which is malloc'd and never
+ * freed once the load has got as far as _PG_init().
+ */
+static const char *polar_ss_preload_dedicated_libname = NULL;
+
 /* POLAR end */
 
 static void *internal_load_library(const char *libname);
@@ -233,6 +241,23 @@ exit:
 
 
 /*
+ * Take the backend out of the pool if it preloaded a library with a
+ * _PG_init().  Called from polar_switch_to_session() when the backend is
+ * given a shared session, which is the first moment it has a client to keep.
+ */
+void
+polar_ss_dedicate_for_preloaded_library(void)
+{
+	if (polar_ss_preload_dedicated_libname != NULL &&
+		POLAR_SS_NOT_DEDICATED())
+	{
+		MyProc->polar_is_backend_dedicated = true;
+		elog(LOG, "polar shared server set dedicated from internal_load_library '%s'",
+			 polar_ss_preload_dedicated_libname);
+	}
+}
+
+/*
  * Load the specified dynamic-link library file, unless it already is
  * loaded.  Return the pg_dl* handle for the file.
  *
@@ -361,13 +386,28 @@ internal_load_library(const char *libname)
 		PG_init = (PG_init_t) dlsym(file_scanner->handle, "_PG_init");
 		if (PG_init)
 		{
-			/* POLAR: Shared Server */
-			if (POLAR_SS_NOT_DEDICATED())
+			/*
+			 * A library with a _PG_init() takes the backend out of the pool.
+			 * One preloaded at backend startup can only be remembered, since
+			 * the backend has no client yet.
+			 */
+			bool		preloading = (polar_session_preload_libraries_in_progress &&
+									  POLAR_SHARED_SERVER_ENABLE() &&
+									  IS_POLAR_BACKEND_SHARED());
+
+			if (preloading)
+			{
+				/* only the first one is kept; the backend leaves once */
+				if (!polar_ss_preload_dedicated_libname)
+					polar_ss_preload_dedicated_libname = file_scanner->filename;
+			}
+			else if (POLAR_SS_NOT_DEDICATED())
 			{
 				MyProc->polar_is_backend_dedicated = true;
 				elog(LOG, "polar shared server set dedicated from internal_load_library '%s'",
 					 libname);
 			}
+
 			(*PG_init) ();
 		}
 
