@@ -724,6 +724,7 @@ extern PGDLLIMPORT char *Dynamic_library_path;
 
 /* POLAR */
 extern PGDLLIMPORT bool polar_suppress_preload_error;
+extern void polar_ss_dedicate_for_preloaded_library(void);
 
 /* POLAR end */
 

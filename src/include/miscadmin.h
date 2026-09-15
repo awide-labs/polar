@@ -584,6 +584,7 @@ extern PGDLLIMPORT char *local_preload_libraries_string;
 
 /* POLAR */
 extern PGDLLIMPORT char *polar_internal_shared_preload_libraries;
+extern PGDLLIMPORT bool polar_session_preload_libraries_in_progress;
 
 /* POLAR end */
 
