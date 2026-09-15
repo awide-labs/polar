@@ -406,31 +406,119 @@ $pooled_pid = dedicates(
 #     is consulted, so a library that escalated on load would mask the rule
 #     being checked here.  Preloading polar_monitor is what rules that out.
 #
+#     The list is PGC_SIGHUP, so it is checked on first resolution and again
+#     before each command.  Cold, warm and type-cache-only cases follow.
+#
 my $ext_re =
   qr/polar shared server set dedicated from dedicated extention '\$libdir\/polar_monitor'/;
+
+# 12a. Warm the cache while the list is still empty.  Nothing above calls a
+#      polar_monitor function, so this is the resolution.
+my $before_warm = $ss->log_count($ext_re);
+my $ext_w = $ss->psql_session();
+is(backend_pid($ext_w), $pooled_pid,
+	'dedicated extension: the warm-up client started on the pooled backend');
+
+$ext_w->query_safe('SELECT polar_node_type()');
+$ss->log_barrier($ext_w);
+is($ss->log_count($ext_re), $before_warm,
+	'dedicated extension: nothing escalates while the list is empty');
+my $ext_w_pid = backend_pid($ext_w);
+$ext_w->quit;
+
+# 12b. Warm backend, held across the reload so reload_setting()'s connections
+#      go elsewhere.  The next command must escalate without calling the
+#      library.
+my ($ext_a, @ext_a_others) = $ss->hold_backend($ext_w_pid);
+is(backend_pid($ext_a), $ext_w_pid,
+	'dedicated extension: the warm backend is held across the reload');
+
+my $before_hit = $ss->log_count($ext_re);
 $ss->reload_setting('polar_ss_dedicated_extension_names',
 	q{"$libdir/polar_monitor"});
 
-# The check sits behind fmgr's per-process cache of C function addresses, so it
-# runs only for the first client to resolve a given function in a given backend
-# -- a miss, never a hit.  This backend has resolved no polar_monitor function
-# yet, because nothing before this point calls one, so the call below is a miss
-# and the rule fires.  Read the pid after the call rather than before it, for
-# the same reason: it must be the first thing this client does.
-my $before_ext = $ss->log_count($ext_re);
-my $ext_a = $ss->psql_session();
+$ext_a->query_safe('SELECT 1');
+is($ss->wait_log_count($ext_re, $before_hit + 1), $before_hit + 1,
+	'dedicated extension: escalation logged before the next command');
+$ext_a->query_safe('ROLLBACK');
+$_->quit foreach ($ext_a, @ext_a_others);
 
-$ext_a->query_safe('SELECT polar_node_type()');
-is($ss->wait_log_count($ext_re, $before_ext + 1), $before_ext + 1,
-	'dedicated extension: escalation logged on first call');
-
-my $ext_a_pid = backend_pid($ext_a);
-$ext_a->quit;
-
+# One transaction, so the pid read is the backend that resolves.
 my $ext_b = $ss->psql_session();
-isnt(backend_pid($ext_b), $ext_a_pid,
-	'dedicated extension: the next client landed on a different backend');
+$ext_b->query_safe('BEGIN');
+my $ext_b_pid = backend_pid($ext_b);
+isnt($ext_b_pid, $ext_w_pid,
+	'dedicated extension: the warm backend left the pool');
+
+# 12c. Cold backend: first resolution.
+my $before_miss = $ss->log_count($ext_re);
+$ext_b->query_safe('SELECT polar_node_type()');
+is($ss->wait_log_count($ext_re, $before_miss + 1), $before_miss + 1,
+	'dedicated extension: escalation logged on first resolution');
+$ext_b->query_safe('COMMIT');
 $ext_b->quit;
+
+my $ext_c = $ss->psql_session();
+isnt(backend_pid($ext_c), $ext_b_pid,
+	'dedicated extension: that backend left the pool too');
+$ext_c->quit;
+
+# 12d. Empty list: neither a first resolution nor a warm backend escalates,
+#      so the checks above are not passing vacuously.  The flag is never
+#      cleared, hence clients that arrive after the reload.
+$ss->reload_setting('polar_ss_dedicated_extension_names', '');
+
+my $before_off = $ss->log_count($ext_re);
+my $ext_d = $ss->psql_session();
+my $ext_d_pid = backend_pid($ext_d);
+$ext_d->query_safe('SELECT polar_node_type()');
+$ext_d->quit;
+
+my $ext_e = $ss->psql_session();
+is(backend_pid($ext_e), $ext_d_pid,
+	'dedicated extension: an empty list leaves the backend in the pool');
+$ext_e->query_safe('SELECT polar_node_type()');
+$ss->log_barrier($ext_e);
+is($ss->log_count($ext_re), $before_off,
+	'dedicated extension: and escalates on neither');
+$ext_e->quit;
+
+# 12e. Library reached only through the type cache: array_eq() calls
+#      hstore's equality via its cached FmgrInfo.  hstore has no _PG_init(),
+#      so loading it does not dedicate.
+my $hs_re =
+  qr/polar shared server set dedicated from dedicated extention '\$libdir\/hstore'/;
+
+my $hs_w = $ss->psql_session();
+my $hs_w_pid = backend_pid($hs_w);
+$hs_w->query_safe(
+	q{CREATE EXTENSION hstore;
+	  CREATE TABLE hs_probe(a hstore[], b hstore[]);
+	  INSERT INTO hs_probe
+	    VALUES (ARRAY['x=>1'::hstore], ARRAY['x=>2'::hstore])});
+$hs_w->query_safe('SELECT a = b FROM hs_probe');
+$hs_w->quit;
+
+my ($hs_a, @hs_a_others) = $ss->hold_backend($hs_w_pid);
+is(backend_pid($hs_a), $hs_w_pid,
+	'dedicated extension, type cache: the warm backend is held');
+
+my $before_hs = $ss->log_count($hs_re);
+$ss->reload_setting('polar_ss_dedicated_extension_names',
+	q{"$libdir/hstore"});
+
+$hs_a->query_safe('SELECT a = b FROM hs_probe');
+is($ss->wait_log_count($hs_re, $before_hs + 1), $before_hs + 1,
+	'dedicated extension, type cache: escalation logged');
+$hs_a->query_safe('ROLLBACK');
+$_->quit foreach ($hs_a, @hs_a_others);
+
+my $hs_b = $ss->psql_session();
+isnt(backend_pid($hs_b), $hs_w_pid,
+	'dedicated extension, type cache: the warm backend left the pool');
+$hs_b->quit;
+
+$ss->reload_setting('polar_ss_dedicated_extension_names', '');
 
 #
 # 13. polar_ss_session_schedule_policy = dedicated, which dedicates every
