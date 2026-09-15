@@ -450,6 +450,7 @@ static void polar_assign_dedicated_guc_names(const char *newval, void *extra);
 static void polar_assign_dedicated_extension_names(const char *newval, void *extra);
 static void polar_assign_dedicated_dbuser_names(const char *newval, void *extra);
 static void polar_assign_shared_server_enable(const bool newval, void *extra);
+static bool polar_extension_listed(const char *name);
 
 static void polar_shared_server_guc_initialize(void);
 
@@ -1399,6 +1400,16 @@ static PolarName polar_session_external_guc_enum_names_array[] =
 static PolarNames *polar_session_dedicated_guc_name_array;
 static PolarNames *polar_session_dedicated_extention_name_array;
 static PolarNames *polar_session_dedicated_dbuser_name_array;
+
+/*
+ * Libraries this process has resolved C functions from.  The type cache and
+ * others keep the FmgrInfo and never return to fmgr, so a list change has to
+ * be rechecked against these before each command.
+ */
+static List *polar_ss_resolved_libraries = NIL;
+
+/* First of them on polar_ss_dedicated_extension_names, or NULL */
+static const char *polar_ss_listed_library = NULL;
 
 const int	polar_session_external_guc_bool_count = sizeof(polar_session_external_guc_bool_names_array) / sizeof(PolarName);
 const int	polar_session_external_guc_int_count = sizeof(polar_session_external_guc_int_names_array) / sizeof(PolarName);
@@ -16821,6 +16832,8 @@ polar_check_dedicated_names(char **newval, void **extra, GucSource source)
 	List	   *elemlist;
 	ListCell   *l;
 	PolarNames *tmp_array;
+	Size		size;
+	char	   *names;
 	int			i = 0;
 
 	/* Need a modifiable copy of string */
@@ -16836,18 +16849,29 @@ polar_check_dedicated_names(char **newval, void **extra, GucSource source)
 		return false;
 	}
 
-	tmp_array = guc_malloc(FATAL, sizeof(PolarNames) + list_length(elemlist) * sizeof(PolarName));
+	/*
+	 * The names follow the array in the same block: the GUC machinery frees a
+	 * replaced extra with a single free().
+	 */
+	size = sizeof(PolarNames) + list_length(elemlist) * sizeof(PolarName);
+	foreach(l, elemlist)
+		size += strlen((char *) lfirst(l)) + 1;
+
+	tmp_array = guc_malloc(FATAL, size);
 	if (!tmp_array)
 		return false;
 
 	tmp_array->count = list_length(elemlist);
+	names = (char *) &tmp_array->cell[tmp_array->count];
 
 	foreach(l, elemlist)
 	{
 		char	   *tok = (char *) lfirst(l);
+		Size		len = strlen(tok) + 1;
 
 		tmp_array->cell[i].id = i;
-		tmp_array->cell[i].name = strdup(tok);
+		tmp_array->cell[i].name = memcpy(names, tok, len);
+		names += len;
 
 		i++;
 	}
@@ -16874,11 +16898,23 @@ polar_assign_dedicated_guc_names(const char *newval, void *extra)
 static void
 polar_assign_dedicated_extension_names(const char *newval, void *extra)
 {
+	ListCell   *lc;
+
 	polar_session_dedicated_extention_name_array = (PolarNames *) extra;
 
 	pg_qsort(polar_session_dedicated_extention_name_array->cell,
 			 polar_session_dedicated_extention_name_array->count,
 			 sizeof(PolarName), polar_name_compare);
+
+	polar_ss_listed_library = NULL;
+	foreach(lc, polar_ss_resolved_libraries)
+	{
+		if (polar_extension_listed((const char *) lfirst(lc)))
+		{
+			polar_ss_listed_library = (const char *) lfirst(lc);
+			break;
+		}
+	}
 }
 
 static void
@@ -16915,28 +16951,69 @@ polar_shared_server_guc_initialize(void)
 	polar_session_dedicated_dbuser_name_array->count = 0;
 }
 
+static bool
+polar_extension_listed(const char *name)
+{
+	PolarName	temp;
+
+	if (polar_session_dedicated_extention_name_array->count == 0)
+		return false;
+
+	temp.id = -1;
+	temp.name = name;
+
+	return bsearch((void *) &temp,
+				   (void *) polar_session_dedicated_extention_name_array->cell,
+				   polar_session_dedicated_extention_name_array->count,
+				   sizeof(PolarName),
+				   polar_name_compare) != NULL;
+}
+
 void
 polar_check_extention_dedicated(const char *extention_name)
 {
-	if (POLAR_SS_NOT_DEDICATED() &&
-		polar_session_dedicated_extention_name_array->count > 0)
+	if (POLAR_SS_NOT_DEDICATED() && polar_extension_listed(extention_name))
 	{
-		PolarName	temp;
-		PolarName  *res;
+		MyProc->polar_is_backend_dedicated = true;
+		elog(LOG, "polar shared server set dedicated from dedicated extention '%s'", extention_name);
+	}
+}
 
-		temp.id = -1;
-		temp.name = extention_name;
+void
+polar_ss_note_resolved_library(const char *probin)
+{
+	ListCell   *lc;
 
-		res = (PolarName *) bsearch((void *) &temp,
-									(void *) polar_session_dedicated_extention_name_array->cell,
-									polar_session_dedicated_extention_name_array->count,
-									sizeof(PolarName),
-									polar_name_compare);
-		if (res)
-		{
-			MyProc->polar_is_backend_dedicated = true;
-			elog(LOG, "polar shared server set dedicated from dedicated extention '%s'", extention_name);
-		}
+	foreach(lc, polar_ss_resolved_libraries)
+	{
+		if (strcmp((const char *) lfirst(lc), probin) == 0)
+			break;
+	}
+
+	if (lc == NULL)
+	{
+		MemoryContext oldcxt = MemoryContextSwitchTo(TopMemoryContext);
+		char	   *library = pstrdup(probin);
+
+		polar_ss_resolved_libraries = lappend(polar_ss_resolved_libraries,
+											  library);
+		MemoryContextSwitchTo(oldcxt);
+
+		if (polar_ss_listed_library == NULL && polar_extension_listed(library))
+			polar_ss_listed_library = library;
+	}
+
+	polar_check_extention_dedicated(probin);
+}
+
+void
+polar_ss_recheck_resolved_libraries(void)
+{
+	if (polar_ss_listed_library != NULL && POLAR_SS_NOT_DEDICATED())
+	{
+		MyProc->polar_is_backend_dedicated = true;
+		elog(LOG, "polar shared server set dedicated from dedicated extention '%s'",
+			 polar_ss_listed_library);
 	}
 }
 

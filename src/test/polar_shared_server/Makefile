@@ -9,7 +9,7 @@
 #
 #-------------------------------------------------------------------------
 
-EXTRA_INSTALL=external/polar_monitor
+EXTRA_INSTALL=contrib/hstore external/polar_monitor
 
 subdir = src/test/polar_shared_server
 top_builddir = ../../..

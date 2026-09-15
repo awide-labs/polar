@@ -5112,6 +5112,9 @@ PostgresMain(const char *dbname, const char *username)
 			/* POLAR end */
 		}
 
+		/* Recheck resolved libraries after the reload above */
+		polar_ss_recheck_resolved_libraries();
+
 		/*
 		 * (7) process the command.  But ignore it if we're skipping till
 		 * Sync.

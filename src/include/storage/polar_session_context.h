@@ -179,6 +179,8 @@ extern struct PolarSessionAcl *polar_session_acl_create(MemoryContext mctx);
 extern bool polar_session_guc_restore(PolarSessionContext *session, bool to_session);
 extern void polar_session_guc_release(PolarSessionContext *session);
 extern void polar_check_extention_dedicated(const char *extention_name);
+extern void polar_ss_note_resolved_library(const char *probin);
+extern void polar_ss_recheck_resolved_libraries(void);
 extern bool polar_check_dbuser_dedicated(const char *dbname, const char *username);
 extern void polar_session_accept_invalidation_messages(PolarSessionContext *session);
 
