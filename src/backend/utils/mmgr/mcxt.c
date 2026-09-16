@@ -1657,17 +1657,21 @@ polar_palloc_in_crit(Size size)
 	return ret;
 }
 
-/* POLAR: Shared Server */
+/*
+ * How many bytes of usable space does this block hold?
+ */
 Size
 polar_malloc_usable_size(MemoryContext context, void *pointer)
 {
+	MemoryContext owner;
+
 	AssertArg(MemoryContextIsValid(context));
 	AssertNotInCriticalSection(context);
 
 	if (MemoryContextContains(context, pointer))
-		return context->methods->malloc_usable_size(context, pointer);
+		owner = context;
 	else if (context->fallback.mcxt != NULL)
-		return context->fallback.mcxt->methods->malloc_usable_size(context->fallback.mcxt, pointer);
+		owner = context->fallback.mcxt;
 	else
 	{
 		Assert(false);
@@ -1675,6 +1679,13 @@ polar_malloc_usable_size(MemoryContext context, void *pointer)
 			 context->type, context->name,
 			 context->ident ? context->ident : "null");
 	}
+
+	if (!owner->methods->malloc_usable_size)
+		elog(ERROR, "context(%d-%s-%s) does not support malloc_usable_size",
+			 owner->type, owner->name,
+			 owner->ident ? owner->ident : "null");
+
+	return owner->methods->malloc_usable_size(owner, pointer);
 }
 
 /* POLAR px */

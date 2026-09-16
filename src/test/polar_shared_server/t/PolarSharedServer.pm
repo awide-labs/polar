@@ -250,6 +250,29 @@ sub pooled_backend_pid
 	return $pid;
 }
 
+# Puts the node back if a backend crash took it down.
+#
+# restart_after_crash is off throughout this suite, so one backend crash takes
+# the postmaster with it, and every case after it would fail for want of a
+# server rather than on its own merits.  On a build where nothing crashes this
+# never fires.
+#
+# Not $node->stop first: that reports a missing pidfile through BAIL_OUT,
+# which no eval can catch, and the postmaster that went down with the backend
+# has already removed it.  _update_pid(-1) is how Cluster itself notices a
+# postmaster that is gone, and start() bails without it.
+sub ensure_up
+{
+	my ($self) = @_;
+	my $node = $self->{node};
+
+	return if eval { $node->safe_psql('postgres', 'SELECT 1'); 1 };
+
+	$node->_update_pid(-1);
+	$node->start;
+	return;
+}
+
 # For each name, creates that schema with a table t holding the schema name,
 # so a query on unqualified t shows where it resolved.
 sub create_path_tables
