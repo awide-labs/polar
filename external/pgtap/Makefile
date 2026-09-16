@@ -167,7 +167,17 @@ endif
 # Check for missing extensions
 # NOTE! This currently MUST be after PGXS! The problem is that $(DESTDIR)$(datadir) aren't being expanded.
 #
+
 EXTENSION_DIR = $(DESTDIR)$(datadir)/extension
+
+# When running in-tree `make check`, temp-install installs extensions to $(abs_top_builddir)/tmp_install,
+# but DESTDIR is not passed down to this sub-make. Hardcode it here.
+ifndef PGXS
+ifndef DESTDIR
+EXTENSION_DIR = $(abs_top_builddir)/tmp_install$(datadir)/extension
+endif
+endif
+
 extension_control = $(shell file="$(EXTENSION_DIR)/$1.control"; [ -e "$$file" ] && echo "$$file")
 ifeq (,$(call extension_control,citext))
 MISSING_EXTENSIONS += citext
