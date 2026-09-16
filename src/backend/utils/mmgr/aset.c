@@ -1341,6 +1341,25 @@ AllocSetGetChunkSpace(MemoryContext context, void *pointer)
 }
 
 /*
+ * polar_AllocUsableSize
+ *		Given a currently-allocated chunk, determine the size of the usable
+ *		space in it, not counting the chunk header.
+ *
+ * This is the memory-context counterpart of glibc's malloc_usable_size().
+ */
+static Size
+polar_AllocUsableSize(MemoryContext context, void *pointer)
+{
+	AllocChunk	chunk = AllocPointerGetChunk(pointer);
+	Size		result;
+
+	VALGRIND_MAKE_MEM_DEFINED(chunk, ALLOCCHUNK_PRIVATE_LEN);
+	result = chunk->size;
+	VALGRIND_MAKE_MEM_NOACCESS(chunk, ALLOCCHUNK_PRIVATE_LEN);
+	return result;
+}
+
+/*
  * AllocSetIsEmpty
  *		Is an allocset empty of any allocated space?
  */
@@ -1571,12 +1590,6 @@ polar_AllocSetGetPeakUsage(MemoryContext context)
 	 * 23.129 ms Optimizer: PolarDB PX Optimizer (slice0) (slice1) Execution
 	 * Time: 17.646 ms (8 rows)
 	 */
-	return 1024;
-}
-
-static Size
-polar_AllocUsableSize(MemoryContext context, void *pointer)
-{
 	return 1024;
 }
 

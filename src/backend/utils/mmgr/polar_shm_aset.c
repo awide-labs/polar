@@ -317,7 +317,7 @@ static Size polar_AllocSetGetPeakUsage(MemoryContext context) pg_attribute_unuse
 
 /*POLAR end */
 
-static Size polar_ShmAllocUsableSize(MemoryContext context, void *pointer) pg_attribute_unused();
+static Size polar_ShmAllocUsableSize(MemoryContext context, void *pointer);
 
 #ifdef MEMORY_CONTEXT_CHECKING
 static void ShmAllocSetCheck(MemoryContext context);
@@ -338,6 +338,10 @@ static const MemoryContextMethods AllocSetMethods = {
 #ifdef MEMORY_CONTEXT_CHECKING
 	,ShmAllocSetCheck
 #endif
+	,NULL						/* declare_accounting_root */
+	,NULL						/* get_peak_usage */
+	/* Sizes a session GUC's extra across a handover */
+	,polar_ShmAllocUsableSize
 };
 
 /*
@@ -1141,6 +1145,13 @@ ShmAllocSetGetChunkSpace(MemoryContext context, void *pointer)
 	return result;
 }
 
+/*
+ * polar_ShmAllocUsableSize
+ *		Given a currently-allocated chunk, determine the size of the usable
+ *		space in it, not counting the chunk header.
+ *
+ * This is the memory-context counterpart of glibc's malloc_usable_size().
+ */
 static Size
 polar_ShmAllocUsableSize(MemoryContext context, void *pointer)
 {
