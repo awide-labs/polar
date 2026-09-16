@@ -8,14 +8,14 @@ SELECT is( pg_typeof(42), 'integer', 'pg_type(int) should work' );
 SELECT is( pg_typeof(42.1), 'numeric', 'pg_type(numeric) should work' );
 SELECT is( pg_typeof(''::text), 'text', 'pg_type(text) should work' );
 
-SELECT is( pg_typeof( pg_version() ), 'text', 'pg_version() should return text' );
+SELECT is( pg_typeof( public.pg_version() ), 'text', 'pg_version() should return text' );
 SELECT is(
-    pg_version(),
+    public.pg_version(),
     current_setting( 'server_version'),
     'pg_version() should return same as "server_version" setting'
 );
 SELECT matches(
-    pg_version(),
+    public.pg_version(),
     '(?x)'
     '(?: ^[89][.][[:digit:]]{1,2}([.][[:digit:]]{1,2}|devel|(alpha|beta|rc)[[:digit:]]+) )'
     '|'
