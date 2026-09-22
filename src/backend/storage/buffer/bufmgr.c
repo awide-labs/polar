@@ -81,6 +81,7 @@
 #include "storage/polar_rsc.h"
 #include "storage/polar_flush.h"
 #include "storage/polar_io_stat.h"
+#include "utils/faultinjector.h"
 #include "utils/guc.h"
 #include "utils/injection_point.h"
 #include "utils/polar_log.h"
@@ -1735,6 +1736,22 @@ BufferAlloc(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 	 */
 	LWLockRelease(newPartitionLock);
 
+#ifdef FAULT_INJECTOR
+
+	/*
+	 * The lookup missed and our tag is not in the buffer table yet, so a
+	 * concurrent startup process looking this tag up misses too. Tests hold a
+	 * fault-in here to reach that interleaving. Filtered by relfilenode,
+	 * since every allocation reaches this point.
+	 */
+	{
+		char		relnode[32];
+
+		snprintf(relnode, sizeof(relnode), "%u", newTag.relNumber);
+		FaultInjector_TriggerFaultIfSet("polar_stall_buffer_insert", "", relnode);
+	}
+#endif
+
 	/*
 	 * Acquire a victim buffer. Somebody else might try to do the same, we
 	 * don't hold any conflicting locks. If so we'll have to undo our work
@@ -1827,6 +1844,7 @@ BufferAlloc(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 	/* POLAR: reset redo state for the new buffer. */
 	victim_redo_state = polar_lock_redo_state(victim_buf_hdr);
 	victim_redo_state &= ~(POLAR_BUF_REDO_FLAG_MASK);
+	pg_atomic_write_u64(&victim_buf_hdr->polar_outdate_lsn, InvalidXLogRecPtr);
 	polar_unlock_redo_state(victim_buf_hdr, victim_redo_state);
 
 	LWLockRelease(newPartitionLock);
@@ -1938,6 +1956,7 @@ retry:
 	/* POLAR: Clear all polar redo state flag */
 	redo_state = polar_lock_redo_state(buf);
 	redo_state &= ~(POLAR_BUF_REDO_FLAG_MASK);
+	pg_atomic_write_u64(&buf->polar_outdate_lsn, InvalidXLogRecPtr);
 	polar_unlock_redo_state(buf, redo_state);
 
 	/* POLAR: free its copy buffer and remove it from flush list */
@@ -2030,6 +2049,7 @@ InvalidateVictimBuffer(BufferDesc *buf_hdr)
 	/* POLAR: Clear all polar redo state flag */
 	redo_state = polar_lock_redo_state(buf_hdr);
 	redo_state &= ~(POLAR_BUF_REDO_FLAG_MASK);
+	pg_atomic_write_u64(&buf_hdr->polar_outdate_lsn, InvalidXLogRecPtr);
 	polar_unlock_redo_state(buf_hdr, redo_state);
 
 	LWLockRelease(partition_lock);
@@ -5970,6 +5990,7 @@ void
 polar_lock_buffer_ext(Buffer buffer, int mode, bool fresh_check)
 {
 	BufferDesc *buf_desc;
+	bool		applied = false;
 
 	Assert(BufferIsPinned(buffer));
 
@@ -5999,6 +6020,22 @@ polar_lock_buffer_ext(Buffer buffer, int mode, bool fresh_check)
 		if (!fresh_check || !polar_redo_check_state(buf_desc, POLAR_REDO_OUTDATE))
 			break;
 
+		/*
+		 * An earlier iteration either replayed the page to a frontier sampled
+		 * after the caller's snapshot was taken, or found OUTDATE already
+		 * clear under the exclusive lock, which means another replay had
+		 * brought the page at least that far. Either way every record visible
+		 * to the snapshot is already in the page. The records still owed
+		 * (there may be several, all at or below polar_outdate_lsn) belong to
+		 * transactions whose commit records replay above that frontier, so no
+		 * snapshot taken before this lock call can see them; a later reader
+		 * applies them itself because OUTDATE stays armed. Break instead of
+		 * spinning until the frontier passes the watermark.
+		 */
+		if (applied &&
+			polar_get_xlog_replay_recptr_nolock() < pg_atomic_read_u64(&buf_desc->polar_outdate_lsn))
+			break;
+
 		switch (mode)
 		{
 			case BUFFER_LOCK_SHARE:
@@ -6020,6 +6057,7 @@ polar_lock_buffer_ext(Buffer buffer, int mode, bool fresh_check)
 		 * BUFFER_LOCK_SHARE mode, so we should re-check buffer outdate state.
 		 */
 		polar_logindex_lock_apply_buffer(polar_logindex_redo_instance, &buffer);
+		applied = true;
 
 		switch (mode)
 		{
@@ -7620,10 +7658,7 @@ polar_exec_backend_redo(ReadBuffersOperation *operation, BufferDesc *bufHdr)
 	}
 	else if (operation->polar_replay_action == POLAR_REDO_MARK_OUTDATE)
 	{
-		uint32		redo_state = polar_lock_redo_state(bufHdr);
-
-		redo_state |= POLAR_REDO_OUTDATE;
-		polar_unlock_redo_state(bufHdr, redo_state);
+		polar_mark_buffer_outdate(bufHdr);
 
 		POLAR_RESET_BACKEND_READ_MIN_LSN();
 	}

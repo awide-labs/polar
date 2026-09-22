@@ -99,6 +99,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Fixed a race where a shared-storage replica, or a standby with parallel
+  replay enabled (`polar_enable_parallel_replay_standby_mode`, on by
+  default), could sporadically return stale data: a page replayed while its
+  WAL record was still being parsed was left stale with no retry (XCOM-195)
 - Fixed a crash in `polar_tools logindex-page` when the required
   `table_path` argument was omitted. The tool now prints usage help
   and exits with an error code. (XCOM-195)

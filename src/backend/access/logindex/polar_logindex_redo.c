@@ -329,6 +329,14 @@ polar_logindex_outdate_parse(polar_logindex_redo_ctl_t instance, XLogReaderState
 		tag = &vm_tag;
 	}
 
+	/*
+	 * A single-page record has no mini-transaction page lock, so it relies on
+	 * the tags polar_logindex_parse_xlog published before the parse. Every
+	 * page reached here must be one of them; see the publication site.
+	 */
+	Assert(*page_lock != POLAR_INVALID_PAGE_LOCK ||
+		   polar_in_flight_covers_tag(tag, state->EndRecPtr));
+
 	page_hash = BufTableHashCode(tag);
 	partition_lock = BufMappingPartitionLock(page_hash);
 
@@ -373,6 +381,14 @@ polar_logindex_outdate_parse(polar_logindex_redo_ctl_t instance, XLogReaderState
 			 !(pg_atomic_read_u32(&buf_desc->state) & BM_VALID)))
 		{
 			redo_state |= POLAR_REDO_OUTDATE;
+
+			/*
+			 * Single-page records skip mini transactions. Remember the newest
+			 * such record this buffer is stale for so an early replay can
+			 * re-arm OUTDATE instead of losing it.
+			 */
+			if (*page_lock == POLAR_INVALID_PAGE_LOCK)
+				pg_atomic_write_u64(&buf_desc->polar_outdate_lsn, state->EndRecPtr);
 			polar_unlock_redo_state(buf_desc, redo_state);
 
 			ReleaseBuffer(BufferDescriptorGetBuffer(buf_desc));
@@ -424,6 +440,8 @@ polar_logindex_outdate_parse(polar_logindex_redo_ctl_t instance, XLogReaderState
 			buf_desc = GetBufferDescriptor(buffer - 1);
 			redo_state = polar_lock_redo_state(buf_desc);
 			redo_state |= POLAR_REDO_OUTDATE;
+			if (*page_lock == POLAR_INVALID_PAGE_LOCK)
+				pg_atomic_write_u64(&buf_desc->polar_outdate_lsn, state->EndRecPtr);
 			polar_unlock_redo_state(buf_desc, redo_state);
 		}
 
@@ -620,10 +638,14 @@ polar_logindex_redo_parse_start_lsn(polar_logindex_redo_ctl_t instance)
 
 bool
 polar_logindex_parse_xlog(polar_logindex_redo_ctl_t instance, RmgrId rmid, XLogReaderState *state,
-						  XLogRecPtr redo_start_lsn, XLogRecPtr *mini_trans_lsn)
+						  XLogRecPtr redo_start_lsn, XLogRecPtr *mini_trans_lsn,
+						  bool *in_flight_published)
 {
 	bool		redo = false;
 	static bool parse_valid = false;
+
+	POLAR_ASSERT_PANIC(in_flight_published != NULL);
+	*in_flight_published = false;
 
 	if (unlikely(!parse_valid))
 	{
@@ -662,12 +684,59 @@ polar_logindex_parse_xlog(polar_logindex_redo_ctl_t instance, RmgrId rmid, XLogR
 
 		if (polar_idx_redo[rmid].rm_polar_idx_parse != NULL)
 		{
+			RelFileLocator rlocator;
+			ForkNumber	forknum;
+			BlockNumber blocknum;
+
 			if (unlikely(polar_trace_logindex_messages <= DEBUG4))
 				polar_xlog_log(LOG, state, __func__);
 
 			if (XLogRecMaxBlockId(state) > 0)
 			{
 				polar_logindex_mini_trans_start(instance->mini_trans, state->EndRecPtr);
+			}
+			else if (XLogRecGetBlockTagExtended(state, 0, &rlocator, &forknum,
+												&blocknum, NULL))
+			{
+				/*
+				 * A single-page record skips the mini transaction, so a
+				 * backend can fault this page in while we parse it. Publish
+				 * the tags before the parse (hence before the logindex
+				 * insert) so a fault-in can arm OUTDATE across the whole
+				 * parse window; see polar_logindex_io_lock_apply. Cleared in
+				 * ApplyWalRecord once lastReplayedEndRecPtr covers the
+				 * record.
+				 *
+				 * These tags must stay in lockstep with the pages the rmgr
+				 * parse callbacks actually touch -- if a callback grows a new
+				 * derived page, add its tag here, or a fault-in of that page
+				 * during the parse loses the record.
+				 * polar_logindex_outdate_parse asserts the two agree.
+				 */
+				BufferTag	tags[2];
+				int			ntags = 1;
+
+				InitBufferTag(&tags[0], &rlocator, forknum, blocknum);
+
+				if (rmid == RM_HEAP_ID || rmid == RM_HEAP2_ID)
+				{
+					/*
+					 * Block 0 here is always the main-fork heap page: the one
+					 * heap record registering a visibility-map block
+					 * (XLOG_HEAP2_VISIBLE) registers the heap page too and so
+					 * takes the mini transaction path above. Assert it:
+					 * polar_logindex_outdate_parse derives its vm_tag the
+					 * same way from block 0, so its coverage assertion would
+					 * agree with a wrong derivation rather than catch it.
+					 */
+					Assert(forknum == MAIN_FORKNUM);
+					InitBufferTag(&tags[1], &rlocator, VISIBILITYMAP_FORKNUM,
+								  HEAPBLK_TO_MAPBLOCK(blocknum));
+					ntags = 2;
+				}
+
+				polar_set_in_flight_page(tags, ntags, state->EndRecPtr);
+				*in_flight_published = true;
 			}
 			redo = polar_idx_redo[rmid].rm_polar_idx_parse(instance, state);
 
@@ -830,11 +899,83 @@ polar_logindex_apply_page_from(polar_logindex_redo_ctl_t instance, XLogRecPtr st
 }
 
 /*
+ * The record the startup process published for this page while it was not in
+ * the buffer pool, or InvalidXLogRecPtr when no such record is in flight.
+ * Callers sample it before taking the buffer's redo state lock; see the
+ * ordering note in polar_logindex_lock_apply_page_from().
+ */
+static XLogRecPtr
+polar_in_flight_page_lsn(const BufferTag *tag)
+{
+	BufferTag	in_flight_tags[2];
+	int			in_flight_ntags;
+	XLogRecPtr	in_flight_lsn;
+
+	if (polar_in_flight_read(in_flight_tags, &in_flight_ntags, &in_flight_lsn) &&
+		(BufferTagsEqual(&in_flight_tags[0], tag) ||
+		 (in_flight_ntags > 1 && BufferTagsEqual(&in_flight_tags[1], tag))))
+		return in_flight_lsn;
+
+	return InvalidXLogRecPtr;
+}
+
+/*
+ * Record that this buffer owes arm_lsn, and report whether it did. Caller
+ * holds the buffer's redo state lock and sampled arm_lsn before taking it.
+ */
+static bool
+polar_arm_in_flight_watermark(BufferDesc *buf_hdr, XLogRecPtr arm_lsn)
+{
+	Assert(pg_atomic_read_u32(&buf_hdr->polar_redo_state) & POLAR_REDO_LOCKED);
+
+	if (arm_lsn == InvalidXLogRecPtr)
+		return false;
+
+	/*
+	 * Monotonic: never lower a watermark the startup armed for a later
+	 * record.
+	 */
+	if (arm_lsn <= pg_atomic_read_u64(&buf_hdr->polar_outdate_lsn))
+		return false;
+
+	pg_atomic_write_u64(&buf_hdr->polar_outdate_lsn, arm_lsn);
+	return true;
+}
+
+/*
+ * Mark a page just read from storage outdated, carrying with it the record the
+ * startup process published while the page was unbuffered.
+ *
+ * The parallel replay worker paths mark the buffer here instead of replaying
+ * it, so this is their only chance to pick that record up. Without the
+ * watermark the next reader clears OUTDATE after replaying to a frontier that
+ * does not cover the record, and the page is served stale.
+ */
+void
+polar_mark_buffer_outdate(BufferDesc *buf_hdr)
+{
+	XLogRecPtr	arm_lsn = polar_in_flight_page_lsn(&buf_hdr->tag);
+	uint32		redo_state;
+	bool		armed pg_attribute_unused();
+
+	redo_state = polar_lock_redo_state(buf_hdr);
+	redo_state |= POLAR_REDO_OUTDATE;
+	armed = polar_arm_in_flight_watermark(buf_hdr, arm_lsn);
+	polar_unlock_redo_state(buf_hdr, redo_state);
+
+#ifdef FAULT_INJECTOR
+	if (armed)
+		SIMPLE_FAULT_INJECTOR("polar_in_flight_buffer_arm");
+#endif
+}
+
+/*
  * Search xlog base on the buffer tag and replay these xlog record for the buffer.
  * Return true if page lsn changed after replay
  */
 bool
-polar_logindex_lock_apply_page_from(polar_logindex_redo_ctl_t instance, XLogRecPtr start_lsn, BufferTag *tag, Buffer *buffer)
+polar_logindex_lock_apply_page_from(polar_logindex_redo_ctl_t instance, XLogRecPtr start_lsn,
+									BufferTag *tag, Buffer *buffer, XLogRecPtr arm_lsn)
 {
 	BufferDesc *buf_hdr;
 	polar_page_lock_t page_lock;
@@ -842,6 +983,7 @@ polar_logindex_lock_apply_page_from(polar_logindex_redo_ctl_t instance, XLogRecP
 	char	   *page;
 	XLogRecPtr	origin_lsn;
 	MemoryContext oldcontext;
+	bool		armed pg_attribute_unused();
 
 	POLAR_ASSERT_PANIC(BufferIsValid(*buffer));
 
@@ -858,11 +1000,22 @@ polar_logindex_lock_apply_page_from(polar_logindex_redo_ctl_t instance, XLogRecP
 	 * We should finish reading data from storage and then replay xlog for
 	 * page, so we set redo_state to be POLAR_REDO_READ_IO_END |
 	 * POLAR_REDO_REPLAYING.
+	 *
+	 * arm_lsn was sampled before this redo-state lock, whose fetch_or orders
+	 * that sample before the later read of lastReplayedEndRecPtr: if the
+	 * startup cleared the publication, the pointer publish preceding the
+	 * clear is visible here.
 	 */
 	redo_state = polar_lock_redo_state(buf_hdr);
 	redo_state |= (POLAR_REDO_READ_IO_END | POLAR_REDO_REPLAYING);
 	redo_state &= (~POLAR_REDO_OUTDATE);
+	armed = polar_arm_in_flight_watermark(buf_hdr, arm_lsn);
 	polar_unlock_redo_state(buf_hdr, redo_state);
+
+#ifdef FAULT_INJECTOR
+	if (armed)
+		SIMPLE_FAULT_INJECTOR("polar_in_flight_buffer_arm");
+#endif
 
 	page = BufferGetPage(*buffer);
 	origin_lsn = PageGetLSN(page);
@@ -877,6 +1030,18 @@ polar_logindex_lock_apply_page_from(polar_logindex_redo_ctl_t instance, XLogRecP
 
 		if (redo_state & POLAR_REDO_OUTDATE)
 			redo_state &= (~POLAR_REDO_OUTDATE);
+		else if (start_lsn < pg_atomic_read_u64(&buf_hdr->polar_outdate_lsn))
+		{
+			/*
+			 * start_lsn now holds the exact upper bound of the replay we just
+			 * completed, and a record this buffer is stale for lies above it.
+			 * Re-arm OUTDATE so a reader at a later frontier applies it. Do
+			 * not sample lastReplayedEndRecPtr here: it can advance after
+			 * page replay, clearing OUTDATE for a record that replay missed.
+			 */
+			redo_state |= POLAR_REDO_OUTDATE;
+			redo_state &= (~POLAR_REDO_REPLAYING);
+		}
 		else
 			redo_state &= (~POLAR_REDO_REPLAYING);
 
@@ -982,7 +1147,8 @@ polar_logindex_lock_apply_buffer(polar_logindex_redo_ctl_t instance, Buffer *buf
 		 * buffer if there is any error.
 		 */
 		START_CRIT_SECTION();
-		polar_logindex_lock_apply_page_from(instance, start_lsn, &buf_desc->tag, buffer);
+		polar_logindex_lock_apply_page_from(instance, start_lsn, &buf_desc->tag,
+											buffer, InvalidXLogRecPtr);
 		END_CRIT_SECTION();
 
 		polar_promote_mark_buf_dirty(instance, *buffer, start_lsn);
@@ -1195,6 +1361,7 @@ polar_evict_buffer(Buffer buffer)
 
 		redo_state = polar_lock_redo_state(buf_desc);
 		redo_state &= ~(POLAR_BUF_REDO_FLAG_MASK);
+		pg_atomic_write_u64(&buf_desc->polar_outdate_lsn, InvalidXLogRecPtr);
 		polar_unlock_redo_state(buf_desc, redo_state);
 
 		BufTableDelete(&tag, hash);
@@ -2436,12 +2603,28 @@ polar_logindex_io_lock_apply(polar_logindex_redo_ctl_t instance, BufferDesc *buf
 {
 	Buffer		buffer;
 	XLogRecPtr	start_lsn = replay_from;
+	XLogRecPtr	arm_lsn = InvalidXLogRecPtr;
 	bool		lsn_changed = false;
 
 	POLAR_ASSERT_PANIC(buf_hdr != NULL);
 
 	buffer = BufferDescriptorGetBuffer(buf_hdr);
 	POLAR_ASSERT_PANIC(BufferIsValid(buffer));
+
+	/*
+	 * Probe the publication only on physical fault-in, keeping this
+	 * shared-cache-line read out of ordinary buffered replay; the startup
+	 * arms a buffered page directly.
+	 *
+	 * The mapping-partition lock orders this probe against the startup's
+	 * lookup: BufferAlloc inserts the tag, sets the descriptor up and resets
+	 * its redo state all under that lock held exclusively. The startup
+	 * publishes before its lookup, so either the lookup found this descriptor
+	 * and armed it, or we inserted it only after the startup released the
+	 * lock and this probe sees the publication, or its clear, after which
+	 * lastReplayedEndRecPtr covers the record.
+	 */
+	arm_lsn = polar_in_flight_page_lsn(&buf_hdr->tag);
 
 	/*
 	 * If we read a future page, then restore old fullpage version and reset
@@ -2454,7 +2637,8 @@ polar_logindex_io_lock_apply(polar_logindex_redo_ctl_t instance, BufferDesc *buf
 		POLAR_ASSERT_PANIC(!XLogRecPtrIsInvalid(start_lsn));
 	}
 
-	lsn_changed = polar_logindex_lock_apply_page_from(instance, start_lsn, &buf_hdr->tag, &buffer);
+	lsn_changed = polar_logindex_lock_apply_page_from(instance, start_lsn,
+													  &buf_hdr->tag, &buffer, arm_lsn);
 
 	/*
 	 * If we read buffer from storage and have no xlog to do replay, then it
@@ -2852,6 +3036,21 @@ polar_xlog_need_replay(polar_logindex_redo_ctl_t instance, BufferTag *tag, XLogR
 			/* Don't replay this block if it's truncated or dropped */
 			if (polar_check_rel_block_valid_only(instance->rel_size_cache, lsn, tag))
 			{
+#ifdef FAULT_INJECTOR
+
+				/*
+				 * A page this worker has to read in from storage, which the
+				 * startup may be parsing a newer record for. Filtered by
+				 * relfilenode, since recovery reads many pages this way.
+				 */
+				{
+					char		relnode[32];
+
+					snprintf(relnode, sizeof(relnode), "%u", tag->relNumber);
+					FaultInjector_TriggerFaultIfSet("polar_worker_read_absent_page",
+													"", relnode);
+				}
+#endif
 				buffer = XLogReadBufferExtended(POLAR_REL_FILE_LOCATOR(tag),
 												tag->forkNum, tag->blockNum,
 												RBM_NORMAL_NO_LOG, InvalidBuffer);

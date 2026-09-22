@@ -257,6 +257,7 @@ InitBufferPool(void)
 			pg_atomic_init_u32(&buf->state, 0);
 			pg_atomic_init_u32(&buf->state_ext, 0);
 			pg_atomic_init_u32(&buf->polar_redo_state, 0);
+			pg_atomic_init_u64(&buf->polar_outdate_lsn, InvalidXLogRecPtr);
 			buf->wait_backend_pgprocno = INVALID_PROC_NUMBER;
 
 			buf->buf_id = i;
