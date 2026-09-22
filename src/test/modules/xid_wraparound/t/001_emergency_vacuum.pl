@@ -22,6 +22,7 @@ autovacuum_naptime = 1s
 # so it's easier to verify the order of operations
 autovacuum_max_workers = 1
 log_autovacuum_min_duration = 0
+polar_csn_enable=off
 ]);
 $node->start;
 $node->safe_psql('postgres', 'CREATE EXTENSION xid_wraparound');

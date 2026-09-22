@@ -11,6 +11,10 @@ use Test::More;
 
 my $node = PostgreSQL::Test::Cluster->new('node');
 $node->init;
+$node->append_conf(
+	'postgresql.conf', qq[
+polar_csn_enable=off
+]);
 $node->start;
 
 if (!$ENV{PG_TEST_EXTRA} || $ENV{PG_TEST_EXTRA} !~ /\bxid_wraparound\b/)
