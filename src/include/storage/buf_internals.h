@@ -220,6 +220,15 @@ typedef struct BufferDesc
 	uint16		recently_modified_count;
 	/* POLAR: record buffer redo state */
 	pg_atomic_uint32 polar_redo_state;
+
+	/*
+	 * Highest WAL record EndRecPtr this buffer was marked POLAR_REDO_OUTDATE
+	 * for without mini-transaction protection. OUTDATE must stay armed until
+	 * page replay reaches it, or a backend consuming the flag early loses a
+	 * record that lastReplayedEndRecPtr did not cover yet. Non-decreasing
+	 * while the descriptor keeps its tag; reset on invalidate or reuse.
+	 */
+	pg_atomic_uint64 polar_outdate_lsn;
 	/* POLAR end */
 } BufferDesc;
 
