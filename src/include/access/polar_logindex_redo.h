@@ -195,7 +195,7 @@ extern void polar_logindex_redo_flush_data(polar_logindex_redo_ctl_t instance, X
 extern bool polar_logindex_redo_bg_flush_data(polar_logindex_redo_ctl_t instance);
 extern bool polar_logindex_redo_bg_replay(polar_logindex_bg_redo_ctl_t *ctl, bool *can_hold);
 extern XLogRecPtr polar_logindex_redo_get_min_replay_from_lsn(polar_logindex_redo_ctl_t instance, XLogRecPtr consist_lsn);
-extern bool polar_logindex_parse_xlog(polar_logindex_redo_ctl_t instance, RmgrId rmid, XLogReaderState *state, XLogRecPtr redo_start_lsn, XLogRecPtr *mini_trans_lsn);
+extern bool polar_logindex_parse_xlog(polar_logindex_redo_ctl_t instance, RmgrId rmid, XLogReaderState *state, XLogRecPtr redo_start_lsn, XLogRecPtr *mini_trans_lsn, bool *in_flight_published);
 extern void polar_logindex_primary_save(polar_logindex_redo_ctl_t instance);
 extern void polar_bg_redo_set_replayed_lsn(polar_logindex_redo_ctl_t instance, XLogRecPtr lsn);
 extern XLogRecPtr polar_bg_redo_get_replayed_lsn(polar_logindex_redo_ctl_t instance);
@@ -215,7 +215,7 @@ extern bool polar_logindex_io_lock_apply(polar_logindex_redo_ctl_t instance, Buf
 
 extern XLogRecPtr polar_logindex_apply_page(polar_logindex_redo_ctl_t instance, XLogRecPtr start_lsn, XLogRecPtr end_lsn, BufferTag *tag, Buffer *buffer);
 extern void polar_logindex_lock_apply_buffer(polar_logindex_redo_ctl_t instance, Buffer *buffer);
-extern bool polar_logindex_lock_apply_page_from(polar_logindex_redo_ctl_t instance, XLogRecPtr start_lsn, BufferTag *tag, Buffer *buffer);
+extern bool polar_logindex_lock_apply_page_from(polar_logindex_redo_ctl_t instance, XLogRecPtr start_lsn, BufferTag *tag, Buffer *buffer, XLogRecPtr arm_lsn);
 extern bool polar_logindex_restore_fullpage_snapshot_if_needed(polar_logindex_redo_ctl_t instance, BufferTag *tag, Buffer *buffer);
 extern bool polar_enable_logindex_parse(void);
 
@@ -376,6 +376,17 @@ extern void polar_checkpoint_ringbuf_free(polar_checkpoint_ringbuf checkpoint_rb
 											 * and marking all buffer dirty in
 											 * parallel from last consistent
 											 * lsn */
+
+/*
+ * The single-page record the startup process is currently parsing. Defined in
+ * xlogrecovery.c, but declared here because they name buffer tags and
+ * xlogrecovery.h is reachable from frontend code.
+ */
+extern void polar_mark_buffer_outdate(BufferDesc *buf_hdr);
+extern void polar_set_in_flight_page(const BufferTag *tags, int ntags, XLogRecPtr lsn);
+extern void polar_clear_in_flight_page(void);
+extern bool polar_in_flight_read(BufferTag *tags, int *ntags, XLogRecPtr *lsn);
+extern bool polar_in_flight_covers_tag(const BufferTag *tag, XLogRecPtr lsn);
 
 /*
  * Functions for acquiring/releasing a shared buffer redo state's spinlock.

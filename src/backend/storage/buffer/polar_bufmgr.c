@@ -1495,12 +1495,7 @@ repeat_read:
 			polar_apply_io_locked_page(bufHdr, final_replay_from, checkpoint_redo_lsn, smgr, forkNum, blockNum);
 		}
 		else if (redo_action == POLAR_REDO_MARK_OUTDATE)
-		{
-			uint32		redo_state = polar_lock_redo_state(bufHdr);
-
-			redo_state |= POLAR_REDO_OUTDATE;
-			polar_unlock_redo_state(bufHdr, redo_state);
-		}
+			polar_mark_buffer_outdate(bufHdr);
 
 		/* POLAR end */
 

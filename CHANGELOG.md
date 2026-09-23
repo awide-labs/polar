@@ -17,6 +17,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Fixed a race where a shared-storage replica, or a standby with parallel
+  replay enabled (`polar_enable_parallel_replay_standby_mode`, on by
+  default), could sporadically return stale data: a page replayed while its
+  WAL record was still being parsed was left stale with no retry (XCOM-192)
 - Fixed pg_bulkload client errors reporting a bare "ERROR:" with no message text (XCOM-186)
 - Fixed primary hanging during shutdown when replicas were already stopped,
   repeatedly logging "Checkpoint blocked" warnings until killed (XCOM-153)
