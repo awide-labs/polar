@@ -44,6 +44,7 @@
 #include "access/polar_ringbuf.h"
 #include "miscadmin.h"
 #include "pgstat.h"
+#include "port/pg_bitutils.h"
 #include "storage/ipc.h"
 #include "utils/polar_bitpos.h"
 
@@ -55,11 +56,17 @@ static bool polar_ringbuf_update_pread(polar_ringbuf_t rbuf);
 
 /*
  * Initialize ring buffer from allocated memory.
+ *
+ * The data area is rounded down to a power of two so that POLAR_RINGBUF_IDX()
+ * is a mask; anything the rounding drops is unused.  The xlog queue loses
+ * nothing here when its configured size is a power of two, because
+ * polar_xlog_queue_size() requests the header on top of it.
  */
 polar_ringbuf_t
 polar_ringbuf_init(uint8 *data, size_t len, int tranche_id)
 {
 	polar_ringbuf_t rbuf = (polar_ringbuf_t) data;
+	size_t		data_size = len - offsetof(polar_ringbuf_data_t, data);
 
 	LWLockInitialize(&rbuf->lock.lock, tranche_id);
 
@@ -72,7 +79,10 @@ polar_ringbuf_init(uint8 *data, size_t len, int tranche_id)
 
 	MemSet(rbuf->slot, 0, sizeof(polar_ringbuf_slot_t) * POLAR_RINGBUF_MAX_SLOT);
 
-	rbuf->size = len - offsetof(polar_ringbuf_data_t, data);
+	rbuf->size = pg_prevpower2_size_t(data_size);
+	if (rbuf->size != data_size)
+		elog(WARNING, "ring buffer data area size %zu is not a power of two, rounding down to %zu",
+			 data_size, rbuf->size);
 	rbuf->occupied = 0;
 
 	MemSet(rbuf->data, POLAR_RINGBUF_PKT_FREE, rbuf->size);

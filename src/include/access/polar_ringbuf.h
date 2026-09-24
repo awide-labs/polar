@@ -168,8 +168,12 @@ extern void polar_ringbuf_reset(polar_ringbuf_t rbuf);
  * Map a monotonic position to a physical offset in the data array.
  * pread, pwrite, and slot[].pread grow monotonically (never wrap);
  * all rbuf->data[] access must go through this macro.
+ *
+ * rbuf->size is a power of two (polar_ringbuf_init enforces it) so that this
+ * is a mask rather than a 64-bit divide: it sits in every packet header read,
+ * packet write and reference update, several times per packet.
  */
-#define POLAR_RINGBUF_IDX(rbuf, pos) ((size_t)((pos) % (rbuf)->size))
+#define POLAR_RINGBUF_IDX(rbuf, pos) ((size_t)((pos) & ((rbuf)->size - 1)))
 
 /*
  * Get the packet data length.
@@ -341,7 +345,7 @@ polar_ringbuf_set_pkt_flag(polar_ringbuf_t rbuf, uint64 pwrite, uint8 flag)
 {
 	/* ensure all previous writes are visible before follower continues. */
 	pg_write_barrier();
-	rbuf->data[pwrite % rbuf->size] = flag;
+	rbuf->data[POLAR_RINGBUF_IDX(rbuf, pwrite)] = flag;
 }
 
 extern polar_ringbuf_slot_t *polar_get_min_visit_slot_except_keep(polar_ringbuf_t rbuf, int keep_slot);

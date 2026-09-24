@@ -49,6 +49,7 @@
 #include "access/xloginsert.h"
 #include "catalog/pg_control.h"
 #include "miscadmin.h"
+#include "port/pg_bitutils.h"
 #include "postmaster/startup.h"
 #include "replication/origin.h"
 #include "replication/syncrep.h"
@@ -73,7 +74,11 @@ polar_xlog_queue_size(int size_MB)
 {
 	Size		size = 0;
 
-	/* xlog queue size */
+	/*
+	 * The configured size is the data area; polar_ringbuf_init() carves the
+	 * ring buffer header out of what it is given, so ask for it on top.
+	 */
+	size = add_size(size, offsetof(polar_ringbuf_data_t, data));
 	size = add_size(size, size_MB * 1024L * 1024L);
 	return size;
 }
@@ -278,7 +283,6 @@ check_xlog_queue_size(Size xlog_queue_size)
 
 	POLAR_ASSERT_PANIC(XLOGbuffers > 0);
 	xlog_buffer_size = (Size) XLOGbuffers * XLOG_BLCKSZ;
-	xlog_queue_size -= offsetof(polar_ringbuf_data_t, data);
 	if (xlog_buffer_size * (Size) ((1 + free_ratio) / free_ratio) > xlog_queue_size)
 		elog(FATAL, "xlog_queue_buffer (%lu B) must be %d times larger than wal_buffers (%lu B)",
 			 xlog_queue_size, (int) ((1 + free_ratio) / free_ratio), xlog_buffer_size);
@@ -290,13 +294,15 @@ polar_xlog_queue_init(const char *name, int tranche_id, int size_MB)
 	bool		found;
 	uint8	   *data;
 	Size		size;
+	Size		data_size;
 	polar_ringbuf_t queue = NULL;
 
 	StaticAssertStmt(POLAR_RINGBUF_MAX_SLOT <= sizeof(uint64) * CHAR_BIT,
 					 "POLAR_RINGBUF_MAX_SLOT is larger than 64");
 
+	data_size = pg_prevpower2_size_t((Size) size_MB * 1024L * 1024L);
 	size = polar_xlog_queue_size(size_MB);
-	check_xlog_queue_size(size);
+	check_xlog_queue_size(data_size);
 
 	data = (uint8 *) ShmemInitStruct(name, size, &found);
 
@@ -305,6 +311,7 @@ polar_xlog_queue_init(const char *name, int tranche_id, int size_MB)
 		POLAR_ASSERT_PANIC(!found);
 		MemSet(data, 0, size);
 		queue = polar_ringbuf_init(data, size, tranche_id);
+		Assert(queue->size == data_size);
 	}
 	else
 		POLAR_ASSERT_PANIC(found);
