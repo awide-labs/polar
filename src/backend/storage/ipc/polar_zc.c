@@ -47,6 +47,7 @@ polar_zc_main_segment_active(void)
 
 #include "storage/pg_shmem.h"	/* GetHugePageSize, huge_pages */
 #include "storage/shmem.h"		/* add_size */
+#include "utils/guc.h"			/* SetConfigOption */
 
 /*
  * Postmaster-private handle for the one registered segment. In postmaster
@@ -70,11 +71,12 @@ typedef struct PolarZcRegion
 	int64		buf_id;			/* >=0 registered; <0 registration failed */
 	char	   *base;			/* mmap base == the registered region start */
 	Size		size;			/* mapped length */
+	bool		huge;			/* got huge pages (not the TRY fallback) */
 } PolarZcRegion;
 
 static PolarZcRegion MainSegReg =
 {
-	false, -1, NULL, 0
+	false, -1, NULL, 0, false
 };
 
 /*
@@ -199,6 +201,7 @@ retry:
 	reg->buf_id = buf_id;
 	reg->base = raw;
 	reg->size = map_size;
+	reg->huge = (hpsz != 0);
 
 	ereport(LOG,
 			(errmsg("zero-copy region \"%s\": %s (memfd %zu bytes, %s pages)",
@@ -216,6 +219,15 @@ polar_zc_main_segment_create(Size *size)
 
 	/* honor whatever huge_pages requests for the main segment */
 	raw = polar_zc_region_init("pg-main-shmem", *size, &MainSegReg);
+
+	/*
+	 * this path bypasses CreateAnonymousSegment's mmap, and with it that
+	 * function's huge_pages_status reporting, so report here whether the
+	 * memfd actually got huge pages (false under the huge_pages=try fallback
+	 * inside polar_zc_region_init).
+	 */
+	SetConfigOption("huge_pages_status", MainSegReg.huge ? "on" : "off",
+					PGC_INTERNAL, PGC_S_DYNAMIC_DEFAULT);
 
 	/*
 	 * report the actual (possibly huge-page-rounded) length back to the

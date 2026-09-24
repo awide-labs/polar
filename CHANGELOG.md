@@ -8,6 +8,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Fixed `huge_pages_status` showing `unknown` instead of `on` or `off` when
+  zero-copy I/O (`polar_enable_zero_copy`) is in use on shared storage
+  (XCOM-236)
 - The LSN-based session-consistency wait now respects large
   `polar_proxy_wait_timeout_ms` values. Before, a timeout above
   2147483 ms (about 35 minutes) made a replica give up on its first
