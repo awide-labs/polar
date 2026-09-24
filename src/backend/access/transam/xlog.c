@@ -10826,9 +10826,7 @@ GetXLogInsertEndRecPtr(void)
 	XLogCtlInsert *Insert = &XLogCtl->Insert;
 	uint64		current_bytepos;
 
-	SpinLockAcquire(&Insert->insertpos_lck);
-	current_bytepos = Insert->CurrBytePos;
-	SpinLockRelease(&Insert->insertpos_lck);
+	current_bytepos = pg_atomic_read_u64(&Insert->CurrBytePos);
 
 	return XLogBytePosToEndRecPtr(current_bytepos);
 }
