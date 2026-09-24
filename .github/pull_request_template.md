@@ -10,18 +10,18 @@ Refs:
 
 ## Contributor checklist
 
-- [ ] I have read [CONTRIBUTING.md](../CONTRIBUTING.md).
-- [ ] Commits follow [Conventional Commits](../CONTRIBUTING.md#commit-message-format)
+- [ ] I have read [CONTRIBUTING.md](https://github.com/awide-labs/polar/blob/POLARDB_15_STABLE/CONTRIBUTING.md).
+- [ ] Commits follow [Conventional Commits](https://github.com/awide-labs/polar/blob/POLARDB_15_STABLE/CONTRIBUTING.md#commit-message-format)
       with a mandatory `Refs:` footer.
 - [ ] I ran `make stylecheck` (or the relevant checks) locally where applicable.
-- [ ] I updated [CHANGELOG](../CHANGELOG) when required by CI.
+- [ ] I updated [CHANGELOG.md](https://github.com/awide-labs/polar/blob/POLARDB_15_STABLE/CHANGELOG.md) when required by CI.
 
 ## Contributor License Agreement (CLA)
 
 First-time contributors must sign the CLA before this PR can merge.
 
-- [ ] I have signed the [Individual CLA](../legal/INDIVIDUAL-CLA.md) (version 1.0),
-      **or** my employer has signed the [Corporate CLA](../legal/CORPORATE-CLA.md).
+- [ ] I have signed the [Individual CLA](https://github.com/awide-labs/polar/blob/POLARDB_15_STABLE/legal/INDIVIDUAL-CLA.md) (version 1.0),
+      **or** my employer has signed the [Corporate CLA](https://github.com/awide-labs/polar/blob/POLARDB_15_STABLE/legal/CORPORATE-CLA.md).
 
 **How to sign (manual process):**
 
