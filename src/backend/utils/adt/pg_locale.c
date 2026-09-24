@@ -64,6 +64,7 @@
 #include "utils/lsyscache.h"
 #include "utils/memutils.h"
 #include "utils/pg_locale.h"
+#include "utils/relcache.h"
 #include "utils/syscache.h"
 
 #ifdef USE_ICU
@@ -1048,7 +1049,7 @@ get_iso_localename(const char *winlocname)
 	wchar_t		wc_locale_name[LOCALE_NAME_MAX_LENGTH];
 	wchar_t		buffer[LOCALE_NAME_MAX_LENGTH];
 	static char iso_lc_messages[LOCALE_NAME_MAX_LENGTH];
-	char	   *period;
+	const char *period;
 	int			len;
 	int			ret_val;
 
@@ -1264,6 +1265,8 @@ lookup_collation_cache(Oid collation, bool set_flags)
 
 	Assert(OidIsValid(collation));
 	Assert(collation != DEFAULT_COLLATION_OID);
+
+	AssertCouldGetRelation();
 
 	if (collation_cache == NULL)
 	{
@@ -1834,7 +1837,7 @@ icu_to_uchar(UChar **buff_uchar, const char *buff, size_t nbytes)
 		ereport(ERROR,
 				(errmsg("%s failed: %s", "ucnv_toUChars", u_errorName(status))));
 
-	*buff_uchar = palloc((len_uchar + 1) * sizeof(**buff_uchar));
+	*buff_uchar = palloc_array(UChar, len_uchar + 1);
 
 	status = U_ZERO_ERROR;
 	len_uchar = ucnv_toUChars(icu_converter, *buff_uchar, len_uchar + 1,

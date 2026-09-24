@@ -1389,9 +1389,16 @@ UPDATE ft2 d SET c2 = CASE WHEN random() >= 0 THEN d.c2 ELSE 0 END
 ALTER SERVER loopback OPTIONS (DROP extensions);
 INSERT INTO ft2 (c1,c2,c3)
   SELECT id, id % 10, to_char(id, 'FM00000') FROM generate_series(2001, 2010) id;
+
+-- this will do a remote seqscan, causing unstable result order, so sort
 EXPLAIN (verbose, costs off)
-UPDATE ft2 SET c3 = 'bar' WHERE postgres_fdw_abs(c1) > 2000 RETURNING *;            -- can't be pushed down
-UPDATE ft2 SET c3 = 'bar' WHERE postgres_fdw_abs(c1) > 2000 RETURNING *;
+WITH cte AS (
+  UPDATE ft2 SET c3 = 'bar' WHERE postgres_fdw_abs(c1) > 2000 RETURNING *
+) SELECT * FROM cte ORDER BY c1;          -- can't be pushed down
+WITH cte AS (
+  UPDATE ft2 SET c3 = 'bar' WHERE postgres_fdw_abs(c1) > 2000 RETURNING *
+) SELECT * FROM cte ORDER BY c1;
+
 EXPLAIN (verbose, costs off)
 UPDATE ft2 SET c3 = 'baz'
   FROM ft4 INNER JOIN ft5 ON (ft4.c1 = ft5.c1)
@@ -3924,3 +3931,54 @@ SELECT * FROM prem2;
 
 ALTER SERVER loopback OPTIONS (DROP parallel_commit);
 ALTER SERVER loopback2 OPTIONS (DROP parallel_commit);
+
+-- ===================================================================
+-- test cleanup of failed connections on abort
+-- ===================================================================
+
+CREATE VIEW my_backend_pid (pid) AS SELECT pg_backend_pid();
+CREATE FOREIGN TABLE remote_backend_pid (pid int)
+  SERVER loopback OPTIONS (table_name 'my_backend_pid');
+CREATE FUNCTION wait_for_backend_termination(int) RETURNS void AS $$
+  BEGIN
+    WHILE (SELECT count(*) FROM pg_stat_activity WHERE pid = $1) > 0
+    LOOP
+      PERFORM pg_stat_clear_snapshot();
+    END LOOP;
+  END
+$$ LANGUAGE plpgsql;
+
+SET client_min_messages = 'ERROR';
+
+BEGIN;
+DECLARE c CURSOR FOR SELECT * FROM ft1 ORDER BY c1;
+SAVEPOINT s;
+SELECT pid AS remote_pid FROM remote_backend_pid \gset
+SELECT pg_terminate_backend(:remote_pid);
+SELECT wait_for_backend_termination(:remote_pid);
+ROLLBACK TO SAVEPOINT s;
+SELECT pid FROM remote_backend_pid;
+ROLLBACK TO SAVEPOINT s;
+RELEASE SAVEPOINT s;
+FETCH c;
+ABORT;
+
+BEGIN;
+DECLARE c CURSOR FOR SELECT * FROM ft1 ORDER BY c1;
+FETCH c;
+SAVEPOINT s;
+SELECT pid AS remote_pid FROM remote_backend_pid \gset
+SELECT pg_terminate_backend(:remote_pid);
+SELECT wait_for_backend_termination(:remote_pid);
+ROLLBACK TO SAVEPOINT s;
+SELECT pid FROM remote_backend_pid;
+ROLLBACK TO SAVEPOINT s;
+RELEASE SAVEPOINT s;
+CLOSE c;
+ABORT;
+
+RESET client_min_messages;
+
+DROP FUNCTION wait_for_backend_termination(int);
+DROP FOREIGN TABLE remote_backend_pid;
+DROP VIEW my_backend_pid;

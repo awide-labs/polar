@@ -25,7 +25,7 @@ jobs:
     strategy:
       matrix:
         arch: [ ubuntu-24.04, ubuntu-24.04-arm ]
-        base_image: [ anolis8, rocky8, rocky9 ]
+        base_image: [ anolis8, rocky8, rocky9, rocky10 ]
     runs-on: ${{ matrix.arch }}
     steps:
       - name: fetch source code
@@ -72,7 +72,7 @@ jobs:
     strategy:
       matrix:
         arch: [ ubuntu-24.04, ubuntu-24.04-arm ]
-        base_image: [ ubuntu20.04, ubuntu22.04, ubuntu24.04, debian11, debian12 ]
+        base_image: [ ubuntu20.04, ubuntu22.04, ubuntu24.04, debian11, debian12, debian13 ]
     runs-on: ${{ matrix.arch }}
     steps:
       - name: fetch source code

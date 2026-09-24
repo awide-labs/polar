@@ -23717,6 +23717,21 @@ SELECT pg_type_is_visible('myschema.widget'::regtype);
       <row>
        <entry role="func_table_entry"><para role="func_signature">
         <indexterm>
+         <primary>pg_get_partition_constraintdef</primary>
+        </indexterm>
+        <function>pg_get_partition_constraintdef</function> ( <parameter>table</parameter> <type>oid</type> )
+        <returnvalue>text</returnvalue>
+       </para>
+       <para>
+        Reconstructs the definition of a partition constraint.
+        (This is a decompiled reconstruction, not the original text
+        of the command.)
+       </para></entry>
+      </row>
+
+      <row>
+       <entry role="func_table_entry"><para role="func_signature">
+        <indexterm>
          <primary>pg_get_ruledef</primary>
         </indexterm>
         <function>pg_get_ruledef</function> ( <parameter>rule</parameter> <type>oid</type> <optional>, <parameter>pretty</parameter> <type>boolean</type> </optional> )
@@ -27116,7 +27131,8 @@ postgres=# SELECT * FROM pg_walfile_name_offset((pg_backup_stop()).lsn);
         <function>pg_relation_filepath</function>.  For a relation in the
         database's default tablespace, the tablespace can be specified as zero.
         Returns <literal>NULL</literal> if no relation in the current database
-        is associated with the given values.
+        is associated with the given values, or if dealing with a temporary
+        relation.
        </para></entry>
       </row>
      </tbody>

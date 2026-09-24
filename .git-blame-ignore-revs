@@ -14,6 +14,9 @@
 #
 # $ git log --pretty=format:"%H # %cd%n# %s" $PGINDENTGITHASH -1 --date=iso
 
+f9790ac5464da45eb44470ab831584356381597b # 2025-10-21 09:56:26 -0500
+# Re-pgindent brin.c.
+
 d04649cd9674a5408bada0c1d5f543a931ab675f # 2024-08-29 21:34:37 +0800
 # feat: prior indent run for PolarDB-PG 15
 

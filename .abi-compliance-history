@@ -1,0 +1,57 @@
+# Reference point for ABI compliance checks
+#
+# This file lists commits on the current branch that break ABI compatibility in
+# ways that have been deemed acceptable (e.g., removing an extern function with
+# no third-party uses).  The primary intent of this file is to control the ABI
+# compliance checks on the buildfarm, but it also serves as a central location
+# to document the justification for each.
+#
+# In general, entries should be added reactively after an abi-compliance-check
+# buildfarm failure.  It is important to verify the details of the breakage
+# match expectations, as the first entry listed will become the updated ABI
+# baseline point.
+#
+# Add new entries by adding the output of the following to the top of the file:
+#
+# $ git log --pretty=format:"%H%n#%n# %s%n# %cd%n#%n# <ADD JUSTIFICATION HERE>" $ABIBREAKGITHASH -1 --date=iso
+#
+# Be sure to replace "<ADD JUSTIFICATION HERE>" with details of your change and
+# why it is deemed acceptable.
+
+c5824536e7ca3c5ef5a9db59bd36c4e6beb23f51
+#
+# Fix trigger transition table capture for MERGE in CTE queries.
+# 2026-01-24 11:30:51 +0000
+#
+# This commit changed the TransitionCaptureState structure, replacing
+# the "tcs_private" field with 3 separate fields. This structure can
+# only be built using MakeTransitionCaptureState(), and PGXN contained
+# no calls to MakeTransitionCaptureState() or uses of the
+# TransitionCaptureState structure.
+
+05d605b6c69f0276ae091ced1ed9082963052550
+#
+# For inplace update, send nontransactional invalidations.
+# 2025-12-16 16:13:55 -0800
+#
+# This changed PrepareToInvalidateCacheTuple() parameters.  PGXN contained no
+# calls to that function.
+
+2393d374ae9c0bc8327adc80fe4490edb05be167
+#
+# Check for CREATE privilege on the schema in CREATE STATISTICS.
+# 2025-11-10 09:00:00 -0600
+#
+# This commit added a parameter to CreateStatistics().  We are unaware of any
+# impacted third-party code.
+
+fc0fb77c550fe8289d718c33c7aacf16023d9941
+#
+# Fix re-distributing previously distributed invalidation messages during logical decoding.
+# 2025-06-16 17:35:53 -0700
+#
+# This is the original ABI baseline point for REL_15_STABLE.  The first entry
+# would ordinarily point to something just before the .0 release, but this file
+# was first added in October 2025, and we're unlikely to act upon ABI breaks in
+# released minor versions, so we've chosen to truncate the ABI history to start
+# with the most recent ABI break documented in the git commit history.

@@ -3,7 +3,6 @@ This is not an introduction or user document for pg_repack, if you are looking f
 
 1. external/pg_repack/README.rst for a brief introduction of pg_repack.
 2. external/pg_repack/doc/pg_repack.rst for more details about Downloading, Installing, Execution and Release Notes.
-3. polar-doc/docs/zh/features/v11/extensions/pg-repack.md for PolarDB user document of pg_repack.
 
 Here we focus on how to develop new features by ourselves or port new features from the pg_repack community.
 

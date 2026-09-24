@@ -47,7 +47,7 @@ task:
 
   <<: *freebsd_task_template
 
-  only_if: $CIRRUS_CHANGE_MESSAGE !=~ '.*\nci-os-only:.*' || $CIRRUS_CHANGE_MESSAGE =~ '.*\nci-os-only:[^\n]*freebsd.*'
+  only_if: $CI_FREEBSD_ENABLED
 
   sysinfo_script: |
     id
@@ -76,6 +76,7 @@ task:
   # freebsd already takes longer than other platforms except for windows.
   configure_script: |
     su postgres <<-EOF
+      set -e
       ./configure \
         --enable-cassert --enable-debug --enable-tap-tests \
         --enable-nls \
@@ -138,13 +139,13 @@ LINUX_CONFIGURE_FEATURES: &LINUX_CONFIGURE_FEATURES >-
 
 
 task:
-  name: Linux - Debian Bookworm
+  name: Linux - Debian Trixie
 
   env:
     CPUS: 4
     BUILD_JOBS: 4
     TEST_JOBS: 8 # experimentally derived to be a decent choice
-    IMAGE_FAMILY: pg-ci-bookworm
+    IMAGE_FAMILY: pg-ci-trixie
 
     CCACHE_DIR: /tmp/ccache_dir
     DEBUGINFOD_URLS: "https://debuginfod.debian.net"
@@ -153,7 +154,7 @@ task:
 
   <<: *linux_task_template
 
-  only_if: $CIRRUS_CHANGE_MESSAGE !=~ '.*\nci-os-only:.*' || $CIRRUS_CHANGE_MESSAGE =~ '.*\nci-os-only:[^\n]*linux.*'
+  only_if: $CI_LINUX_ENABLED
 
   ccache_cache:
     folder: ${CCACHE_DIR}
@@ -181,6 +182,7 @@ task:
 
   configure_script: |
     su postgres <<-EOF
+      set -e
       ./configure \
         --enable-cassert --enable-debug --enable-tap-tests \
         --enable-nls \
@@ -198,6 +200,7 @@ task:
 
   test_world_script: |
     su postgres <<-EOF
+      set -e
       ulimit -c unlimited # default is 0
       make -s ${CHECK} ${CHECKFLAGS} -j${TEST_JOBS}
     EOF
@@ -208,16 +211,16 @@ task:
 
 
 task:
-  name: macOS - Sonoma
+  name: macOS - Sequoia
 
   env:
     CPUS: 4 # always get that much for cirrusci macOS instances
     BUILD_JOBS: $CPUS
-    # Test performance regresses noticably when using all cores. 8 seems to
+    # Test performance regresses noticeably when using all cores. 8 seems to
     # work OK. See
     # https://postgr.es/m/20220927040208.l3shfcidovpzqxfh%40awork3.anarazel.de
     TEST_JOBS: 8
-    IMAGE: ghcr.io/cirruslabs/macos-runner:sonoma
+    IMAGE: ghcr.io/cirruslabs/macos-runner:sequoia
 
     CIRRUS_WORKING_DIR: ${HOME}/pgsql/
     CCACHE_DIR: ${HOME}/ccache
@@ -239,7 +242,7 @@ task:
 
   <<: *macos_task_template
 
-  only_if: $CIRRUS_CHANGE_MESSAGE !=~ '.*\nci-os-only:.*' || $CIRRUS_CHANGE_MESSAGE =~ '.*\nci-os-only:[^\n]*(macos|darwin|osx).*'
+  only_if: $CI_MACOS_ENABLED
 
   sysinfo_script: |
     id
@@ -328,7 +331,7 @@ task:
 
 
 task:
-  name: Windows - Server 2019, VS 2019
+  name: Windows - Server 2022, VS 2019
 
   env:
     # Half the allowed per-user CPU cores
@@ -389,7 +392,7 @@ task:
 
   <<: *windows_task_template
 
-  only_if: $CIRRUS_CHANGE_MESSAGE !=~ '.*\nci-os-only:.*' || $CIRRUS_CHANGE_MESSAGE =~ '.*\nci-os-only:[^\n]*windows.*'
+  only_if: $CI_WINDOWS_ENABLED
 
   sysinfo_script: |
     chcp
@@ -460,12 +463,12 @@ task:
 
   # To limit unnecessary work only run this once the normal linux test succeeds
   depends_on:
-    - Linux - Debian Bookworm
+    - Linux - Debian Trixie
 
   env:
     CPUS: 4
     BUILD_JOBS: 4
-    IMAGE_FAMILY: pg-ci-bookworm
+    IMAGE_FAMILY: pg-ci-trixie
 
     # Use larger ccache cache, as this task compiles with multiple compilers /
     # flag combinations
@@ -476,7 +479,7 @@ task:
 
   # task that did not run, count as a success, so we need to recheck Linux'
   # condition here ...
-  only_if: $CIRRUS_CHANGE_MESSAGE !=~ '.*\nci-os-only:.*' || $CIRRUS_CHANGE_MESSAGE =~ '.*\nci-os-only:[^\n]*linux.*'
+  only_if: $CI_LINUX_ENABLED
 
   <<: *linux_task_template
 
@@ -554,10 +557,10 @@ task:
   always:
     mingw_cross_warning_script: |
       time ./configure \
-        --host=x86_64-w64-mingw32 \
+        --host=x86_64-w64-mingw32ucrt \
         --enable-cassert \
-        CC="ccache x86_64-w64-mingw32-gcc" \
-        CXX="ccache x86_64-w64-mingw32-g++"
+        CC="ccache x86_64-w64-mingw32ucrt-gcc" \
+        CXX="ccache x86_64-w64-mingw32ucrt-g++"
       make -s -j${BUILD_JOBS} clean
       time make -s -j${BUILD_JOBS} world-bin
 

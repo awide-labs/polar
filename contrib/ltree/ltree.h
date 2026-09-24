@@ -126,7 +126,8 @@ typedef struct
 
 #define LQUERY_HASNOT		0x01
 
-#define ISALNUM(x)	( t_isalpha(x) || t_isdigit(x)	|| ( pg_mblen(x) == 1 && t_iseq((x), '_') ) )
+/* Caller has already called mblen, so we can use _unbounded variants safely. */
+#define ISALNUM(x)	( t_isalpha_unbounded(x) || t_isdigit_unbounded(x) || ( pg_mblen_unbounded(x) == 1 && t_iseq((x), '_') ) )
 
 /* full text query */
 
@@ -206,10 +207,11 @@ bool		ltree_execute(ITEM *curitem, void *checkval,
 
 int			ltree_compare(const ltree *a, const ltree *b);
 bool		inner_isparent(const ltree *c, const ltree *p);
-bool		compare_subnode(ltree_level *t, char *q, int len,
-							int (*cmpptr) (const char *, const char *, size_t), bool anyend);
+bool		compare_subnode(ltree_level *t, char *qn, int len, bool prefix, bool ci);
 ltree	   *lca_inner(ltree **a, int len);
-int			ltree_strncasecmp(const char *a, const char *b, size_t s);
+bool		ltree_label_match(const char *pred, size_t pred_len,
+							  const char *label, size_t label_len,
+							  bool prefix, bool ci);
 
 /* fmgr macros for ltree objects */
 #define DatumGetLtreeP(X)			((ltree *) PG_DETOAST_DATUM(X))

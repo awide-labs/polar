@@ -22,6 +22,7 @@
 
 #include "postgres.h"
 
+#include "common/int.h"
 #include "mb/pg_wchar.h"
 #include "miscadmin.h"
 #include "storage/proc.h"
@@ -60,6 +61,9 @@ MemoryContext CurTransactionContext = NULL;
 /* This is a transient link to the active portal's memory context: */
 MemoryContext PortalContext = NULL;
 
+/* Is memory context logging currently in progress? */
+static bool LogMemoryContextInProgress = false;
+
 static void MemoryContextCallResetCallbacks(MemoryContext context);
 static void MemoryContextStatsInternal(MemoryContext context, int level,
 									   bool print, int max_children,
@@ -68,6 +72,8 @@ static void MemoryContextStatsInternal(MemoryContext context, int level,
 static void MemoryContextStatsPrint(MemoryContext context, void *passthru,
 									const char *stats_string,
 									bool print_to_stderr);
+static pg_noinline void add_size_error(Size s1, Size s2) pg_attribute_noreturn();
+static pg_noinline void mul_size_error(Size s1, Size s2) pg_attribute_noreturn();
 
 static void AlignedAllocFree(MemoryContext context, void *pointer);
 
@@ -1071,25 +1077,45 @@ ProcessLogMemoryContextInterrupt(void)
 	LogMemoryContextPending = false;
 
 	/*
-	 * Use LOG_SERVER_ONLY to prevent this message from being sent to the
-	 * connected client.
+	 * Exit immediately if memory context logging is already in progress. This
+	 * prevents recursive calls, which could occur if logging is requested
+	 * repeatedly and rapidly, potentially leading to infinite recursion and a
+	 * crash.
 	 */
-	ereport(LOG_SERVER_ONLY,
-			(errhidestmt(true),
-			 errhidecontext(true),
-			 errmsg("logging memory contexts of PID %d", MyProcPid)));
+	if (LogMemoryContextInProgress)
+		return;
+	LogMemoryContextInProgress = true;
 
-	/*
-	 * When a backend process is consuming huge memory, logging all its memory
-	 * contexts might overrun available disk space. To prevent this, we limit
-	 * the number of child contexts to log per parent to 100.
-	 *
-	 * As with MemoryContextStats(), we suppose that practical cases where the
-	 * dump gets long will typically be huge numbers of siblings under the
-	 * same parent context; while the additional debugging value from seeing
-	 * details about individual siblings beyond 100 will not be large.
-	 */
-	MemoryContextStatsDetail(TopMemoryContext, 100, false);
+	PG_TRY();
+	{
+		/*
+		 * Use LOG_SERVER_ONLY to prevent this message from being sent to the
+		 * connected client.
+		 */
+		ereport(LOG_SERVER_ONLY,
+				(errhidestmt(true),
+				 errhidecontext(true),
+				 errmsg("logging memory contexts of PID %d", MyProcPid)));
+
+		/*
+		 * When a backend process is consuming huge memory, logging all its
+		 * memory contexts might overrun available disk space. To prevent
+		 * this, we limit the number of child contexts to log per parent to
+		 * 100.
+		 *
+		 * As with MemoryContextStats(), we suppose that practical cases where
+		 * the dump gets long will typically be huge numbers of siblings under
+		 * the same parent context; while the additional debugging value from
+		 * seeing details about individual siblings beyond 100 will not be
+		 * large.
+		 */
+		MemoryContextStatsDetail(TopMemoryContext, 100, false);
+	}
+	PG_FINALLY();
+	{
+		LogMemoryContextInProgress = false;
+	}
+	PG_END_TRY();
 }
 
 void *
@@ -1257,6 +1283,175 @@ repalloc(void *pointer, Size size)
 }
 
 /*
+ * repalloc_extended
+ *		Adjust the size of a previously allocated chunk,
+ *		with HUGE and NO_OOM options.
+ */
+void *
+repalloc_extended(void *pointer, Size size, int flags)
+{
+	MemoryContext context = GetMemoryChunkContext(pointer);
+	void	   *ret;
+
+	if (!((flags & MCXT_ALLOC_HUGE) != 0 ? AllocHugeSizeIsValid(size) :
+		  AllocSizeIsValid(size)))
+		elog(ERROR, "invalid memory alloc request size %zu", size);
+
+	/* POLAR: Enable check interrupt when allocating memory. */
+	POLAR_INTERRUPTS_FOR_ALLOC();
+
+	AssertNotInCriticalSection(context);
+
+	/* isReset must be false already */
+	Assert(!context->isReset);
+
+	ret = context->methods->realloc(context, pointer, size);
+	if (unlikely(ret == NULL))
+	{
+		if ((flags & MCXT_ALLOC_NO_OOM) == 0)
+		{
+			MemoryContextStats(TopMemoryContext);
+			ereport(ERROR,
+					(errcode(ERRCODE_OUT_OF_MEMORY),
+					 errmsg("out of memory"),
+					 errdetail("Failed on request of size %zu in memory context \"%s\".",
+							   size, context->name)));
+		}
+		return NULL;
+	}
+
+	VALGRIND_MEMPOOL_CHANGE(context, pointer, ret, size);
+
+	return ret;
+}
+
+/*
+ * Support for safe calculation of memory request sizes
+ *
+ * These functions perform the requested calculation, but throw error if the
+ * result overflows.
+ *
+ * An important property of these functions is that if an argument was a
+ * negative signed int before promotion (implying overflow in calculating it)
+ * we will detect that as an error.  That happens because we reject results
+ * larger than SIZE_MAX / 2 later on, in the actual allocation step.
+ */
+Size
+add_size(Size s1, Size s2)
+{
+	Size		result;
+
+	if (unlikely(pg_add_size_overflow(s1, s2, &result)))
+		add_size_error(s1, s2);
+	return result;
+}
+
+static pg_noinline void
+add_size_error(Size s1, Size s2)
+{
+	ereport(ERROR,
+			(errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
+			 errmsg("invalid memory allocation request size %zu + %zu",
+					s1, s2)));
+}
+
+Size
+mul_size(Size s1, Size s2)
+{
+	Size		result;
+
+	if (unlikely(pg_mul_size_overflow(s1, s2, &result)))
+		mul_size_error(s1, s2);
+	return result;
+}
+
+static pg_noinline void
+mul_size_error(Size s1, Size s2)
+{
+	ereport(ERROR,
+			(errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
+			 errmsg("invalid memory allocation request size %zu * %zu",
+					s1, s2)));
+}
+
+/*
+ * palloc_mul
+ *		Equivalent to palloc(mul_size(s1, s2)).
+ */
+void *
+palloc_mul(Size s1, Size s2)
+{
+	/* inline mul_size() for efficiency */
+	Size		req;
+
+	if (unlikely(pg_mul_size_overflow(s1, s2, &req)))
+		mul_size_error(s1, s2);
+	return palloc(req);
+}
+
+/*
+ * palloc0_mul
+ *		Equivalent to palloc0(mul_size(s1, s2)).
+ *
+ * This is comparable to standard calloc's behavior.
+ */
+void *
+palloc0_mul(Size s1, Size s2)
+{
+	/* inline mul_size() for efficiency */
+	Size		req;
+
+	if (unlikely(pg_mul_size_overflow(s1, s2, &req)))
+		mul_size_error(s1, s2);
+	return palloc0(req);
+}
+
+/*
+ * palloc_mul_extended
+ *		Equivalent to palloc_extended(mul_size(s1, s2), flags).
+ */
+void *
+palloc_mul_extended(Size s1, Size s2, int flags)
+{
+	/* inline mul_size() for efficiency */
+	Size		req;
+
+	if (unlikely(pg_mul_size_overflow(s1, s2, &req)))
+		mul_size_error(s1, s2);
+	return palloc_extended(req, flags);
+}
+
+/*
+ * repalloc_mul
+ *		Equivalent to repalloc(p, mul_size(s1, s2)).
+ */
+void *
+repalloc_mul(void *p, Size s1, Size s2)
+{
+	/* inline mul_size() for efficiency */
+	Size		req;
+
+	if (unlikely(pg_mul_size_overflow(s1, s2, &req)))
+		mul_size_error(s1, s2);
+	return repalloc(p, req);
+}
+
+/*
+ * repalloc_mul_extended
+ *		Equivalent to repalloc_extended(p, mul_size(s1, s2), flags).
+ */
+void *
+repalloc_mul_extended(void *p, Size s1, Size s2, int flags)
+{
+	/* inline mul_size() for efficiency */
+	Size		req;
+
+	if (unlikely(pg_mul_size_overflow(s1, s2, &req)))
+		mul_size_error(s1, s2);
+	return repalloc_extended(p, req, flags);
+}
+
+/*
  * MemoryContextAllocHuge
  *		Allocate (possibly-expansive) space within the specified context.
  *
@@ -1302,34 +1497,8 @@ MemoryContextAllocHuge(MemoryContext context, Size size)
 void *
 repalloc_huge(void *pointer, Size size)
 {
-	MemoryContext context = GetMemoryChunkContext(pointer);
-	void	   *ret;
-
-	if (!AllocHugeSizeIsValid(size))
-		elog(ERROR, "invalid memory alloc request size %zu", size);
-
-	/* POLAR: Enable check interrupt when allocating memory. */
-	POLAR_INTERRUPTS_FOR_ALLOC();
-
-	AssertNotInCriticalSection(context);
-
-	/* isReset must be false already */
-	Assert(!context->isReset);
-
-	ret = context->methods->realloc(context, pointer, size);
-	if (unlikely(ret == NULL))
-	{
-		MemoryContextStats(TopMemoryContext);
-		ereport(ERROR,
-				(errcode(ERRCODE_OUT_OF_MEMORY),
-				 errmsg("out of memory"),
-				 errdetail("Failed on request of size %zu in memory context \"%s\".",
-						   size, context->name)));
-	}
-
-	VALGRIND_MEMPOOL_CHANGE(context, pointer, ret, size);
-
-	return ret;
+	/* this one seems not worth its own implementation */
+	return repalloc_extended(pointer, size, MCXT_ALLOC_HUGE);
 }
 
 /*

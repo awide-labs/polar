@@ -2625,14 +2625,6 @@ ExecOnConflictUpdate(ModifyTableContext *context,
 						 errmsg("could not serialize access due to concurrent update")));
 
 			/*
-			 * As long as we don't support an UPDATE of INSERT ON CONFLICT for
-			 * a partitioned table we shouldn't reach to a case where tuple to
-			 * be lock is moved to another partition due to concurrent update
-			 * of the partition key.
-			 */
-			Assert(!ItemPointerIndicatesMovedPartitions(&tmfd.ctid));
-
-			/*
 			 * Tell caller to try again from the very start.
 			 *
 			 * It does not make sense to use the usual EvalPlanQual() style
@@ -2649,7 +2641,6 @@ ExecOnConflictUpdate(ModifyTableContext *context,
 						 errmsg("could not serialize access due to concurrent delete")));
 
 			/* see TM_Updated case */
-			Assert(!ItemPointerIndicatesMovedPartitions(&tmfd.ctid));
 			ExecClearTuple(existing);
 			return false;
 
@@ -3067,6 +3058,11 @@ lmerge_matched:;
 							   *inputslot;
 					LockTupleMode lockmode;
 
+					if (IsolationUsesXactSnapshot())
+						ereport(ERROR,
+								(errcode(ERRCODE_T_R_SERIALIZATION_FAILURE),
+								 errmsg("could not serialize access due to concurrent update")));
+
 					/*
 					 * The target tuple was concurrently updated by some other
 					 * transaction. Run EvalPlanQual() with the new version of
@@ -3127,7 +3123,7 @@ lmerge_matched:;
 							 * the tuple moved, and setting our current
 							 * resultRelInfo to that.
 							 */
-							if (ItemPointerIndicatesMovedPartitions(&context->tmfd.ctid))
+							if (ItemPointerIndicatesMovedPartitions(tupleid))
 								ereport(ERROR,
 										(errcode(ERRCODE_T_R_SERIALIZATION_FAILURE),
 										 errmsg("tuple to be deleted was already moved to another partition due to concurrent update")));
@@ -3139,14 +3135,14 @@ lmerge_matched:;
 							 * that the first qualifying WHEN MATCHED action
 							 * is executed.
 							 *
-							 * Update tupleid to that of the new tuple, for
-							 * the refetch we do at the top.
+							 * tupleid has been updated to that of the new
+							 * tuple, as required for the refetch we do at the
+							 * top.
 							 */
 							if (resultRelInfo->ri_needLockTagTuple)
 								UnlockTuple(resultRelInfo->ri_RelationDesc,
 											&lockedtid,
 											InplaceUpdateTupleLock);
-							ItemPointerCopy(&context->tmfd.ctid, tupleid);
 							goto lmerge_matched;
 
 						case TM_Deleted:
@@ -3905,8 +3901,12 @@ ExecModifyTable(PlanState *pstate)
 				relkind == RELKIND_MATVIEW ||
 				relkind == RELKIND_PARTITIONED_TABLE)
 			{
-				/* ri_RowIdAttNo refers to a ctid attribute */
-				Assert(AttributeNumberIsValid(resultRelInfo->ri_RowIdAttNo));
+				/*
+				 * ri_RowIdAttNo refers to a ctid attribute.  See the comment
+				 * in ExecInitModifyTable().
+				 */
+				Assert(AttributeNumberIsValid(resultRelInfo->ri_RowIdAttNo) ||
+					   relkind == RELKIND_PARTITIONED_TABLE);
 				datum = ExecGetJunkAttribute(slot,
 											 resultRelInfo->ri_RowIdAttNo,
 											 &isNull);
@@ -4220,6 +4220,10 @@ ExecInitModifyTable(ModifyTable *node, EState *estate, int eflags)
 	foreach(l, node->resultRelations)
 	{
 		Index		resultRelation = lfirst_int(l);
+		List	   *mergeActions = NIL;
+
+		if (node->mergeActionLists)
+			mergeActions = list_nth(node->mergeActionLists, i);
 
 		if (resultRelInfo != mtstate->rootResultRelInfo)
 		{
@@ -4241,7 +4245,8 @@ ExecInitModifyTable(ModifyTable *node, EState *estate, int eflags)
 		/*
 		 * Verify result relation is a valid target for the current operation
 		 */
-		CheckValidResultRel(resultRelInfo, operation);
+		CheckValidResultRelNew(resultRelInfo, operation,
+							   node->onConflictAction, mergeActions);
 
 		resultRelInfo++;
 		i++;
@@ -4291,7 +4296,16 @@ ExecInitModifyTable(ModifyTable *node, EState *estate, int eflags)
 			{
 				resultRelInfo->ri_RowIdAttNo =
 					ExecFindJunkAttributeInTlist(subplan->targetlist, "ctid");
-				if (!AttributeNumberIsValid(resultRelInfo->ri_RowIdAttNo))
+
+				/*
+				 * For heap relations, a ctid junk attribute must be present.
+				 * Partitioned tables should only appear here when all leaf
+				 * partitions were pruned, in which case no rows can be
+				 * produced and ctid is not needed.
+				 */
+				if (relkind == RELKIND_PARTITIONED_TABLE)
+					Assert(nrels == 1);
+				else if (!AttributeNumberIsValid(resultRelInfo->ri_RowIdAttNo))
 					elog(ERROR, "could not find junk ctid column");
 			}
 			else if (relkind == RELKIND_FOREIGN_TABLE)
