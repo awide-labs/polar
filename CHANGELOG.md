@@ -103,6 +103,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Fixed `polar_resource_manager.mem_release_policy` being ignored when
+  instance memory exceeded the limit: sessions were always released by the
+  `default` policy (idle sessions terminated first, then active ones), so
+  `none`, `cancel_query`, `terminate_idle_backend` and
+  `terminate_any_backend` had no effect. Instances using the default
+  setting are not affected (XCOM-232)
 - Fixed an out-of-memory failure after crash restart with zero-copy
   I/O. The syslogger kept the previous shared-memory generation alive,
   so two full copies stayed resident. The fix requires PolarFS 3.2.0

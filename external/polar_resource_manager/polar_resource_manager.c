@@ -765,7 +765,7 @@ polar_throttle_mem(Size mem_usage, Size mem_limit, bool force_evict)
 		 * In order to avoid all connection disconnections caused by OOM,
 		 * perform forced release of memory
 		 */
-		mem_release(allprocs, num_allprocs, exceed_size, 1);
+		mem_release(allprocs, num_allprocs, exceed_size, mem_release_policy);
 	}
 
 	pfree(allprocs);
