@@ -50,6 +50,7 @@
 #include "postmaster/bgwriter.h"
 #include "postmaster/startup.h"
 #include "replication/walreceiver.h"
+#include "storage/buf_internals.h"
 #include "storage/fd.h"
 #include "storage/ipc.h"
 #include "storage/latch.h"
@@ -68,6 +69,7 @@
 #include "postmaster/polar_async_lock_replay.h"
 #include "storage/polar_fd.h"
 #include "storage/polar_xlogbuf.h"
+#include "utils/faultinjector.h"
 /* POLAR end */
 
 /* Unsupported old recovery command file names (relative to $PGDATA) */
@@ -353,6 +355,24 @@ typedef struct XLogRecoveryCtlData
 	pg_atomic_uint32 lastReplayedTLI;	/* timeline */
 
 	/*
+	 * The single-page record the startup process is currently parsing. A
+	 * backend faulting the page in would otherwise bound its replay by a
+	 * lastReplayedEndRecPtr that does not cover the record yet; reading this
+	 * lets it arm the buffer's outdate watermark instead of losing the
+	 * record. Writer: the startup (serial). Readers: backends. Seqlocked for
+	 * a consistent (tags, lsn) snapshot.
+	 *
+	 * Cleared only after lastReplayedEndRecPtr has advanced past the record,
+	 * so a backend seeing polar_in_flight_lsn invalid knows the pointer
+	 * already covers whatever was in flight.
+	 */
+	char		polarInFlightPad[PG_CACHE_LINE_SIZE];
+	pg_seqlock	polar_in_flight_seq;
+	int			polar_in_flight_ntags;	/* 1 (data page) or 2 (+ derived VM) */
+	BufferTag	polar_in_flight_tag[2];
+	pg_atomic_uint64 polar_in_flight_lsn;	/* EndRecPtr, or InvalidXLogRecPtr */
+
+	/*
 	 * When we're currently replaying a record, ie. in a redo function,
 	 * replayEndRecPtr points to the end+1 of the record being replayed,
 	 * otherwise it's equal to lastReplayedEndRecPtr.
@@ -494,6 +514,11 @@ XLogRecoveryShmemInit(void)
 	/* POLAR: init replay recptr */
 	pg_atomic_init_u64(&XLogRecoveryCtl->polar_replay_read_recptr, InvalidXLogRecPtr);
 	pg_atomic_init_u64(&XLogRecoveryCtl->lastReplayedEndRecPtr, InvalidXLogRecPtr);
+
+	/* Init the in-flight single-page record (no record in flight) */
+	pg_seqlock_init(&XLogRecoveryCtl->polar_in_flight_seq);
+	XLogRecoveryCtl->polar_in_flight_ntags = 0;
+	pg_atomic_init_u64(&XLogRecoveryCtl->polar_in_flight_lsn, InvalidXLogRecPtr);
 
 	SpinLockInit(&XLogRecoveryCtl->info_lck);
 	InitSharedLatch(&XLogRecoveryCtl->recoveryWakeupLatch);
@@ -2054,6 +2079,7 @@ ApplyWalRecord(XLogReaderState *xlogreader, XLogRecord *record,
 {
 	ErrorContextCallback errcallback;
 	bool		switchedTLI = false;
+	bool		in_flight_published = false;
 	XLogRecPtr	logindex_mini_trans_lsn = InvalidXLogRecPtr;
 
 	/* POLAR RSC: redo callback ptr */
@@ -2190,7 +2216,8 @@ ApplyWalRecord(XLogReaderState *xlogreader, XLogRecord *record,
 	 * that we parse xlog in a mini transaction.
 	 */
 	if (!polar_logindex_parse_xlog(polar_logindex_redo_instance, record->xl_rmid,
-								   xlogreader, redo_start_lsn, &logindex_mini_trans_lsn))
+								   xlogreader, redo_start_lsn, &logindex_mini_trans_lsn,
+								   &in_flight_published))
 		GetRmgr(record->xl_rmid).rm_redo(xlogreader);
 
 	/*
@@ -2211,6 +2238,18 @@ ApplyWalRecord(XLogReaderState *xlogreader, XLogRecord *record,
 	/* Pop the error context stack */
 	error_context_stack = errcallback.previous;
 
+#ifdef FAULT_INJECTOR
+
+	/*
+	 * Hold the record in the "parsed but not yet replayable" window --
+	 * logindex entries inserted and buffers marked OUTDATE, but
+	 * lastReplayedEndRecPtr not covering it yet. Heap records only, so
+	 * unrelated background WAL does not trip the tests.
+	 */
+	if (record->xl_rmid == RM_HEAP_ID || record->xl_rmid == RM_HEAP2_ID)
+		SIMPLE_FAULT_INJECTOR("polar_stall_replay_frontier_publish");
+#endif
+
 	/*
 	 * Update lastReplayedEndRecPtr after this record has been successfully
 	 * replayed.
@@ -2220,6 +2259,15 @@ ApplyWalRecord(XLogReaderState *xlogreader, XLogRecord *record,
 	pg_atomic_write_u64(&XLogRecoveryCtl->lastReplayedEndRecPtr, xlogreader->EndRecPtr);
 	pg_atomic_write_u32(&XLogRecoveryCtl->lastReplayedTLI, *replayTLI);
 	pg_seqlock_write_end(&XLogRecoveryCtl->lastReplayedRecSeq);
+
+	/*
+	 * The record is now covered by lastReplayedEndRecPtr, so a backend
+	 * faulting the page in replays it on its own. Must follow the publish
+	 * above, so that observing no in-flight record implies the pointer covers
+	 * it.
+	 */
+	if (in_flight_published)
+		polar_clear_in_flight_page();
 
 	/*
 	 * POLAR: If logindex_mini_trans_lsn is valid which means we parse xlog in
@@ -5089,6 +5137,94 @@ XLogRecPtr
 polar_get_xlog_replay_recptr_nolock(void)
 {
 	return pg_atomic_read_u64(&XLogRecoveryCtl->lastReplayedEndRecPtr);
+}
+
+/*
+ * Publish the single-page record the startup is about to parse; see
+ * polar_in_flight_seq in XLogRecoveryCtlData. Called before the logindex
+ * insert and cleared once lastReplayedEndRecPtr covers the record. The startup
+ * is the only writer, so plain seqlock writes suffice.
+ */
+void
+polar_set_in_flight_page(const BufferTag *tags, int ntags, XLogRecPtr lsn)
+{
+	int			i;
+
+	pg_seqlock_write_begin(&XLogRecoveryCtl->polar_in_flight_seq);
+	for (i = 0; i < ntags; i++)
+		XLogRecoveryCtl->polar_in_flight_tag[i] = tags[i];
+	XLogRecoveryCtl->polar_in_flight_ntags = ntags;
+	pg_atomic_write_u64(&XLogRecoveryCtl->polar_in_flight_lsn, lsn);
+	pg_seqlock_write_end(&XLogRecoveryCtl->polar_in_flight_seq);
+}
+
+void
+polar_clear_in_flight_page(void)
+{
+	pg_seqlock_write_begin(&XLogRecoveryCtl->polar_in_flight_seq);
+	XLogRecoveryCtl->polar_in_flight_ntags = 0;
+	pg_atomic_write_u64(&XLogRecoveryCtl->polar_in_flight_lsn, InvalidXLogRecPtr);
+	pg_seqlock_write_end(&XLogRecoveryCtl->polar_in_flight_seq);
+}
+
+/*
+ * Read a consistent snapshot of the in-flight record into the caller's
+ * tags, ntags and lsn out-parameters. A concurrent writer makes the reader
+ * retry; false means the stable snapshot contains no in-flight record.
+ */
+bool
+polar_in_flight_read(BufferTag *tags, int *ntags, XLogRecPtr *lsn)
+{
+	uint64		seq;
+	int			n;
+	int			i;
+
+	/*
+	 * Fast path: skip the seqlock when nothing is in flight. The I/O replay
+	 * caller reads this before taking the buffer redo-state lock, which
+	 * orders a clear observed here before its later lastReplayedEndRecPtr
+	 * read.
+	 */
+	*lsn = pg_atomic_read_u64(&XLogRecoveryCtl->polar_in_flight_lsn);
+	if (*lsn == InvalidXLogRecPtr)
+	{
+		*ntags = 0;
+		return false;
+	}
+
+	do
+	{
+		seq = pg_seqlock_read_begin(&XLogRecoveryCtl->polar_in_flight_seq);
+		n = XLogRecoveryCtl->polar_in_flight_ntags;
+		for (i = 0; i < n; i++)
+			tags[i] = XLogRecoveryCtl->polar_in_flight_tag[i];
+		*lsn = pg_atomic_read_u64(&XLogRecoveryCtl->polar_in_flight_lsn);
+	} while (pg_seqlock_read_retry(&XLogRecoveryCtl->polar_in_flight_seq, seq));
+
+	*ntags = n;
+	return *lsn != InvalidXLogRecPtr;
+}
+
+/*
+ * Startup-only check that the in-flight publication covers (tag, lsn), for
+ * the tag-prediction assertion in polar_logindex_outdate_parse. The
+ * startup is the only writer, so unlocked reads are stable here.
+ */
+bool
+polar_in_flight_covers_tag(const BufferTag *tag, XLogRecPtr lsn)
+{
+	int			i;
+
+	if (pg_atomic_read_u64(&XLogRecoveryCtl->polar_in_flight_lsn) != lsn)
+		return false;
+
+	for (i = 0; i < XLogRecoveryCtl->polar_in_flight_ntags; i++)
+	{
+		if (BUFFERTAGS_EQUAL(XLogRecoveryCtl->polar_in_flight_tag[i], *tag))
+			return true;
+	}
+
+	return false;
 }
 
 
