@@ -67,28 +67,40 @@ is(scalar(@audit_files), 16, "Should have 16 auditlog files");
 # Since audit logs are distributed across multiple loggers based on PID,
 # we need to check all log files for each statement
 
-foreach my $statement (@sql_statements)
+sub statements_logged_once
 {
-	my $found = 0;
-	foreach my $file (@audit_files)
+	foreach my $statement (@sql_statements)
 	{
-		open(my $fh, '<', $file) or die "Could not open file '$file': $!";
-		while (my $line = <$fh>)
+		my $found = 0;
+		foreach my $file (@audit_files)
 		{
-			if (index($line, $statement) != -1)
+			open(my $fh, '<', $file) or die "Could not open file '$file': $!";
+			while (my $line = <$fh>)
 			{
-				$found += 1;
-				# log level of this line should be LOG
-				if (index($line, 'LOG:  statement:') == -1)
+				if (index($line, $statement) != -1)
 				{
-					fail("Log level of Statement '$statement' should be LOG");
+					$found += 1;
+					# log level of this line should be LOG
+					return -1 if index($line, 'LOG:  statement:') == -1;
 				}
 			}
+			close($fh);
 		}
-		close($fh);
+		return 0 if $found == 0;
+		return -1 if $found > 1;
 	}
-	is($found, 1,
-		"Statement '$statement' should be found exactly once in audit logs");
+
+	return 1;
 }
+
+my $logged_once;
+foreach (1 .. $PostgreSQL::Test::Utils::timeout_default)
+{
+	$logged_once = statements_logged_once();
+	last if $logged_once != 0;
+	sleep 1;
+}
+ok($logged_once == 1,
+	"All statements should be found exactly once in audit logs");
 
 done_testing();
