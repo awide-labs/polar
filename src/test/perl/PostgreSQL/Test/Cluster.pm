@@ -3767,6 +3767,41 @@ sub wait_for_log
 
 =pod
 
+=item $node->wait_for_log_entry(pattern, log_type, tail_lines)
+
+Waits for a line containing the given pattern to show up in the newest
+logs of type $log_type (slow/audit). Only the last tail_lines lines of that
+file are inspected (default 1).
+
+Returns the inspected log lines, which is the last inspected content if no
+match was found.
+
+=cut
+
+sub wait_for_log_entry
+{
+	my ($self, $pattern, $log_type, $tail_lines) = @_;
+	$tail_lines = 1 unless defined $tail_lines;
+	my $log_dir = $self->data_dir . '/log';
+	my $max_retries = 30;
+	my $retry = 0;
+	my $result = '';
+
+	while ($retry < $max_retries)
+	{
+		$result = qx{/bin/bash -c "if [ `ls $log_dir | wc -l` != \'0\' ] ; then cat `ls -t $log_dir/*${log_type}* | head -1` | tail -${tail_lines} | head -1; fi"};
+		if (index($result, $pattern) >= 0)
+		{
+			return $result;
+		}
+		sleep(1);
+		$retry++;
+	}
+	return $result;
+}
+
+=pod
+
 =item $node->query_hash($dbname, $query, @columns)
 
 Execute $query on $dbname, replacing any appearance of the string __COLUMNS__
