@@ -445,6 +445,7 @@ MemoryContextSetParentWithFallback(MemoryContext context,
 		context->fallback.mcxt = NULL;
 	}
 }
+
 /* POLAR end */
 
 /*
@@ -1664,7 +1665,7 @@ polar_malloc_usable_size(MemoryContext context, void *pointer)
 	{
 		Assert(false);
 		elog(ERROR, "context(%d-%s-%s) does not contains this pointer",
-				context->type, context->name,
-				context->ident ? context->ident : "null");
+			 context->type, context->name,
+			 context->ident ? context->ident : "null");
 	}
 }

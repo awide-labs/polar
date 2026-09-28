@@ -80,6 +80,7 @@ extern void MemoryContextDeleteChildren(MemoryContext context);
 extern void MemoryContextSetIdentifier(MemoryContext context, const char *id);
 extern void MemoryContextSetParent(MemoryContext context,
 								   MemoryContext new_parent);
+
 /* POLAR: Shared Server */
 extern Size polar_malloc_usable_size(MemoryContext context, void *pointer);
 extern void MemoryContextSetParentWithFallback(MemoryContext context,
