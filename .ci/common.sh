@@ -12,12 +12,14 @@ fi
 unset _COMMON_SCRIPT_DIR
 
 # Conventional Commits regex patterns
-readonly CC_OPTIONAL_SCOPE="(\\([^)]+\\))?"
-readonly CC_HEADER_BASE="^[a-z]+${CC_OPTIONAL_SCOPE}(!)?:"
+# Valid header forms: type:, type!:, type(scope):, type(scope)!:
+# Invalid: type!(scope): — '!' must follow the full scope, not precede it
+readonly CC_HEADER_SUFFIX="(\\([^)]+\\)!|\\([^)]+\\)|!)?"
+readonly CC_HEADER_BASE="^[a-z]+${CC_HEADER_SUFFIX}:"
 readonly CC_HEADER_WITH_DESC="${CC_HEADER_BASE}[[:space:]]+.+"
-readonly CC_HEADER_BREAKING="^[a-z]+${CC_OPTIONAL_SCOPE}!:"
+readonly CC_HEADER_BREAKING="^[a-z]+(\\([^)]+\\)!|!):"
 
-readonly CC_SED_HEADER="^([a-z]+)${CC_OPTIONAL_SCOPE}(!)?:"
+readonly CC_SED_HEADER="^([a-z]+)${CC_HEADER_SUFFIX}:"
 readonly CC_SED_TYPE_EXTRACT="${CC_SED_HEADER}.*"
 readonly CC_SED_DESC_EXTRACT="${CC_SED_HEADER}[[:space:]]+"
 
@@ -213,7 +215,13 @@ is_commit_excluded() {
     return 1
   fi
 
-  # Use indirect array reference
+  # Use indirect array reference (check count first for set -u with empty array)
+  local count
+  eval "count=\${#${excluded_array_name}[@]}"
+  if [ "${count}" -eq 0 ]; then
+    return 1
+  fi
+
   local excluded_array
   eval "excluded_array=(\"\${${excluded_array_name}[@]}\")"
 

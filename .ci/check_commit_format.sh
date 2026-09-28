@@ -145,11 +145,23 @@ main() {
     local full_msg
     full_msg=$(get_commit_body "${commit_sha}")
 
+    # Reject type!(scope): — breaking '!' must follow the full scope
+    # (type(scope)!: or type!:), not sit between type and scope.
+    if echo "${commit_msg}" | grep -qE "^[a-z]+!\\("; then
+      local bang_error
+      bang_error="${commit_sha:0:8}: ${commit_msg} "
+      bang_error+="(breaking change '!' must follow scope, e.g. type(scope)!:)"
+      invalid_commits+=("${bang_error}")
+      log_error "  Misplaced '!': ${commit_sha:0:8} - ${commit_msg}"
+      continue
+    fi
+
     # Check if commit message follows Conventional Commits format
-    # Format: <type>[optional scope]: <description>
+    # Format: <type>[optional scope][optional !]: <description>
     # Types: feat, fix, docs, style, refactor, perf, test, build, ci, chore,
     #        revert
-    # Scope is optional and in parentheses
+    # Scope is optional and in parentheses; '!' marks breaking changes and
+    # must follow the scope (type(scope)!:) or the type (type!:) when unscoped
     # Description must be present and not empty
     if ! echo "${commit_msg}" | grep -qE "${CC_HEADER_WITH_DESC}"; then
       invalid_commits+=("${commit_sha:0:8}: ${commit_msg}")
@@ -250,7 +262,7 @@ main() {
       commit_scope=$(extract_commit_scope "${commit_msg}")
       if [ -z "${commit_scope}" ]; then
         scopeless_commits+=("${commit_sha:0:8}: ${commit_msg}")
-      elif ! is_scope_known "${commit_scope}" "${commit_sha}"; then
+      elif ! is_scope_known "${commit_scope}" "${all_checked_shas[@]}"; then
         # Unshallow the repository if it's a shallow clone to ensure we have
         # enough history to check for scope usage. CI systems by default uses
         # depth=20, which can cause false warnings when checking scopes.
@@ -260,7 +272,7 @@ main() {
             git fetch --depth=1000000 --no-tags 2>/dev/null || true
         fi
         # Now repeat the search with a full clone
-        if ! is_scope_known "${commit_scope}" "${commit_sha}"; then
+        if ! is_scope_known "${commit_scope}" "${all_checked_shas[@]}"; then
           new_scope_commits+=("${commit_sha:0:8}: ${commit_msg}")
         fi
       fi
@@ -284,7 +296,10 @@ main() {
     done
     echo ""
     echo "Please ensure all commits follow the format:"
-    echo "  <type>[optional scope]: <description>"
+    echo "  <type>[optional scope][optional !]: <description>"
+    echo ""
+    echo "Breaking changes use '!' after the type or scope (type!: or"
+    echo "type(scope)!:), not between them (type!(scope): is invalid)."
     echo ""
     echo "  [optional body]"
     echo ""
