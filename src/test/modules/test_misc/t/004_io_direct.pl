@@ -45,6 +45,7 @@ $node->append_conf(
 	'postgresql.conf', qq{
 debug_io_direct = 'data,wal,wal_init'
 shared_buffers = '256kB' # tiny to force I/O
+polar_bulk_write_maxpages = 16
 wal_level = replica # minimal runs out of shared_buffers when set so tiny
 });
 $node->start;
