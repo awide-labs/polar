@@ -1,6 +1,9 @@
 # Test for datamax keep walfiles which haven't been removed in upstream node
 use strict;
 use warnings;
+use FindBin;
+use lib $FindBin::RealBin;
+use PolarDatamaxUtils;
 use PostgreSQL::Test::Cluster;
 use Test::More tests=>2;
 
@@ -46,67 +49,6 @@ $node_standby->start;
 $node_datamax->wait_walstreaming_establish_timeout(20);
 $node_standby->wait_walstreaming_establish_timeout(20);
 
-# get current wal file 
-sub polar_get_walfile
-{
-	my ($node, $is_datamax) = @_;
-	my $polar_waldir = $node->polar_get_datadir;
-	my $name = $node->name;
-	if ($is_datamax == 1)
-	{
-		$polar_waldir = "$polar_waldir/polar_datamax/pg_wal";
-	}
-	else
-	{
-		$polar_waldir = "$polar_waldir/pg_wal";
-	}
-	my $walfile = readpipe("ls $polar_waldir");
-	my @wal_array = split('\n', $walfile);
-	print "current walfile of node $name:\n";
-	foreach my $i (@wal_array)  
-	{ 
-		print "$i\n";
-	}
-	return @wal_array;
-}
-
-# judge whether wal file is the same
-sub polar_walfile_compare
-{
-	my ($walfile1, $walfile2, $waldir1, $waldir2, $last_segno) = @_;
-	my $ret = 0;
-	foreach my $i (@$walfile1)  
-	{ 
-		if ($i le $last_segno)
-		{
-			if(grep { $_ eq $i } @$walfile2)
-			{
-                my $wal1 = $waldir1 . "/" . $i;
-                my $md51 = readpipe("md5sum $wal1");
-                $md51 = (split(" ",$md51))[0];
-                $wal1 = $waldir2 . "/" . $i;
-                my $md52 = readpipe("md5sum $wal1");
-                $md52 = (split(" ",$md52))[0];
-                if ($md51 eq $md52)
-                {
-                    $ret = 1;
-                }
-				else
-				{
-					$ret = 0;
-					last;
-				}
-			}
-			else
-			{
-				$ret = 0;
-				last;
-			}
-		}
-	}
-	return $ret;
-}
-
 # Compare only the valid, already-flushed prefix ($len bytes) of a wal segment
 # both nodes hold in common.  Once the primary recycles old wal, the only
 # segment master and datamax both retain is the one currently being received:
@@ -149,16 +91,21 @@ sleep 10;
 $node_standby->safe_psql('postgres', "checkpoint");
 sleep 10;
 
-my $last_segno = $node_master->safe_psql('postgres', "select pg_walfile_name('$insert_lsn');");
-print "last_segno: $last_segno\n";
-my @master_wal = polar_get_walfile($node_master, 0);
-my @datamax_wal = polar_get_walfile($node_datamax, 1);
-my @standby_wal = polar_get_walfile($node_standby, 0);
-my $master_waldir = $node_master->polar_get_datadir;
-$master_waldir = "$master_waldir/pg_wal";
-my $datamax_waldir = $node_datamax->polar_get_datadir;
-$datamax_waldir = "$datamax_waldir/polar_datamax/pg_wal";
-my $result = polar_walfile_compare(\@master_wal, \@datamax_wal, $master_waldir, $datamax_waldir, $last_segno);
+# the master can write more wal at any time, so compare the wal up to the
+# lsn it has flushed now, once datamax has flushed it too
+my $cmp_lsn = $node_master->lsn('flush');
+print "cmp_lsn: $cmp_lsn\n";
+my $master_waldir = polar_waldir($node_master, 0);
+my $datamax_waldir = polar_waldir($node_datamax, 1);
+my $result = 0;
+if ($node_master->wait_for_catchup($node_datamax, 'flush', $cmp_lsn, 1, 't', 300))
+{
+	polar_get_walfile($node_master, 0);
+	polar_get_walfile($node_datamax, 1);
+	polar_get_walfile($node_standby, 0);
+	$result = polar_walfile_compare($master_waldir, $datamax_waldir, $cmp_lsn,
+		polar_wal_segment_size($node_master));
+}
 ok($result == 1, "datamax keep the wal files those haven't been removed by master\n"); 
 
 # test delete wal file in master
@@ -189,8 +136,8 @@ my ($cmp_walfile, $cmp_offset) = split(/\|/,
 	$node_master->safe_psql('postgres',
 		"select file_name, file_offset from pg_walfile_name_offset('$insert_lsn')"));
 print "compare walfile $cmp_walfile, first $cmp_offset bytes\n";
-@master_wal = polar_get_walfile($node_master, 0);
-@datamax_wal = polar_get_walfile($node_datamax, 1);
+polar_get_walfile($node_master, 0);
+polar_get_walfile($node_datamax, 1);
 $result = polar_walfile_prefix_compare($master_waldir, $datamax_waldir, $cmp_walfile, $cmp_offset);
 ok($result == 1, "master deletes walfile, datamax keep the wal files those haven't been removed by master\n");
 
