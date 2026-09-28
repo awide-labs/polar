@@ -1,80 +1,12 @@
 # Test for whether datamax work normally after timeline switch
 use strict;
 use warnings;
+use FindBin;
+use lib $FindBin::RealBin;
+use PolarDatamaxUtils;
 use PostgreSQL::Test::Cluster;
 use File::Path 'rmtree';
 use Test::More tests=>22;
-
-# get current wal file 
-sub polar_get_walfile
-{
-	my ($node, $is_datamax) = @_;
-	my $polar_waldir = $node->polar_get_datadir;
-	my $name = $node->name;
-	if ($is_datamax == 1)
-	{
-		$polar_waldir = "$polar_waldir/polar_datamax/pg_wal";
-	}
-	else
-	{
-		$polar_waldir = "$polar_waldir/pg_wal";
-	}
-	my $walfile = readpipe("ls $polar_waldir");
-	my @wal_array = split('\n', $walfile);
-	print "current walfile of node $name:\n";
-	foreach my $i (@wal_array)  
-	{ 
-		print "$i\n";
-	}
-	return @wal_array;
-}
-
-# judge whether wal file is the same
-sub polar_walfile_compare
-{
-	my ($walfile1, $walfile2, $waldir1, $waldir2, $last_segno) = @_;
-	my $ret = 0;
-	foreach my $i (@$walfile1)  
-	{ 
-		if ($i le $last_segno)
-		{
-			if(grep { $_ eq $i } @$walfile2)
-			{
-				my $wal1 = $waldir1 . "/" . $i;
-                my $md51 = readpipe("md5sum $wal1");
-                $md51 = (split(" ",$md51))[0];
-                $wal1 = $waldir2 . "/" . $i;
-                my $md52 = readpipe("md5sum $wal1");
-                $md52 = (split(" ",$md52))[0];
-                if ($md51 eq $md52)
-                {
-                    $ret = 1;
-                }
-				else
-				{
-					$ret = 0;
-					last;
-				}
-			}
-			else
-			{
-				$ret = 0;
-				last;
-			}
-		}
-	}
-	return $ret;
-}
-
-sub get_wal_from_backup
-{
-	my ($self, $backup, $datamax_pfs, $backup_pfs) = @_;
-	my $pgdata  = $self->polar_get_datadir;
-	my $name    = $self->name; 
-	print "### node \"$name\" get wal from backup_set \"$backup\" \n";
-	my $ret = system("polar_tools datamax-get-wal -D $pgdata -M $datamax_pfs -b $backup -m $backup_pfs");
-	return $ret;
-}
 
 #### 1rw 1datamax 2standby promote standby and datamax streaming from new rw
 #### check whether standby1 can receive data normally
@@ -207,8 +139,6 @@ $result = $node_standby->safe_psql('postgres',
 		qq[SELECT 1 FROM test_table WHERE val = $val_newrw]);
 ok($result == 1, "insert success in new master(old standby) node");
 my $insert_lsn = $node_standby->lsn('insert');
-my $last_segno = $node_standby->safe_psql('postgres', "select pg_walfile_name('$insert_lsn');");
-print "last_segno: $last_segno\n";
 
 # check whether standby1 receive all data, and whether wal of standby1 is the same as new master(old standby)
 # wait for standby1 catchup
@@ -220,14 +150,18 @@ $result = 0;
 $result = $node_standby1->safe_psql('postgres',
 		qq[SELECT 1 FROM test_table WHERE val = $val_newrw]);
 ok($result == 1, "standby1 received all data success");
-my @standby_wal = polar_get_walfile($node_standby, 0);
-my @standby1_wal = polar_get_walfile($node_standby1, 0);
-my $standby_waldir = $node_standby->polar_get_datadir;
-$standby_waldir = "$standby_waldir/pg_wal";
-my $standby1_waldir = $node_standby1->polar_get_datadir;
-$standby1_waldir = "$standby1_waldir/pg_wal";
+# the new master can write more wal at any time, so compare the wal up to
+# the lsn it has flushed now, once standby1 has flushed it too
+my $cmp_lsn = $node_standby->lsn('flush');
+print "cmp_lsn: $cmp_lsn\n";
 $result = 0;
-$result = polar_walfile_compare(\@standby_wal, \@standby1_wal, $standby_waldir, $standby1_waldir, $last_segno);
+if ($node_datamax->wait_for_catchup($node_standby1, 'flush', $cmp_lsn, 1, 't', $catchup_timeout))
+{
+	polar_get_walfile($node_standby, 0);
+	polar_get_walfile($node_standby1, 0);
+	$result = polar_walfile_compare(polar_waldir($node_standby, 0),
+		polar_waldir($node_standby1, 0), $cmp_lsn, polar_wal_segment_size($node_standby));
+}
 print "standby1 wal compares with standby wal result: $result\n";
 ok($result == 1, "standby wal is the same as standby1 wal\n"); 
 
@@ -411,8 +345,6 @@ $result = $node_standby2->safe_psql('postgres',
 		qq[SELECT 1 FROM test_table WHERE val = $val_newrw]);
 ok($result == 1, "insert success in new master(old standby2) node");
 $insert_lsn = $node_standby2->lsn('write');
-$last_segno = $node_standby2->safe_psql('postgres', "select pg_walfile_name('$insert_lsn');");
-print "last_segno: $last_segno\n";
 
 # check whether standby3 receive all data, and whether wal of standby1 is the same as new master(old standby)
 # wait for standby1 catchup
@@ -420,14 +352,18 @@ $result = 0;
 $result = $node_datamax2->wait_for_catchup($node_standby3, 'replay',
 	$insert_lsn, timeout => $catchup_timeout, return_failed => 1);
 ok($result == 1, "standby3 catchup success");
-@standby_wal = polar_get_walfile($node_standby2, 0);
-@standby1_wal = polar_get_walfile($node_standby3, 0);
-$standby_waldir = $node_standby2->polar_get_datadir;
-$standby_waldir = "$standby_waldir/pg_wal";
-$standby1_waldir = $node_standby3->polar_get_datadir;
-$standby1_waldir = "$standby1_waldir/pg_wal";
+# the new master can write more wal at any time, so compare the wal up to
+# the lsn it has flushed now, once standby3 has flushed it too
+$cmp_lsn = $node_standby2->lsn('flush');
+print "cmp_lsn: $cmp_lsn\n";
 $result = 0;
-$result = polar_walfile_compare(\@standby_wal, \@standby1_wal, $standby_waldir, $standby1_waldir, $last_segno);
+if ($node_datamax2->wait_for_catchup($node_standby3, 'flush', $cmp_lsn, 1, 't', $catchup_timeout))
+{
+	polar_get_walfile($node_standby2, 0);
+	polar_get_walfile($node_standby3, 0);
+	$result = polar_walfile_compare(polar_waldir($node_standby2, 0),
+		polar_waldir($node_standby3, 0), $cmp_lsn, polar_wal_segment_size($node_standby2));
+}
 print "standby3 wal compares with standby2 wal result: $result\n";
 ok($result == 1, "standby3 wal is the same as standby2 wal\n"); 
 
