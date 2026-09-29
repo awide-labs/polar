@@ -12,6 +12,8 @@
  */
 #include "postgres.h"
 
+#include <unistd.h>
+
 #include "access/xact.h"
 #include "libpq/libpq-be.h"
 #include "miscadmin.h"
