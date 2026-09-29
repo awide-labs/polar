@@ -676,6 +676,22 @@ subtest 'walsender exits mid-checkpoint exposes residual race' => sub {
 	# deadlocking in secure_write's WaitEventSetWait(-1).
 	$replica->stop_child('startup');
 
+	# Replay may have moved past the seed baseline before startup froze
+	# (background WAL such as standby snapshots, or stop_child()'s
+	# SIGCONT/SIGSTOP retries), and feedback carrying the newer position
+	# may still be in flight. Re-baseline on the frozen replay position
+	# and wait for the slot to catch up to it; the slot's apply_lsn only
+	# moves forward, so once it matches it stays put.
+	my $frozen_replay_lsn =
+	  $replica->safe_psql($regress_db, q[SELECT pg_last_wal_replay_lsn()]);
+	$primary->poll_query_until($regress_db,
+		qq[SELECT polar_oldest_apply_lsn() >= '$frozen_replay_lsn'::pg_lsn])
+	  or die "[$tag] slot's apply_lsn never reached frozen replay "
+	  . "position $frozen_replay_lsn";
+	note "[$tag] replay frozen at $frozen_replay_lsn "
+	  . "(seed baseline was $apply_lsn_seed)";
+	$apply_lsn_seed = $frozen_replay_lsn;
+
 	my $slot_active = $primary->safe_psql(
 		$regress_db,
 		qq[SELECT active FROM pg_replication_slots
