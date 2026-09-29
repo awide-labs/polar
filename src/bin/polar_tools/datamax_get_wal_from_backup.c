@@ -149,14 +149,14 @@ polar_get_smallest_and_greatest_walfile(char *waldir_path, char *smallest_walfil
 		if (!found_smallest || strcmp(xlde->d_name + 8, smallest_walfile + 8) < 0)
 		{
 			found_smallest = 1;
-			strncpy(smallest_walfile, xlde->d_name, strlen(xlde->d_name));
+			strlcpy(smallest_walfile, xlde->d_name, XLOG_FNAME_LEN + 1);
 		}
 
 		/* first found a valid wal file or found greater wal file, update */
 		if (!found_greatest || strcmp(xlde->d_name + 8, greatest_walfile + 8) > 0)
 		{
 			found_greatest = 1;
-			strncpy(greatest_walfile, xlde->d_name, strlen(xlde->d_name));
+			strlcpy(greatest_walfile, xlde->d_name, XLOG_FNAME_LEN + 1);
 		}
 	}
 	polar_closedir(xldir);
