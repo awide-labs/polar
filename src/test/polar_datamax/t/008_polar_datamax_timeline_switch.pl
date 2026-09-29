@@ -213,7 +213,8 @@ print "last_segno: $last_segno\n";
 # check whether standby1 receive all data, and whether wal of standby1 is the same as new master(old standby)
 # wait for standby1 catchup
 $result = 0;
-$result = $node_datamax->wait_for_catchup($node_standby1, 'replay', $insert_lsn, 1, 't', $catchup_timeout);
+$result = $node_datamax->wait_for_catchup($node_standby1, 'replay',
+	$insert_lsn, timeout => $catchup_timeout, return_failed => 1);
 ok($result == 1, "standby1 catchup success");
 $result = 0;
 $result = $node_standby1->safe_psql('postgres',
@@ -416,7 +417,8 @@ print "last_segno: $last_segno\n";
 # check whether standby3 receive all data, and whether wal of standby1 is the same as new master(old standby)
 # wait for standby1 catchup
 $result = 0;
-$result = $node_datamax2->wait_for_catchup($node_standby3, 'replay', $insert_lsn, 1, 't', $catchup_timeout);
+$result = $node_datamax2->wait_for_catchup($node_standby3, 'replay',
+	$insert_lsn, timeout => $catchup_timeout, return_failed => 1);
 ok($result == 1, "standby3 catchup success");
 @standby_wal = polar_get_walfile($node_standby2, 0);
 @standby1_wal = polar_get_walfile($node_standby3, 0);

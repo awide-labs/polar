@@ -96,7 +96,8 @@ my $insert_lsn = $node_master->lsn('insert');
 
 # Make sure the datamax has received/flushed the freshly completed segments
 # before we start timing the archive poll.
-$node_master->wait_for_catchup($node_datamax, 'flush', $insert_lsn, 1, 't', 60);
+$node_master->wait_for_catchup($node_datamax, 'flush',
+	$insert_lsn, timeout => 60, return_failed => 1);
 
 # A brand-new segment (completed after the settle window) must get archived.
 my $got_new_segment = 0;
