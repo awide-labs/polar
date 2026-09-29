@@ -1131,6 +1131,19 @@ typedef struct polar_wait_object_t
 {
 	pthread_mutex_t mutex;
 	pthread_cond_t cond;
+	/*
+	 * Doorbell flag for lost-wakeup-free worker signalling: set under
+	 * mutex by a signaler when new work becomes available (together with
+	 * pthread_cond_signal), cleared under mutex by the waiter around its
+	 * block in polar_perform_spin_delay_mt().  Checking it under the mutex
+	 * right before blocking closes the window in which a bare
+	 * pthread_cond_signal() would be dropped because the waiter is not
+	 * registered yet.  While the flag is pending, further signalers
+	 * return early without taking the mutex, coalescing redundant
+	 * wakeups on the WAL insert hot path.  Accessed only via the
+	 * pg_atomic primitives.
+	 */
+	pg_atomic_uint32 wakeup_pending;
 	polar_wait_object_stats_t stats;
 } polar_wait_object_t;
 
