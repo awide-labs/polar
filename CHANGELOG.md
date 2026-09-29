@@ -216,6 +216,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Performance
 
+- Fixed occasional slow commits on lightly loaded instances,
+  because of lost wakeups of pipeline workers (XCOM-162)
 - Eliminate the per-I/O memory copy on shared storage: PolarDB now reads and
   writes directly from its shared-memory buffers instead of copying every page
   through the pfsdaemon's shared pool. Enabled by default via
