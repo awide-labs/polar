@@ -3078,7 +3078,7 @@ sub advance_wal_to_record_splitting_zone
 
 =pod
 
-=item $node->wait_for_catchup(standby_name, mode, target_lsn [, timeout])
+=item $node->wait_for_catchup(standby_name, mode, target_lsn [, option => value ...])
 
 Wait for the replication connection with application_name standby_name until
 its 'mode' replication column in pg_stat_replication equals or passes the
@@ -3096,29 +3096,57 @@ If you pass an explicit value of target_lsn, it should almost always be
 the primary's write LSN; so this parameter is seldom needed except when
 querying some intermediate replication node rather than the primary.
 
-timeout specifies the maximum time to wait in seconds. If not specified,
-defaults to $PostgreSQL::Test::Utils::timeout_default (180 seconds).
+POLAR: further options are passed as name => value pairs after target_lsn
+(pass undef for mode or target_lsn to get their defaults):
+
+=over
+
+=item timeout => seconds
+
+Maximum time to wait. Defaults to $PostgreSQL::Test::Utils::timeout_default
+(180 seconds).
+
+=item return_failed => 1
+
+Return 0 on timeout instead of die()ing, so the caller can assert on the
+result.
+
+=back
 
 If there is no active replication connection from this peer, waits until
 timeout.
 
 Requires that the 'postgres' db exists and is accessible.
 
-This is not a test. It die()s on failure.
+This is not a test. It die()s on failure, unless return_failed is set.
+Returns 1 on success, 0 on a tolerated timeout.
 
 =cut
 
+# POLAR: parse name => value options for a function, croaking on an odd
+# number of arguments or an unknown name.  Positional extras from older
+# call conventions therefore fail loudly instead of being misread.
+sub _polar_named_opts
+{
+	my ($func, $allowed, @args) = @_;
+
+	croak "$func: options must be name => value pairs ("
+	  . join(', ', @$allowed) . "), got: @args"
+	  if @args % 2;
+	my %opts = @args;
+	my %known = map { $_ => 1 } @$allowed;
+	my @unknown = grep { !$known{$_} } sort keys %opts;
+	croak "$func: unknown option(s) @unknown; valid options are "
+	  . join(', ', @$allowed)
+	  if @unknown;
+	return %opts;
+}
+
 sub wait_for_catchup
 {
-	my ($self, $standby_name, $mode, $target_lsn, $timeout, $return_failed,
-		$expected_res)
-	  = @_;
-	# POLAR: return_failed lets a caller request "return 0 on timeout"
-	# instead of croaking so it can assert on the result; expected_res
-	# overrides the expected poll result. The function returns 1 on
-	# success / 0 on a tolerated timeout.
-	$return_failed = defined($return_failed) ? $return_failed : 0;
-	$expected_res  = defined($expected_res)  ? $expected_res  : 't';
+	my ($self, $standby_name, $mode, $target_lsn, @args) = @_;
+	my %opts = _polar_named_opts('wait_for_catchup',
+		[ 'timeout', 'return_failed' ], @args);
 	$mode = defined($mode) ? $mode : 'replay';
 	my %valid_modes =
 	  ('sent' => 1, 'write' => 1, 'flush' => 1, 'replay' => 1);
@@ -3147,11 +3175,9 @@ sub wait_for_catchup
 	my $query = qq[SELECT '$target_lsn' <= ${mode}_lsn AND state = 'streaming'
          FROM pg_catalog.pg_stat_replication
          WHERE application_name IN ('$standby_name', 'walreceiver')];
-	if (!$self->poll_query_until('postgres', $query, $expected_res, $timeout))
+	if (!$self->poll_query_until('postgres', $query, 't', $opts{timeout}))
 	{
-		# POLAR: callers that pass return_failed want a soft failure so they
-		# can assert on the result themselves rather than aborting the test.
-		if ($return_failed)
+		if ($opts{return_failed})
 		{
 			print "timed out waiting for catchup\n";
 			return 0;
@@ -3177,7 +3203,7 @@ sub wait_for_catchup
 
 =pod
 
-=item $node->wait_for_catchup_with_progress(standby_name, mode, target_lsn, stall_timeout, hard_cap)
+=item $node->wait_for_catchup_with_progress(standby_name, mode, target_lsn [, option => value ...])
 
 POLAR: progress-based variant of wait_for_catchup(). Same success condition
 (state = 'streaming' and the standby's <mode>_lsn has reached target_lsn), but
@@ -3190,22 +3216,20 @@ slowly a fixed deadline would bail out a standby that is still
 replaying happily. For crisp progress detection, set wal_receiver_status_interval
 small (e.g. 1s) on the receiver so a fresh replay_lsn is visible on each poll.
 
-The first four arguments match wait_for_catchup(), so the two are interchangeable
-for existing callers; target_lsn defaults to $node->lsn('write') when omitted,
-as in wait_for_catchup(). The trailing $stall_timeout and $hard_cap are optional
-input parameters (mirroring wait_for_catchup()'s trailing $timeout) defaulting to
-120s and 1800s. Requires the 'postgres' db. die()s on failure.
+The positional arguments match wait_for_catchup(), so the two are
+interchangeable for existing callers; target_lsn defaults to
+$node->lsn('write') when omitted, as in wait_for_catchup(). Like
+wait_for_catchup(), further options are name => value pairs:
+stall_timeout (default 120s) and hard_cap (default 1800s).
+Requires the 'postgres' db. die()s on failure.
 
 =cut
 
 sub wait_for_catchup_with_progress
 {
-	my ($self, $standby_name, $mode, $target_lsn, $stall_timeout, $hard_cap)
-	  = @_;
-	# POLAR: the first four arguments match wait_for_catchup() so callers can
-	# swap one for the other without changes. The trailing $stall_timeout and
-	# $hard_cap mirror wait_for_catchup()'s trailing $timeout: optional input
-	# parameters that default to 120s and 1800s when undef.
+	my ($self, $standby_name, $mode, $target_lsn, @args) = @_;
+	my %opts = _polar_named_opts('wait_for_catchup_with_progress',
+		[ 'stall_timeout', 'hard_cap' ], @args);
 	$mode = defined($mode) ? $mode : 'replay';
 	my $mode_col = $mode . '_lsn';
 
@@ -3222,9 +3246,9 @@ sub wait_for_catchup_with_progress
 	}
 
 	# fail after this many s with no <mode>_lsn progress (a real stall)
-	$stall_timeout = defined($stall_timeout) ? $stall_timeout : 120;
+	my $stall_timeout = $opts{stall_timeout} // 120;
 	# absolute safety net in seconds
-	$hard_cap = defined($hard_cap) ? $hard_cap : 1800;
+	my $hard_cap = $opts{hard_cap} // 1800;
 	my $poll_interval = 1;
 
 	# Byte-offset of the target from the origin, so we can compare numerically.

@@ -141,7 +141,8 @@ my $insert_lsn = $node_master->lsn('insert');
 print "insert_lsn: $insert_lsn\n";
 
 # wait for standby replay
-$node_datamax->wait_for_catchup($node_standby, 'replay', $insert_lsn, 300, 1);
+$node_datamax->wait_for_catchup($node_standby, 'replay',
+	$insert_lsn, timeout => 300, return_failed => 1);
 # checkpoint after having replayed all wal
 $node_master->safe_psql('postgres', "checkpoint");
 sleep 10;
@@ -182,7 +183,8 @@ sleep 30;
 # store everything up to that flush lsn first.
 $insert_lsn = $node_master->lsn('flush');
 print "flush_lsn: $insert_lsn\n";
-$node_master->wait_for_catchup($node_datamax, 'flush', $insert_lsn, 300, 1);
+$node_master->wait_for_catchup($node_datamax, 'flush',
+	$insert_lsn, timeout => 300, return_failed => 1);
 my ($cmp_walfile, $cmp_offset) = split(/\|/,
 	$node_master->safe_psql('postgres',
 		"select file_name, file_offset from pg_walfile_name_offset('$insert_lsn')"));

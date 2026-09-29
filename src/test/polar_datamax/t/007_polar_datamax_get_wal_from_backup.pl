@@ -175,7 +175,8 @@ $node_datamax->start;
 $node_datamax->wait_walstreaming_establish_timeout($wait_timeout);
 $result = 0;
 my $write_lsn = $node_master->lsn('write');
-$result = $node_master->wait_for_catchup($node_datamax, 'flush', $write_lsn, 1);
+$result = $node_master->wait_for_catchup($node_datamax, 'flush',
+	$write_lsn, return_failed => 1);
 ok($result == 1, "datamax catchup success");
 $result = 0;
 $result = $node_datamax->safe_psql('postgres',
@@ -194,7 +195,8 @@ $node_standby->start;
 $node_standby->wait_walstreaming_establish_timeout($wait_timeout);
 # wait for standby catchup
 $result = 0;
-$result = $node_datamax->wait_for_catchup($node_standby, 'replay', $insert_lsn, $catchup_timeout, 1);
+$result = $node_datamax->wait_for_catchup($node_standby, 'replay',
+	$insert_lsn, timeout => $catchup_timeout, return_failed => 1);
 ok($result == 1, "standby catchup success");
 
 $result = 0;
@@ -236,7 +238,8 @@ $node_datamax1->wait_walstreaming_establish_timeout($wait_timeout);
 # wait for datamax1 catchup
 $result = 0;
 $write_lsn = $node_master->lsn('write');
-$result = $node_master->wait_for_catchup($node_datamax1, 'flush', $write_lsn, 1);
+$result = $node_master->wait_for_catchup($node_datamax1, 'flush',
+	$write_lsn, return_failed => 1);
 ok($result == 1, "datamax1 catchup success");
 $result = 0;
 $result = $node_datamax1->safe_psql('postgres',
@@ -271,7 +274,8 @@ $node_standby1->start;
 $node_standby1->wait_walstreaming_establish_timeout($wait_timeout);
 # wait for standby1 catchup
 $result = 0;
-$result = $node_datamax1->wait_for_catchup($node_standby1, 'replay', $insert_lsn, $catchup_timeout, 1);
+$result = $node_datamax1->wait_for_catchup($node_standby1, 'replay',
+	$insert_lsn, timeout => $catchup_timeout, return_failed => 1);
 ok($result == 1, "standby1 catchup success");
 
 $result = 0;
