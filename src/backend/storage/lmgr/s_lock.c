@@ -382,14 +382,38 @@ polar_perform_spin_delay_mt(polar_spin_delay_status_t * status, bool need_lock, 
 		if (unlikely(need_lock))
 			pthread_mutex_lock(&status->wait_obj->mutex);
 
-		pg_atomic_fetch_add_u64(&status->wait_obj->stats.waiters, 1);
-
-		if (status->cur_delay != 0)
-			res = pthread_cond_timedwait(&status->wait_obj->cond, &status->wait_obj->mutex, &tv);
+		/*
+		 * Skip the block if a wakeup was posted after the caller's work
+		 * predicate returned false (see polar_wal_pipeline_signal_worker):
+		 * the caller re-polls its predicate immediately instead of sleeping
+		 * until its poll timer fires.  Checking the flag here under the mutex
+		 * is what closes the lost-wakeup window against the mutex-protected
+		 * post on the signaler side.
+		 */
+		if (pg_atomic_read_u32(&status->wait_obj->wakeup_pending))
+			res = 0;
 		else
-			res = pthread_cond_wait(&status->wait_obj->cond, &status->wait_obj->mutex);
+		{
+			pg_atomic_fetch_add_u64(&status->wait_obj->stats.waiters, 1);
 
-		pg_atomic_fetch_sub_u64(&status->wait_obj->stats.waiters, 1);
+			if (status->cur_delay != 0)
+				res = pthread_cond_timedwait(&status->wait_obj->cond, &status->wait_obj->mutex, &tv);
+			else
+				res = pthread_cond_wait(&status->wait_obj->cond, &status->wait_obj->mutex);
+
+			pg_atomic_fetch_sub_u64(&status->wait_obj->stats.waiters, 1);
+		}
+
+		/*
+		 * Consume the doorbell, whether we skipped the block above or woke
+		 * from it, so that it is rearmed for the next round and signalers
+		 * stop taking the coalescing fast path once we are about to sleep.
+		 */
+		if (pg_atomic_read_u32(&status->wait_obj->wakeup_pending))
+		{
+			pg_atomic_write_u32(&status->wait_obj->wakeup_pending, 0);
+			pg_memory_barrier();
+		}
 
 		if (unlikely(need_lock))
 			pthread_mutex_unlock(&status->wait_obj->mutex);

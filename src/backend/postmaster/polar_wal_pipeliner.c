@@ -465,13 +465,45 @@ polar_wal_pipeliner_worker(void *arg)
 
 /*
  * Wake a single pipeline worker that is waiting in polar_perform_spin_delay_mt.
+ *
+ * Wakeups are posted through the wakeup_pending doorbell flag:
+ *
+ * Fast path: a wakeup is already pending (flag set, not yet consumed), so
+ * this one simply rides along with it -- the worker is guaranteed to see
+ * the flag at its next blocking check and re-poll its work predicate.
+ * Return with a single atomic load, no mutex and no cond_signal.  The
+ * flag is only consumed at the blocking point, so while the worker is
+ * busy every redundant wakeup collapses to this load, which keeps the
+ * WAL insert hot path (XLogInsertRecord wakes the pipeliner on every
+ * record) cheap.
+ *
+ * Slow path: post the flag and signal under the wait object's mutex.  The
+ * worker checks the flag under the same mutex right before blocking (see
+ * polar_perform_spin_delay_mt), so a wakeup posted before the worker
+ * blocks is observed there and the wait is skipped; a wakeup posted after
+ * the worker entered pthread_cond_timedwait() reaches it via the signal,
+ * because the mutex acquisition below can only succeed once the waiter is
+ * registered and has released the mutex.  Neither side of the window can
+ * lose a wakeup.
+ *
+ * A worker sleeping in pthread_cond_timedwait() always has its flag
+ * cleared: posting takes the mutex and always comes with a signal, and
+ * the waiter consumes the flag around the block.  So the fast path can
+ * never skip signaling a worker that is actually asleep.
  */
 static void
 polar_wal_pipeline_signal_worker(int thread_no)
 {
 	polar_wait_object_t *wait_obj = polar_wal_pipeline_get_worker_wait_obj(thread_no);
 
+	pg_memory_barrier();
+	if (pg_atomic_read_u32(&wait_obj->wakeup_pending))
+		return;
+
+	pthread_mutex_lock(&wait_obj->mutex);
+	pg_atomic_write_u32(&wait_obj->wakeup_pending, 1);
 	pthread_cond_signal(&wait_obj->cond);
+	pthread_mutex_unlock(&wait_obj->mutex);
 }
 
 void

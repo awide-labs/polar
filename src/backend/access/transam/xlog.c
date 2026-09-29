@@ -1076,6 +1076,7 @@ polar_wait_obj_init(polar_wait_object_t * wait_obj,
 	ret = pthread_cond_init(&wait_obj->cond, cond_attr);
 	if (ret != 0)
 		elog(ERROR, "pthread condition init failed, errno is %d", ret);
+	pg_atomic_init_u32(&wait_obj->wakeup_pending, 0);
 	polar_wait_obj_stats_init(&wait_obj->stats);
 }
 
