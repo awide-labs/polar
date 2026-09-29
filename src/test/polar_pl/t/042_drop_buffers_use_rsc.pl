@@ -25,9 +25,6 @@ use PostgreSQL::Test::Cluster;
 use Test::More;
 use Time::HiRes qw(gettimeofday);
 
-# Temporarily disabled due to instability
-plan skip_all => 'Test temporarily disabled due to instability';
-
 my $round = 0;
 
 sub insert_and_truncate
