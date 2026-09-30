@@ -66,10 +66,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   terminate with an error message in the log (XCOM-195).
 - Expose 69 PolarDB-specific GUCs in `pg_settings` and
   `postgres --describe-config` so that Patroni can enumerate,
-  validate, and track `pending_restart` for them (XCOM-195)
+  validate, and track `pending_restart` for them (XCOM-124)
 - Add pg_bulkload v3.1.23, a high-speed bulk data loading utility,
   as an in-tree extension with full PolarDB shared storage support
-  (XCOM-195)
+  (XCOM-99)
 
 ### Changed
 
@@ -88,7 +88,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   regression tests (XCOM-195)
 - The pgtap extension has been temporarily disabled due to broken regression
   tests (XCOM-195)
-- The following third-party extensions have been removed (XCOM-195):
+- The following third-party extensions have been removed (XCOM-61):
   - hll
   - ip4r
   - log_fdw
@@ -109,7 +109,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Fixed a crash in `polar_tools control-data-change` when the control
   data file was empty or unreadable. The tool now prints an error
   message and exits with an error code. (XCOM-195)
-- Fixed pg_bulkload client errors reporting a bare "ERROR:" with no message text (XCOM-195)
+- Fixed pg_bulkload client errors reporting a bare "ERROR:" with no message text (XCOM-186)
 - Fixed ignored fsync errors during WAL file sync on shared storage —
   fsync failures now trigger a PANIC. Added proper WAL fsync statistics
   collection (wait events, I/O timing, sync counter). (XCOM-195)
@@ -177,7 +177,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   lsn X is great than next consistent lsn Y" PANIC under concurrent
   buffer writes (XCOM-195)
 - Fixed primary hanging during shutdown when replicas were already stopped,
-  repeatedly logging "Checkpoint blocked" warnings until killed (XCOM-195)
+  repeatedly logging "Checkpoint blocked" warnings until killed (XCOM-153)
 - Fixed `pg_bulkload` crash recovery so that disk space allocated by an
   interrupted bulk load is reclaimed: after both automatic (postmaster)
   and offline (`pg_bulkload -r`) recovery, the target relation returns to
@@ -197,13 +197,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   already been removed and leading to intermittent catalog/relcache failures
   (XCOM-195)
 - Fixed replica promotion failure (FATAL: "WAL segment has already been removed")
-  when primary crashed while creating a new WAL segment file (XCOM-195)
-- Fixed non-working log rotation via pg_ctl logrotate (XCOM-195)
+  when primary crashed while creating a new WAL segment file (XCOM-114)
+- Fixed non-working log rotation via pg_ctl logrotate (XCOM-87)
 
 ### Performance
 
 - Fixed occasional slow commits on lightly loaded instances,
-  because of lost wakeups of pipeline workers (XCOM-195)
+  because of lost wakeups of pipeline workers (XCOM-162)
 - Eliminate the per-I/O memory copy on shared storage: PolarDB now reads and
   writes directly from its shared-memory buffers instead of copying every page
   through the pfsdaemon's shared pool. Enabled by default via
@@ -211,39 +211,39 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Speed up statements that must wait for WAL to reach disk (synchronous
   commits, DDL, and similar durable writes) when `polar_wal_pipeline_mode`
   is 3 or 5, cutting idle-system latency from ~100ms to single-digit
-  milliseconds (XCOM-195)
+  milliseconds (XCOM-160)
 - Avoid unconditional full scan of shared_buffers in the buffer-pool
   invalidation path when RSC is enabled.  This speeds up every
   command that drops or truncates relation storage, including
   DROP TABLE/INDEX/MATERIALIZED VIEW, TRUNCATE, VACUUM/autovacuum
   tail truncation, CLUSTER, VACUUM FULL, REFRESH MATERIALIZED VIEW,
   REINDEX, and rewriting forms of ALTER TABLE, as well as replay of
-  smgr truncate records on replicas (XCOM-195)
+  smgr truncate records on replicas (XCOM-159)
 - Replace spinlock-protected reads of `RedoRecPtr` and
   `curr_primary_consistent_lsn` with lock-free `pg_atomic_uint64` ops,
   eliminating two hot spinlocks (`info_lck`, `WalRcv->mutex`) from the
-  per-buffer-read path on replicas (XCOM-195)
+  per-buffer-read path on replicas (XCOM-128)
 - Port CSN (Commit Sequence Number) feature from PolarDB 11 to improve MVCC
-  scalability (XCOM-195)
+  scalability (XCOM-100)
 - Increase the number of WAL insertion locks (NUM_XLOGINSERT_LOCKS) from 8 to 64
-  to improve WAL insertion scalability (XCOM-195)
+  to improve WAL insertion scalability (XCOM-59)
 - Port WAL pipeline feature from PolarDB 11 to improve write throughput
-  (XCOM-195)
+  (XCOM-59)
 - Increase the number of buffer partitions and the number of logindex hash locks
-  (XCOM-195)
-- Bump the maximum number of parallel bgwriters from 16 to 64 (XCOM-195)
+  (XCOM-35)
+- Bump the maximum number of parallel bgwriters from 16 to 64 (XCOM-35)
 - Avoid mini transaction overhead by the startup process when replayed WAL record
-  updates a single page (XCOM-195)
+  updates a single page (XCOM-35)
 - Optimize asynchronous DDL processing by the startup process when
-  `polar_enable_async_ddl_lock_replay` is enabled (XCOM-195)
+  `polar_enable_async_ddl_lock_replay` is enabled (XCOM-35)
 - Reduce replica lag by avoiding a contended spinlock and publishing replay LSN
-  updates with optimized locking primitives (XCOM-195)
+  updates with optimized locking primitives (XCOM-35)
 - Improve RW performance with logindex enabled by optimizing the XLOG queue
   space reservation process, eliminating a major bottleneck where packets were
   marked as free by writing into the queue while holding a global spinlock
-  (XCOM-195)
+  (XCOM-39)
 - Reduce contention on the flush list on RW node by splitting it into multiple
   partitions (currently 64), with each partition having its own lock, control
-  structure and statistics (XCOM-195)
+  structure and statistics (XCOM-38)
 
 [unreleased]: https://github.com/awide-labs/polar/compare/248cd221718..POLARDB_17_STABLE
