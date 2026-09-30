@@ -43,7 +43,7 @@ Awide Polar uses a shared-storage-based architecture in which computing is decou
 
 After computing is decoupled from storage, the I/O latency and throughput increase. When a single read-only node is used to process analytical queries, the CPUs, memory, and I/O of other read-only nodes and the large storage I/O bandwidth cannot be fully utilized. To resolve this issue, Awide Polar provides the shared-storage-based MPP engine. The engine can use CPUs to accelerate analytical queries at SQL level and support a mix of OLAP workloads and OLTP workloads for HTAP.
 
-For more information, see [Architecture](https://apsaradb.github.io/PolarDB-for-PostgreSQL/theory/arch-overview.html).
+For more information, see [Architecture](https://polardb.github.io/polardb-pg-docs/theory/arch-overview.html).
 
 ## Quick Start
 
@@ -65,11 +65,11 @@ For deployment and product information, see the [Awide Polar website](https://aw
 
 ## Development
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) and the [development guide](https://apsaradb.github.io/PolarDB-for-PostgreSQL/development/dev-on-docker.html) to compile and develop Awide Polar.
+See [CONTRIBUTING.md](CONTRIBUTING.md) and the [development guide](https://polardb.github.io/polardb-pg-docs/development/dev-on-docker.html) to compile and develop Awide Polar.
 
 ## Documentation
 
-See the [PolarDB for PostgreSQL documentation](https://apsaradb.github.io/PolarDB-for-PostgreSQL/). Its sources live in the [polardb-pg-docs](https://github.com/polardb/polardb-pg-docs) repository.
+See the [PolarDB for PostgreSQL documentation](https://polardb.github.io/polardb-pg-docs/). Its sources live in the [polardb-pg-docs](https://github.com/polardb/polardb-pg-docs) repository.
 
 ## Contributing
 

@@ -17,7 +17,7 @@ Awide Polar is an open source database based on PostgreSQL and [PolarDB for Post
 Here is a checklist to prepare and submit your PR (pull request):
 
 - Create your own GitHub repository copy by forking [`awide-labs/polar`](https://github.com/awide-labs/polar).
-- Check out the [architecture overview](https://apsaradb.github.io/PolarDB-for-PostgreSQL/theory/arch-overview.html) and the [development guide](https://apsaradb.github.io/PolarDB-for-PostgreSQL/development/dev-on-docker.html) for how to build and run Awide Polar.
+- Check out the [architecture overview](https://polardb.github.io/polardb-pg-docs/theory/arch-overview.html) and the [development guide](https://polardb.github.io/polardb-pg-docs/development/dev-on-docker.html) for how to build and run Awide Polar.
 - Run `make stylecheck` to format your code, and push changes to your personal fork.
 - Write a detailed commit message following the Conventional Commits format (see below), and open a PR against the upstream repository.
 - Wait for all CI checks to pass.
