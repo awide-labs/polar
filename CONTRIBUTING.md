@@ -102,6 +102,8 @@ include:
 - `See: <URL>` - Reference to external documentation, RFCs, or related
   resources
 - `Discussion: <URL>` - Link to a discussion related to this commit, e.g., a mailing list thread
+- `Forward-as-null: <branch>` - The change does not apply to the next stable
+  branch (or to any of them with `all`); see Stable Branches
 
 All footers must follow the `token: value` format and are exempt from the
 72-character line length limit.
@@ -224,6 +226,27 @@ If a commit with user-visible changes intentionally does not require a changelog
 ```
 Skip-changelog: true
 ```
+
+## Stable Branches
+
+Awide Polar maintains one stable branch per PolarDB major version
+(`POLARDB_15_STABLE`, `POLARDB_17_STABLE`). New work goes to the highest one.
+Changes to a lower branch are forward-merged into the next higher branch, so
+a pull request into `POLARDB_15_STABLE` also has to work on
+`POLARDB_17_STABLE`. The **Can Forward Merge** check verifies this:
+
+- If the change merges cleanly, nothing else is needed.
+- If it conflicts, resolve the conflict once from your pull request branch
+  with `.ci/forward-merge/forward-merge.sh --prepare POLARDB_17_STABLE`,
+  then `.ci/forward-merge/forward-merge.sh --record`. The resolution is
+  stored in a shared cache and reused by the forward-merge.
+- If the change does not apply to the higher branch (e.g. the code is gone
+  there), label the pull request `forward:null-POLARDB_17_STABLE` or add a
+  `Forward-as-null: POLARDB_17_STABLE` footer to the commit.
+
+Maintainers run `.ci/forward-merge/forward-merge.sh --merge POLARDB_15_STABLE`
+after changes land and open a pull request with the result. Merge it with a
+merge commit, not a squash or rebase.
 
 ## Coding Style
 
