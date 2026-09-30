@@ -18,7 +18,16 @@ jobs:
       - name: Check cla-signed label
         env:
           LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+          AUTHOR: ${{ github.event.pull_request.user.login }}
+          HEAD_REF: ${{ github.head_ref }}
         run: |
+          # Forward-merges only carry changes already accepted on a lower
+          # stable branch.
+          if [ "$AUTHOR" = "awide-polardb-bot" ] && [[ "$HEAD_REF" == forward/* ]]; then
+            echo "Forward-merge by the bot; no CLA needed."
+            exit 0
+          fi
+
           if echo "$LABELS" | grep -q '"cla-signed"'; then
             echo "CLA verified (cla-signed label present)."
             exit 0

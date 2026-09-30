@@ -1,17 +1,27 @@
 name: forward-merge
 
 # Every change to a stable branch must also reach the higher ones
-# (POLARDB_15_STABLE -> POLARDB_17_STABLE). This checks that the forward-merge
-# of a pull request will go through; see .ci/forward-merge/forward-merge.sh.
+# (POLARDB_15_STABLE -> POLARDB_17_STABLE). See .github/forward-merge/README.md.
 
 on:
   pull_request:
     branches: [ 'POLARDB_*_STABLE' ]
     types: [ opened, synchronize, reopened, labeled, unlabeled ]
+  push:
+    branches: [ 'POLARDB_*_STABLE' ]
+  schedule:
+    - cron: '17 6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
+  # Blocks a pull request into a lower stable branch until its forward-merge
+  # to the next branch is clean, recorded or marked null.
   can-forward-merge:
     name: Can Forward Merge
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -26,3 +36,44 @@ jobs:
           .ci/forward-merge/check-can-forward-merge.sh
           "${{ github.base_ref }}"
           "${{ github.event.pull_request.head.sha }}"
+
+  # On every push to a stable branch, forward-merge it to the next-higher
+  # branch and open an auto-merging pull request as the bot.
+  forward-merge:
+    name: Forward Merge
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    concurrency:
+      group: forward-merge-${{ github.ref_name }}
+      cancel-in-progress: false
+    timeout-minutes: 30
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.FORWARD_BOT_TOKEN }}
+      - name: Forward-merge to the next stable branch
+        env:
+          GH_TOKEN: ${{ secrets.FORWARD_BOT_TOKEN }}
+          FORWARD_REFS: ${{ vars.FORWARD_REFS }}
+        run: .github/forward-merge/forward-merge.sh
+
+  # Drift alarm: fails when a branch pair has un-forwarded commits past the
+  # age/count thresholds. Scheduled (catches stuck forwards), on demand and on
+  # stable pushes (fresh drift is within limits, so it stays green).
+  sync-check:
+    name: Sync Check
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Check the stable branches are in sync
+        env:
+          SYNC_MAX_AGE_HOURS: ${{ vars.SYNC_MAX_AGE_HOURS }}
+          SYNC_MAX_COUNT: ${{ vars.SYNC_MAX_COUNT }}
+        run: .ci/check_sync.sh
