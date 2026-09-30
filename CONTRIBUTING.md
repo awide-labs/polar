@@ -244,9 +244,10 @@ a pull request into `POLARDB_15_STABLE` also has to work on
   there), label the pull request `forward:null-POLARDB_17_STABLE` or add a
   `Forward-as-null: POLARDB_17_STABLE` footer to the commit.
 
-Maintainers run `.ci/forward-merge/forward-merge.sh --merge POLARDB_15_STABLE`
-after changes land and open a pull request with the result. Merge it with a
-merge commit, not a squash or rebase.
+After changes land, a bot opens the forward-merge pull request and merges it
+once its checks pass. `--record` needs write access to the repository; if you
+don't have it, ask a maintainer to record the resolution. See
+[`.github/forward-merge/README.md`](.github/forward-merge/README.md).
 
 ## Coding Style
 
