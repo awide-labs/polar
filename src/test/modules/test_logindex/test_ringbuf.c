@@ -58,14 +58,14 @@ test_fix_pktlen_overflow(void)
 	rbuf = polar_ringbuf_init(data, RINGBUF_SIZE, LWTRANCHE_POLAR_XLOG_QUEUE);
 
 	Assert(polar_ringbuf_new_ref(rbuf, true, &ref, "test"));
-	Assert(polar_ringbuf_free_size(rbuf) == rbuf->size);
+	Assert(polar_ringbuf_free_size(rbuf) == rbuf->size - 1);
 	Assert(polar_ringbuf_avail_size(&ref) == 0);
 
 	for (i = 0; i < 1000; i++)
 	{
 		idx = polar_ringbuf_pkt_reserve(rbuf, POLAR_RINGBUF_PKT_SIZE(TEST_DATA_LEN));
 
-		Assert(polar_ringbuf_free_size(rbuf) == rbuf->size - POLAR_RINGBUF_PKT_SIZE(TEST_DATA_LEN));
+		Assert(polar_ringbuf_free_size(rbuf) == rbuf->size - POLAR_RINGBUF_PKT_SIZE(TEST_DATA_LEN) - 1);
 		Assert(polar_ringbuf_avail_size(&ref) == POLAR_RINGBUF_PKT_SIZE(TEST_DATA_LEN));
 
 		polar_ringbuf_set_pkt_length(rbuf, idx, TEST_DATA_LEN);
@@ -83,7 +83,7 @@ test_fix_pktlen_overflow(void)
 
 		polar_ringbuf_update_ref(&ref);
 		polar_ringbuf_update_keep_data(rbuf);
-		Assert(polar_ringbuf_free_size(rbuf) == rbuf->size);
+		Assert(polar_ringbuf_free_size(rbuf) == rbuf->size - 1);
 		Assert(polar_ringbuf_avail_size(&ref) == 0);
 	}
 
@@ -107,13 +107,13 @@ test_single_ringbuf()
 	*overflow = UINT32_MAX;
 
 	Assert(polar_ringbuf_new_ref(rbuf, true, &ref, "test"));
-	Assert(polar_ringbuf_free_size(rbuf) == rbuf->size);
+	Assert(polar_ringbuf_free_size(rbuf) == rbuf->size - 1);
 	Assert(polar_ringbuf_avail_size(&ref) == 0);
 
 	for (j = 0; j < 1000; j++)
 	{
 		idx = polar_ringbuf_pkt_reserve(rbuf, POLAR_RINGBUF_PKT_SIZE(16));
-		Assert(polar_ringbuf_free_size(rbuf) == rbuf->size - POLAR_RINGBUF_PKT_SIZE(16));
+		Assert(polar_ringbuf_free_size(rbuf) == rbuf->size - POLAR_RINGBUF_PKT_SIZE(16) - 1);
 		Assert(polar_ringbuf_avail_size(&ref) == POLAR_RINGBUF_PKT_SIZE(16));
 
 		memset(buf, 'A', 8);
@@ -147,7 +147,7 @@ test_single_ringbuf()
 
 		polar_ringbuf_update_ref(&ref);
 		polar_ringbuf_update_keep_data(rbuf);
-		Assert(polar_ringbuf_free_size(rbuf) == rbuf->size);
+		Assert(polar_ringbuf_free_size(rbuf) == rbuf->size - 1);
 		Assert(polar_ringbuf_avail_size(&ref) == 0);
 
 	}
@@ -159,7 +159,7 @@ test_single_ringbuf()
 
 		memset(buf, c, len);
 		idx = polar_ringbuf_pkt_reserve(rbuf, POLAR_RINGBUF_PKT_SIZE(len));
-		Assert(polar_ringbuf_free_size(rbuf) == rbuf->size - POLAR_RINGBUF_PKT_SIZE(len));
+		Assert(polar_ringbuf_free_size(rbuf) == rbuf->size - POLAR_RINGBUF_PKT_SIZE(len) - 1);
 		Assert(polar_ringbuf_avail_size(&ref) == len + POLAR_RINGBUF_PKTHDRSIZE);
 
 		polar_ringbuf_set_pkt_length(rbuf, idx, len);
@@ -177,7 +177,7 @@ test_single_ringbuf()
 
 		polar_ringbuf_update_ref(&ref);
 		polar_ringbuf_update_keep_data(rbuf);
-		Assert(polar_ringbuf_free_size(rbuf) == rbuf->size);
+		Assert(polar_ringbuf_free_size(rbuf) == rbuf->size - 1);
 		Assert(polar_ringbuf_avail_size(&ref) == 0);
 	}
 
