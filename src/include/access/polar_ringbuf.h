@@ -232,7 +232,7 @@ polar_ringbuf_set_pkt_length(polar_ringbuf_t rbuf, uint64 idx, uint32 len)
 /*
  * Get the free size of the ring buffer.
  *
- * With monotonic counters: used = pwrite - pread, free = size - used.
+ * With monotonic counters: used = pwrite - pread, free = size - used - 1.
  * Clamped to 0 when the queue is fully claimed (or over-claimed by an
  * optimistic reservation), so observability paths never see a negative
  * value.
@@ -244,9 +244,9 @@ polar_ringbuf_free_size(polar_ringbuf_t rbuf)
 	uint64		pread = pg_atomic_read_u64(&rbuf->pread);
 	uint64		used = pwrite - pread;
 
-	if (used >= rbuf->size)
+	if (used >= rbuf->size - 1)
 		return 0;
-	return (ssize_t) (rbuf->size - used);
+	return (ssize_t) (rbuf->size - used - 1);
 }
 
 static inline ssize_t
@@ -258,7 +258,7 @@ polar_ringbuf_free_size_at_pwrite(polar_ringbuf_t rbuf, uint64 pwrite)
 	Assert(free_bytes >= 0);
 
 	if (free_bytes < rbuf->size && free_bytes >= 0)
-		free_bytes = rbuf->size - free_bytes;
+		free_bytes = rbuf->size - free_bytes - 1;
 	else
 		free_bytes = 0;
 
