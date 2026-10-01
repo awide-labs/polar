@@ -301,6 +301,49 @@ test_ringbuf_worker_main(Datum main_arg)
 }
 
 static void
+test_ringbuf_full()
+{
+	uint8	   *data = malloc(RINGBUF_SIZE + 4);
+	polar_ringbuf_t rbuf;
+	polar_ringbuf_ref_t ref;
+	uint32		pktlen;
+	uint64		idx;
+
+	rbuf = polar_ringbuf_init(data, RINGBUF_SIZE, LWTRANCHE_POLAR_XLOG_QUEUE);
+	Assert(polar_ringbuf_new_ref(rbuf, true, &ref, "reader"));
+
+	while (polar_ringbuf_free_size(rbuf))
+	{
+		size_t		rem = polar_ringbuf_free_size(rbuf);
+		size_t		len;
+		const size_t pkt_size = 30; /* random value */
+
+		if (rem == 0)
+			break;
+
+		len = (rem >= 2 * POLAR_RINGBUF_PKT_SIZE(pkt_size)) ? pkt_size : rem - POLAR_RINGBUF_PKTHDRSIZE;
+
+		idx = polar_ringbuf_pkt_reserve(rbuf, POLAR_RINGBUF_PKT_SIZE(len));
+
+		polar_ringbuf_set_pkt_length(rbuf, idx, len);
+		polar_ringbuf_set_pkt_flag(rbuf, idx, POLAR_RINGBUF_PKT_WAL_META | POLAR_RINGBUF_PKT_READY);
+	}
+
+	Assert(polar_ringbuf_free_size(rbuf) == 0);
+
+	/* Replicate regular consume loop */
+	while (polar_ringbuf_next_pkt_type(&ref, &pktlen) != POLAR_RINGBUF_PKT_INVALID_TYPE)
+	{
+		polar_ringbuf_update_ref(&ref);
+
+		/* Trigger internal assert and validate 'always >=0' claim */
+		Assert(polar_ringbuf_avail_size(&ref) >= 0);
+	}
+
+	free(data);
+}
+
+static void
 test_ringbuf_bgworker()
 {
 	BackgroundWorker worker;
@@ -364,6 +407,7 @@ test_ringbuf(PG_FUNCTION_ARGS)
 	test_fix_pktlen_overflow();
 	test_single_ringbuf();
 	test_ringbuf_bgworker();
+	test_ringbuf_full();
 	PG_RETURN_VOID();
 }
 
