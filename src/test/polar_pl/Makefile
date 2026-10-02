@@ -7,6 +7,7 @@
 #-------------------------------------------------------------------------
 
 export enable_injection_points
+export enable_fault_injector
 export with_ssl
 
 EXTRA_INSTALL = contrib/amcheck
