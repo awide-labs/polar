@@ -23,12 +23,14 @@
 #	  reaches POLAR_BG_REDO_NOT_START before it exits on shutdown.
 #
 #	  Determinism: the window in step 1->2 is sub-millisecond in the wild, so
-#	  this test forces it with the `polar_hold_online_promote` fault, which
-#	  parks the worker in ONLINE_PROMOTE and holds the NOT_START transition for
-#	  one pass past the shutdown request -- guaranteeing the worker's exit-check
-#	  runs at least once while the state is still ONLINE_PROMOTE. The test waits
-#	  (via the fault's log marker) until the worker is parked before issuing the
-#	  stop, so there are no timing heuristics. Requires --enable-fault-injector.
+#	  this test forces it with the `polar_hold_online_promote` injection
+#	  point, which parks the worker in ONLINE_PROMOTE and holds the
+#	  NOT_START transition for one pass past the shutdown request --
+#	  guaranteeing the worker's exit-check runs at least once while the
+#	  state is still ONLINE_PROMOTE. The test waits (via the injection
+#	  point's log marker) until the worker is parked before issuing the
+#	  stop, so there are no timing heuristics. Requires
+#	  --enable-injection-points.
 #
 # IDENTIFICATION
 #		  src/test/polar_consistency/t/016_promote_then_fast_shutdown.pl
@@ -41,10 +43,11 @@ use Test::More;
 use Time::HiRes qw(time);
 use POSIX ();
 
-# The whole point of this test is the fault-driven, deterministic handshake.
-if (($ENV{enable_fault_injector} // '') ne 'yes')
+# The whole point of this test is the injection-point-driven, deterministic
+# handshake.
+if (($ENV{enable_injection_points} // '') ne 'yes')
 {
-	plan skip_all => 'this test requires a --enable-fault-injector build';
+	plan skip_all => 'this test requires a --enable-injection-points build';
 }
 
 # Cap pg_ctl's shutdown wait so a regression manifests as a bounded failure
@@ -54,8 +57,6 @@ my $shutdown_timeout = 30;
 $ENV{PGCTLTIMEOUT} = $shutdown_timeout;
 
 my $tag = 'promote_then_fast_shutdown';
-my $marker =
-  qr/POLAR fault: polar_hold_online_promote parked in ONLINE_PROMOTE/;
 
 # Disable _enable_data_checksums below to skip the framework's pg_checksums
 # sweep, which would otherwise BAIL_OUT on a node left "in production" by
@@ -71,7 +72,7 @@ $node_standby->{_enable_data_checksums} = 0;
 
 # Keep things quiet/deterministic, and send server log output
 # to the file pg_ctl launched with, so $node->logfile actually contains the
-# fault's parked marker we synchronize on.
+# injection point's parked marker we synchronize on.
 for my $n ($node_primary, $node_standby)
 {
 	$n->append_conf('postgresql.conf', 'autovacuum = off');
@@ -86,10 +87,12 @@ $node_primary->start;
 $node_primary->polar_create_slot($node_standby->name);
 $node_standby->start;
 
-# inject_fault() is provided by the faultinjector extension; create it on the
-# primary so it replicates into the standby's catalog, then drive it on the
-# standby (inject_fault only touches the core fault shmem, fine on a follower).
-$node_primary->safe_psql('postgres', 'CREATE EXTENSION faultinjector;');
+# injection_points_attach() is provided by the injection_points extension;
+# create it on the primary so the extension's catalog replicates into the
+# standby, then attach the injection point on the standby itself (attach only
+# writes the local fault shmem, allowed during recovery -- same pattern as
+# t/007_promote_standby_with_parallel_replay.pl).
+$node_primary->safe_psql('postgres', 'CREATE EXTENSION injection_points;');
 
 # A little traffic so the standby has WAL to replay, and wait until it has it.
 $node_primary->safe_psql('postgres', 'CREATE TABLE t (id int);');
@@ -101,7 +104,7 @@ $node_primary->wait_for_catchup($node_standby, 'replay', $insert_lsn);
 # Arm the hold: from now on, when the standby is promoted the logindex bg
 # worker parks in POLAR_BG_ONLINE_PROMOTE instead of completing the promote.
 $node_standby->safe_psql('postgres',
-	"SELECT inject_fault('polar_hold_online_promote', 'enable', '', '', 1, -1, -1);"
+	"SELECT injection_points_attach('polar_hold_online_promote', 'notice');"
 );
 
 # Promote the standby. pg_ctl promote returns once recovery is declared done,
@@ -111,6 +114,8 @@ $node_standby->promote;
 
 # Wait until the bg worker has parked in ONLINE_PROMOTE, so
 # the fast shutdown below is guaranteed to land in the ONLINE_PROMOTE window.
+my $marker =
+  qr/POLAR injection point: polar_hold_online_promote parked in ONLINE_PROMOTE/;
 my $parked = eval { $node_standby->wait_for_log($marker, $log_offset); 1 };
 ok($parked,
 	"[$tag] logindex bg worker parked in POLAR_BG_ONLINE_PROMOTE after promote"
