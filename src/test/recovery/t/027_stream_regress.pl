@@ -86,7 +86,7 @@ $node_primary->psql('regression',
 	"select setval(seqrelid, nextval(seqrelid)) from pg_sequence");
 
 # Wait for standby to catch up
-$node_primary->wait_for_catchup($node_standby_1, 'replay',
+$node_primary->wait_for_catchup_with_progress($node_standby_1, 'replay',
 	$node_primary->lsn('insert'));
 
 # Perform a logical dump of primary and standby, and check that they match
