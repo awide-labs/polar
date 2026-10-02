@@ -15,6 +15,7 @@ top_builddir = ../../..
 include $(top_builddir)/src/Makefile.global
 
 export enable_injection_points
+export enable_fault_injector
 
 ifeq ($(enable_tap_tests)$(NO_TAP_TESTS),yes)
 
