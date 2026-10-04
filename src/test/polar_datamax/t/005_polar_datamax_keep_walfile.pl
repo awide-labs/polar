@@ -98,7 +98,8 @@ print "cmp_lsn: $cmp_lsn\n";
 my $master_waldir = polar_waldir($node_master, 0);
 my $datamax_waldir = polar_waldir($node_datamax, 1);
 my $result = 0;
-if ($node_master->wait_for_catchup($node_datamax, 'flush', $cmp_lsn, 1, 't', 300))
+if ($node_master->wait_for_catchup($node_datamax, 'flush',
+	$cmp_lsn, timeout => 300, return_failed => 1))
 {
 	polar_get_walfile($node_master, 0);
 	polar_get_walfile($node_datamax, 1);
