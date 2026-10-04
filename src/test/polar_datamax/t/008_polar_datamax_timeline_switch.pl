@@ -155,7 +155,8 @@ ok($result == 1, "standby1 received all data success");
 my $cmp_lsn = $node_standby->lsn('flush');
 print "cmp_lsn: $cmp_lsn\n";
 $result = 0;
-if ($node_datamax->wait_for_catchup($node_standby1, 'flush', $cmp_lsn, 1, 't', $catchup_timeout))
+if ($node_datamax->wait_for_catchup($node_standby1, 'flush',
+	$cmp_lsn, timeout => $catchup_timeout, return_failed => 1))
 {
 	polar_get_walfile($node_standby, 0);
 	polar_get_walfile($node_standby1, 0);
@@ -357,7 +358,8 @@ ok($result == 1, "standby3 catchup success");
 $cmp_lsn = $node_standby2->lsn('flush');
 print "cmp_lsn: $cmp_lsn\n";
 $result = 0;
-if ($node_datamax2->wait_for_catchup($node_standby3, 'flush', $cmp_lsn, 1, 't', $catchup_timeout))
+if ($node_datamax2->wait_for_catchup($node_standby3, 'flush',
+	$cmp_lsn, timeout => $catchup_timeout, return_failed => 1))
 {
 	polar_get_walfile($node_standby2, 0);
 	polar_get_walfile($node_standby3, 0);
