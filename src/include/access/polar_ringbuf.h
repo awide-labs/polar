@@ -270,6 +270,16 @@ polar_ringbuf_free_size_at_pwrite(polar_ringbuf_t rbuf, uint64 pwrite)
 }
 
 /*
+ * Is the reservation ending at end safe to write?  Use the caller's pread
+ * snapshot so readiness and backoff decisions can observe the same progress.
+ */
+static inline bool
+polar_ringbuf_reservation_ready(polar_ringbuf_t rbuf, uint64 end, uint64 pread)
+{
+	return (ssize_t) (end - pread) <= (ssize_t) (rbuf->size - 1);
+}
+
+/*
  * The data that is available or reserved for read.
  * With monotonic counters: avail = pwrite - slot_pread (always >= 0).
  */

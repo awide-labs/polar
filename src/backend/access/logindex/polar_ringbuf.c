@@ -55,6 +55,13 @@ static bool polar_ringbuf_update_pread(polar_ringbuf_t rbuf);
 	 && (ref)->rbuf->slot[(ref)->slot].ref_num == (ref)->ref_num)
 
 /*
+ * Minimum and maximum sleep, in microseconds, between reclaim attempts in
+ * polar_ringbuf_wait_for_space().
+ */
+#define RINGBUF_WAIT_MIN_US 10
+#define RINGBUF_WAIT_MAX_US 1000
+
+/*
  * Initialize ring buffer from allocated memory.
  *
  * The data area is rounded down to a power of two so that POLAR_RINGBUF_IDX()
@@ -442,34 +449,63 @@ polar_ringbuf_update_keep_data(polar_ringbuf_t rbuf)
  * here would re-create the walwriter+logindex-writer deadlock (walwriter
  * blocks on WaitXLogInsertionsToFinish, the logindex writer can't drain,
  * the queue stays full).
+ *
+ * Reclaiming is a single-writer job, so we only ever try the lock
+ * conditionally: whoever holds it is already doing the work for everybody.
+ * Queueing up behind it instead would put every blocked inserter on the same
+ * wait list, which collapses into a convoy on the wait list spinlock and
+ * starves polar_ringbuf_new_ref()/polar_ringbuf_release_ref() as well.
  */
 void
 polar_ringbuf_wait_for_space(polar_ringbuf_t rbuf, uint64 idx, size_t len)
 {
 	uint64		end = idx + len;
+	uint64		last_pread = pg_atomic_read_u64(&rbuf->pread);
+	long		delay = RINGBUF_WAIT_MIN_US;
 
 	/*
 	 * Fast path: our region is already free.  This is the common case when
 	 * the queue is large relative to the write rate.
 	 */
-	if ((ssize_t) (end - pg_atomic_read_u64(&rbuf->pread)) <= (ssize_t) (rbuf->size - 1))
+	if (polar_ringbuf_reservation_ready(rbuf, end, last_pread))
 		return;
 
 	pgstat_report_wait_start(WAIT_EVENT_LOGINDEX_QUEUE_SPACE);
 	pg_atomic_fetch_add_u64(&rbuf->prs.free_up_cnt, 1);
 
-	while ((ssize_t) (end - pg_atomic_read_u64(&rbuf->pread)) > (ssize_t) (rbuf->size - 1))
+	while (!polar_ringbuf_reservation_ready(rbuf, end,
+											pg_atomic_read_u64(&rbuf->pread)))
 	{
-		LWLockAcquire(&rbuf->lock.lock, LW_EXCLUSIVE);
-		if (!polar_ringbuf_update_pread(rbuf) &&
-			!polar_ringbuf_evict_ref(rbuf))
+		bool		progress = false;
+		uint64		current_pread;
+
+		if (LWLockConditionalAcquire(&rbuf->lock.lock, LW_EXCLUSIVE))
 		{
+			progress = (polar_ringbuf_update_pread(rbuf) ||
+						polar_ringbuf_evict_ref(rbuf));
 			LWLockRelease(&rbuf->lock.lock);
-			CHECK_FOR_INTERRUPTS();
-			pg_usleep(10);
-			continue;
 		}
-		LWLockRelease(&rbuf->lock.lock);
+
+		/*
+		 * Another waiter may have reclaimed our region even if we failed to
+		 * acquire the lock.  Check before sleeping, and reset the backoff on
+		 * shared progress rather than only on our own reclaim attempts.
+		 */
+		current_pread = pg_atomic_read_u64(&rbuf->pread);
+		if (polar_ringbuf_reservation_ready(rbuf, end, current_pread))
+			break;
+
+		if (current_pread != last_pread || progress)
+			delay = RINGBUF_WAIT_MIN_US;
+		last_pread = current_pread;
+
+		/* Retry immediately after reclaiming space or evicting a reference. */
+		if (progress)
+			continue;
+
+		CHECK_FOR_INTERRUPTS();
+		pg_usleep(delay);
+		delay = Min(delay * 2, RINGBUF_WAIT_MAX_US);
 	}
 
 	pgstat_report_wait_end();
