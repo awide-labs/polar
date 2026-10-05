@@ -367,7 +367,12 @@ polar_ringbuf_update_ref(polar_ringbuf_ref_t *ref)
 {
 	polar_ringbuf_t rbuf = ref->rbuf;
 	size_t		idx = rbuf->slot[ref->slot].pread;
-	size_t		pktlen = polar_ringbuf_get_pkt_length(rbuf, idx);
+	size_t		pktlen;
+
+	/* Packet length is valid only after the producer publishes its header. */
+	Assert((rbuf->data[POLAR_RINGBUF_IDX(rbuf, idx)] & POLAR_RINGBUF_PKT_STATE_MASK)
+		   == POLAR_RINGBUF_PKT_READY);
+	pktlen = polar_ringbuf_get_pkt_length(rbuf, idx);
 
 	/* must be a strong ref so that pread can be updated without lock */
 	Assert(rbuf->slot[ref->slot].strong);
@@ -543,6 +548,12 @@ polar_ringbuf_ref_keep_data(polar_ringbuf_ref_t *ref, float ratio, uint64_t new_
 	pwrite = pg_atomic_read_u64(&rbuf->pwrite);
 	while (pwrite > rbuf->slot[ref->slot].pread + keep_size)
 	{
+		uint32		pktlen;
+
+		/* pwrite includes reservations whose headers are not ready yet. */
+		if (polar_ringbuf_next_pkt_type(ref, &pktlen) == POLAR_RINGBUF_PKT_INVALID_TYPE)
+			break;
+
 		polar_ringbuf_update_ref(ref);
 		updated = true;
 		if (pwrite <= rbuf->slot[ref->slot].pread + keep_size)

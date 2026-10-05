@@ -184,6 +184,54 @@ test_single_ringbuf()
 	free(data);
 }
 
+/* Reservations advance pwrite before their packet headers are published. */
+static void
+test_keep_data_publish_frontier(void)
+{
+	uint8	   *data = calloc(1, RINGBUF_SIZE);
+	polar_ringbuf_t rbuf;
+	polar_ringbuf_ref_t ref;
+	uint64		first,
+				pending,
+				later;
+	const uint32 pktlen = 16;
+	const uint64 pkt_size = POLAR_RINGBUF_PKT_SIZE(pktlen);
+
+	rbuf = polar_ringbuf_init(data, RINGBUF_SIZE, LWTRANCHE_POLAR_XLOG_QUEUE);
+	Assert(polar_ringbuf_new_ref(rbuf, true, &ref, "test_keep_data"));
+
+	/* Even a zero keep ratio must not step over an unpublished reservation. */
+	first = polar_ringbuf_pkt_reserve(rbuf, pkt_size);
+	polar_ringbuf_ref_keep_data(&ref, 0.0f, POLAR_RINGBUF_MIN_PREAD);
+	Assert(polar_ringbuf_avail_size(&ref) == pkt_size);
+	Assert(pg_atomic_read_u64(&rbuf->pread) == first);
+
+	polar_ringbuf_set_pkt_length(rbuf, first, pktlen);
+	polar_ringbuf_set_pkt_flag(rbuf, first,
+							   POLAR_RINGBUF_PKT_WAL_META | POLAR_RINGBUF_PKT_READY);
+	pending = polar_ringbuf_pkt_reserve(rbuf, pkt_size);
+	later = polar_ringbuf_pkt_reserve(rbuf, pkt_size);
+	polar_ringbuf_set_pkt_length(rbuf, later, pktlen);
+	polar_ringbuf_set_pkt_flag(rbuf, later,
+							   POLAR_RINGBUF_PKT_WAL_META | POLAR_RINGBUF_PKT_READY);
+
+	/* Stop at the gap, even when a later reservation has been published. */
+	polar_ringbuf_ref_keep_data(&ref, 0.0f, POLAR_RINGBUF_MIN_PREAD);
+	Assert(polar_ringbuf_avail_size(&ref) == 2 * pkt_size);
+	Assert(pg_atomic_read_u64(&rbuf->pread) == pending);
+
+	/* Once the gap is published, both remaining packets can be discarded. */
+	polar_ringbuf_set_pkt_length(rbuf, pending, pktlen);
+	polar_ringbuf_set_pkt_flag(rbuf, pending,
+							   POLAR_RINGBUF_PKT_WAL_META | POLAR_RINGBUF_PKT_READY);
+	polar_ringbuf_ref_keep_data(&ref, 0.0f, POLAR_RINGBUF_MIN_PREAD);
+	Assert(polar_ringbuf_avail_size(&ref) == 0);
+	Assert(pg_atomic_read_u64(&rbuf->pread) == later + pkt_size);
+
+	polar_ringbuf_release_ref(&ref);
+	free(data);
+}
+
 static void
 test_ringbuf_sigterm(SIGNAL_ARGS)
 {
@@ -406,6 +454,7 @@ test_ringbuf(PG_FUNCTION_ARGS)
 {
 	test_fix_pktlen_overflow();
 	test_single_ringbuf();
+	test_keep_data_publish_frontier();
 	test_ringbuf_bgworker();
 	test_ringbuf_full();
 	PG_RETURN_VOID();
