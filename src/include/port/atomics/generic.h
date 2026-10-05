@@ -40,6 +40,16 @@
 typedef pg_atomic_uint32 pg_atomic_flag;
 #endif
 
+#if defined(PG_HAVE_ATOMIC_U128_SUPPORT) \
+	&& !defined(PG_HAVE_ATOMIC_INIT_U128)
+#define PG_HAVE_ATOMIC_INIT_U128
+static inline void
+pg_atomic_init_u128_impl(volatile pg_atomic_uint128 *ptr, uint128 val_)
+{
+	ptr->value = val_;
+}
+#endif
+
 #ifndef PG_HAVE_ATOMIC_READ_U32
 #define PG_HAVE_ATOMIC_READ_U32
 static inline uint32

@@ -35,6 +35,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Performance
 
+- Reduce contention when many sessions insert WAL concurrently by removing
+  the global spinlock from WAL space reservation. (XCOM-238)
 - Eliminated multi-second transaction commit stalls under heavy write
   load when the in-memory WAL queue is full (XCOM-237).
 - Prefault huge-page shared memory in a background worker during startup to

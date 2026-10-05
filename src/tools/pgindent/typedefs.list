@@ -3234,6 +3234,7 @@ XLogRecordBlockImageHeader
 XLogRecordBuffer
 XLogRecoveryCtlData
 XLogRedoAction
+XLogReserveCounter
 XLogSegNo
 XLogSource
 XLogStats
@@ -3678,6 +3679,7 @@ pfsd_mount_arg_t
 pgParameterStatus
 pgPxStatCell
 pg_atomic_flag
+pg_atomic_uint128
 pg_atomic_uint32
 pg_atomic_uint64
 pg_be_sasl_mech

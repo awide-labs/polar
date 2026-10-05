@@ -293,12 +293,22 @@ polar_ringbuf_avail(polar_ringbuf_ref_t *ref)
  * Returns the monotonic position; use POLAR_RINGBUF_IDX() when accessing
  * rbuf->data[].
  *
- * Concurrent callers must serialize on an exclusive lock (e.g. the caller's
- * own spinlock, as XLogInsertRecord uses insertpos_lck).  Future work: the
- * read+write pair can be replaced with pg_atomic_fetch_add_u64() to make
- * reservation lock-free, once the surrounding critical section (e.g. the
- * paired CurrBytePos/PrevBytePos update in ReserveXLogInsertLocation) no
- * longer needs the spinlock.
+ * The read+write pair is not atomic, so it rests on the queue having a single
+ * producer at any one moment.  For the xlog queue the producer is whichever the
+ * node's role makes it: the walreceiver on a replica or datamax
+ * (polar_xlog_recv_queue_push()), the startup process replaying WAL on a standby
+ * (polar_standby_xlog_send_queue_push()), or local WAL insertion on a primary.
+ * These roles do not overlap.  A node in recovery cannot insert WAL, and a
+ * datamax node never leaves recovery (FinishWalRecovery() diverts into
+ * polar_datamax_main() and never returns).  A standby being promoted blocks in
+ * XLogShutdownWalRcv() until the walreceiver has stopped, then stops replay
+ * before it resets the queue and enables local insertion.
+ *
+ * WAL insertion no longer reserves here at all -- it takes its queue position
+ * from the same CAS that hands out the byte range, and accounts for it with
+ * pg_atomic_fetch_add_u64().  That add and this read-modify-write would
+ * interleave badly, so a second concurrent producer would break the queue even
+ * though each side looks safe on its own.
  */
 static inline uint64
 polar_ringbuf_pkt_reserve(polar_ringbuf_t rbuf, size_t len)
