@@ -2,7 +2,7 @@ name: stylecheck
 
 on:
   pull_request:
-    branches: [ POLARDB_15_STABLE ]
+    branches: [ 'POLARDB_*_STABLE' ]
 
 jobs:
   pgindent:
