@@ -3,7 +3,7 @@ name: cla
 
 on:
   pull_request:
-    branches: [ POLARDB_17_STABLE ]
+    branches: [ 'POLARDB_*_STABLE' ]
     types: [opened, synchronize, reopened, labeled, unlabeled]
 
 permissions:
