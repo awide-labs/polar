@@ -2,7 +2,7 @@ name: precheck
 
 on:
   push:
-    branches: [ POLARDB_15_STABLE ]
+    branches: [ 'POLARDB_*_STABLE' ]
     paths:
       - '.github/workflows/precheck.yml'
       - '.ci/**'
@@ -15,7 +15,7 @@ on:
   # No paths filter: the required Regression check must report on every pull
   # request. The changes job keeps the matrix to code changes instead.
   pull_request:
-    branches: [ POLARDB_15_STABLE ]
+    branches: [ 'POLARDB_*_STABLE' ]
   # Manual trigger - runs all matrix combinations
   workflow_dispatch:
 
