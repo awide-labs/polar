@@ -8,6 +8,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Fixed a race on weakly ordered CPUs, such as ARM, in which a session
+  writing to the in-memory WAL queue could overwrite WAL that the logindex
+  saver or a walsender was still reading from the queue (XCOM-237).
 - Fixed a rare failure of the in-memory WAL queue when sessions waiting
   for queue space had reserved most of it. The primary could restart with
   `PANIC: For xlog send queue there should be only WAL META`, all writing

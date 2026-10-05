@@ -44,8 +44,19 @@ typedef struct polar_ringbuf_slot_t
 {
 	/* Is this a strong reference? */
 	bool		strong;
-	/* The read position of the ring buffer */
-	uint64		pread;
+
+	/*
+	 * The read position of the ring buffer.
+	 *
+	 * Published by the owning reference in polar_ringbuf_update_ref() and
+	 * read by polar_ringbuf_update_pread()/polar_ringbuf_evict_ref() while
+	 * holding rbuf->lock exclusively.  The owner also reads it without that
+	 * lock; monitoring reads it under the shared lock.
+	 *
+	 * A strong reference publishes it without taking the lock at all (it can
+	 * never be evicted, so nobody else writes this slot), hence the atomic.
+	 */
+	pg_atomic_uint64 pread;
 
 	/* Each reference has one identity number */
 	uint64		ref_num;
@@ -61,8 +72,18 @@ typedef struct polar_ringbuf_ref_t
 	uint64		ref_num;
 	/* The slot number this reference occupied */
 	int			slot;
-	/* Is this a strong reference? */
+	/* Was this reference created strong, and so never evictable? */
 	bool		strong;
+
+	/*
+	 * Is the slot currently promoted to strong by this reference?  Set
+	 * between polar_ringbuf_set_ref_strong_property(..., true) and
+	 * polar_ringbuf_set_ref_strong_property(..., false); always false for a
+	 * reference that is already strong.  While it is set the slot cannot be
+	 * evicted, so the owner may publish its read position without the lock;
+	 * see polar_ringbuf_update_ref().
+	 */
+	bool		promoted;
 	char		ref_name[POLAR_RINGBUF_MAX_REF_NAME + 1];
 } polar_ringbuf_ref_t;
 
@@ -288,7 +309,7 @@ polar_ringbuf_avail_size(polar_ringbuf_ref_t *ref)
 {
 	polar_ringbuf_t rbuf = ref->rbuf;
 	uint64		pwrite = pg_atomic_read_u64(&rbuf->pwrite);
-	uint64		pread = rbuf->slot[ref->slot].pread;
+	uint64		pread = pg_atomic_read_u64(&rbuf->slot[ref->slot].pread);
 
 	Assert(pwrite >= pread);
 
@@ -331,7 +352,7 @@ static inline uint8
 polar_ringbuf_next_pkt_type(polar_ringbuf_ref_t *ref, uint32 *pktlen)
 {
 	polar_ringbuf_t rbuf = ref->rbuf;
-	uint64		idx = rbuf->slot[ref->slot].pread;
+	uint64		idx = pg_atomic_read_u64(&rbuf->slot[ref->slot].pread);
 	size_t		phys = POLAR_RINGBUF_IDX(rbuf, idx);
 
 	*pktlen = 0;
@@ -358,7 +379,6 @@ polar_ringbuf_set_pkt_flag(polar_ringbuf_t rbuf, uint64 pwrite, uint8 flag)
 	rbuf->data[POLAR_RINGBUF_IDX(rbuf, pwrite)] = flag;
 }
 
-extern polar_ringbuf_slot_t *polar_get_min_visit_slot_except_keep(polar_ringbuf_t rbuf, int keep_slot);
 extern void polar_prs_stat_reset(polar_ringbuf_t rbuf);
 
 #endif

@@ -4310,6 +4310,7 @@ xl_xact_xinfo
 xlhp_freeze_plan
 xlhp_freeze_plans
 xlhp_prune_items
+xlog_queue_slot_info
 xmlBuffer
 xmlBufferPtr
 xmlChar

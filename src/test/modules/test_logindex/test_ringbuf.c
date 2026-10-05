@@ -232,6 +232,48 @@ test_keep_data_publish_frontier(void)
 	free(data);
 }
 
+/* Walsenders temporarily promote weak references while draining the queue. */
+static void
+test_promoted_ringbuf_ref(void)
+{
+	uint8	   *data = calloc(1, RINGBUF_SIZE);
+	polar_ringbuf_t rbuf;
+	polar_ringbuf_ref_t ref;
+	uint64		idx;
+	uint32		pktlen;
+	uint8		sent[16] = "promoted packet";
+	uint8		received[sizeof(sent)];
+
+	rbuf = polar_ringbuf_init(data, RINGBUF_SIZE, LWTRANCHE_POLAR_XLOG_QUEUE);
+	Assert(polar_ringbuf_new_ref(rbuf, false, &ref, "test_promoted"));
+	Assert(!ref.strong && !ref.promoted);
+
+	idx = polar_ringbuf_pkt_reserve(rbuf, POLAR_RINGBUF_PKT_SIZE(sizeof(sent)));
+	polar_ringbuf_set_pkt_length(rbuf, idx, sizeof(sent));
+	Assert(polar_ringbuf_pkt_write(rbuf, idx, 0, sent, sizeof(sent)) == sizeof(sent));
+	polar_ringbuf_set_pkt_flag(rbuf, idx,
+							   POLAR_RINGBUF_PKT_WAL_META | POLAR_RINGBUF_PKT_READY);
+
+	Assert(polar_ringbuf_set_ref_strong_property(&ref, true));
+	Assert(!ref.strong && ref.promoted && rbuf->slot[ref.slot].strong);
+	Assert(polar_ringbuf_next_pkt_type(&ref, &pktlen) == POLAR_RINGBUF_PKT_WAL_META);
+	Assert(pktlen == sizeof(sent));
+	Assert(polar_ringbuf_read_next_pkt(&ref, 0, received, sizeof(received)) == sizeof(received));
+	Assert(memcmp(sent, received, sizeof(sent)) == 0);
+
+	polar_ringbuf_update_ref(&ref);
+	Assert(polar_ringbuf_avail_size(&ref) == 0);
+	Assert(pg_atomic_read_u64(&rbuf->slot[ref.slot].pread) == idx + POLAR_RINGBUF_PKT_SIZE(sizeof(sent)));
+	polar_ringbuf_update_keep_data(rbuf);
+	Assert(pg_atomic_read_u64(&rbuf->pread) == idx + POLAR_RINGBUF_PKT_SIZE(sizeof(sent)));
+
+	Assert(polar_ringbuf_set_ref_strong_property(&ref, false));
+	Assert(!ref.strong && !ref.promoted && !rbuf->slot[ref.slot].strong);
+	Assert(polar_ringbuf_valid_ref(&ref));
+	polar_ringbuf_release_ref(&ref);
+	free(data);
+}
+
 static void
 test_ringbuf_sigterm(SIGNAL_ARGS)
 {
@@ -455,6 +497,7 @@ test_ringbuf(PG_FUNCTION_ARGS)
 	test_fix_pktlen_overflow();
 	test_single_ringbuf();
 	test_keep_data_publish_frontier();
+	test_promoted_ringbuf_ref();
 	test_ringbuf_bgworker();
 	test_ringbuf_full();
 	PG_RETURN_VOID();

@@ -2689,7 +2689,7 @@ polar_logindex_primary_save(polar_logindex_redo_ctl_t instance)
 		if (pop_count == POLAR_UPDATE_DATA_KEEP_REF_COUNT)
 		{
 			if (need_update_pread)
-				new_pread = instance->xlog_queue->slot[ref.slot].pread;
+				new_pread = pg_atomic_read_u64(&instance->xlog_queue->slot[ref.slot].pread);
 
 			need_update_pread = polar_xlog_send_queue_keep_data(instance->xlog_queue, new_pread);
 			pop_count = 0;
