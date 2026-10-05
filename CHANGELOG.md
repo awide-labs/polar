@@ -99,9 +99,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
-- Fixed incorrect operation of the XLog queue when it becomes
-  completely full: a reader could mistake a stale entry for a new one
-  and consume invalid WAL data instead of waiting (XCOM-199)
+- Fixed a bug in the in-memory WAL queue that could cause previously
+  consumed records to be read again when the queue became full, leading
+  to replication errors (XCOM-199)
 - Fixed `polar_ignore_coredump_functions` not matching functions that the
   compiler renamed (for example, static functions in LTO-enabled release
   builds), so the coredump was not ignored (XCOM-198)
