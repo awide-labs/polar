@@ -2657,7 +2657,7 @@ polar_logindex_io_lock_apply(polar_logindex_redo_ctl_t instance, BufferDesc *buf
 void
 polar_logindex_primary_save(polar_logindex_redo_ctl_t instance)
 {
-#define POLAR_UPDATE_DATA_KEEP_REF_COUNT	(10000)
+#define POLAR_UPDATE_DATA_KEEP_REF_COUNT	(4096)
 	DecodedXLogRecord *decoded;
 	static XLogReaderState *state = NULL;
 	static TimestampTz last_flush_time = 0;

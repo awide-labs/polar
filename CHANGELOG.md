@@ -27,6 +27,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Performance
 
+- Eliminated multi-second transaction commit stalls under heavy write
+  load when the in-memory WAL queue is full (XCOM-237).
 - Reduced CPU overhead of logindex saving and WAL streaming to shared-storage
   replicas (XCOM-240)
 - Prefault huge-page shared memory in a background worker during startup to

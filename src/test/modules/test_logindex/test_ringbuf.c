@@ -274,6 +274,55 @@ test_promoted_ringbuf_ref(void)
 	free(data);
 }
 
+/* Consumed-position jump and its refresh-request result. */
+static void
+test_keep_data_consumed_position(void)
+{
+	uint8	   *data = malloc(RINGBUF_SIZE);
+	polar_ringbuf_t rbuf;
+	polar_ringbuf_ref_t keeper;
+	polar_ringbuf_ref_t reader;
+	uint64		first;
+	uint64		pending;
+	uint32		pktlen;
+	const uint32 payload_size = 16;
+	const size_t pkt_size = POLAR_RINGBUF_PKT_SIZE(payload_size);
+
+	rbuf = polar_ringbuf_init(data, RINGBUF_SIZE, LWTRANCHE_POLAR_XLOG_QUEUE);
+	Assert(polar_ringbuf_new_ref(rbuf, true, &keeper, "test_keep_jump"));
+	Assert(polar_ringbuf_new_ref(rbuf, true, &reader, "test_keep_reader"));
+
+	first = polar_ringbuf_pkt_reserve(rbuf, pkt_size);
+	polar_ringbuf_set_pkt_length(rbuf, first, payload_size);
+	polar_ringbuf_set_pkt_flag(rbuf, first,
+							   POLAR_RINGBUF_PKT_WAL_META | POLAR_RINGBUF_PKT_READY);
+	pending = polar_ringbuf_pkt_reserve(rbuf, pkt_size);
+	Assert(polar_ringbuf_next_pkt_type(&reader, &pktlen) == POLAR_RINGBUF_PKT_WAL_META);
+	polar_ringbuf_update_ref(&reader);
+	Assert(pg_atomic_read_u64(&rbuf->slot[reader.slot].pread) == pending);
+
+	/* Retention still fits, so keep the old position and consumed snapshot. */
+	Assert(!polar_ringbuf_ref_keep_data(&keeper, 1.0f, pending));
+	Assert(pg_atomic_read_u64(&rbuf->slot[keeper.slot].pread) == first);
+
+	/* Jump to the consumed boundary, then stop at the unpublished packet. */
+	Assert(polar_ringbuf_ref_keep_data(&keeper, 0.0f, pending));
+	Assert(pg_atomic_read_u64(&rbuf->slot[keeper.slot].pread) == pending);
+	Assert(pg_atomic_read_u64(&rbuf->pread) == pending);
+
+	polar_ringbuf_set_pkt_length(rbuf, pending, payload_size);
+	polar_ringbuf_set_pkt_flag(rbuf, pending,
+							   POLAR_RINGBUF_PKT_WAL_META | POLAR_RINGBUF_PKT_READY);
+	Assert(polar_ringbuf_ref_keep_data(&keeper, 0.0f, pending));
+	Assert(pg_atomic_read_u64(&rbuf->slot[keeper.slot].pread) == pending + pkt_size);
+	/* The reader still pins the newly published packet. */
+	Assert(pg_atomic_read_u64(&rbuf->pread) == pending);
+
+	polar_ringbuf_release_ref(&reader);
+	polar_ringbuf_release_ref(&keeper);
+	free(data);
+}
+
 static void
 test_ringbuf_sigterm(SIGNAL_ARGS)
 {
@@ -498,6 +547,7 @@ test_ringbuf(PG_FUNCTION_ARGS)
 	test_single_ringbuf();
 	test_keep_data_publish_frontier();
 	test_promoted_ringbuf_ref();
+	test_keep_data_consumed_position();
 	test_ringbuf_bgworker();
 	test_ringbuf_full();
 	PG_RETURN_VOID();

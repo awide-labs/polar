@@ -617,13 +617,21 @@ polar_ringbuf_free_up(polar_ringbuf_t rbuf, uint64 pwrite, size_t len, polar_int
 bool
 polar_ringbuf_ref_keep_data(polar_ringbuf_ref_t *ref, float ratio, uint64_t new_pread)
 {
-	uint64		pwrite;
 	polar_ringbuf_t rbuf = ref->rbuf;
+	uint64		pos = pg_atomic_read_u64(&rbuf->slot[ref->slot].pread);
+	uint64		pwrite;
 	ssize_t		keep_size = rbuf->size * ratio;
 	bool		updated = false;
 	bool		need_update_pread = false;
 
-	if (new_pread <= pg_atomic_read_u64(&rbuf->slot[ref->slot].pread))
+	Assert(ref->strong || ref->promoted);
+
+	/*
+	 * The saver supplies new_pread at a packet boundary it has already
+	 * consumed. When that boundary is more than keep_size behind pwrite, jump
+	 * directly to it instead of walking the consumed packet headers.
+	 */
+	if (new_pread <= pos)
 		need_update_pread = true;
 	else
 	{
@@ -632,29 +640,38 @@ polar_ringbuf_ref_keep_data(polar_ringbuf_ref_t *ref, float ratio, uint64_t new_
 		Assert(pwrite >= new_pread);
 		if (pwrite > new_pread + keep_size)
 		{
-			pg_atomic_write_u64(&rbuf->slot[ref->slot].pread, new_pread);
+			pos = new_pread;
 			updated = true;
 			need_update_pread = true;
 		}
 	}
 
+	/* Walk locally and publish once; pwrite includes unpublished claims. */
 	pwrite = pg_atomic_read_u64(&rbuf->pwrite);
-	while (pwrite > pg_atomic_read_u64(&rbuf->slot[ref->slot].pread) + keep_size)
+	while (pwrite > pos + keep_size)
 	{
 		uint32		pktlen;
 
-		/* pwrite includes reservations whose headers are not ready yet. */
-		if (polar_ringbuf_next_pkt_type(ref, &pktlen) == POLAR_RINGBUF_PKT_INVALID_TYPE)
+		if ((rbuf->data[POLAR_RINGBUF_IDX(rbuf, pos)] & POLAR_RINGBUF_PKT_STATE_MASK)
+			!= POLAR_RINGBUF_PKT_READY)
 			break;
 
-		polar_ringbuf_update_ref(ref);
+		/* Read the length only after observing the published header. */
+		pg_read_barrier();
+		pktlen = polar_ringbuf_get_pkt_length(rbuf, pos);
+		pos += POLAR_RINGBUF_PKTHDRSIZE + pktlen;
 		updated = true;
-		if (pwrite <= pg_atomic_read_u64(&rbuf->slot[ref->slot].pread) + keep_size)
+		if (pwrite <= pos + keep_size)
 			pwrite = pg_atomic_read_u64(&rbuf->pwrite);
 	}
 
 	if (updated)
+	{
+		/* Complete header reads before allowing reclamation of their bytes. */
+		pg_memory_barrier();
+		pg_atomic_write_u64(&rbuf->slot[ref->slot].pread, pos);
 		polar_ringbuf_update_keep_data(rbuf);
+	}
 
 	return need_update_pread;
 }
