@@ -1,0 +1,72 @@
+name: stylecheck
+
+on:
+  pull_request:
+<<<<<<<
+    branches: [ 'POLARDB_*_STABLE' ]
+=======
+    branches: [ POLARDB_17_STABLE ]
+>>>>>>>
+
+jobs:
+  pgindent:
+    name: C Code Style (pgindent)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: create and start the container
+        run: |
+          docker create                                                  \
+            -t                                                           \
+            --name polardb_rocky9                                        \
+            -v `pwd`:/home/postgres/PolarDB-for-PostgreSQL               \
+            polardb/polardb_pg_devel:rocky9                              \
+            bash &&                                                      \
+          docker start polardb_rocky9
+
+      - name: change ownership of the source code
+        run: |
+          docker exec                                            \
+            polardb_rocky9                                       \
+            bash -c "cd /home/postgres/PolarDB-for-PostgreSQL && \
+                     sudo chown -R postgres:postgres ./"
+
+      - name: Check C code style with pgindent
+        run: |
+          docker exec                                            \
+            polardb_rocky9                                       \
+            bash -c "cd /home/postgres/PolarDB-for-PostgreSQL && \
+                     .ci/check_pgindent.sh"
+
+  check-extensions-order:
+    name: Check Extensions Order
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: create and start the container
+        run: |
+          docker create                                                  \
+            -t                                                           \
+            --name polardb_rocky9                                        \
+            -v `pwd`:/home/postgres/PolarDB-for-PostgreSQL               \
+            polardb/polardb_pg_devel:rocky9                              \
+            bash &&                                                      \
+          docker start polardb_rocky9
+
+      - name: change ownership of the source code
+        run: |
+          docker exec                                            \
+            polardb_rocky9                                       \
+            bash -c "cd /home/postgres/PolarDB-for-PostgreSQL && \
+                     sudo chown -R postgres:postgres ./"
+
+      - name: Check extensions order
+        run: |
+          docker exec                                            \
+            polardb_rocky9                                       \
+            bash -c "cd /home/postgres/PolarDB-for-PostgreSQL && \
+                     .ci/check_extensions_order.sh"
