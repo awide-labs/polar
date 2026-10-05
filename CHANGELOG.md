@@ -99,6 +99,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Fixed `polar_ignore_coredump_functions` not matching functions that the
+  compiler renamed (for example, static functions in LTO-enabled release
+  builds), so the coredump was not ignored (XCOM-198)
 - Fixed a race where a shared-storage replica, or a standby with parallel
   replay enabled (`polar_enable_parallel_replay_standby_mode`, on by
   default), could sporadically return stale data: a page replayed while its

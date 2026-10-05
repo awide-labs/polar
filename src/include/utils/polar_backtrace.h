@@ -133,6 +133,8 @@ POLAR_DUMP_BACKTRACE_END: \
 				break; \
 			unw_get_reg(&cursor, UNW_REG_IP, &ip); \
 			unw_get_proc_name(&cursor, symbol, sizeof(symbol), &off); \
+			/* strip compiler clone suffixes such as .lto_priv.0 or .isra.0 */ \
+			symbol[strcspn(symbol, ".")] = '\0'; \
 			snprintf(ip_str, 256, "0x%llx", (unsigned long long) ip); \
 			snprintf(ip_longstr, 256, "0x%016llx", (unsigned long long) ip); \
 			/* C function symbol/short-address/long-address are all acceptable */ \
