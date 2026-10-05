@@ -166,7 +166,9 @@ int			wal_segment_size = DEFAULT_XLOG_SEG_SIZE;
  * to happen concurrently, but adds some CPU overhead to flushing the WAL,
  * which needs to iterate all the locks.
  */
-#define NUM_XLOGINSERT_LOCKS  64
+int			polar_wal_buffer_insert_locks = 256;
+
+#define NUM_XLOGINSERT_LOCKS  (polar_wal_buffer_insert_locks)
 
 /*
  * Max distance from last checkpoint, before triggering a new xlog-based

@@ -92,6 +92,7 @@
 #include "storage/dsm_impl.h"
 #include "storage/fd.h"
 #include "storage/large_object.h"
+#include "storage/lwlock.h"
 #include "storage/pg_shmem.h"
 #include "storage/polar_session_context.h"
 #include "storage/predicate.h"
@@ -3635,6 +3636,22 @@ static struct config_int ConfigureNamesInt[] =
 		&polar_hostid,
 		/* -1 means this variable is disabled */
 		1, 1, POLAR_MAX_PDB_HOSTID,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"polar_wal_buffer_insert_locks", PGC_POSTMASTER, POLAR_STORAGE,
+			gettext_noop("Number of WAL insertion locks."),
+			NULL,
+			POLAR_GUC_IS_VISIBLE | POLAR_GUC_IS_CHANGABLE
+		},
+		&polar_wal_buffer_insert_locks,
+
+		/*
+		 * Keep below MAX_SIMUL_LWLOCKS: WALInsertLockAcquireExclusive() takes
+		 * them all at once.
+		 */
+		256, 1, MAX_SIMUL_LWLOCKS / 2,
 		NULL, NULL, NULL
 	},
 
