@@ -12,17 +12,10 @@ on:
       - 'src/**'
       - 'configure*'
       - 'build.sh'
+  # No paths filter: the required Regression check must report on every pull
+  # request. The changes job keeps the matrix to code changes instead.
   pull_request:
     branches: [ POLARDB_15_STABLE ]
-    paths:
-      - '.github/workflows/precheck.yml'
-      - '.ci/**'
-      - 'config/**'
-      - 'contrib/**'
-      - 'external/**'
-      - 'src/**'
-      - 'configure*'
-      - 'build.sh'
   # Manual trigger - runs all matrix combinations
   workflow_dispatch:
 
@@ -53,7 +46,37 @@ jobs:
       - name: Check changelog
         run: .ci/check_changelog.sh origin/${{ github.base_ref }}
 
+  changes:
+    name: Detect Changes
+    runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.filter.outputs.code }}
+    steps:
+      - name: Checkout code
+        if: github.event_name == 'pull_request'
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+      - name: Check for code changes
+        id: filter
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          if [ "${{ github.event_name }}" != "pull_request" ] ||
+             ! git diff --quiet "${BASE_SHA}...${HEAD_SHA}" -- \
+               .github/workflows/precheck.yml .ci config contrib external \
+               src 'configure*' build.sh; then
+            echo "code=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "No code changes; skipping regression."
+            echo "code=false" >> "$GITHUB_OUTPUT"
+          fi
+
   regression:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -70,3 +93,23 @@ jobs:
             "${{ matrix.container_image }}" \
             "${{ matrix.debug_mode }}" \
             "${{ matrix.rules }}"
+
+  # Single required check for the whole matrix, so the ruleset does not have
+  # to list every combination.
+  regression-result:
+    name: Regression
+    needs: [ changes, regression ]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check regression results
+        env:
+          CHANGES_RESULT: ${{ needs.changes.result }}
+          REGRESSION_RESULT: ${{ needs.regression.result }}
+        run: |
+          echo "changes: ${CHANGES_RESULT}, regression: ${REGRESSION_RESULT}"
+          [ "${CHANGES_RESULT}" = "success" ] || exit 1
+          case "${REGRESSION_RESULT}" in
+            success|skipped) ;;
+            *) exit 1 ;;
+          esac
