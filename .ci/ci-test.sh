@@ -47,6 +47,14 @@ docker exec polardb_${CONTAINER_IMAGE} bash -c \
        sudo apt-get install -y eatmydata; \
      fi; \
    fi && \
+   if ! command -v ps >/dev/null 2>&1; then \
+     if command -v yum >/dev/null 2>&1; then \
+       sudo yum install -y procps-ng; \
+     elif command -v apt-get >/dev/null 2>&1; then \
+       sudo apt-get update -y && \
+       sudo apt-get install -y procps; \
+     fi; \
+   fi && \
    cd /home/postgres/PolarDB-for-PostgreSQL && \
    if [ -f /etc/bashrc ]; then source /etc/bashrc; fi && \
    set -eu && \
