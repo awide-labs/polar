@@ -77,6 +77,17 @@
 #define PgXmlErrorPtr xmlErrorPtr
 #endif
 
+/*
+ * Some libxml2 versions (e.g. the one in RHEL 10) mark xmlKeepBlanksDefault()
+ * deprecated, but xml_parse() has no other way to control blank handling in
+ * CONTENT mode: xmlParseBalancedChunkMemory() takes no parse options.
+ * Remove this once https://commitfest.postgresql.org/patch/7032/ is merged
+ * and backpatched to 17.
+ */
+#ifdef __GNUC__
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+#endif
+
 #endif							/* USE_LIBXML */
 
 #include "access/htup_details.h"
