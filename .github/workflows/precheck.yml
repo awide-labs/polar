@@ -80,7 +80,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        container_image: [ rocky8, rocky9, ubuntu22.04 ]
+        container_image: [ rocky9, rocky10, ubuntu22.04, ubuntu26.04 ]
         rules: [ precheck-main-check, plcheck ]
         debug_mode: [ on, off ]
     steps:
