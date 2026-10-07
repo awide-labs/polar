@@ -101,6 +101,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Fixed checkpoints on an idle shared-storage primary taking up to 10
+  seconds instead of about 0.1 second, and logging "Checkpoint blocked"
+  warnings every 100 ms meanwhile, because they waited for the
+  hibernating background writer to wake up by itself. The checkpoint now
+  wakes it up, as it did in version 15 (XCOM-207)
 - Fixed logical replication from a cascading standby breaking when the
   standby it follows is promoted. Subscribers and other clients reading
   from a replication slot on such a node were disconnected with "invalid

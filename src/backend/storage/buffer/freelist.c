@@ -451,6 +451,33 @@ StrategyNotifyBgWriter(int bgwprocno)
 	SpinLockRelease(&StrategyControl->buffer_strategy_lock);
 }
 
+/*
+ * POLAR: Wake the bgwriter if it hibernates, the same way StrategyGetBuffer
+ * does, and return whether it did.  A hibernating bgwriter does not advance
+ * the consistent LSN, so a checkpoint waiting for it would otherwise wait for
+ * the whole hibernation.
+ */
+bool
+polar_try_to_wake_bgwriter(void)
+{
+	int			bgwprocno = INT_ACCESS_ONCE(StrategyControl->bgwprocno);
+
+	if (bgwprocno != -1)
+	{
+		/* reset bgwprocno first, before setting the latch */
+		StrategyControl->bgwprocno = -1;
+
+		/*
+		 * Not acquiring ProcArrayLock here which is slightly icky. It's
+		 * actually fine because procLatch isn't ever freed, so we just can
+		 * potentially set the wrong process' (or no process') latch.
+		 */
+		SetLatch(&GetPGProcByNumber(bgwprocno)->procLatch);
+		return true;
+	}
+	return false;
+}
+
 
 /*
  * StrategyShmemSize

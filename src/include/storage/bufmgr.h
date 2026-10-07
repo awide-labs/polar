@@ -378,6 +378,7 @@ extern void FreeAccessStrategy(BufferAccessStrategy strategy);
 
 /* POLAR */
 extern void PolarMarkBufferDirty(Buffer buffer, XLogRecPtr oldest_lsn);
+extern bool polar_try_to_wake_bgwriter(void);
 extern bool polar_start_buffer_io_extend(BufferDesc *buf,
 										 bool forInput,
 										 bool nowait,
