@@ -57,7 +57,9 @@ $node_primary->psql_connect($db, $timeout, _psql => $checkpoint_psql);
 $node_primary->psql_execute("checkpoint;", _psql => $checkpoint_psql);
 $node_primary->psql_close(_psql => $checkpoint_psql);
 
-my $failed = $node_replica->restart_no_check;
+# The open transaction above has overflowed subtransactions, so the replica
+# stays in snapshot pending state and never accepts connections.
+my $failed = $node_replica->restart_no_check(timeout => 10);
 ok($failed != 0, "Replica is in snapshot pending");
 
 $node_primary->kill9;
