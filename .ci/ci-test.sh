@@ -24,6 +24,7 @@ echo "Executing rules: $RULES"
 # Create and start the container
 docker create                                                  \
   -t                                                           \
+  --shm-size=1g                                                \
   --name polardb_${CONTAINER_IMAGE}                 \
   -v `pwd`:/home/postgres/PolarDB-for-PostgreSQL               \
   polardb/polardb_pg_devel:${CONTAINER_IMAGE} \
