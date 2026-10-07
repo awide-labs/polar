@@ -5472,6 +5472,9 @@ sub polar_is_in_recovery
 =item $node->generate_wal(self, start_lsn, size)
 
 Generate WAL records on a node from start_lsn until reaching specified size.
+The WAL comes from batches of rows inserted into pgbench_history, one
+transaction per batch, so the node must have been initialized with
+pgbench_init.
 
 =cut
 
@@ -5481,12 +5484,10 @@ sub generate_wal
 
 	while (1)
 	{
-		$self->pgbench_test(
-			dbname => 'postgres',
-			client => 4,
-			job => 4,
-			time => 5,
-			script => 'tpcb-like');
+		$self->safe_psql('postgres',
+			"INSERT INTO pgbench_history (tid, bid, aid, delta, mtime) "
+			  . "SELECT g % 100 + 1, 1, g, 0, now() FROM generate_series(1, 20000) g;"
+		);
 
 		my $cur_insert_lsn = $self->lsn('insert');
 		my $diff = $self->safe_psql('postgres',
