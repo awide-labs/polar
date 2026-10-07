@@ -243,7 +243,7 @@ configure_flag+=" --with-linux-dist=$linux_dist"
 if [[ $minimal == "on" ]]; then
   configure_flag+=" --enable-minimal"
 else
-  configure_flag+=" --with-openssl --enable-nls --with-libxml --with-libxslt --with-icu --with-pam --with-gssapi --with-ldap --with-perl --with-python --with-tcl --with-llvm --with-lz4 --with-zstd --with-system-tzdata=/usr/share/zoneinfo"
+  configure_flag+=" --with-openssl --enable-nls --with-libxml --with-libxslt --with-icu --with-pam --with-gssapi --with-ldap --with-perl --with-python --with-tcl --with-llvm --with-lz4 --with-zstd"
   configure_flag+=" --with-tde --with-libunwind"
 fi
 
