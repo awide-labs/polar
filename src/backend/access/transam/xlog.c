@@ -12357,6 +12357,8 @@ polar_wait_consistent_lsn(XLogRecPtr redo, int flags)
 			if (!XLogRecPtrIsInvalid(consistent_lsn))
 				polar_set_consistent_lsn(consistent_lsn);
 		}
+		else
+			polar_try_to_wake_bgwriter();
 		polar_accept_signal_for_checkpoint(flags);
 
 		/*
