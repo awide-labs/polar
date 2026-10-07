@@ -76,7 +76,7 @@ distclean:
 	@rm -rf autom4te.cache/
 	rm -f config.cache config.log config.status GNUmakefile
 
-check-tests: | temp-install
+check-tests polar-check: | temp-install
 check polar-check check-tests installcheck polar-installcheck installcheck-parallel installcheck-tests: CHECKPREP_TOP=src/test/regress
 check polar-check check-tests installcheck polar-installcheck installcheck-parallel installcheck-tests: submake-generated-headers
 	$(MAKE) -C src/test/regress $@
@@ -165,8 +165,14 @@ else
   PROVE_FLAGS = --timer --jobs=$(PROVE_JOBS)
 endif
 
-precheck-main-check: | temp-install
+# polar-check has its own temp instance and output directory, so under make -jN
+# it runs concurrently with check-world instead of after it.
+precheck-main-check: precheck-main-polar precheck-main-world
+
+precheck-main-world: | temp-install
 	$(MAKE) check-world EXTRA_TESTS=numeric_big PG_TEST_EXTRA='kerberos ssl' USE_MODULE_DB=1 PROVE_FLAGS="$(PROVE_FLAGS)"
+
+precheck-main-polar: | temp-install
 	$(MAKE) polar-check PG_TEST_EXTRA='kerberos ssl' USE_MODULE_DB=1 PROVE_FLAGS="$(PROVE_FLAGS)"
 
 precheck-main-install:
@@ -179,7 +185,11 @@ precheck: plcheck dccheck-lite datamax-check-lite precheck-main
 
 precheck-main-ci: precheck-main-check
 
-precheck-ci: precheck-main-ci plcheck datamax-check-lite
+# The polar suites contain the longest TAP tests, so they are listed first:
+# under make -jN they then start before the check-world subdirectories instead
+# of ending up on the critical path. They must be .PHONY: make defers the
+# non-phony ones until after the rest anyway.
+precheck-ci: plcheck datamax-check-lite precheck-main-ci
 
 covcheck: coverage-html
 	$(top_srcdir)/src/tools/delta_coverage.pl -f coverage/delta_coverage.txt -p $(LAST_COMMIT)
@@ -228,4 +238,6 @@ datamax-check: | temp-install
 
 .PHONY: dist distcheck docs install-docs world check-world install-world \
 	installcheck-world headerscheck cpluspluscheck \
-	covcheck precheck stylecheck dccheck datamax-check datamax-check-lite
+	covcheck precheck stylecheck plcheck dccheck dccheck-lite datamax-check \
+	datamax-check-lite precheck-main-check precheck-main-world \
+	precheck-main-polar

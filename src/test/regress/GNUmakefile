@@ -117,9 +117,11 @@ REGRESS_OPTS = --dlpath=. --max-concurrent-tests=20 \
 check: all
 	$(pg_regress_check) $(REGRESS_OPTS) --schedule=$(srcdir)/parallel_schedule $(MAXCONNOPT) $(EXTRA_TESTS)
 
+# Separate temp instance and output directory, so that polar-check can run
+# concurrently with check.
 polar-check: all | temp-install
-	mkdir -p $(srcdir)/results/polar
-	$(pg_regress_check) $(REGRESS_OPTS) --schedule=$(srcdir)/polar_check_schedule $(MAXCONNOPT) $(EXTRA_TESTS)
+	mkdir -p output_polar/results/polar
+	$(pg_regress_check) $(REGRESS_OPTS) --temp-instance=./tmp_check_polar --outputdir=output_polar --schedule=$(srcdir)/polar_check_schedule $(MAXCONNOPT) $(EXTRA_TESTS)
 
 check-tests: all | temp-install
 	$(pg_regress_check) $(REGRESS_OPTS) $(MAXCONNOPT) $(TESTS) $(EXTRA_TESTS)
@@ -159,4 +161,4 @@ clean distclean: clean-lib
 	rm -f $(OBJS) refint$(DLSUFFIX) autoinc$(DLSUFFIX)
 	rm -f pg_regress_main.o pg_regress.o pg_regress$(X)
 # things created by various check targets
-	rm -rf $(pg_regress_clean_files)
+	rm -rf $(pg_regress_clean_files) tmp_check_polar/ output_polar/
