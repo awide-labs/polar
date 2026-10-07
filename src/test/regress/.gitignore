@@ -5,6 +5,8 @@
 /tmp_check/
 /results/
 /log/
+/tmp_check_polar/
+/output_polar/
 
 # Note: regression.* are only left behind on a failure; that's why they're not ignored
 #/regression.diffs

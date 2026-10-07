@@ -49,7 +49,9 @@ SUBDIRS = \
 # SUBDIRS += test_bulkio
 SUBDIRS += test_buffer
 SUBDIRS += test_coredump_handler
-SUBDIRS += test_logindex test_procpool
+# test_logindex has one of the longest TAP tests, so start it first under make -jN
+SUBDIRS := test_logindex $(SUBDIRS)
+SUBDIRS += test_procpool
 SUBDIRS += test_polar_datamax
 SUBDIRS += test_polar_rsc
 SUBDIRS += test_polar_shm_limit
