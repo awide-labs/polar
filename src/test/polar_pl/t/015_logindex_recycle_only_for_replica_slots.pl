@@ -84,7 +84,7 @@ sub wait_for_logindex_meta_catchup
 	my ($root_node, $replica, @wait_slots) = @_;
 	my $max_loop = 60;
 	my $insert_sql =
-	  "SET polar_table_multi_insert_min_rows = 0; insert into test select generate_series(1, 100000);";
+	  "SET polar_table_multi_insert_min_rows = 0; insert into test select generate_series(1, 200000);";
 	my $truncate_sql = "truncate table test;";
 	my $catchup = 0;
 
@@ -157,8 +157,12 @@ $node_primary->polar_create_slot($node_replica->name);
 $node_primary->polar_create_slot($node_standby->name);
 
 $node_primary->safe_psql($regress_db, 'create extension polar_monitor;');
+# Logindex tables fill up per page touched by a WAL record, not per byte. A
+# narrow table with fillfactor = 10 fits few rows per page, so the bulk
+# inserts in wait_for_logindex_meta_catchup() fill logindex tables with a
+# fraction of the WAL that wide rows would need.
 $node_primary->safe_psql($regress_db,
-	"create table test(id int, name char(512) default 'A');");
+	"create table test(id int) with (fillfactor = 10);");
 
 # current physical slot's node type should be UNKNOWN
 my $slot_name = $node_replica->name;
