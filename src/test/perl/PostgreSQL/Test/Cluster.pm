@@ -4830,12 +4830,27 @@ sub polar_init_standby
 
 =pod
 
-=item $node->restart_no_check()
+=item $node->restart_no_check(%params)
+
+Restart the node with pg_ctl and return its exit code instead of dying when
+the node does not start.
+
+=over
+
+=item timeout => seconds
+
+How long pg_ctl waits for the node to accept connections.  Defaults to
+pg_ctl's own default, i.e. PGCTLTIMEOUT or 60 seconds.  Tests that expect the
+node not to become ready should pass a short timeout, or they spend the whole
+wait doing nothing.
+
+=back
+
 =cut
 
 sub restart_no_check
 {
-	my ($self) = @_;
+	my ($self, %params) = @_;
 
 	my $port = $self->port;
 	my $pgdata = $self->data_dir;
@@ -4843,9 +4858,10 @@ sub restart_no_check
 	my $name = $self->name;
 	print "### Restarting node \"$name\"\n";
 
+	my @timeout = defined $params{timeout} ? ('-t', $params{timeout}) : ();
 	my $ret =
 	  PostgreSQL::Test::Utils::system_log('pg_ctl', '-D', $pgdata, '-l',
-		$logfile, 'restart');
+		$logfile, @timeout, 'restart');
 
 	if ($ret != 0)
 	{
