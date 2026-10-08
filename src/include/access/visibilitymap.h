@@ -42,6 +42,9 @@
 	(polar_is_primary() || polar_is_standby() || POLAR_REPLICA_ENABLE_VISIBILITYMAP())
 /* POLAR end */
 
+extern bool visibilitymap_clear_locked(Relation rel, BlockNumber heapBlk,
+									   Buffer vmbuf, uint8 flags,
+									   XLogReaderState *polar_record);
 extern bool visibilitymap_clear(Relation rel, BlockNumber heapBlk,
 								Buffer vmbuf, uint8 flags,
 								XLogReaderState *polar_record);

@@ -170,6 +170,7 @@ WAL_PIPELINE_WAIT_RECENT_WRITTEN_SPACE	"Waiting for free space in the WAL pipeli
 WAL_PIPELINE_WAIT_UNFLUSHED_XLOG_SLOT	"Waiting for an unflushed WAL pipeline xlog slot."
 
 ABI_compatibility:
+WAL_RECEIVER_UPSTREAM_CATCHUP	"Waiting for upstream server WAL flush position to catch up to requested start point."
 
 #
 # Wait Events - Timeout
