@@ -62,12 +62,11 @@ polar_zc_main_segment_active(void)
  * zero-copy for the rest. (Clean postmaster shutdown can't unregister either --
  * ExitPostmaster() unmounts pfsd before shmem_exit runs.) So the teardown below
  * runs only on crash-recovery restart, where pfsd is still mounted and this reg
- * still holds the previous generation's fd and buf_id.
+ * still holds the previous generation's buf_id.
  */
 typedef struct PolarZcRegion
 {
 	bool		valid;
-	int			fd;
 	int64		buf_id;			/* >=0 registered; <0 registration failed */
 	char	   *base;			/* mmap base == the registered region start */
 	Size		size;			/* mapped length */
@@ -75,7 +74,7 @@ typedef struct PolarZcRegion
 
 static PolarZcRegion MainSegReg =
 {
-	false, -1, -1, NULL, 0
+	false, -1, NULL, 0
 };
 
 /*
@@ -105,8 +104,6 @@ polar_zc_region_init(const char *name, Size usable_size, PolarZcRegion *reg)
 	{
 		if (reg->buf_id >= 0)
 			polar_unregister_buffer(reg->buf_id);
-		if (reg->fd >= 0)
-			close(reg->fd);
 		MemSet(reg, 0, sizeof(*reg));
 	}
 
@@ -191,13 +188,14 @@ retry:
 	 * memfd.
 	 */
 	buf_id = polar_register_buffer(fd, map_size, raw);
+	close(fd);
+
 	if (buf_id < 0)
 		ereport(WARNING,
 				(errmsg("could not register region \"%s\" with pfsd; "
 						"its IO will use the copying path", name)));
 
 	reg->valid = true;
-	reg->fd = fd;
 	reg->buf_id = buf_id;
 	reg->base = raw;
 	reg->size = map_size;
