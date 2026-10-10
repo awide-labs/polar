@@ -17,7 +17,11 @@
 
 ## Overview
 
+<div align="center">
+
 ![Awide Polar architecture](./awide-doc/attachments/architecture.drawio.svg)
+
+</div>
 
 Awide Polar is a cloud-native database based on [PolarDB for PostgreSQL](https://github.com/polardb/PolarDB-for-PostgreSQL) by Alibaba Cloud. It is fully compatible with PostgreSQL and uses a shared-storage-based architecture in which computing is decoupled from storage. Awide Polar features flexible scalability, millisecond-level latency, and hybrid transactional/analytical processing (HTAP) capabilities.
 
