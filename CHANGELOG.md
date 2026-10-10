@@ -73,6 +73,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- Rebased on PolarDB for PostgreSQL 17.11.1.0, which includes all changes
+  from the PostgreSQL 17.11 minor release (XCOM-206)
 - Added exponential backoff for the `Failed to get the instance memory
   usage` warning that previously flooded the logs when memory statistics
   were temporarily unavailable (XCOM-195)

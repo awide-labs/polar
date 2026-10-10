@@ -8,6 +8,8 @@ $node->init;
 $node->append_conf('postgresql.conf', "wal_level = logical");
 $node->append_conf('postgresql.conf',
 	"shared_preload_libraries = '\$libdir/pg_squeeze'");
+$node->append_conf('postgresql.conf',
+	"output_plugin_libraries = 'pg_squeeze'");
 $node->start;
 
 my $host = $node->host;
