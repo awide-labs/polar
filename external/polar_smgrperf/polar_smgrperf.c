@@ -143,8 +143,20 @@ report_perf_stats_timeout_handler(void)
 }
 
 static void
+accumulate_perf_stats(void)
+{
+	accum_stats.count += stats.count;
+	accum_stats.blocks += stats.blocks;
+	accum_stats.time += stats.time;
+}
+
+static void
 report_summary_perf_stats(void)
 {
+	/* include the interval cut short by the error */
+	accumulate_perf_stats();
+	MemSet(&stats, 0, sizeof(perf_stats));
+
 	report_perf_stats(&accum_stats, "Summary: ");
 }
 
@@ -159,19 +171,21 @@ collect_perf_stats_end(int blocks)
 {
 	instr_time	duration;
 
-	CHECK_FOR_INTERRUPTS();
-
 	INSTR_TIME_SET_CURRENT(duration);
 	INSTR_TIME_SUBTRACT(duration, start);
 	stats.time += INSTR_TIME_GET_NANOSEC(duration);
 	stats.blocks += blocks;
 	stats.count++;
 
+	/*
+	 * Must come before the report below: sending INFO to the client while a
+	 * statement timeout is pending turns the cancel into a FATAL.
+	 */
+	CHECK_FOR_INTERRUPTS();
+
 	if (report_perf_stats_pending)
 	{
-		accum_stats.count += stats.count;
-		accum_stats.blocks += stats.blocks;
-		accum_stats.time += stats.time;
+		accumulate_perf_stats();
 
 		report_perf_stats(&stats, "");
 
