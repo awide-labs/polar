@@ -1,5 +1,9 @@
 name: precheck
 
+# Pull requests run ci-quick on debug builds, stable branch pushes run ci-full
+# on release builds and the nightly schedule runs ci-full on debug builds.
+# Debug builds have assertions enabled, but are optimized with -O2.
+
 on:
   push:
     branches: [ 'POLARDB_*_STABLE' ]
@@ -10,14 +14,34 @@ on:
       - 'contrib/**'
       - 'external/**'
       - 'src/**'
+      - 'GNUmakefile.in'
+      - 'Makefile'
+      - 'aclocal.m4'
       - 'configure*'
       - 'build.sh'
   # No paths filter: the required Regression check must report on every pull
   # request. The changes job keeps the matrix to code changes instead.
   pull_request:
     branches: [ 'POLARDB_*_STABLE' ]
-  # Manual trigger - runs all matrix combinations
+  # Scheduled runs only test the default branch.
+  schedule:
+    - cron: '23 1 * * *'
   workflow_dispatch:
+    inputs:
+      target:
+        description: CI test target
+        type: choice
+        options: [ ci-quick, ci-full ]
+        default: ci-quick
+      debug_mode:
+        description: Debug build (assertions enabled)
+        type: choice
+        options: [ 'on', 'off' ]
+        default: 'on'
+
+concurrency:
+  group: precheck-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   check-commit-format:
@@ -51,6 +75,8 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       code: ${{ steps.filter.outputs.code }}
+      target: ${{ steps.mode.outputs.target }}
+      debug_mode: ${{ steps.mode.outputs.debug_mode }}
     steps:
       - name: Checkout code
         if: github.event_name == 'pull_request'
@@ -67,32 +93,53 @@ jobs:
           if [ "${{ github.event_name }}" != "pull_request" ] ||
              ! git diff --quiet "${BASE_SHA}...${HEAD_SHA}" -- \
                .github/workflows/precheck.yml .ci config contrib external \
-               src 'configure*' build.sh; then
+               src GNUmakefile.in Makefile aclocal.m4 'configure*' build.sh; then
             echo "code=true" >> "$GITHUB_OUTPUT"
           else
             echo "No code changes; skipping regression."
             echo "code=false" >> "$GITHUB_OUTPUT"
           fi
+      - name: Select test target and build mode
+        id: mode
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_TARGET: ${{ inputs.target }}
+          INPUT_DEBUG_MODE: ${{ inputs.debug_mode }}
+        run: |
+          case "${EVENT_NAME}" in
+            push)              target=ci-full  debug_mode=off ;;
+            schedule)          target=ci-full  debug_mode=on ;;
+            workflow_dispatch) target="${INPUT_TARGET}" debug_mode="${INPUT_DEBUG_MODE}" ;;
+            *)                 target=ci-quick debug_mode=on ;;
+          esac
+          echo "target=${target}, debug_mode=${debug_mode}"
+          echo "target=${target}" >> "$GITHUB_OUTPUT"
+          echo "debug_mode=${debug_mode}" >> "$GITHUB_OUTPUT"
 
   regression:
+    name: ${{ needs.changes.outputs.target }} (${{ matrix.container_image }}, debug=${{ needs.changes.outputs.debug_mode }})
     needs: changes
     if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         container_image: [ rocky9, rocky10, ubuntu22.04, ubuntu26.04 ]
-        rules: [ precheck-main-check, plcheck ]
-        debug_mode: [ on, off ]
     steps:
       - name: fetch source code
         uses: actions/checkout@v4
+
+      # polar_consistency tests inspect server backtraces with eu-stack, which
+      # needs to attach to processes it did not start.
+      - name: allow ptrace of non-child processes
+        run: sudo sysctl -w kernel.yama.ptrace_scope=0
 
       - name: build and test
         run: |
           .ci/ci-test.sh \
             "${{ matrix.container_image }}" \
-            "${{ matrix.debug_mode }}" \
-            "${{ matrix.rules }}"
+            "${{ needs.changes.outputs.debug_mode }}" \
+            "${{ needs.changes.outputs.target }}"
 
   # Single required check for the whole matrix, so the ruleset does not have
   # to list every combination.

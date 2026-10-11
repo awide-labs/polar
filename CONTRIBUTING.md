@@ -249,6 +249,26 @@ once its checks pass. `--record` needs write access to the repository; if you
 don't have it, ask a maintainer to record the resolution. See
 [`.github/forward-merge/README.md`](.github/forward-merge/README.md).
 
+## Continuous Integration
+
+CI runs two make targets: `ci-quick` runs most PostgreSQL and PolarDB-specific
+tests, and `ci-full` also runs the longer consistency and DataMax tests.
+
+- Pull requests run `ci-quick` on debug builds.
+- Pushes to `POLARDB_*_STABLE` run `ci-full` on release builds.
+- A nightly schedule runs `ci-full` on debug builds of the default branch.
+
+Debug builds have assertions, injection points and fault injection enabled,
+but are compiled with `-O2`. To reproduce a CI run locally, use
+`.ci/ci-test.sh <image> <on|off> <ci-quick|ci-full>`, or run a target directly
+in a `./build.sh` tree. Smaller WAL segments and parallel TAP tests speed up
+the run:
+
+```bash
+make ci-quick -j4 PROVE_FLAGS='--timer --jobs=4' \
+  PG_TEST_INITDB_EXTRA_OPTS='--wal-segsize=16'
+```
+
 ## Coding Style
 
 ### Languages
