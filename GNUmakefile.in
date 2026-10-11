@@ -76,7 +76,7 @@ distclean:
 	@rm -rf autom4te.cache/
 	rm -f config.cache config.log config.status GNUmakefile
 
-check-tests polar-check: | temp-install
+check-tests: | temp-install
 check polar-check check-tests installcheck polar-installcheck installcheck-parallel installcheck-tests: CHECKPREP_TOP=src/test/regress
 check polar-check check-tests installcheck polar-installcheck installcheck-parallel installcheck-tests: submake-generated-headers
 	$(MAKE) -C src/test/regress $@
@@ -151,45 +151,15 @@ cpluspluscheck: submake-generated-headers
 # POLAR
 #
 LAST_COMMIT = HEAD~1
+PROVE_FLAGS = "--timer"
 
-# Use 1.5x CPU cores as PROVE_JOBS, but allow overriding with
-# "make PROVE_FLAGS=...""
-PROVE_JOBS := $(shell cores=$$(nproc 2>/dev/null || echo 2); echo $$(( cores * 3 / 2 )) )
-# Override PROVE_FLAGS with our calculated value if not set externally
-ifneq (,$(findstring command line,$(origin PROVE_FLAGS)))
-  # PROVE_FLAGS was set via command line - keep it
-else ifneq (,$(findstring environment,$(origin PROVE_FLAGS)))
-  # PROVE_FLAGS was set via environment - keep it
-else
-  # PROVE_FLAGS was set in Makefile.global, override it
-  PROVE_FLAGS = --timer --jobs=$(PROVE_JOBS)
-endif
-
-# polar-check has its own temp instance and output directory, so under make -jN
-# it runs concurrently with check-world instead of after it.
-precheck-main-check: precheck-main-polar precheck-main-world
-
-precheck-main-world: | temp-install
+precheck-main: | temp-install
 	$(MAKE) check-world EXTRA_TESTS=numeric_big PG_TEST_EXTRA='kerberos ssl' USE_MODULE_DB=1 PROVE_FLAGS="$(PROVE_FLAGS)"
-
-precheck-main-polar: | temp-install
-	$(MAKE) polar-check PG_TEST_EXTRA='kerberos ssl' USE_MODULE_DB=1 PROVE_FLAGS="$(PROVE_FLAGS)"
-
-precheck-main-install:
 	$(MAKE) installcheck-world EXTRA_TESTS=numeric_big PG_TEST_EXTRA='kerberos ssl' USE_MODULE_DB=1 NO_TAP_TESTS=1
+	$(MAKE) polar-check PG_TEST_EXTRA='kerberos ssl' USE_MODULE_DB=1 PROVE_FLAGS="$(PROVE_FLAGS)"
 	$(MAKE) polar-installcheck PG_TEST_EXTRA='kerberos ssl' USE_MODULE_DB=1 NO_TAP_TESTS=1
 
-precheck-main: precheck-main-check precheck-main-install
-
-precheck: plcheck dccheck-lite datamax-check-lite precheck-main
-
-precheck-main-ci: precheck-main-check
-
-# The polar suites contain the longest TAP tests, so they are listed first:
-# under make -jN they then start before the check-world subdirectories instead
-# of ending up on the critical path. They must be .PHONY: make defers the
-# non-phony ones until after the rest anyway.
-precheck-ci: plcheck datamax-check-lite precheck-main-ci
+precheck: plcheck dccheck-lite precheck-main
 
 covcheck: coverage-html
 	$(top_srcdir)/src/tools/delta_coverage.pl -f coverage/delta_coverage.txt -p $(LAST_COMMIT)
@@ -220,7 +190,8 @@ dccheck-lite: | temp-install
 	$(MAKE) -C src/test/polar_consistency check
 
 dccheck: | temp-install
-	$(MAKE) -C src/test/polar_consistency check-all
+	# dccheck must run serially
+	$(MAKE) -C src/test/polar_consistency check-all PROVE_FLAGS="--timer --failures"
 
 # Datamax TAP suite. datamax-check-lite runs the smoke subset
 # (001..003) for quick CI; datamax-check runs the full set.
@@ -232,12 +203,26 @@ datamax-check-lite: | temp-install
 datamax-check: | temp-install
 	$(MAKE) -C src/test/polar_datamax check PROVE_FLAGS="$(PROVE_FLAGS)"
 
+# The ci-* targets run polar-check concurrently with check-world, so it cannot
+# rely on check-world to set up the temporary installation.
+polar-check: | temp-install
+
+# Test suites run by CI: ci-quick covers most PostgreSQL and PolarDB tests,
+# ci-full adds the complete consistency and DataMax suites. The polar suites
+# contain the longest TAP tests, so they are listed before check-world: under
+# make -jN they then start first instead of queueing behind every check-world
+# subdirectory and ending up on the critical path. They must be .PHONY: make
+# defers the non-phony ones until after check-world anyway.
+ci-full: plcheck dccheck datamax-check check-world polar-check
+
+ci-quick: plcheck dccheck-lite datamax-check-lite check-world polar-check
+
+.PHONY: plcheck dccheck-lite datamax-check datamax-check-lite ci-full ci-quick
+
 #
 # POLAR end
 #
 
 .PHONY: dist distcheck docs install-docs world check-world install-world \
 	installcheck-world headerscheck cpluspluscheck \
-	covcheck precheck stylecheck plcheck dccheck dccheck-lite datamax-check \
-	datamax-check-lite precheck-main-check precheck-main-world \
-	precheck-main-polar
+	covcheck precheck stylecheck dccheck

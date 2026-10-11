@@ -2,8 +2,11 @@
 set -xeuo pipefail
 
 # Usage: ci-test.sh <container_image> <debug_mode> <rules> [cleanup]
-# Example: ci-test.sh rocky9 on precheck-ci
-# Example: ci-test.sh rocky9 on precheck-ci true
+# Example: ci-test.sh rocky9 on ci-quick
+# Example: ci-test.sh rocky9 off ci-full true
+#
+# debug_mode=on builds with assertions, injection points and fault injection,
+# but optimized like a release build (-O2 instead of the -O0 of build.sh).
 #
 # cleanup: optional flag (true/1 to enable cleanup, false/0 or omitted to skip)
 #          Useful when multiple containers run in the same VM/step
@@ -36,8 +39,10 @@ docker exec polardb_${CONTAINER_IMAGE} bash -c \
   "cd /home/postgres/PolarDB-for-PostgreSQL && \
    sudo chown -R postgres:postgres . 2>/dev/null || true"
 
-# Build and run defined checks in sequence
-# Use all available CPU cores for faster builds and tests
+# Build and run defined checks in sequence. The build uses all CPU cores. The
+# ci-* targets run several TAP suites concurrently, each with its own prove
+# jobs, so test parallelism is kept below the core count: on an oversubscribed
+# host, servers in TAP tests miss their start and stop timeouts.
 docker exec polardb_${CONTAINER_IMAGE} bash -c \
   "set -x && \
    if ! command -v eatmydata >/dev/null 2>&1; then \
@@ -56,15 +61,38 @@ docker exec polardb_${CONTAINER_IMAGE} bash -c \
        sudo apt-get install -y procps; \
      fi; \
    fi && \
+   if ! command -v eu-stack >/dev/null 2>&1; then \
+     if command -v yum >/dev/null 2>&1; then \
+       sudo yum install -y elfutils; \
+     elif command -v apt-get >/dev/null 2>&1; then \
+       sudo apt-get update -y && \
+       sudo apt-get install -y elfutils; \
+     fi; \
+   fi && \
+   if [ ! -x /usr/sbin/slapd ]; then \
+     if command -v yum >/dev/null 2>&1; then \
+       sudo yum install -y openldap-servers openldap-clients; \
+     elif command -v apt-get >/dev/null 2>&1; then \
+       sudo apt-get update -y && \
+       sudo DEBIAN_FRONTEND=noninteractive apt-get install -y slapd ldap-utils; \
+     fi; \
+   fi && \
    cd /home/postgres/PolarDB-for-PostgreSQL && \
    if [ -f /etc/bashrc ]; then source /etc/bashrc; fi && \
    set -eu && \
-   JOBS=\$(nproc) && \
+   CPUS=\$(nproc) && \
+   MAKE_JOBS=\$(( CPUS / 2 > 0 ? CPUS / 2 : 1 )) && \
+   PROVE_JOBS=\$(( CPUS * 2 / 3 > 0 ? CPUS * 2 / 3 : 1 )) && \
+   export CFLAGS=-O2 CXXFLAGS=-O2 && \
    eatmydata ./build.sh --noinstall --debug=${DEBUG_MODE} --ec='--enable-tap-tests' && \
+   export PG_TEST_INITDB_EXTRA_OPTS=--wal-segsize=16 && \
+   export PGCTLTIMEOUT=300 && \
    for rule in ${RULES}; do \
      echo \"=== Running \$rule ===\" && \
-     export PG_TEST_INITDB_EXTRA_OPTS=--wal-segsize=16 &&
-     eatmydata make \$rule -j\$JOBS -Otarget || (echo \"=== \$rule FAILED ===\" && exit 1); \
+     eatmydata make \$rule -j\$MAKE_JOBS -Otarget \
+       PROVE_FLAGS=\"--timer --jobs=\$PROVE_JOBS\" \
+       PG_TEST_EXTRA='kerberos ssl ldap wal_consistency_checking xid_wraparound' || \
+       (echo \"=== \$rule FAILED ===\" && exit 1); \
    done"
 
 # Clean up container if requested (useful when multiple containers run in same VM)
