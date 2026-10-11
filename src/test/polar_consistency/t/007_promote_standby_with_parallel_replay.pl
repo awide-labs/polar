@@ -101,6 +101,9 @@ $node_primary1->append_conf('postgresql.conf',
 
 $node_primary1->append_conf('postgresql.conf', 'polar_csn_enable=on');
 $node_primary1->append_conf('postgresql.conf', 'wal_keep_size=10240MB');
+# Vacuum truncation would queue forget invalid page requests that the
+# standby cannot send while test_skip_dispatch is attached (see below).
+$node_primary1->append_conf('postgresql.conf', 'autovacuum=off');
 
 $node_standby1->append_conf('postgresql.conf', 'polar_csn_enable=on');
 $node_standby1->append_conf('postgresql.conf', 'wal_keep_size=10240MB');
@@ -116,10 +119,22 @@ $node_primary1->safe_psql('postgres', 'create table test(id int);');
 $node_primary1->safe_psql('postgres', "insert into test values($test_id);");
 # create injection_points extension and enable 'test_use_incremental_checkpoint'
 $node_primary1->safe_psql('postgres', 'create extension injection_points;');
+$node_primary1->safe_psql('postgres', 'create extension polar_monitor;');
 # init pgbench
 $node_primary1->pgbench_init(scale => 10);
 # generate checkpoint
 $node_primary1->safe_psql('postgres', 'checkpoint;');
+
+# While test_skip_dispatch is attached, bg_replayed_lsn stays put, and on
+# promote the logindex worker checks invalid pages only after it has sent
+# every queued forget invalid page request, which it may only do up to
+# bg_replayed_lsn. Let it get past the relation files that pgbench_init
+# drops when it truncates its tables, or promote waits forever.
+my $replay_lsn = $node_primary1->lsn('insert');
+$node_primary1->wait_for_catchup($node_standby1, 'replay', $replay_lsn);
+$node_standby1->poll_query_until('postgres',
+	"select polar_replica_bg_replay_lsn() >= '$replay_lsn'::pg_lsn")
+  or die "timed out waiting for bg_replayed_lsn to reach $replay_lsn";
 
 # use fault injector to force logindex worker to stop dispatching
 $result = $node_standby1->safe_psql('postgres',
