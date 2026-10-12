@@ -1,0 +1,131 @@
+# Development and CI image for Awide Polar. See .ci/docker/README.md.
+
+FROM rockylinux/rockylinux:10
+
+LABEL org.opencontainers.image.source="https://github.com/awide-labs/polar"
+LABEL org.opencontainers.image.description="Awide Polar development and CI environment"
+
+RUN dnf distro-sync -y && \
+    dnf upgrade -y --refresh && \
+    dnf install -y epel-release && \
+    dnf install -y \
+        glibc-langpack-en \
+        glibc-langpack-zh \
+        && \
+    dnf clean all
+
+# Default GCC and LLVM 19
+RUN dnf install -y \
+        alternatives \
+        clang19 \
+        cmake \
+        gcc \
+        gcc-c++ \
+        gdb \
+        llvm19-devel \
+        && \
+    alternatives --install \
+        /usr/bin/clang clang /usr/bin/clang-19 60 --slave \
+        /usr/bin/clang++ clang++ /usr/bin/clang++-19 && \
+    alternatives --install \
+        /usr/bin/llvm-config llvm-config /usr/bin/llvm-config-19 60 && \
+    dnf clean all
+
+# Build dependencies
+RUN dnf install -y \
+        bison \
+        flex \
+        gettext \
+        krb5-devel \
+        libaio-devel \
+        libicu-devel \
+        libunwind-devel \
+        libuuid-devel \
+        libxml2-devel \
+        libxslt-devel \
+        libzstd-devel \
+        lz4-devel \
+        openldap-devel \
+        openssl-devel \
+        pam-devel \
+        perl-CPAN \
+        perl-DBI \
+        perl-ExtUtils-Embed \
+        perl-Test-Simple \
+        python3-devel \
+        readline-devel \
+        tcl-devel \
+        zlib-devel \
+        && \
+    dnf --enablerepo=crb install -y \
+        perl-File-Find-Rule \
+        perl-FindBin \
+        perl-IPC-Run \
+        perl-Opcode \
+        && \
+    dnf clean all
+
+# Test dependencies: Kerberos, LDAP and SSL TAP tests, eu-stack for
+# polar_consistency, eatmydata to speed up fsync-heavy tests
+RUN dnf install -y \
+        elfutils \
+        krb5-server \
+        krb5-workstation \
+        libeatmydata \
+        openldap-clients \
+        openldap-servers \
+        openssl \
+        procps-ng \
+        && \
+    dnf clean all
+
+# Tools
+RUN dnf install -y \
+        autoconf \
+        git \
+        iproute \
+        rpm-build \
+        sudo \
+        vim \
+        wget \
+        && \
+    dnf clean all
+
+# Perl::Tidy version must match src/tools/pgindent/README
+RUN perl -MCPAN -e "CPAN::Shell->notest('install', 'Expect')" && \
+    perl -MCPAN -e "CPAN::Shell->notest('install', 'SHANCOCK/Perl-Tidy-20230309.tar.gz')" && \
+    rm -rf /root/.cpan
+
+# pg_bsd_indent is not packaged, and ours differs from upstream's. Build it
+# from src/tools/pg_bsd_indent, passed as the pg_bsd_indent build context.
+# It only needs these definitions from c.h and nothing from libpgport.
+RUN --mount=type=bind,from=pg_bsd_indent,target=/tmp/pg_bsd_indent \
+    mkdir /tmp/pg_bsd_indent_include && \
+    printf '%s\n' \
+        '#include <stdarg.h>' \
+        '#include <stdbool.h>' \
+        '#include <stddef.h>' \
+        '#define MAXPGPATH 1024' \
+        '#define pg_attribute_noreturn() __attribute__((noreturn))' \
+        '#define pg_attribute_printf(f, a) __attribute__((format(printf, f, a)))' \
+        > /tmp/pg_bsd_indent_include/c.h && \
+    gcc -O2 -Wall -I/tmp/pg_bsd_indent -I/tmp/pg_bsd_indent_include \
+        -o /usr/local/bin/pg_bsd_indent /tmp/pg_bsd_indent/*.c && \
+    rm -rf /tmp/pg_bsd_indent_include
+
+RUN groupadd -r postgres -g 1000 && \
+    useradd -u 1000 -g postgres -G wheel -p '' postgres && \
+    echo "postgres ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/postgres && \
+    chmod 0440 /etc/sudoers.d/postgres && \
+    echo "ulimit -c unlimited" >> /home/postgres/.bashrc && \
+    echo "export PGHOST=127.0.0.1" >> /home/postgres/.bashrc && \
+    ln -sf /usr/share/zoneinfo/UTC /etc/localtime
+
+ENV PATH="/home/postgres/tmp_polardb_pg_17_base/bin:/home/postgres/tmp_polardb_pg_15_base/bin:$PATH"
+ENV LANG=en_US.UTF-8
+ENV LANGUAGE=en_US.UTF-8
+ENV LC_ALL=en_US.UTF-8
+
+USER postgres
+WORKDIR /home/postgres
+CMD ["bash"]

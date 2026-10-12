@@ -24,13 +24,15 @@ CLEANUP="${4:-false}"
 echo "Running with container_image=$CONTAINER_IMAGE, debug_mode=$DEBUG_MODE"
 echo "Executing rules: $RULES"
 
+IMAGE=$("$(dirname "$0")/docker/image.sh" ensure "$CONTAINER_IMAGE")
+
 # Create and start the container
 docker create                                                  \
   -t                                                           \
   --shm-size=1g                                                \
-  --name polardb_${CONTAINER_IMAGE}                 \
+  --name polardb_${CONTAINER_IMAGE}                            \
   -v `pwd`:/home/postgres/PolarDB-for-PostgreSQL               \
-  polardb/polardb_pg_devel:${CONTAINER_IMAGE} \
+  "$IMAGE"                                                     \
   bash
 docker start polardb_${CONTAINER_IMAGE}
 
@@ -45,38 +47,6 @@ docker exec polardb_${CONTAINER_IMAGE} bash -c \
 # host, servers in TAP tests miss their start and stop timeouts.
 docker exec polardb_${CONTAINER_IMAGE} bash -c \
   "set -x && \
-   if ! command -v eatmydata >/dev/null 2>&1; then \
-     if command -v yum >/dev/null 2>&1; then \
-       sudo yum install -y eatmydata; \
-     elif command -v apt-get >/dev/null 2>&1; then \
-       sudo apt-get update -y && \
-       sudo apt-get install -y eatmydata; \
-     fi; \
-   fi && \
-   if ! command -v ps >/dev/null 2>&1; then \
-     if command -v yum >/dev/null 2>&1; then \
-       sudo yum install -y procps-ng; \
-     elif command -v apt-get >/dev/null 2>&1; then \
-       sudo apt-get update -y && \
-       sudo apt-get install -y procps; \
-     fi; \
-   fi && \
-   if ! command -v eu-stack >/dev/null 2>&1; then \
-     if command -v yum >/dev/null 2>&1; then \
-       sudo yum install -y elfutils; \
-     elif command -v apt-get >/dev/null 2>&1; then \
-       sudo apt-get update -y && \
-       sudo apt-get install -y elfutils; \
-     fi; \
-   fi && \
-   if [ ! -x /usr/sbin/slapd ]; then \
-     if command -v yum >/dev/null 2>&1; then \
-       sudo yum install -y openldap-servers openldap-clients; \
-     elif command -v apt-get >/dev/null 2>&1; then \
-       sudo apt-get update -y && \
-       sudo DEBIAN_FRONTEND=noninteractive apt-get install -y slapd ldap-utils; \
-     fi; \
-   fi && \
    cd /home/postgres/PolarDB-for-PostgreSQL && \
    if [ -f /etc/bashrc ]; then source /etc/bashrc; fi && \
    set -eu && \
