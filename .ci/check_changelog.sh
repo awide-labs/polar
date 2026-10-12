@@ -22,7 +22,7 @@ source "${SCRIPT_DIR}/common.sh"
 RELEASE_HEADING_PATTERN='^## \[.+\] - [0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$'
 
 # Regex for URL definition line (Keep a Changelog link format): [version]: URL
-URL_DEFINITION_PATTERN='^\[.+\]:\s*.+'
+URL_DEFINITION_PATTERN='^\[.+\]:[[:space:]]*.+'
 
 readonly CHANGELOG="CHANGELOG.md"
 
@@ -475,7 +475,7 @@ main() {
     # Uses Conventional Commits footer format: skip-changelog: true
     # Breaking changes cannot be skipped.
     if [ "${is_breaking}" = "false" ] && \
-       echo "${full_msg}" | grep -qiE "^skip-changelog:\s*true"; then
+       echo "${full_msg}" | grep -qiE "^skip-changelog:[[:space:]]*true"; then
       commits_skip_changelog+=("${commit_sha:0:8} - ${commit_msg}")
       log_success "  ✓ ${commit_sha:0:8} - ${commit_msg} " \
                   "(skip-changelog)"
