@@ -204,7 +204,7 @@ main() {
       fi
       # Skip footer lines (any line matching token: value format)
       # Footer lines follow the pattern: token: value
-      if echo "${body_line}" | grep -qE "^[A-Za-z-]+:\s+"; then
+      if echo "${body_line}" | grep -qE "^[A-Za-z-]+:[[:space:]]+"; then
         continue
       fi
       # Check line length
@@ -221,7 +221,7 @@ main() {
 
     # Check for mandatory Refs: footer (must be exactly one)
     local refs_lines
-    refs_lines=$(echo "${full_msg}" | grep -iE "^Refs:\s+.+" || true)
+    refs_lines=$(echo "${full_msg}" | grep -iE "^Refs:[[:space:]]+.+" || true)
     local refs_count=0
     if [ -n "${refs_lines}" ]; then
       refs_count=$(echo "${refs_lines}" | grep -c .)
@@ -246,8 +246,8 @@ main() {
     local refs_line
     refs_line=$(echo "${refs_lines}" | head -1)
     local refs_value
-    refs_value=$(echo "${refs_line}" | sed -E 's/^[Rr]efs:\s+//')
-    if ! echo "${refs_value}" | grep -qE "^[A-Za-z0-9_-]+(,\s*[A-Za-z0-9_-]+)*$"; then
+    refs_value=$(echo "${refs_line}" | sed -E 's/^[Rr]efs:[[:space:]]+//')
+    if ! echo "${refs_value}" | grep -qE "^[A-Za-z0-9_-]+(,[[:space:]]*[A-Za-z0-9_-]+)*$"; then
       local new_entry
       new_entry="${commit_sha:0:8}: ${commit_msg} "
       new_entry+="(Refs: must be comma-separated list of words)"
