@@ -275,6 +275,9 @@ CI builds and tests in the development images defined in
 values of `ci-test.sh`. The images also work as a development environment,
 e.g. `ghcr.io/awide-labs/polar/dev/rocky:9`.
 
+The images include [PolarFS](https://github.com/awide-labs/polarfs),
+installed to `/usr/local/polarstore`, to build with `--with-pfsd`.
+
 ## Coding Style
 
 ### Languages
