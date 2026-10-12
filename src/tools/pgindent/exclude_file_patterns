@@ -87,3 +87,6 @@ external/sequential_uuids/
 
 # weird
 src/include/utils/faultinjector_lists.h
+
+# The PolarFS submodule built into the development images
+\.ci/docker/polarfs/

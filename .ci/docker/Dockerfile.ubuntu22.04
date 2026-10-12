@@ -43,7 +43,9 @@ RUN apt-get update -y && \
         libdbi-perl \
         libexpect-perl \
         libfile-find-rule-perl \
+        libfuse-dev \
         libgss-dev \
+        libgtest-dev \
         libicu-dev \
         libipc-run-perl \
         libkrb5-dev \
@@ -114,6 +116,18 @@ RUN --mount=type=bind,from=pg_bsd_indent,target=/tmp/pg_bsd_indent \
     gcc -O2 -Wall -I/tmp/pg_bsd_indent -I/tmp/pg_bsd_indent_include \
         -o /usr/local/bin/pg_bsd_indent /tmp/pg_bsd_indent/*.c && \
     rm -rf /tmp/pg_bsd_indent_include
+
+# PolarFS, for --with-pfsd. Built from the .ci/docker/polarfs submodule,
+# passed as the polarfs build context, and installed to
+# /usr/local/polarstore.
+RUN --mount=type=bind,from=polarfs,target=/tmp/polarfs-src \
+    cp -r /tmp/polarfs-src /tmp/polarfs && \
+    cd /tmp/polarfs && \
+    cmake -S . -B build && \
+    cmake --build build --parallel "$(nproc)" && \
+    ./install.sh && \
+    cd / && \
+    rm -rf /tmp/polarfs
 
 RUN groupadd -r postgres -g 1000 && \
     useradd -u 1000 -g postgres -G sudo -ms /bin/bash -p '' postgres && \
