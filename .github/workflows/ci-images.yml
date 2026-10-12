@@ -1,0 +1,100 @@
+name: ci-images
+
+# Publishes the images in .ci/docker to ghcr.io/awide-labs/polar/dev/<name>
+# for amd64 and arm64. Tags are content hashes of the image sources (see
+# .ci/docker/image.sh), so only images whose sources changed are built.
+
+on:
+  push:
+    branches: [ 'POLARDB_*_STABLE' ]
+    paths:
+      - '.ci/docker/**'
+      - '.github/workflows/ci-images.yml'
+      - 'src/tools/pg_bsd_indent/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: ci-images-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: build (${{ matrix.os }}, ${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ rocky9, rocky10, ubuntu22.04, ubuntu26.04 ]
+        arch: [ amd64, arm64 ]
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Login to ghcr.io
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        env:
+          OS: ${{ matrix.os }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          image=$(.ci/docker/image.sh ref "$OS")
+          if docker manifest inspect "$image" >/dev/null 2>&1; then
+            echo "$image is already published"
+            exit 0
+          fi
+          .ci/docker/image.sh build "$OS" "$image-$ARCH"
+          docker push "$image-$ARCH"
+
+  publish:
+    name: publish (${{ matrix.os }})
+    needs: build
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ rocky9, rocky10, ubuntu22.04, ubuntu26.04 ]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Login to ghcr.io
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create multi-arch tag
+        env:
+          OS: ${{ matrix.os }}
+        run: |
+          image=$(.ci/docker/image.sh ref "$OS")
+          if docker manifest inspect "$image" >/dev/null 2>&1; then
+            echo "$image is already published"
+            exit 0
+          fi
+          docker buildx imagetools create -t "$image" "$image-amd64" "$image-arm64"
+
+      # Only the default branch moves the <version> tags, so that stable
+      # branches with different images do not override each other.
+      - name: Point <version> tag at the image
+        if: github.ref_name == github.event.repository.default_branch
+        env:
+          OS: ${{ matrix.os }}
+        run: |
+          image=$(.ci/docker/image.sh ref "$OS")
+          docker buildx imagetools create -t "${image%-*}" "$image"

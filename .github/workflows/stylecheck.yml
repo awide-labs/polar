@@ -14,11 +14,12 @@ jobs:
 
       - name: create and start the container
         run: |
+          image=$(.ci/docker/image.sh ensure rocky9) &&                 \
           docker create                                                  \
             -t                                                           \
             --name polardb_rocky9                                        \
             -v `pwd`:/home/postgres/PolarDB-for-PostgreSQL               \
-            polardb/polardb_pg_devel:rocky9                              \
+            "$image"                                                     \
             bash &&                                                      \
           docker start polardb_rocky9
 
@@ -45,11 +46,12 @@ jobs:
 
       - name: create and start the container
         run: |
+          image=$(.ci/docker/image.sh ensure rocky9) &&                 \
           docker create                                                  \
             -t                                                           \
             --name polardb_rocky9                                        \
             -v `pwd`:/home/postgres/PolarDB-for-PostgreSQL               \
-            polardb/polardb_pg_devel:rocky9                              \
+            "$image"                                                     \
             bash &&                                                      \
           docker start polardb_rocky9
 

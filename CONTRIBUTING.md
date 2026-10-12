@@ -269,6 +269,12 @@ make ci-quick -j4 PROVE_FLAGS='--timer --jobs=4' \
   PG_TEST_INITDB_EXTRA_OPTS='--wal-segsize=16'
 ```
 
+CI builds and tests in the development images defined in
+[`.ci/docker`](.ci/docker/README.md), one per distribution in the CI matrix:
+`rocky9`, `rocky10`, `ubuntu22.04` and `ubuntu26.04`. These are the `<image>`
+values of `ci-test.sh`. The images also work as a development environment,
+e.g. `ghcr.io/awide-labs/polar/dev/rocky:9`.
+
 ## Coding Style
 
 ### Languages

@@ -1,0 +1,136 @@
+# Development and CI image for Awide Polar. See .ci/docker/README.md.
+
+FROM ubuntu:26.04
+
+LABEL org.opencontainers.image.source="https://github.com/awide-labs/polar"
+LABEL org.opencontainers.image.description="Awide Polar development and CI environment"
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV TZ=UTC
+
+RUN apt-get update -y && \
+    apt-get upgrade -y && \
+    apt-get install -y locales && \
+    sed -i '/en_US.UTF-8/s/^# //g' /etc/locale.gen && \
+    sed -i '/zh_CN/s/^# //g' /etc/locale.gen && \
+    locale-gen && \
+    rm -rf /var/lib/apt/lists/*
+
+# Default GCC and LLVM 17
+RUN apt-get update -y && \
+    apt-get install -y \
+        clang-17 \
+        g++ \
+        gcc \
+        gdb \
+        llvm-17-dev \
+        make \
+        pkg-config \
+        && \
+    update-alternatives --install \
+        /usr/bin/llvm-config llvm-config /usr/bin/llvm-config-17 60 --slave \
+        /usr/bin/clang++ clang++ /usr/bin/clang++-17 --slave \
+        /usr/bin/clang clang /usr/bin/clang-17 && \
+    rm -rf /var/lib/apt/lists/*
+
+# Build dependencies
+RUN apt-get update -y && \
+    apt-get install -y \
+        bison \
+        flex \
+        gettext \
+        libaio-dev \
+        libdbi-perl \
+        libexpect-perl \
+        libfile-find-rule-perl \
+        libgss-dev \
+        libicu-dev \
+        libipc-run-perl \
+        libkrb5-dev \
+        libldap2-dev \
+        liblz4-dev \
+        libpam0g-dev \
+        libperl-dev \
+        libreadline-dev \
+        libssl-dev \
+        libunwind-dev \
+        libxml2-dev \
+        libxslt1-dev \
+        libzstd-dev \
+        python3-dev \
+        tcl-dev \
+        uuid-dev \
+        zlib1g-dev \
+        && \
+    rm -rf /var/lib/apt/lists/*
+
+# Test dependencies: Kerberos, LDAP and SSL TAP tests, eu-stack for
+# polar_consistency, eatmydata to speed up fsync-heavy tests
+RUN apt-get update -y && \
+    apt-get install -y \
+        eatmydata \
+        elfutils \
+        krb5-admin-server \
+        krb5-kdc \
+        krb5-user \
+        ldap-utils \
+        openssl \
+        procps \
+        slapd \
+        && \
+    rm -rf /var/lib/apt/lists/*
+
+# Tools
+RUN apt-get update -y && \
+    apt-get install -y \
+        autoconf \
+        ccache \
+        cmake \
+        git \
+        iproute2 \
+        sudo \
+        vim \
+        wget \
+        && \
+    rm -rf /var/lib/apt/lists/*
+
+# Perl::Tidy version must match src/tools/pgindent/README
+RUN perl -MCPAN -e "CPAN::Shell->notest('install', 'SHANCOCK/Perl-Tidy-20230309.tar.gz')" && \
+    rm -rf /root/.cpan
+
+# pg_bsd_indent is not packaged, and ours differs from upstream's. Build it
+# from src/tools/pg_bsd_indent, passed as the pg_bsd_indent build context.
+# It only needs these definitions from c.h and nothing from libpgport.
+RUN --mount=type=bind,from=pg_bsd_indent,target=/tmp/pg_bsd_indent \
+    mkdir /tmp/pg_bsd_indent_include && \
+    printf '%s\n' \
+        '#include <stdarg.h>' \
+        '#include <stdbool.h>' \
+        '#include <stddef.h>' \
+        '#define MAXPGPATH 1024' \
+        '#define pg_attribute_noreturn() __attribute__((noreturn))' \
+        '#define pg_attribute_printf(f, a) __attribute__((format(printf, f, a)))' \
+        > /tmp/pg_bsd_indent_include/c.h && \
+    gcc -O2 -Wall -I/tmp/pg_bsd_indent -I/tmp/pg_bsd_indent_include \
+        -o /usr/local/bin/pg_bsd_indent /tmp/pg_bsd_indent/*.c && \
+    rm -rf /tmp/pg_bsd_indent_include
+
+# The base image has an "ubuntu" user with UID 1000
+RUN userdel -r ubuntu && \
+    groupadd -r postgres -g 1000 && \
+    useradd -u 1000 -g postgres -G sudo -ms /bin/bash -p '' postgres && \
+    echo "postgres ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/postgres && \
+    chmod 0440 /etc/sudoers.d/postgres && \
+    echo "ulimit -c unlimited" >> /home/postgres/.bashrc && \
+    echo "export PGHOST=127.0.0.1" >> /home/postgres/.bashrc && \
+    ln -sf /usr/share/zoneinfo/UTC /etc/localtime && \
+    echo UTC > /etc/timezone
+
+ENV PATH="/home/postgres/tmp_polardb_pg_17_base/bin:/home/postgres/tmp_polardb_pg_15_base/bin:$PATH"
+ENV LANG=en_US.UTF-8
+ENV LANGUAGE=en_US.UTF-8
+ENV LC_ALL=en_US.UTF-8
+
+USER postgres
+WORKDIR /home/postgres
+CMD ["bash"]
