@@ -49,6 +49,7 @@ Usage:
     -m --minimal compile with minimal extention set
     --jobs=<jobs number for compile>, specifies CPU cores number for compiling
     --quiet=[on|off], configure with quiet mode or not, default on. more info for debug if off
+    --pfsd=[on|off], build with PolarFS (--with-pfsd), default on. needs PolarFS installed in /usr/local/polarstore
     --clean, stop and clean existing cluster
     --nc,--nocompile, prevents recompile PolarDB
     --ni,--noinit, prevents init PolarDB cluster
@@ -169,6 +170,7 @@ port=$(random_unused_port)
 # 2.2 complie options
 debug=on
 minimal=off
+pfsd=on
 compiler_flag="-g -Wall -fno-omit-frame-pointer"
 lto_flag=""
 # disable origin rpath config because of our own rpath config in LDFLAGS
@@ -205,6 +207,7 @@ for arg do
     --debug=*)                  debug="$val" ;;
     --jobs=*)                   jobs="$val" ;;
     --quiet=*)                  quiet="$val" ;;
+    --pfsd=*)                   pfsd="$val" ;;
     -m|--minimal)               minimal=on ;;
     --ws=*|--withstandby=*)     standby_num="$val" ;;
     --wr=*|--withreplica=*)     replica_num="$val" ;;
@@ -237,6 +240,15 @@ else
 fi
 
 configure_flag+=" --with-linux-dist=$linux_dist"
+
+if [[ $pfsd == "on" ]]; then
+  configure_flag+=" --with-pfsd"
+  if [[ $compile == "on" ]] && [[ ! -f /usr/local/polarstore/pfsd/lib/libpfsd.a ]]; then
+    error "build.sh: PolarFS is not installed in /usr/local/polarstore."
+    error "Install PolarFS, or build without it with --pfsd=off."
+    exit 1
+  fi
+fi
 
 # Compile PolarDB in minimal mode, this will discard some strange dependencies
 # and make it much more convenient to develop
