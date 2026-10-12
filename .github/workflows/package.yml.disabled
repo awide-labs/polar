@@ -37,7 +37,7 @@ jobs:
           docker create                                                    \
             -t                                                             \
             --name polardb_${{ matrix.base_image }}                        \
-            -v `pwd`:/home/postgres/PolarDB-for-PostgreSQL                 \
+            -v `pwd`:/home/postgres/polar                                  \
             polardb/polardb_pg_devel:${{ matrix.base_image }}              \
             bash &&                                                        \
           docker start polardb_${{ matrix.base_image }}
@@ -46,7 +46,7 @@ jobs:
         run: |
           docker exec                                                      \
             polardb_${{ matrix.base_image }}                               \
-            bash -c "cd /home/postgres/PolarDB-for-PostgreSQL &&           \
+            bash -c "cd /home/postgres/polar &&                            \
                      sudo chown -R postgres:postgres ./ &&                 \
                      cd ./package/rpm &&                                   \
                      if [ -f /etc/bashrc ]; then source /etc/bashrc; fi && \
@@ -86,7 +86,7 @@ jobs:
           docker create                                                    \
             -t                                                             \
             --name polardb_${{ matrix.base_image }}                        \
-            -v `pwd`:/home/postgres/PolarDB-for-PostgreSQL                 \
+            -v `pwd`:/home/postgres/polar                                  \
             polardb/polardb_pg_devel:${{ matrix.base_image }}              \
             bash &&                                                        \
           docker start polardb_${{ matrix.base_image }}
@@ -95,7 +95,7 @@ jobs:
         run: |
           docker exec                                                       \
             polardb_${{ matrix.base_image }}                                \
-            bash -c "cd /home/postgres/PolarDB-for-PostgreSQL &&            \
+            bash -c "cd /home/postgres/polar &&                             \
                       sudo chown -R postgres:postgres ./ &&                 \
                       cd ./package/debian &&                                \
                       if [ -f /etc/bashrc ]; then source /etc/bashrc; fi && \
