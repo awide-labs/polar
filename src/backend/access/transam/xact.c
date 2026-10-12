@@ -736,8 +736,8 @@ AssignTransactionId(TransactionState s)
 			polar_csnlog_set_parent(XidFromFullTransactionId(s->fullTransactionId),
 									XidFromFullTransactionId(s->parent->fullTransactionId));
 		else
-		SubTransSetParent(XidFromFullTransactionId(s->fullTransactionId),
-						  XidFromFullTransactionId(s->parent->fullTransactionId));
+			SubTransSetParent(XidFromFullTransactionId(s->fullTransactionId),
+							  XidFromFullTransactionId(s->parent->fullTransactionId));
 	}
 
 	/*
@@ -1348,7 +1348,7 @@ RecordTransactionCommit(void)
 	SharedInvalidationMessage *invalMessages = NULL;
 	bool		RelcacheInitFileInval = false;
 	bool		wrote_xlog;
-	bool 	 	async_commit;
+	bool		async_commit;
 
 	/*
 	 * Log pending invalidations for logical decoding of in-progress
@@ -1583,9 +1583,10 @@ RecordTransactionCommit(void)
 		SyncRepWaitForLSN(XactLastRecEnd, true, false);
 
 	/*
-	 * POLAR: If polar csn enabled. Firstly, we should wait for synchronous replication
-	 * before update committed csn. Without this, the changes made by the transaction
-	 * may become visible before standby recieves the commit XLOG record.
+	 * POLAR: If polar csn enabled. Firstly, we should wait for synchronous
+	 * replication before update committed csn. Without this, the changes made
+	 * by the transaction may become visible before standby recieves the
+	 * commit XLOG record.
 	 */
 	if (polar_csn_enable && markXidCommitted)
 	{
@@ -6268,7 +6269,7 @@ xact_redo_commit(xl_xact_parsed_commit *parsed,
 		if (polar_csn_enable)
 		{
 			polar_xact_commit_tree_csn(
-									 xid, parsed->nsubxacts, parsed->subxacts, lsn);
+									   xid, parsed->nsubxacts, parsed->subxacts, lsn);
 		}
 
 		/*
@@ -6550,7 +6551,7 @@ polar_check_xact_split_wait_lsn(char **newval, void **extra, GucSource source)
 	{
 		XLogRecPtr	lsn;
 		XLogRecPtr *myextra;
-		char *endptr;
+		char	   *endptr;
 
 		errno = 0;
 		lsn = strtou64(*newval, &endptr, 10);
