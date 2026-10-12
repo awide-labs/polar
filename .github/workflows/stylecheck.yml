@@ -18,7 +18,7 @@ jobs:
           docker create                                                  \
             -t                                                           \
             --name polardb_rocky9                                        \
-            -v `pwd`:/home/postgres/PolarDB-for-PostgreSQL               \
+            -v `pwd`:/home/postgres/polar                                \
             "$image"                                                     \
             bash &&                                                      \
           docker start polardb_rocky9
@@ -27,14 +27,14 @@ jobs:
         run: |
           docker exec                                            \
             polardb_rocky9                                       \
-            bash -c "cd /home/postgres/PolarDB-for-PostgreSQL && \
+            bash -c "cd /home/postgres/polar && \
                      sudo chown -R postgres:postgres ./"
 
       - name: Check C code style with pgindent
         run: |
           docker exec                                            \
             polardb_rocky9                                       \
-            bash -c "cd /home/postgres/PolarDB-for-PostgreSQL && \
+            bash -c "cd /home/postgres/polar && \
                      .ci/check_pgindent.sh"
 
   check-extensions-order:
@@ -50,7 +50,7 @@ jobs:
           docker create                                                  \
             -t                                                           \
             --name polardb_rocky9                                        \
-            -v `pwd`:/home/postgres/PolarDB-for-PostgreSQL               \
+            -v `pwd`:/home/postgres/polar                                \
             "$image"                                                     \
             bash &&                                                      \
           docker start polardb_rocky9
@@ -59,12 +59,12 @@ jobs:
         run: |
           docker exec                                            \
             polardb_rocky9                                       \
-            bash -c "cd /home/postgres/PolarDB-for-PostgreSQL && \
+            bash -c "cd /home/postgres/polar && \
                      sudo chown -R postgres:postgres ./"
 
       - name: Check extensions order
         run: |
           docker exec                                            \
             polardb_rocky9                                       \
-            bash -c "cd /home/postgres/PolarDB-for-PostgreSQL && \
+            bash -c "cd /home/postgres/polar && \
                      .ci/check_extensions_order.sh"

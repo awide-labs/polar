@@ -31,14 +31,14 @@ docker create                                                  \
   -t                                                           \
   --shm-size=1g                                                \
   --name polardb_${CONTAINER_IMAGE}                            \
-  -v `pwd`:/home/postgres/PolarDB-for-PostgreSQL               \
+  -v `pwd`:/home/postgres/polar                                \
   "$IMAGE"                                                     \
   bash
 docker start polardb_${CONTAINER_IMAGE}
 
 # Make files writable for postgres user
 docker exec polardb_${CONTAINER_IMAGE} bash -c \
-  "cd /home/postgres/PolarDB-for-PostgreSQL && \
+  "cd /home/postgres/polar && \
    sudo chown -R postgres:postgres . 2>/dev/null || true"
 
 # Build and run defined checks in sequence. The build uses all CPU cores. The
@@ -47,7 +47,7 @@ docker exec polardb_${CONTAINER_IMAGE} bash -c \
 # host, servers in TAP tests miss their start and stop timeouts.
 docker exec polardb_${CONTAINER_IMAGE} bash -c \
   "set -x && \
-   cd /home/postgres/PolarDB-for-PostgreSQL && \
+   cd /home/postgres/polar && \
    if [ -f /etc/bashrc ]; then source /etc/bashrc; fi && \
    set -eu && \
    CPUS=\$(nproc) && \
