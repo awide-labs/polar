@@ -128,7 +128,8 @@ like($log, $panic_log, "found panic log");
 $node_replica->_update_pid(-1);
 $node_replica->start;
 # wait for replica to do crash recovery
-$node_replica->polar_wait_for_startup(30);
+$node_replica->poll_query_until($db, 'SELECT pg_is_in_recovery()')
+  or die "Timed out while waiting for replica to restart";
 
 $node_replica->promote;
 # wait for new primary to startup
