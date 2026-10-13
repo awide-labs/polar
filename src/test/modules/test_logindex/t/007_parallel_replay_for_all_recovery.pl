@@ -303,7 +303,8 @@ PostgreSQL::Test::Utils::system_or_bail('rm', '-f',
 	$node_pitr_1->data_dir . '/polar_node_static.conf');
 
 $node_pitr_1->start;
-$node_pitr_1->polar_wait_for_startup(60);
+$node_pitr_1->poll_query_until('postgres', 'SELECT NOT pg_is_in_recovery()')
+  or die "Timed out while waiting for PITR of pitr1 to complete";
 $node_pitr_1->polar_drop_all_slots;
 
 parallel_replay_check($node_pitr_1,
@@ -331,7 +332,8 @@ PostgreSQL::Test::Utils::system_or_bail('rm', '-f',
 	$node_pitr_2->data_dir . '/polar_node_static.conf');
 
 $node_pitr_2->start;
-$node_pitr_2->polar_wait_for_startup(60);
+$node_pitr_2->poll_query_until('postgres', 'SELECT NOT pg_is_in_recovery()')
+  or die "Timed out while waiting for PITR of pitr2 to complete";
 $node_pitr_2->polar_drop_all_slots;
 
 parallel_replay_check($node_pitr_2,
@@ -360,7 +362,8 @@ PostgreSQL::Test::Utils::system_or_bail('rm', '-f',
 	$node_pitr_3->data_dir . '/polar_node_static.conf');
 
 $node_pitr_3->start;
-$node_pitr_3->polar_wait_for_startup(60);
+$node_pitr_3->poll_query_until('postgres', 'SELECT NOT pg_is_in_recovery()')
+  or die "Timed out while waiting for PITR of pitr3 to complete";
 $node_pitr_3->polar_drop_all_slots;
 
 parallel_replay_check(
@@ -391,7 +394,8 @@ PostgreSQL::Test::Utils::system_or_bail('rm', '-f',
 	$node_pitr_4->data_dir . '/polar_node_static.conf');
 
 $node_pitr_4->start;
-$node_pitr_4->polar_wait_for_startup(60);
+$node_pitr_4->poll_query_until('postgres', 'SELECT NOT pg_is_in_recovery()')
+  or die "Timed out while waiting for PITR of pitr4 to complete";
 $node_pitr_4->polar_drop_all_slots;
 
 parallel_replay_check(
