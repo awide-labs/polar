@@ -2596,7 +2596,7 @@ regression_main(int argc, char *argv[],
 		 * Start the temp postmaster
 		 */
 		snprintf(buf, sizeof(buf),
-				 "%s \"%s%spostgres\" -D \"%s/data\" -F%s "
+				 "%s \"%s%spostgres\" -D \"%s/data\"%s "
 				 "-c \"listen_addresses=%s\" -k \"%s\" "
 				 "> \"%s/log/postmaster.log\" 2>&1",
 				 RR_RECORD_CMD,

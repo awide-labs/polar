@@ -593,9 +593,6 @@ should be enabled. This is disabled by default.
 force_initdb => 1 will force the initialization of the cluster with a new
 initdb rather than copying the data folder from a template.
 
-The new node is set up in a fast but unsafe configuration where fsync is
-disabled.
-
 =cut
 
 sub init
@@ -709,7 +706,6 @@ sub init
 
 	open my $conf, '>>', "$pgdata/postgresql.conf" or die $!;
 	print $conf "\n# Added by PostgreSQL::Test::Cluster.pm\n";
-	print $conf "fsync = off\n";
 	print $conf "restart_after_crash = off\n";
 	print $conf "log_line_prefix = '%m [%p] %q%a '\n";
 	print $conf "log_statement = all\n";
