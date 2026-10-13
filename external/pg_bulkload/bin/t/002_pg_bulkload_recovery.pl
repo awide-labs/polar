@@ -464,7 +464,9 @@ sub PolarColdRestore {
 	# Replace polar_datadir in copied postgresql.conf with this node's path
 	my $conffile = $new_node->data_dir . '/postgresql.conf';
 	my $content = PostgreSQL::Test::Utils::slurp_file($conffile);
-	$content =~ s/^\s*polar_datadir\s*=.*/polar_datadir='file-dio:\/\/$new_polar_datadir'/gm;
+	my $polar_vfs_protocol = PostgreSQL::Test::Cluster::polar_vfs_protocol();
+	$content =~
+	  s/^\s*polar_datadir\s*=.*/polar_datadir='$polar_vfs_protocol$new_polar_datadir'/gm;
 	open my $fh, '>', $conffile or die "Cannot write $conffile: $!";
 	print $fh $content;
 	close $fh or die "Cannot close $conffile: $!";

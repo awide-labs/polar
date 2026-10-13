@@ -67,7 +67,9 @@ PostgreSQL::Test::Utils::system_or_bail('mv', $primary_datadir,
 	$new_primary_datadir);
 $node_primary->polar_set_datadir($new_primary_datadir);
 $node_primary->append_conf('postgresql.conf',
-	"polar_datadir='file-dio://./polar_shared_data/'");
+		"polar_datadir='"
+	  . PostgreSQL::Test::Cluster::polar_vfs_protocol()
+	  . "./polar_shared_data/'");
 $node_primary->append_conf('postgresql.conf', "max_wal_size='8GB'");
 PostgreSQL::Test::Utils::system_or_bail('rm', '-f',
 	"$primary_basedir/polar_node_static.conf");

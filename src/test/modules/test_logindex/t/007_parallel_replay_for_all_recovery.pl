@@ -25,6 +25,7 @@ use PostgreSQL::Test::Cluster;
 use PostgreSQL::Test::Utils;
 use Test::More;
 my $regress_db = 'postgres';
+my $polar_vfs_protocol = PostgreSQL::Test::Cluster::polar_vfs_protocol();
 
 sub parallel_replay_check
 {
@@ -294,7 +295,7 @@ $node_pitr_1->append_conf(
 	recovery_target_lsn = '$cur_flush_lsn'
 	recovery_target_inclusive = off
 	recovery_target_action = promote
-	polar_datadir='file-dio://polar_shared_data'
+	polar_datadir='${polar_vfs_protocol}polar_shared_data'
 	polar_primary_parallel_replay_mode='disable'
 	polar_pitr_parallel_replay_mode='disable'
 	polar_standby_parallel_replay_mode='disable'
@@ -323,7 +324,7 @@ $node_pitr_2->append_conf(
 	recovery_target_lsn = '$cur_flush_lsn'
 	recovery_target_inclusive = off
 	recovery_target_action = promote
-	polar_datadir='file-dio://polar_shared_data'
+	polar_datadir='${polar_vfs_protocol}polar_shared_data'
 	polar_primary_parallel_replay_mode='disable'
 	polar_pitr_parallel_replay_mode='recovery'
 	polar_standby_parallel_replay_mode='disable'
@@ -353,7 +354,7 @@ $node_pitr_3->append_conf(
 	recovery_target_lsn = '$cur_flush_lsn'
 	recovery_target_inclusive = off
 	recovery_target_action = promote
-	polar_datadir='file-dio://polar_shared_data'
+	polar_datadir='${polar_vfs_protocol}polar_shared_data'
 	polar_primary_parallel_replay_mode='disable'
 	polar_pitr_parallel_replay_mode='instant_recovery'
 	polar_standby_parallel_replay_mode='disable'
@@ -385,7 +386,7 @@ $node_pitr_4->append_conf(
 	recovery_target_lsn = '$cur_flush_lsn'
 	recovery_target_inclusive = off
 	recovery_target_action = promote
-	polar_datadir='file-dio://polar_shared_data'
+	polar_datadir='${polar_vfs_protocol}polar_shared_data'
 	polar_primary_parallel_replay_mode='disable'
 	polar_pitr_parallel_replay_mode='async_instant_recovery'
 	polar_standby_parallel_replay_mode='disable'

@@ -4234,6 +4234,26 @@ sub advance_wal
 
 =pod
 
+=item PostgreSQL::Test::Cluster::polar_vfs_protocol()
+
+Return the polar_vfs protocol prefix of polar_datadir. Nodes use direct I/O
+("file-dio://") by default, as with PFS there is no page cache. If the
+PG_TEST_POLAR_VFS_PROTOCOL environment variable is set to "file", they use
+buffered I/O ("file://") instead, which is much faster on slow disks.
+
+=cut
+
+sub polar_vfs_protocol
+{
+	my $protocol = $ENV{PG_TEST_POLAR_VFS_PROTOCOL} // 'file-dio';
+
+	die "invalid PG_TEST_POLAR_VFS_PROTOCOL \"$protocol\""
+	  unless $protocol eq 'file-dio' || $protocol eq 'file';
+	return "$protocol://";
+}
+
+=pod
+
 =item $node->polar_default_conf(filename, str)
 
 default configure for polar node.
@@ -4245,6 +4265,7 @@ sub polar_default_conf
 	my ($self) = @_;
 
 	my $polar_datadir = $self->polar_get_datadir;
+	my $polar_vfs_protocol = polar_vfs_protocol();
 
 	my $default_conf = <<"default_conf";
 
@@ -4255,7 +4276,7 @@ sub polar_default_conf
 	polar_vfs.localfs_mode = true
 	shared_preload_libraries = '\$libdir/polar_vfs,\$libdir/polar_io_stat,\$libdir/polar_monitor_preload,\$libdir/polar_worker'
 	polar_disk_name='tap_test'
-	polar_datadir='file-dio://$polar_datadir'
+	polar_datadir='$polar_vfs_protocol$polar_datadir'
 	hot_standby_feedback=on
 	polar_standby_feedback=on
 	logging_collector=on
@@ -4459,7 +4480,7 @@ sub polar_replica_set_recovery
 	$polar_datadir = $root_node->polar_get_datadir;
 	print "after set, polar_datadir = $polar_datadir\n";
 	$self->append_conf('postgresql.conf',
-		"polar_datadir='file-dio://$polar_datadir'");
+		"polar_datadir='" . polar_vfs_protocol() . "$polar_datadir'");
 	$self->polar_set_datadir($polar_datadir);
 	# delete polar_replica_booted for replica to make it working well with a new primary
 	PostgreSQL::Test::Utils::system_or_bail('rm', '-rf',
@@ -4565,7 +4586,7 @@ sub polar_standby_build_data
 				"$src_polar_datadir", "$dst_polar_datadir");
 		}
 		$self->append_conf('postgresql.conf',
-			"polar_datadir=\'file-dio://$dst_polar_datadir\'");
+			"polar_datadir='" . polar_vfs_protocol() . "$dst_polar_datadir'");
 		$self->polar_set_datadir($dst_polar_datadir);
 		print
 		  "Building standby datadir ($dst_polar_datadir) from primary datadir ($src_polar_datadir).\n";
