@@ -2248,6 +2248,29 @@ sub safe_psql
 	return $stdout;
 }
 
+# Write the given SQL to a temporary file for psql to read as its standard
+# input. Through a pipe, IPC::Run dies if psql exits before reading all of
+# it, e.g. because it fails to connect, as writing to the pipe then fails
+# with EPIPE. The file is removed when the returned object is destroyed.
+sub _psql_stdin_file
+{
+	my ($sql) = @_;
+	my $input = File::Temp->new(
+		DIR => $PostgreSQL::Test::Utils::tmp_check,
+		TEMPLATE => 'psql_input_XXXXXX');
+
+	if (defined $sql)
+	{
+		# Write the same bytes as IPC::Run would write to the pipe.
+		my $bytes = $sql;
+		utf8::encode($bytes) if utf8::is_utf8($bytes);
+		binmode($input);
+		print $input $bytes;
+	}
+	close($input) or die "could not write \"$input\": $!";
+	return $input;
+}
+
 =pod
 
 =item $node->psql($dbname, $sql, %params) => psql_retval
@@ -2403,6 +2426,7 @@ sub psql
 	$$stderr = "" if ref($stderr);
 
 	my $ret;
+	my $input = _psql_stdin_file($sql);
 
 	# Run psql and capture any possible exceptions.  If the exception is
 	# because of a timeout and the caller requested to handle that, just return
@@ -2414,7 +2438,7 @@ sub psql
 	{
 		local $@;
 		eval {
-			my @ipcrun_opts = (\@psql_params, '<', \$sql);
+			my @ipcrun_opts = (\@psql_params, '<', $input->filename);
 			push @ipcrun_opts, '>', $stdout if defined $stdout;
 			push @ipcrun_opts, '2>', $stderr if defined $stderr;
 			push @ipcrun_opts, $timeout if defined $timeout;
@@ -2880,9 +2904,11 @@ sub poll_query_until
 	my $max_attempts = 10 * $timeout;
 	my $attempts = 0;
 
+	my $input = _psql_stdin_file($query);
+
 	while ($attempts < $max_attempts)
 	{
-		my $result = IPC::Run::run $cmd, '<', \$query,
+		my $result = IPC::Run::run $cmd, '<', $input->filename,
 		  '>', \$stdout, '2>', \$stderr;
 
 		chomp($stdout);
