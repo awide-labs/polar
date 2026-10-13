@@ -217,6 +217,12 @@ ci-full: plcheck dccheck datamax-check check-world polar-check
 
 ci-quick: plcheck dccheck-lite datamax-check-lite check-world polar-check
 
+# PolarDB nodes in TAP tests use direct I/O for polar_datadir by default, so
+# their reads and writes wait for the disk. On slow CI disks this makes tests
+# stall behind the writes of concurrent ones, so ci-quick uses buffered I/O.
+# ci-full keeps direct I/O.
+ci-quick: export PG_TEST_POLAR_VFS_PROTOCOL = file
+
 .PHONY: plcheck dccheck-lite datamax-check datamax-check-lite ci-full ci-quick
 
 #
