@@ -611,7 +611,21 @@ sub init
 	$params{force_initdb} = 0 unless defined $params{force_initdb};
 	$params{has_archiving} = 0 unless defined $params{has_archiving};
 
+	# The initdb templates are created with the PG_TEST_INITDB_EXTRA_OPTS in
+	# effect at temp-install time, recorded in "<template>.opts", so they can
+	# be copied as long as these options are the only extra ones and have not
+	# changed since.
 	my $initdb_extra_opts_env = $ENV{PG_TEST_INITDB_EXTRA_OPTS};
+	my $template_opts_file =
+	  defined $ENV{INITDB_TEMPLATE} ? "$ENV{INITDB_TEMPLATE}.opts" : undef;
+	my $template_has_extra_opts =
+		 defined $initdb_extra_opts_env
+	  && !defined $params{extra}
+	  && !defined $params{system_identifier}
+	  && defined $template_opts_file
+	  && -f $template_opts_file
+	  && PostgreSQL::Test::Utils::slurp_file($template_opts_file) eq
+	  "$initdb_extra_opts_env\n";
 	if (defined $initdb_extra_opts_env)
 	{
 		push @{ $params{extra} }, shellwords($initdb_extra_opts_env);
@@ -639,7 +653,7 @@ sub init
 	# There's very similar code in pg_regress.c, but we can't easily
 	# deduplicate it until we require perl at build time.
 	if (   $params{force_initdb}
-		or defined $params{extra}
+		or (defined $params{extra} and !$template_has_extra_opts)
 		or !defined $ENV{INITDB_TEMPLATE})
 	{
 		note("initializing database system by running initdb");
