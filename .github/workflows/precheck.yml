@@ -134,6 +134,14 @@ jobs:
       - name: allow ptrace of non-child processes
         run: sudo sysctl -w kernel.yama.ptrace_scope=0
 
+      # Tests write and delete over 100 GB of short-lived data. Let the page
+      # cache hold it longer, so less of it is written to the slow runner disk
+      # and tests stall less behind writeback.
+      - name: relax dirty page writeback
+        run: |
+          sudo sysctl -w vm.dirty_background_ratio=50 vm.dirty_ratio=80 \
+            vm.dirty_expire_centisecs=60000
+
       - name: build and test
         run: |
           .ci/ci-test.sh \
