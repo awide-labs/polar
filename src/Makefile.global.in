@@ -433,8 +433,11 @@ ifeq ($(MAKELEVEL),0)
 	$(MAKE) -C '$(top_builddir)/external' DESTDIR='$(abs_top_builddir)'/tmp_install install >>'$(abs_top_builddir)'/tmp_install/log/install.log 2>&1
 	$(MAKE) -j1 $(if $(CHECKPREP_TOP),-C $(CHECKPREP_TOP),) checkprep >>'$(abs_top_builddir)'/tmp_install/log/install.log 2>&1
 
-	$(with_temp_install) initdb --auth trust --no-sync --no-instructions --lc-messages=C --no-clean '$(abs_top_builddir)'/tmp_install/initdb-template >>'$(abs_top_builddir)'/tmp_install/log/initdb-template.log 2>&1
-	$(with_temp_install) initdb -A trust -N --no-instructions -k '$(abs_top_builddir)'/tmp_install/initdb-template-chksum-pg >>'$(abs_top_builddir)'/tmp_install/log/initdb-template-chksum-pg.log 2>&1
+	$(with_temp_install) initdb --auth trust --no-sync --no-instructions --lc-messages=C --no-clean $$PG_TEST_INITDB_EXTRA_OPTS '$(abs_top_builddir)'/tmp_install/initdb-template >>'$(abs_top_builddir)'/tmp_install/log/initdb-template.log 2>&1
+	$(with_temp_install) initdb -A trust -N --no-instructions -k $$PG_TEST_INITDB_EXTRA_OPTS '$(abs_top_builddir)'/tmp_install/initdb-template-chksum-pg >>'$(abs_top_builddir)'/tmp_install/log/initdb-template-chksum-pg.log 2>&1
+	# Record the PG_TEST_INITDB_EXTRA_OPTS the templates were created with,
+	# so that Cluster.pm and pg_regress copy them only if they match
+	if [ -n "$${PG_TEST_INITDB_EXTRA_OPTS+set}" ]; then printf '%s\n' "$$PG_TEST_INITDB_EXTRA_OPTS" >'$(abs_top_builddir)'/tmp_install/initdb-template.opts; fi
 
 endif
 endif

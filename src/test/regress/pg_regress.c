@@ -1359,6 +1359,31 @@ make_directory(const char *dir)
 }
 
 /*
+ * Check whether the initdb template was created with the given extra initdb
+ * options, as recorded in "<template>.opts" by temp-install.
+ */
+static bool
+polar_initdb_template_has_opts(const char *template_dir, const char *opts)
+{
+	char		path[MAXPGPATH];
+	char		line[1024];
+	FILE	   *f;
+	bool		result = false;
+
+	snprintf(path, sizeof(path), "%s.opts", template_dir);
+	f = fopen(path, "r");
+	if (f == NULL)
+		return false;
+	if (fgets(line, sizeof(line), f) != NULL)
+	{
+		line[strcspn(line, "\n")] = '\0';
+		result = strcmp(line, opts) == 0;
+	}
+	fclose(f);
+	return result;
+}
+
+/*
  * In: filename.ext, Return: filename_i.ext, where 0 < i <= 9
  */
 static char *
@@ -2415,7 +2440,10 @@ regression_main(int argc, char *argv[],
 		 * duplicate it until we require perl at build time.
 		 */
 		initdb_template_dir = getenv("INITDB_TEMPLATE");
-		if (initdb_template_dir == NULL || nolocale || debug || initdb_extra_opts_env)
+		if (initdb_template_dir == NULL || nolocale || debug ||
+			(initdb_extra_opts_env &&
+			 !polar_initdb_template_has_opts(initdb_template_dir,
+											 initdb_extra_opts_env)))
 		{
 			note("initializing database system by running initdb");
 
