@@ -149,6 +149,28 @@ jobs:
             "${{ needs.changes.outputs.debug_mode }}" \
             "${{ needs.changes.outputs.target }}"
 
+      # The job log shows only the TAP output, so keep the test and server
+      # logs of failed jobs. Failed TAP tests keep their data directories,
+      # which contain the server logs of nodes with logging_collector = on.
+      # Tests run as postgres in the container, so use sudo to read them.
+      - name: collect test logs
+        if: failure()
+        run: |
+          sudo find . \( -path ./tmp_install -o -path ./.git \) -prune -o \
+            \( -type d -name log -path '*/tmp_check/*' \
+               -o -name regression.diffs -o -name regression.out \
+               -o -name postmaster.log \) -print0 |
+            sudo tar --null -T - -czf "${RUNNER_TEMP}/test-logs.tar.gz"
+          sudo chown "$(id -u):$(id -g)" "${RUNNER_TEMP}/test-logs.tar.gz"
+
+      - name: upload test logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-logs-${{ matrix.container_image }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/test-logs.tar.gz
+          retention-days: 14
+
   # Single required check for the whole matrix, so the ruleset does not have
   # to list every combination.
   regression-result:
