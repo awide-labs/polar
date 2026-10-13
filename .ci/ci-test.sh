@@ -42,17 +42,17 @@ docker exec polardb_${CONTAINER_IMAGE} bash -c \
    sudo chown -R postgres:postgres . 2>/dev/null || true"
 
 # Build and run defined checks in sequence. The build uses all CPU cores. The
-# ci-* targets run several TAP suites concurrently, each with its own prove
-# jobs, so test parallelism is kept below the core count: on an oversubscribed
-# host, servers in TAP tests miss their start and stop timeouts.
+# ci-* targets run as many test suites concurrently as there are CPU cores,
+# each with prove jobs for three quarters of them: most TAP tests spend their
+# time waiting for servers rather than computing.
 docker exec polardb_${CONTAINER_IMAGE} bash -c \
   "set -x && \
    cd /home/postgres/polar && \
    if [ -f /etc/bashrc ]; then source /etc/bashrc; fi && \
    set -eu && \
    CPUS=\$(nproc) && \
-   MAKE_JOBS=\$(( CPUS / 2 > 0 ? CPUS / 2 : 1 )) && \
-   PROVE_JOBS=\$(( CPUS * 2 / 3 > 0 ? CPUS * 2 / 3 : 1 )) && \
+   MAKE_JOBS=\$CPUS && \
+   PROVE_JOBS=\$(( CPUS * 3 / 4 > 0 ? CPUS * 3 / 4 : 1 )) && \
    export CFLAGS=-O2 CXXFLAGS=-O2 && \
    eatmydata ./build.sh --noinstall --debug=${DEBUG_MODE} --ec='--enable-tap-tests' && \
    export PG_TEST_INITDB_EXTRA_OPTS=--wal-segsize=16 && \
