@@ -107,17 +107,25 @@ alr_release_locks(polar_alr_xact *alr_xact)
 }
 
 /*
- * Try to release xact if any. A xact which is not running can be released. To
- * release it, we should remove all locks of this xact. And we will remove it
- * and its locks from HTAB.
+ * Try to acquire lock if any.
+ * Before that, try to release locks that are no longer held.
  */
-static void
-alr_try_to_release_xact(void)
+static bool
+alr_try_to_acquire_lock(void)
 {
+	LOCKTAG		locktag;
+	polar_alr_lock *alr_lock;
 	HASH_SEQ_STATUS hash_seq;
 	polar_alr_xact *alr_xact;
+	xl_standby_lock *lock;
 
 	LWLockAcquire(&polar_alr_ctl->lock, LW_EXCLUSIVE);
+
+	/*
+	 * Release locks of finished xacts before taking the next lock. This must
+	 * be done under the same LW_EXCLUSIVE, otherwise a release <-> acquire
+	 * reorder can cause an artificial deadlock.
+	 */
 	hash_seq_init(&hash_seq, xact_tbl);
 	while ((alr_xact = hash_seq_search(&hash_seq)) != NULL)
 	{
@@ -131,18 +139,7 @@ alr_try_to_release_xact(void)
 			hash_seq_init(&hash_seq, xact_tbl);
 		}
 	}
-	LWLockRelease(&polar_alr_ctl->lock);
-}
 
-/* Try to acquire lock if any. */
-static bool
-alr_try_to_acquire_lock(void)
-{
-	LOCKTAG		locktag;
-	polar_alr_lock *alr_lock;
-	xl_standby_lock *lock;
-
-	LWLockAcquire(&polar_alr_ctl->lock, LW_EXCLUSIVE);
 	if (dlist_is_empty(&polar_alr_ctl->locks))
 	{
 		polar_alr_ctl->lsn = InvalidXLogRecPtr;
@@ -307,11 +304,9 @@ polar_alr_worker_main(Datum main_arg)
 			{
 				polar_alr_ctl->worker_running = false;
 				polar_alr_release_locks(InvalidTransactionId, "worker");
-				alr_try_to_release_xact();
 			}
-			HandleMainLoopInterrupts();
 			got_lock = alr_try_to_acquire_lock();
-			alr_try_to_release_xact();
+			HandleMainLoopInterrupts();
 		} while (got_lock);
 
 		WaitLatch(MyLatch,
