@@ -103,6 +103,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Fixed a race in async lock replay on a replica that could result in a
+  fake deadlock with recovery after the primary ran consecutive
+  transactions that took `ACCESS EXCLUSIVE` locks on different tables,
+  cancelling user queries (XCOM-232)
 - Fixed `polar_resource_manager.mem_release_policy` being ignored when
   instance memory exceeded the limit: sessions were always released by the
   `default` policy (idle sessions terminated first, then active ones), so
