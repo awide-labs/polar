@@ -667,7 +667,7 @@ sub pgbench_worker_main
 			  if $temp_pipe != $pipe;
 			$command = <$pipe>;
 
-			if (defined $command && $command =~ qr/shutdown/i)
+			if (!defined $command || $command =~ qr/shutdown/i)
 			{
 				$request_shutdown += 1;
 				last;
@@ -758,7 +758,7 @@ sub misc_worker_main
 			  if $temp_pipe != $pipe;
 			$command = <$pipe>;
 
-			if (defined $command && $command =~ qr/shutdown/i)
+			if (!defined $command || $command =~ qr/shutdown/i)
 			{
 				$request_shutdown += 1;
 				last;
@@ -821,7 +821,7 @@ sub start_child_workers
 
 	if (!$self->pgbnech_is_enabled)
 	{
-		return;
+		return @child_workers;
 	}
 
 	# init pgbench
