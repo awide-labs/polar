@@ -101,6 +101,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Fixed a pg_bulkload load into a table, including `COPY FROM ... DIRECT`,
+  sometimes failing with "could not create loadstatus file ... File exists"
+  right after a failed parallel (`MULTI_PROCESS = YES`) load into the same
+  table (XCOM-215).
 - Fixed severe replay slowdown on a standby with parallel replay when
   `polar_logindex_replay_delay_threshold` was set to 2 TB or more, including
   its maximum value (XCOM-215).
