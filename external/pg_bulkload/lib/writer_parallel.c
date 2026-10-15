@@ -19,12 +19,14 @@
 #include "mb/pg_wchar.h"
 #include "miscadmin.h"
 #include "postmaster/postmaster.h"
+#include "storage/latch.h"
 #include "storage/lmgr.h"
 #include "storage/proc.h"
 #include "utils/guc.h"
 #include "utils/memutils.h"
 #include "utils/rel.h"
 #include "utils/typcache.h"
+#include "utils/wait_event.h"
 
 #include "pgut/pgut-be.h"
 #include "pgut/pgut-ipc.h"
@@ -52,6 +54,7 @@ static bool	ParallelWriterParam(ParallelWriter *self, const char *keyword, char 
 static void	ParallelWriterDumpParams(ParallelWriter *self);
 static int	ParallelWriterSendQuery(ParallelWriter *self, PGconn *conn, char *queueName, char *logfile, bool verbose);
 static const char *finish_and_get_message(ParallelWriter *self);
+static void wait_for_writer(PGconn *conn);
 static void write_queue(ParallelWriter *self, const void *buffer, uint32 len);
 static void transfer_message(void *arg, const PGresult *res);
 static char *escape_param_str(const char *str);
@@ -271,9 +274,33 @@ ParallelWriterClose(ParallelWriter *self, bool onError)
 		else if (PQisBusy(self->conn))
 		{
 			char		errbuf[256];
-			PGcancel   *cancel = PQgetCancel(self->conn);
+			PGcancel   *cancel;
+
+			/*
+			 * Detach from the queue first: a writer blocked in QueueRead()
+			 * errors out once it is the last one attached, and a writer that
+			 * has not opened the queue yet fails to find it.  This covers a
+			 * cancel request that arrives before the writer starts the query.
+			 */
+			if (self->queue)
+			{
+				QueueClose(self->queue);
+				self->queue = NULL;
+			}
+
+			cancel = PQgetCancel(self->conn);
 			if (cancel)
+			{
 				PQcancel(cancel, errbuf, lengthof(errbuf));
+				PQfreeCancel(cancel);
+			}
+
+			/*
+			 * Wait for the writer to finish its error cleanup, which unlinks
+			 * the load status file.  Otherwise the next load into the same
+			 * table can find the file still present and fail.
+			 */
+			wait_for_writer(self->conn);
 		}
 
 		if (self->conn)
@@ -344,6 +371,46 @@ finish_and_get_message(ParallelWriter *self)
 	PQfinish(self->conn);
 	self->conn = NULL;
 	return msg;
+}
+
+/*
+ * Wait until the query running on the writer connection completes and discard
+ * its results.  Runs during error cleanup, so it must not throw.
+ */
+static void
+wait_for_writer(PGconn *conn)
+{
+	PGresult   *res;
+	pgsocket	sock = PQsocket(conn);
+
+	if (sock == PGINVALID_SOCKET)
+		return;
+
+	for (;;)
+	{
+		while (PQisBusy(conn))
+		{
+			int			rc;
+
+			rc = WaitLatchOrSocket(MyLatch,
+								   WL_LATCH_SET | WL_SOCKET_READABLE |
+								   WL_EXIT_ON_PM_DEATH,
+								   sock, -1L, PG_WAIT_EXTENSION);
+			if (rc & WL_LATCH_SET)
+			{
+				ResetLatch(MyLatch);
+				if (ProcDiePending)
+					return;
+			}
+			if ((rc & WL_SOCKET_READABLE) && !PQconsumeInput(conn))
+				return;
+		}
+
+		res = PQgetResult(conn);
+		if (res == NULL)
+			break;
+		PQclear(res);
+	}
 }
 
 static void
