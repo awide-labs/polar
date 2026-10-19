@@ -15,6 +15,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Fixed false crash reports during smart and fast shutdown: the WAL
+  pipeliner's normal exit after the shutdown checkpoint was treated as a
+  crash, causing the postmaster to report an abnormal shutdown and exit
+  with status 1 (XCOM-240)
 - Fixed `postgres -C shared_memory_size_in_huge_pages` (and
   `-C shared_memory_size`) aborting at startup on a shared-storage node
   with `PANIC: control file ".../global/pg_control" not exist`. These

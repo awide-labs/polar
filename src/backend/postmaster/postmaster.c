@@ -2935,11 +2935,16 @@ process_pm_child_exit(void)
 			continue;
 		}
 
+		/*
+		 * The WAL pipeliner should exit normally only after we ask it to stop
+		 * following the shutdown checkpoint.  Any other exit is a crash.
+		 */
 		if (pid == PolarWalPipelinerPID)
 		{
 			PolarWalPipelinerPID = 0;
-			HandleChildCrash(pid, exitstatus,
-							 _("WAL pipeliner process"));
+			if (!EXIT_STATUS_0(exitstatus) || pmState != PM_SHUTDOWN_2)
+				HandleChildCrash(pid, exitstatus,
+								 _("WAL pipeliner process"));
 			continue;
 		}
 
