@@ -17,6 +17,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Fixed Patroni discarding valid PolarDB settings supplied through its
+  distributed configuration. Exposed 59 operational and diagnostic
+  parameters to configuration discovery, including connection limits,
+  log retention, and replication controls (XCOM-242).
 - A transaction that imports a snapshot with `SET TRANSACTION SNAPSHOT`,
   such as a parallel `pg_dump` worker, now sees the data as of the export.
   Before, with `polar_csn_enable` on, it also saw transactions committed
