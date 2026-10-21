@@ -174,11 +174,12 @@ sub polar_walfile_compare
 sub get_wal_from_backup
 {
 	my ($self, $backup, $datamax_pfs, $backup_pfs) = @_;
-	my $pgdata = $self->polar_get_datadir;
+	my $datamax_datadir = $self->polar_get_datadir;
+	my $local_datadir = $self->data_dir;
 	my $name = $self->name;
 	print "### node \"$name\" get wal from backup_set \"$backup\" \n";
 	my $ret = system(
-		"polar_tools datamax-get-wal -D $pgdata -M $datamax_pfs -b $backup -m $backup_pfs"
+		"polar_tools datamax-get-wal -D $datamax_datadir -l $local_datadir -M $datamax_pfs -b $backup -m $backup_pfs"
 	);
 	return $ret;
 }
