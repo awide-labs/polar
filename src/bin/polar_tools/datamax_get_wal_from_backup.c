@@ -58,6 +58,7 @@ static struct option long_options[] =
 	{"polar_disk_name_backup", required_argument, NULL, 'n'},
 	{"polar_storage_cluster_name", required_argument, NULL, 's'},
 	{"polar_hostid", required_argument, NULL, 'i'},
+	{"local_datadir", required_argument, NULL, 'l'},
 	{"help", no_argument, NULL, '?'},
 	{NULL, 0, NULL, 0}
 };
@@ -74,7 +75,43 @@ usage(void)
 	printf("-n, --polar_disk_name_backup=disk	Specify backup polar_disk_name for pfs mode\n");
 	printf("-s, --polar_storage_cluster_name=cluster_name  Specify polar_storage_cluster_name for pfs mode\n");
 	printf("-i, --polar_hostid=host_id, 		Specify polar_host_id for pfs mode\n");
+	printf("-l, --local_datadir=dir			Specify the node's local data directory (where postmaster.pid is created)\n");
 	printf("-?, --help show this help, then exit\n");
+}
+
+static bool
+check_data_directory(const char *datadir)
+{
+	struct stat stat_buf;
+	char		version_path[MAXPGPATH];
+
+	fprintf(stderr, _("checking if directory \"%s\" is a cluster data directory\n"), datadir);
+
+	if (stat(datadir, &stat_buf) != 0)
+	{
+		if (errno == ENOENT)
+			fprintf(stderr, _("data directory \"%s\" does not exist\n"), datadir);
+		else
+			fprintf(stderr, _("could not access directory \"%s\": %s\n"),
+					datadir, strerror(errno));
+
+		return false;
+	}
+
+	snprintf(version_path, MAXPGPATH, "%s/PG_VERSION", datadir);
+	if (stat(version_path, &stat_buf) != 0)
+	{
+		if (errno == ENOENT)
+			fprintf(stderr, _("directory \"%s\" is not a database cluster directory\n"),
+					datadir);
+		else
+			fprintf(stderr, _("could not access file \"%s\": %s\n"),
+					version_path, strerror(errno));
+
+		return false;
+	}
+
+	return true;
 }
 
 static int
@@ -756,11 +793,13 @@ datamax_get_wal_main(int argc, char **argv)
 				optindex = 0;
 	char	   *datamax_datadir = NULL;
 	char	   *backup_waldir = NULL;
+	char	   *node_datadir = NULL;
 	char	   *polar_storage_cluster_name = NULL;
 	char	   *polar_disk_name_datamax = NULL;
 	char	   *polar_disk_name_backup = NULL;
 	int			polar_hostid = 0;
 	char		datamax_control_filepath[MAXPGPATH];
+	char		node_pid_path[MAXPGPATH];
 	struct stat stat_buf;
 	bool		init_datamax_fs = false,
 				init_backup_fs = false;
@@ -772,7 +811,7 @@ datamax_get_wal_main(int argc, char **argv)
 		return -1;
 	}
 
-	while ((option = getopt_long(argc, argv, "D:b:M:m:N:n:s:i:?", long_options, &optindex)) != -1)
+	while ((option = getopt_long(argc, argv, "D:b:M:m:N:n:s:i:l:?", long_options, &optindex)) != -1)
 	{
 		switch (option)
 		{
@@ -817,6 +856,9 @@ datamax_get_wal_main(int argc, char **argv)
 				break;
 			case 'i':
 				polar_hostid = atoi(optarg);
+				break;
+			case 'l':
+				node_datadir = pg_strdup(optarg);
 				break;
 			case '?':
 				usage();
@@ -904,6 +946,26 @@ datamax_get_wal_main(int argc, char **argv)
 	if (polar_stat(backup_waldir, &stat_buf) != 0)
 	{
 		fprintf(stderr, "backup wal directory doesn't exist\n");
+		goto end;
+	}
+
+	/*
+	 * Node must be stopped: walreceiver flushes polar_datamax_meta from
+	 * memory and would restore the min_received_lsn this tool lowers.
+	 * postmaster.pid is in the local data directory (-l).
+	 */
+	if (node_datadir == NULL)
+	{
+		fprintf(stderr, "local data directory is NULL, need to be specified validly\n");
+		goto end;
+	}
+	if (!check_data_directory(node_datadir))
+		goto end;
+	snprintf(node_pid_path, MAXPGPATH, "%s/postmaster.pid", node_datadir);
+	if (stat(node_pid_path, &stat_buf) == 0)
+	{
+		fprintf(stderr, "datamax server is running\n");
+		fprintf(stderr, "Stop the datamax server and try again.\n");
 		goto end;
 	}
 

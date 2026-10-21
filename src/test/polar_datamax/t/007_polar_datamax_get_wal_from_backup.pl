@@ -5,8 +5,9 @@ use FindBin;
 use lib $FindBin::RealBin;
 use PolarDatamaxUtils;
 use PostgreSQL::Test::Cluster;
+use PostgreSQL::Test::Utils;
 use File::Path 'rmtree';
-use Test::More tests=>17;
+use Test::More tests=>19;
 
 # master
 my $node_master = PostgreSQL::Test::Cluster->new('master');
@@ -177,13 +178,29 @@ $result = $node_datamax1->safe_psql('postgres',
 		"SELECT last_received_lsn >= '$write_lsn' FROM polar_get_datamax_info()");
 ok($result eq "t", "datamax1 get all wal of master success");
 
-# get wal from backup set after datamax1 streaming from master
+# datamax-get-wal rewrites polar_datamax_meta while copying WAL. On a datamax
+# node the walreceiver also periodically rewrites polar_datamax_meta. The
+# writers are not synchronized, so the datamax node must be stopped before
+# datamax-get-wal to avoid losing updates.
+command_fails_like(
+	[
+		'polar_tools', 'datamax-get-wal',
+		'-D', $node_datamax1->polar_get_datadir,
+		'-l', $node_datamax1->data_dir,
+		'-M', 'l',
+		'-b', $backup_dir,
+		'-m', 'l'
+	],
+	qr/datamax server is running/,
+	'datamax-get-wal refuses a running datamax node');
+
+$node_datamax1->stop;
 $copy_ret = 1;
 $copy_ret = get_wal_from_backup($node_datamax1, $backup_dir, 'l', 'l');
 print "datamax1 copy wal from backup set result: $copy_ret\n";
 ok($copy_ret == 0, "datamax1 copy from backup set success");
-# restart datamax1 to reload meta info
-$node_datamax1->restart;
+# start datamax1 to reload meta info
+$node_datamax1->start;
 # check whether datamax1 has gotten the wal which has been removed in master
 $result = 0;
 $result = $node_datamax1->safe_psql('postgres',
