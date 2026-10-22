@@ -136,6 +136,8 @@ $node_primary->safe_psql('postgres',
 	'create table test(id int primary key);');
 $node_primary->safe_psql('postgres', 'checkpoint;');
 
+$node_primary->wait_for_catchup($node_standby);
+
 my ($cur_flush_lsn, $cur_bg_replayed_lsn);
 
 $PostgreSQL::Test::Utils::timeout_default = 10;    # for debug
