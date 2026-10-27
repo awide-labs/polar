@@ -8,6 +8,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Fixed `pg_ctl promote` of a standby returning before recovery finished,
+  so a query right after promote could still fail or see the server in
+  recovery (XCOM-240)
 - Fixed a race on weakly ordered CPUs, such as ARM, in which a session
   writing to the in-memory WAL queue could overwrite WAL that the logindex
   saver or a walsender was still reading from the queue (XCOM-237).

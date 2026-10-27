@@ -8104,15 +8104,11 @@ StartupXLOG(void)
 	ControlFile->state = DB_IN_PRODUCTION;
 
 	/*
-	 * POLAR:  When node type is replica, we will update control file in local
-	 * file system. We must set control file state to DB_IN_PRODUCTION before
-	 * set node type to be POLAR_PRIMARY, because pg_ctl will check promote
-	 * state from control file in local file system. But when do online
-	 * promote we have to set XLogCtl->SharedRecoveryState =
-	 * RECOVERY_STATE_DONE after set node type bo be POLAR_PRIMARY.Otherwise
-	 * the other processes like checkpointer will get false from function
-	 * RecoveryInProgress(), but see the node type as replica, which will
-	 * cause data corrupted.
+	 * POLAR: During online promote, set XLogCtl->SharedRecoveryState to
+	 * RECOVERY_STATE_DONE after changing the node type to POLAR_PRIMARY.
+	 * Otherwise, other processes such as the checkpointer would see the node
+	 * type as replica while RecoveryInProgress() returns false, which could
+	 * corrupt data.
 	 */
 	if (promoted)
 	{
@@ -8129,8 +8125,6 @@ StartupXLOG(void)
 			ControlFile->minRecoveryPointTLI = 0;
 		}
 
-		/* POLAR: RO save control file to local file system */
-		UpdateControlFile();
 		/* POLAR: Set node type to be primary */
 		polar_set_node_type(POLAR_PRIMARY);
 		if (endOfRecoveryInfo->polar_logindex_promote_ro)
