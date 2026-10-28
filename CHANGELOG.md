@@ -108,6 +108,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   sometimes failing with "could not create loadstatus file ... File exists"
   right after a failed parallel (`MULTI_PROCESS = YES`) load into the same
   table (XCOM-215).
+- Fixed pg_bulkload `WRITER = BINARY` loads on shared storage reporting
+  success while leaving the binary output file and its sample control file
+  empty, so the rows were silently lost (XCOM-218).
 - Fixed severe replay slowdown on a standby with parallel replay when
   `polar_logindex_replay_delay_threshold` was set to 2 TB or more, including
   its maximum value (XCOM-215).
