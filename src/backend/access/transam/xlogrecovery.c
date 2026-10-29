@@ -6294,24 +6294,6 @@ polar_logindex_delay_replay_if_need(void)
 	}
 
 	/*
-	 * POLAR: maintain minimum lag for testing session consistency. Unlike
-	 * startup_delay which waits for WAL to arrive, this keeps a minimum gap
-	 * between received and replayed WAL.
-	 */
-	if (unlikely(polar_replay_min_lag_size > 0))
-	{
-		XLogRecPtr	cur = GetXLogReplayRecPtr(NULL);
-		XLogRecPtr	received = GetWalRcvFlushRecPtr(NULL, NULL);
-
-		while (received < cur + polar_replay_min_lag_size)
-		{
-			HandleStartupProcInterrupts();
-			pg_usleep(1000L);	/* 1ms */
-			received = GetWalRcvFlushRecPtr(NULL, NULL);
-		}
-	}
-
-	/*
 	 * Only when the standby node is in parallel replay state and not in
 	 * promote can the logindex parsing speed be limited
 	 */
