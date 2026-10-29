@@ -3762,20 +3762,9 @@ struct config_int ConfigureNamesInt[] =
 		{"polar_startup_replay_delay_size", PGC_SIGHUP, POLAR_LOGINDEX,
 			gettext_noop("Manual startup replay delay wal size, just for test!."),
 			NULL,
-			GUC_UNIT_BYTE | GUC_NO_SHOW_ALL | GUC_NOT_IN_SAMPLE | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_UNCHANGEABLE
+			GUC_UNIT_BYTE | GUC_NO_SHOW_ALL | GUC_NOT_IN_SAMPLE | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_CHANGEABLE
 		},
 		&polar_startup_replay_delay_size,
-		0, 0, INT_MAX,
-		NULL, NULL, NULL
-	},
-
-	{
-		{"polar_replay_min_lag_size", PGC_SIGHUP, REPLICATION_STANDBY,
-			gettext_noop("Minimum lag in bytes between WAL received and replayed."),
-			gettext_noop("Creates steady-state lag for testing session consistency."),
-			GUC_UNIT_BYTE | GUC_NO_RESET_ALL | GUC_NO_SHOW_ALL | GUC_NOT_IN_SAMPLE | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_CHANGABLE
-		},
-		&polar_replay_min_lag_size,
 		0, 0, INT_MAX,
 		NULL, NULL, NULL
 	},

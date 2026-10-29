@@ -1,15 +1,11 @@
 # 048_polar_proxy_test_knobs.pl
 #
-# Coverage for the three test knobs that ride alongside the proxy LSN
+# Coverage for the two test knobs that ride alongside the proxy LSN
 # wait:
 #
 #   * polar_query_delay_us
 #       Microsecond sleep before each SELECT on the primary; skips
 #       replicas, extended-protocol queries, and non-SELECT statements.
-#
-#   * polar_replay_min_lag_size
-#       Forces the replica to hold replay behind WAL receive by at
-#       least N bytes. Reloadable.
 #
 #   * polar_startup_replay_delay_size
 #       Internal unit was switched from MB to bytes; this test asserts
@@ -117,14 +113,14 @@ $node_primary->safe_psql('postgres',
 $node_primary->safe_psql('postgres', 'SELECT pg_reload_conf();');
 
 # ---------------------------------------------------------------------
-# 3. polar_replay_min_lag_size - forces a replay-vs-receive gap.
+# 3. polar_startup_replay_delay_size - forces a replay-vs-receive gap.
 #    Set on the replica, generate enough WAL on the primary, then
 #    observe that the receive LSN runs ahead of the replay LSN by at
 #    least roughly the configured floor.
 # ---------------------------------------------------------------------
 my $min_lag_bytes = 8 * 1024 * 1024;    # 8 MiB - big enough to dominate noise
 $node_replica->safe_psql('postgres',
-	"ALTER SYSTEM SET polar_replay_min_lag_size = $min_lag_bytes;");
+	"ALTER SYSTEM SET polar_startup_replay_delay_size = $min_lag_bytes;");
 $node_replica->safe_psql('postgres', 'SELECT pg_reload_conf();');
 
 # Generate ~64 MiB of WAL so the gap is easily satisfiable.
@@ -145,13 +141,13 @@ for (1 .. 30)
 	sleep 1;
 }
 cmp_ok($observed_gap, '>=', $min_lag_bytes / 2,
-	"polar_replay_min_lag_size enforces receive-vs-replay gap (>= "
+	"polar_startup_replay_delay_size enforces receive-vs-replay gap (>= "
 	  . ($min_lag_bytes / 2)
 	  . " bytes, observed $observed_gap)");
 
 # Lift the floor so the replica can fully catch up before we tear down.
 $node_replica->safe_psql('postgres',
-	'ALTER SYSTEM SET polar_replay_min_lag_size = 0;');
+	'ALTER SYSTEM SET polar_startup_replay_delay_size = 0;');
 $node_replica->safe_psql('postgres', 'SELECT pg_reload_conf();');
 $node_primary->wait_for_catchup($node_replica);
 

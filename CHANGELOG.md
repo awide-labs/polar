@@ -81,6 +81,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Removed
 
+- Removed the `polar_replay_min_lag_size` GUC; use identical
+  `polar_startup_replay_delay_size` instead. (XCOM-225)
 - The following third-party extensions have been removed (XCOM-195):
   - pldebugger
   - prefix
