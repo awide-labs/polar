@@ -103,7 +103,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - Fixed an out-of-memory failure after crash restart with zero-copy
   I/O. The syslogger kept the previous shared-memory generation alive,
-  so two full copies stayed resident (XCOM-189)
+  so two full copies stayed resident. The fix requires PolarFS 3.2.0
+  or later (XCOM-189)
 - Fixed a pg_bulkload load into a table, including `COPY FROM ... DIRECT`,
   sometimes failing with "could not create loadstatus file ... File exists"
   right after a failed parallel (`MULTI_PROCESS = YES`) load into the same
