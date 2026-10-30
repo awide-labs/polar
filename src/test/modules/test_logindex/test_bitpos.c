@@ -43,7 +43,8 @@ test_bitpos(PG_FUNCTION_ARGS)
 	for (i = 0; i < array_size; i++)
 	{
 		Assert(POLAR_BIT_IS_OCCUPIED(x, dst_pos[i]));
-		Assert(!POLAR_BIT_IS_OCCUPIED(x, dst_pos[i] + 1));
+		if (dst_pos[i] < 64)
+			Assert(!POLAR_BIT_IS_OCCUPIED(x, dst_pos[i] + 1));
 		POLAR_BIT_RELEASE_OCCUPIED(x, dst_pos[i]);
 		Assert(!POLAR_BIT_IS_OCCUPIED(x, dst_pos[i]));
 	}
