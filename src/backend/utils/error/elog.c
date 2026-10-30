@@ -3925,6 +3925,7 @@ polar_log_dest(ErrorData *edata)
 /*
  * polar build pipe chunk header
  */
+pg_attribute_no_sanitize_alignment()
 static void
 polar_construct_pipechunk_header(PipeProtoChunk *p, int len, int dest)
 {
@@ -4086,6 +4087,7 @@ polar_write_audit_log(ErrorData *edata, const char *fmt,...)
  * write to channel(original is pipe, now it's socketpair)
  * now we write error log, slow log to channel 0, write audit log to the other channels
  */
+pg_attribute_no_sanitize_alignment()
 static void
 polar_write_channel(PipeProtoChunk *chunk_buf, int len)
 {
