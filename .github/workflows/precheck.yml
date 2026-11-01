@@ -2,7 +2,9 @@ name: precheck
 
 # Pull requests run ci-quick on debug builds, stable branch pushes run ci-full
 # on release builds and the nightly schedule runs ci-full on debug builds.
-# Debug builds have assertions enabled, but are optimized with -O2.
+# Debug builds have assertions enabled, but are optimized with -O2. The
+# nightly schedule also runs a build with AddressSanitizer and
+# UndefinedBehaviorSanitizer; manual runs add it on request.
 
 on:
   push:
@@ -38,6 +40,10 @@ on:
         type: choice
         options: [ 'on', 'off' ]
         default: 'on'
+      sanitizers:
+        description: Add an ASan + UBSan build (ubuntu26.04, debug)
+        type: boolean
+        default: false
 
 concurrency:
   group: precheck-${{ github.event.pull_request.number || github.run_id }}
@@ -116,7 +122,7 @@ jobs:
     outputs:
       code: ${{ steps.filter.outputs.code }}
       target: ${{ steps.mode.outputs.target }}
-      debug_mode: ${{ steps.mode.outputs.debug_mode }}
+      matrix: ${{ steps.mode.outputs.matrix }}
     steps:
       - name: Checkout code
         if: github.event_name == 'pull_request'
@@ -145,26 +151,35 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
           INPUT_TARGET: ${{ inputs.target }}
           INPUT_DEBUG_MODE: ${{ inputs.debug_mode }}
+          INPUT_SANITIZERS: ${{ inputs.sanitizers }}
         run: |
+          sanitizers=false
           case "${EVENT_NAME}" in
             push)              target=ci-full  debug_mode=off ;;
-            schedule)          target=ci-full  debug_mode=on ;;
-            workflow_dispatch) target="${INPUT_TARGET}" debug_mode="${INPUT_DEBUG_MODE}" ;;
+            schedule)          target=ci-full  debug_mode=on  sanitizers=true ;;
+            workflow_dispatch) target="${INPUT_TARGET}" debug_mode="${INPUT_DEBUG_MODE}"
+                               sanitizers="${INPUT_SANITIZERS}" ;;
             *)                 target=ci-quick debug_mode=on ;;
           esac
-          echo "target=${target}, debug_mode=${debug_mode}"
+          matrix=$(jq -nc --arg debug "${debug_mode}" --argjson san "${sanitizers}" '
+            [ "rocky9", "rocky10", "ubuntu22.04", "ubuntu26.04" ]
+            | map({ container_image: ., debug_mode: $debug, sanitizers: "0" })
+            + if $san then [ { container_image: "ubuntu26.04",
+                               debug_mode: "on", sanitizers: "1" } ]
+              else [] end')
+          echo "target=${target}, matrix=${matrix}"
           echo "target=${target}" >> "$GITHUB_OUTPUT"
-          echo "debug_mode=${debug_mode}" >> "$GITHUB_OUTPUT"
+          echo "matrix=${matrix}" >> "$GITHUB_OUTPUT"
 
   regression:
-    name: ${{ needs.changes.outputs.target }} (${{ matrix.container_image }}, debug=${{ needs.changes.outputs.debug_mode }})
+    name: ${{ needs.changes.outputs.target }} (${{ matrix.container_image }}, debug=${{ matrix.debug_mode }}${{ matrix.sanitizers == '1' && ', sanitizers' || '' }})
     needs: changes
     if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        container_image: [ rocky9, rocky10, ubuntu22.04, ubuntu26.04 ]
+        include: ${{ fromJSON(needs.changes.outputs.matrix) }}
     steps:
       - name: fetch source code
         uses: actions/checkout@v4
@@ -183,10 +198,12 @@ jobs:
             vm.dirty_expire_centisecs=60000
 
       - name: build and test
+        env:
+          CI_SANITIZERS: ${{ matrix.sanitizers }}
         run: |
           .ci/ci-test.sh \
             "${{ matrix.container_image }}" \
-            "${{ needs.changes.outputs.debug_mode }}" \
+            "${{ matrix.debug_mode }}" \
             "${{ needs.changes.outputs.target }}"
 
       # The job log shows only the TAP output, so keep the test and server
@@ -207,7 +224,7 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: test-logs-${{ matrix.container_image }}-${{ github.run_attempt }}
+          name: test-logs-${{ matrix.container_image }}${{ matrix.sanitizers == '1' && '-sanitizers' || '' }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/test-logs.tar.gz
           retention-days: 14
 
