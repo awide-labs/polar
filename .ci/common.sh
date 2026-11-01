@@ -5,7 +5,11 @@
 # scripts. Source this file in your script to use these functions.
 
 _COMMON_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-if [ -f "${_COMMON_SCRIPT_DIR}/../.bitbucket/pr-comments.sh" ]; then
+if [ -n "${GITHUB_ACTIONS:-}" ] \
+   && [ -f "${_COMMON_SCRIPT_DIR}/../.github/pr-comments.sh" ]; then
+  # shellcheck source=../.github/pr-comments.sh
+  source "${_COMMON_SCRIPT_DIR}/../.github/pr-comments.sh"
+elif [ -f "${_COMMON_SCRIPT_DIR}/../.bitbucket/pr-comments.sh" ]; then
   # shellcheck source=../.bitbucket/pr-comments.sh
   source "${_COMMON_SCRIPT_DIR}/../.bitbucket/pr-comments.sh"
 fi
@@ -31,11 +35,17 @@ log_success() {
   echo -e "\033[0;32m$*\033[0m"
 }
 
+# Log-only warning: colored on the job log, but never routed to on_warning_hook.
+# Use for expected, non-actionable notices that would otherwise spam PRs.
+log_warning_local() {
+  echo -e "\033[1;33m$*\033[0m"
+}
+
 log_warning() {
   local warning_msg="$*"
 
   # Always print to console with colored output
-  echo -e "\033[1;33m${warning_msg}\033[0m"
+  log_warning_local "${warning_msg}"
 
   # Call optional hook for CI-specific warning handlers if available
   # This allows CI-specific integrations (e.g., posting to MRs/PRs)

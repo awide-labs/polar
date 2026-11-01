@@ -43,11 +43,16 @@ concurrency:
   group: precheck-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+# Check warnings are posted as pull request comments (.github/pr-comments.sh);
+# pull requests from forks get a read-only token and only see annotations.
 jobs:
   check-commit-format:
     name: Check Commit Format
     runs-on: ubuntu-latest
     if: github.event_name == 'pull_request'
+    permissions:
+      contents: read
+      pull-requests: write
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -55,12 +60,18 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
       - name: Check commit format
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
         run: .ci/check_commit_format.sh origin/${{ github.base_ref }}
 
   check-changelog:
     name: Check Changelog
     runs-on: ubuntu-latest
     if: github.event_name == 'pull_request'
+    permissions:
+      contents: read
+      pull-requests: write
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -68,6 +79,9 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
       - name: Check changelog
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
         run: .ci/check_changelog.sh origin/${{ github.base_ref }}
 
   changes:
