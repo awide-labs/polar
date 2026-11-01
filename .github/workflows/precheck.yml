@@ -84,6 +84,32 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: .ci/check_changelog.sh origin/${{ github.base_ref }}
 
+  # Warnings only: they never fail, but reach the pull request as comments.
+  review-warnings:
+    name: Review Warnings
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+      - name: Report commits brought by merges
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: .ci/check_merges.sh origin/${{ github.base_ref }}
+      - name: Report pgindent exclusion changes
+        if: ${{ !cancelled() }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: .ci/check_pgindent_excludes.sh origin/${{ github.base_ref }}
+
   changes:
     name: Detect Changes
     runs-on: ubuntu-latest
