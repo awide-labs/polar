@@ -37,6 +37,16 @@ jobs:
             bash -c "cd /home/postgres/polar && \
                      .ci/check_pgindent.sh"
 
+  check-polar-version:
+    name: Check POLAR_VERSION
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Check POLAR_VERSION matches the PostgreSQL version
+        run: .ci/check_polar_version.sh
+
   check-extensions-order:
     name: Check Extensions Order
     runs-on: ubuntu-latest
