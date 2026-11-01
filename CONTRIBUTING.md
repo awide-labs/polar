@@ -258,11 +258,14 @@ tests, and `ci-full` also runs the longer consistency and DataMax tests.
 
 - Pull requests run `ci-quick` on debug builds.
 - Pushes to `POLARDB_*_STABLE` run `ci-full` on release builds.
-- A nightly schedule runs `ci-full` on debug builds of the default branch.
+- A nightly schedule runs `ci-full` on debug builds of the default branch,
+  plus a debug build with AddressSanitizer and UndefinedBehaviorSanitizer on
+  `ubuntu26.04`.
 
 Debug builds have assertions, injection points and fault injection enabled,
 but are compiled with `-O2`. To reproduce a CI run locally, use
-`.ci/ci-test.sh <image> <on|off> <ci-quick|ci-full>`, or run a target directly
+`.ci/ci-test.sh <image> <on|off> <ci-quick|ci-full>` (with `CI_SANITIZERS=1`
+in the environment for the sanitizer build), or run a target directly
 in a `./build.sh` tree. Smaller WAL segments and parallel TAP tests speed up
 the run:
 

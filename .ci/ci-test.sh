@@ -10,6 +10,9 @@ set -xeuo pipefail
 #
 # cleanup: optional flag (true/1 to enable cleanup, false/0 or omitted to skip)
 #          Useful when multiple containers run in the same VM/step
+#
+# CI_SANITIZERS=1 in the environment builds with AddressSanitizer and
+# UndefinedBehaviorSanitizer and runs the tests under them.
 
 if [ $# -lt 3 ] || [ $# -gt 4 ]; then
   echo "Usage: $0 <container_image> <debug_mode> <rules> [cleanup]" >&2
@@ -20,9 +23,28 @@ CONTAINER_IMAGE="$1"
 DEBUG_MODE="$2"
 RULES="$3"
 CLEANUP="${4:-false}"
+SANITIZERS="${CI_SANITIZERS:-0}"
 
-echo "Running with container_image=$CONTAINER_IMAGE, debug_mode=$DEBUG_MODE"
+echo "Running with container_image=$CONTAINER_IMAGE, debug_mode=$DEBUG_MODE, sanitizers=$SANITIZERS"
 echo "Executing rules: $RULES"
+
+# Sanitizer options are taken from the cirrus CI of upstream PostgreSQL.
+# _FORTIFY_SOURCE conflicts with ASan. The instrumentation makes GCC emit
+# false-positive warnings, so warnings are not errors in this build.
+# Every process of an ASan build needs several times more memory, so the
+# quarantine of freed memory is smaller than the default 256 MB and half as
+# many test suites run concurrently, or the OOM killer stops the servers.
+BUILD_ENV="export CFLAGS=-O2 CXXFLAGS=-O2"
+SUITES_DIVISOR=1
+if [ "$SANITIZERS" = "1" ]; then
+  SAN_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer -U_FORTIFY_SOURCE"
+  BUILD_ENV="export CFLAGS='-O2 $SAN_FLAGS' CXXFLAGS='-O2 $SAN_FLAGS' \
+    LDFLAGS='-fsanitize=address,undefined -static-libasan -static-libubsan' \
+    COPT=-Wno-error \
+    ASAN_OPTIONS=print_stacktrace=1:disable_coredump=0:abort_on_error=1:detect_leaks=0:detect_stack_use_after_return=0:quarantine_size_mb=32 \
+    UBSAN_OPTIONS=print_stacktrace=1:disable_coredump=0:abort_on_error=1:verbosity=2"
+  SUITES_DIVISOR=2
+fi
 
 IMAGE=$("$(dirname "$0")/docker/image.sh" ensure "$CONTAINER_IMAGE")
 
@@ -51,9 +73,9 @@ docker exec polardb_${CONTAINER_IMAGE} bash -c \
    if [ -f /etc/bashrc ]; then source /etc/bashrc; fi && \
    set -eu && \
    CPUS=\$(nproc) && \
-   MAKE_JOBS=\$CPUS && \
+   MAKE_JOBS=\$(( CPUS / ${SUITES_DIVISOR} > 0 ? CPUS / ${SUITES_DIVISOR} : 1 )) && \
    PROVE_JOBS=\$(( CPUS * 3 / 4 > 0 ? CPUS * 3 / 4 : 1 )) && \
-   export CFLAGS=-O2 CXXFLAGS=-O2 && \
+   ${BUILD_ENV} && \
    eatmydata ./build.sh --noinstall --debug=${DEBUG_MODE} --ec='--enable-tap-tests' && \
    export PG_TEST_INITDB_EXTRA_OPTS=--wal-segsize=16 && \
    export PGCTLTIMEOUT=300 && \
