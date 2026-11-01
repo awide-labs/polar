@@ -115,6 +115,7 @@ main() {
   local invalid_commits=()
   local scopeless_commits=()
   local new_scope_commits=()
+  local forward_null_commits=()
   local commit_count=0
 
   # Collect all commit SHAs being checked (to exclude from history search)
@@ -144,6 +145,15 @@ main() {
     commit_msg=$(git log -1 --format="%s" "${commit_sha}")
     local full_msg
     full_msg=$(get_commit_body "${commit_sha}")
+
+    # Flag opt-outs from forward-merging so reviewers can confirm the change
+    # really does not apply to higher stable branches.
+    if echo "${full_msg}" | grep -qiE "^Forward-as-null:[[:space:]]*[^[:space:]]"; then
+      local fwd_null_target
+      fwd_null_target=$(echo "${full_msg}" | grep -iE "^Forward-as-null:" | head -1 \
+        | sed -E 's/^[Ff]orward-[Aa]s-[Nn]ull:[[:space:]]*//')
+      forward_null_commits+=("${commit_sha:0:8}: ${commit_msg} (-> ${fwd_null_target})")
+    fi
 
     # Reject type!(scope): — breaking '!' must follow the full scope
     # (type(scope)!: or type!:), not sit between type and scope.
@@ -353,6 +363,33 @@ consistency.
 To find existing scopes, run:
 \`git log --format="%s" | grep -oE '^(feat|fix|perf)\([^)]+\)' | \
 sed 's/[a-z]*(\(.*\))/\1/' | sort -u\`
+EOF
+)
+    log_warning "${warning_msg}"
+  fi
+
+  # Warn about commits opting out of forward-merging. A null-merge records
+  # the merge without applying the change, so a misused footer silently
+  # drops a fix from newer releases – reviewers must confirm the intent.
+  if [ ${#forward_null_commits[@]} -gt 0 ]; then
+    echo ""
+    local warning_msg
+    warning_msg=$(cat <<EOF
+**${#forward_null_commits[@]} commit(s) opt out of forwarding to higher
+stable branches (\`Forward-as-null\`):**
+
+$(printf -- '- `%s`\n' "${forward_null_commits[@]}")
+
+The forward-merge bot will null-merge these into the named branch(es),
+recording the merge without porting their changes. Confirm the change
+genuinely does not apply upward; otherwise this footer silently drops it
+from newer releases.
+
+If you are only deferring the port (e.g. a large feature that will land
+in the higher branch later), file a Jira issue for the forward-merge and
+reference it here so the work is not lost.
+
+See \`.github/forward-merge/README.md\` for the forward-merge workflow.
 EOF
 )
     log_warning "${warning_msg}"
