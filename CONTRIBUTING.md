@@ -242,7 +242,9 @@ a pull request into `POLARDB_15_STABLE` also has to work on
   stored in a shared cache and reused by the forward-merge.
 - If the change does not apply to the higher branch (e.g. the code is gone
   there), label the pull request `forward:null-POLARDB_17_STABLE` or add a
-  `Forward-as-null: POLARDB_17_STABLE` footer to the commit.
+  `Forward-as-null: POLARDB_17_STABLE` footer to the commit. The commit
+  format check then asks the reviewer to confirm that the change does not
+  apply upward.
 
 After changes land, a bot opens the forward-merge pull request and merges it
 once its checks pass. `--record` needs write access to the repository; if you
