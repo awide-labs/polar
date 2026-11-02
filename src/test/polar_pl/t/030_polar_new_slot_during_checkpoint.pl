@@ -25,6 +25,15 @@
 #    reservation to finish instead of missing the slot.  Run for a
 #    checkpoint on the primary and for a restartpoint on a standby.
 #
+# 3. The slot is advanced in memory before the checkpoint removes WAL, and
+#    the node crashes before any subsequent checkpoint can save the
+#    advance.  The re-read comes after CheckPointGuts() has saved the
+#    slots, so the checkpoint must save them again before bounding WAL
+#    removal by it.  Otherwise the slot comes back at the old redo point
+#    with its WAL removed: crash recovery does not need that WAL, but a
+#    client starting from the slot, such as pg_receivewal with an empty
+#    directory, fails.
+#
 # IDENTIFICATION
 #	  src/test/polar_pl/t/030_polar_new_slot_during_checkpoint.pl
 
@@ -312,6 +321,77 @@ check_reservation_window(
 	'restartpoint', 'reserved_across_restartpoint');
 
 $standby->stop;
+
+#
+# Scenario 3: slot advanced in memory before WAL removal, then a crash.
+# Runs last, after the standby is gone, as it restarts the primary.
+#
+{
+	my $what = 'slot advanced before WAL removal';
+	my $slot = 'advanced_before_removal';
+	my $anchor = prepare_primary_wal_gap();
+
+	# Besides parking after the first reading, pause the checkpoint at
+	# checkpoint-before-old-wal-removal: after it has saved the slots and
+	# updated the control file, but before its second reading of the slot
+	# minimum.  An advance made there is in memory only when that reading
+	# sees it, which is what exposes the bug.
+	$primary->safe_psql('postgres',
+		"SELECT injection_points_attach('checkpoint-before-old-wal-removal', 'wait')"
+	);
+	my ($ckpt, $offset) = park_after_first_reading();
+
+	# Creating the slot saves it to disk at the anchor.
+	create_reserved_physical_slot($primary, $slot);
+	my $saved_lsn = check_reserved_at_anchor($primary, $slot, $anchor, $what);
+
+	# Let the checkpoint save slots, which skips the clean new one, update
+	# the control file, and stop before its second reading.
+	detach_point($primary, 'polar_delay_checkpoint_guts');
+	$primary->wait_for_event('checkpointer',
+		'checkpoint-before-old-wal-removal');
+	check_behind_redo($primary, $saved_lsn, $what);
+
+	# Advance the slot in memory only: this marks it dirty but does not save
+	# it.
+	$primary->safe_psql('postgres',
+		"SELECT pg_replication_slot_advance('$slot', pg_current_wal_lsn())");
+	my $advanced_lsn = slot_restart_lsn($primary, $slot);
+	cmp_ok($advanced_lsn, 'ne', $saved_lsn, "$what: slot advanced in memory");
+
+	release_wait_point($primary, 'checkpoint-before-old-wal-removal');
+	finish_checkpoint($primary, $ckpt, $offset, $what);
+
+	# Crash before any later checkpoint runs.
+	$primary->stop('immediate');
+	$primary->start;
+
+	my $restart_lsn = slot_restart_lsn($primary, $slot);
+	note(   "$what: restart_lsn after the crash: $restart_lsn (saved at "
+		  . "creation: $saved_lsn, advanced to: $advanced_lsn)");
+	check_slot_kept(
+		$primary, $slot,
+		walfile_name($restart_lsn),
+		"$what, after a crash");
+
+	# pg_receivewal with an empty directory asks the server for the slot's
+	# restart_lsn (READ_REPLICATION_SLOT) and streams from the start of that
+	# segment.  Stop it at a position already flushed so it exits on its own
+	# when the WAL is there.
+	$primary->safe_psql('postgres', 'SELECT pg_switch_wal()');
+	my $endpos =
+	  $primary->safe_psql('postgres', 'SELECT pg_current_wal_insert_lsn()');
+	$primary->safe_psql('postgres', 'INSERT INTO t VALUES (1)');
+	my $recv_dir = PostgreSQL::Test::Utils::tempdir;
+	$primary->command_ok(
+		[
+			'pg_receivewal', '-D', $recv_dir, '--slot',
+			$slot, '-n', '--no-sync', '--verbose',
+			'--endpos', $endpos
+		],
+		"$what: pg_receivewal streams from the slot after a crash");
+	drop_slot($primary, $slot);
+}
 
 $primary->stop;
 

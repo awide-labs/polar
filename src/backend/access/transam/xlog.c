@@ -9922,10 +9922,21 @@ CreateCheckPoint(int flags)
 	 * LSN.  The control file already carries our redo point or a later one,
 	 * so a reservation either completes before this read and is included in
 	 * it, or starts after it and lands at or beyond RedoRecPtr.
+	 *
+	 * Unlike the first read, this one comes after CheckPointGuts() has saved
+	 * the slots, so it can see a restart_lsn that is not on disk yet: a slot
+	 * created during the checkpoint is saved at the old redo point and may
+	 * have advanced in memory since.  Removing WAL below the in-memory value
+	 * would leave the saved one pointing at removed WAL after a crash.  Save
+	 * the slots again, as the invalidation path below does, so that every
+	 * restart_lsn on disk is at least what we have just read.  A slot
+	 * reserved after the read lands at or beyond RedoRecPtr and is saved by
+	 * its creator.
 	 */
 	LWLockAcquire(ReplicationSlotAllocationLock, LW_SHARED);
 	polar_slot_min_req_lsn = XLogGetReplicationSlotMinimumLSN();
 	LWLockRelease(ReplicationSlotAllocationLock);
+	CheckPointReplicationSlots(shutdown);
 	slotsMinReqLSN = polar_merge_slot_min_req_lsn(slotsMinReqLSN,
 												  polar_slot_min_req_lsn);
 	/* POLAR end */
@@ -10516,10 +10527,21 @@ CreateRestartPoint(int flags)
 	 * LSN.  The control file already carries our redo point or a later one,
 	 * so a reservation either completes before this read and is included in
 	 * it, or starts after it and lands at or beyond RedoRecPtr.
+	 *
+	 * Unlike the first read, this one comes after CheckPointGuts() has saved
+	 * the slots, so it can see a restart_lsn that is not on disk yet: a slot
+	 * created during the checkpoint is saved at the old redo point and may
+	 * have advanced in memory since.  Removing WAL below the in-memory value
+	 * would leave the saved one pointing at removed WAL after a crash.  Save
+	 * the slots again, as the invalidation path below does, so that every
+	 * restart_lsn on disk is at least what we have just read.  A slot
+	 * reserved after the read lands at or beyond RedoRecPtr and is saved by
+	 * its creator.
 	 */
 	LWLockAcquire(ReplicationSlotAllocationLock, LW_SHARED);
 	polar_slot_min_req_lsn = XLogGetReplicationSlotMinimumLSN();
 	LWLockRelease(ReplicationSlotAllocationLock);
+	CheckPointReplicationSlots(flags & CHECKPOINT_IS_SHUTDOWN);
 	slotsMinReqLSN = polar_merge_slot_min_req_lsn(slotsMinReqLSN,
 												  polar_slot_min_req_lsn);
 	/* POLAR end */

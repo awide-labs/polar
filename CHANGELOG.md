@@ -15,6 +15,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Fixed WAL streaming failures after a crash for clients that start from
+  a replication slot's position. This could occur if the slot was created
+  and advanced during the same checkpoint. For example, `pg_receivewal`
+  with an empty directory could fail with "requested WAL segment ... has
+  already been removed". Standbys and replicas were not affected. (XCOM-240)
 - Fixed query failures on replicas when a node created a replication slot
   during a checkpoint that started with no existing slots. The checkpoint
   could invalidate the new slot and remove required WAL, causing
