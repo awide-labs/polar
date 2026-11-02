@@ -35,7 +35,7 @@ PG_FUNCTION_INFO_V1(test_sigsegv);
 Datum
 test_sigsegv(PG_FUNCTION_ARGS)
 {
-	char	   *ptr = NULL;
+	char	   *ptr = (char *) test_sigsegv;
 
 	*ptr = 'c';
 
