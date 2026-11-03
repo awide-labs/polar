@@ -1,9 +1,9 @@
-# 004_query_coordinator_auth.pl
+# 004_polar_px_qc_auth.pl
 #	  Query coordinator authentication test cases with different combinations of
 #	  existing and missing TLS certificates
 #
 # IDENTIFICATION
-#	  src/test/authentication/t/004_query_coordinator_auth.pl
+#	  src/test/authentication/t/004_polar_px_qc_auth.pl
 
 use strict;
 use warnings;
@@ -56,14 +56,25 @@ $node_primary->safe_psql(
 		ANALYZE foo;
 	]);
 
+# Connection string that makes an ordinary client pose as a QC connecting to
+# the replica: a well-formed pxid with the cluster's system identifier, which
+# any database user can read.
+my $sysid = $node_primary->safe_psql($regress_db,
+	q[SELECT system_identifier FROM pg_control_system()]);
+my $fake_qc_connstr = $node_replica->connstr($regress_db)
+  . " pxid='2;11;$sysid;1;1;0;1;0;1;0;0'";
+
 
 ### TEST CASE: TLS verification is enabled but credentials are not configured
-if ($ENV{with_ssl} eq 'no')
+if ($ENV{with_ssl} ne 'openssl')
 {
 	test_query($node_primary, $regress_db, 3,
 			   qr/FATAL:\s+authentication failed for query coordinator.*DETAIL:\s+TLS is not supported by this build/s,
 			   $sql_general,
 			   'TLS verification is enabled but credentials are not configured');
+	$node_replica->connect_fails($fake_qc_connstr,
+		'Non-QC client is rejected without TLS support',
+		expected_stderr => qr/TLS is not supported by this build/);
 }
 else
 {
@@ -71,6 +82,9 @@ else
 			   qr/FATAL:\s+QE is unable to accept PX connections.*DETAIL:\s+CA certificate missing/s,
 			   $sql_general,
 			   'TLS verification is enabled but credentials are not configured');
+	$node_replica->connect_fails($fake_qc_connstr,
+		'Non-QC client is rejected when CA is not configured',
+		expected_stderr => qr/QE is unable to accept PX connections/);
 }
 
 
@@ -81,6 +95,8 @@ $node_replica->safe_psql(
 $node_replica->reload;
 test_query($node_primary, $regress_db, 0, '', $sql_general,
 		   'TLS verification is disabled in configuration on QE');
+$node_replica->connect_ok($fake_qc_connstr,
+	'Non-QC client is accepted when TLS verification is disabled');
 
 $node_replica->safe_psql(
 		$regress_db,
@@ -88,9 +104,12 @@ $node_replica->safe_psql(
 $node_replica->reload;
 
 
-if ($ENV{with_ssl} eq 'no')
+if ($ENV{with_ssl} ne 'openssl')
 {
-	plan skip_all => 'Subsequent tests require a product build with OpenSSL support';
+	$node_primary->stop;
+	$node_replica->stop;
+	done_testing();
+	exit;
 }
 
 ### POSITIVE TEST SCENARIOS
@@ -106,6 +125,24 @@ setup_tls_creds($node_primary, $regress_db, 'qe_ca.crt', 'qc.crt', 'qc.key');
 setup_tls_creds($node_replica, $regress_db, 'qe_ca.crt', '', '');
 test_query($node_primary, $regress_db, 0, '', $sql_entrydb,
 			'Entrydb slice on coordinator (requires TLS cert, key, and CA on QC)');
+
+
+### CLIENTS POSING AS QC
+
+setup_tls_creds($node_replica, $regress_db, 'qe_ca.crt', '', '');
+
+### TEST CASE: Client sends pxid without a certificate
+$node_replica->connect_fails($fake_qc_connstr,
+	'Non-QC client without certificate is rejected',
+	expected_stderr => qr/missing PX QC certificate/);
+
+### TEST CASE: Client sends a valid certificate but has no private key
+my $qc_cert = slurp_file(
+	abs_path(File::Spec->catfile($FindBin::RealBin, '..', 'tls_creds', 'qc.crt')));
+$node_replica->connect_fails(
+	"$fake_qc_connstr px_auth_cert='$qc_cert'",
+	'Non-QC client with a stolen certificate is rejected',
+	expected_stderr => qr/authentication method 21 not supported/);
 
 
 ### FAILURE HANDLING
@@ -261,7 +298,7 @@ sub setup_tls_creds {
 
 sub test_query {
 	my ($node, $db_name, $expected_res, $expected_err, $test_sql, $test_name) = @_;
-	my ($res, $out, $err) = $node_primary->psql($regress_db, $test_sql);
+	my ($res, $out, $err) = $node->psql($db_name, $test_sql);
 
 	if ($expected_res eq 0)
 	{
