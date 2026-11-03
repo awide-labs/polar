@@ -145,11 +145,11 @@ private:
 	}
 
 public:
-	CDynamicPtrArray<T, CleanupFn>(const CDynamicPtrArray<T, CleanupFn> &) =
+	CDynamicPtrArray(const CDynamicPtrArray<T, CleanupFn> &) =
 		delete;
 
 	// ctor
-	explicit CDynamicPtrArray<T, CleanupFn>(CMemoryPool *mp, ULONG min_size = 4,
+	explicit CDynamicPtrArray(CMemoryPool *mp, ULONG min_size = 4,
 											ULONG expansion_factor = 10)
 		: m_mp(mp),
 		  m_capacity(0),
@@ -165,7 +165,7 @@ public:
 	}
 
 	// dtor
-	~CDynamicPtrArray<T, CleanupFn>() override
+	~CDynamicPtrArray() override
 	{
 		Clear();
 

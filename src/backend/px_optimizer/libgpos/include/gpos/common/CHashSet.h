@@ -163,7 +163,7 @@ public:
 	CHashSet(const CHashSet<T, HashFn, EqFn, CleanupFn> &) = delete;
 
 	// ctor
-	CHashSet<T, HashFn, EqFn, CleanupFn>(CMemoryPool *mp, ULONG size = 127)
+	CHashSet(CMemoryPool *mp, ULONG size = 127)
 		: m_mp(mp),
 		  m_num_chains(size),
 		  m_size(0),
@@ -177,7 +177,7 @@ public:
 	}
 
 	// dtor
-	~CHashSet<T, HashFn, EqFn, CleanupFn>() override
+	~CHashSet() override
 	{
 		// release all hash chains
 		Clear();

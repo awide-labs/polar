@@ -30,18 +30,18 @@ class CEnumSetIter : public CBitSetIter
 {
 private:
 public:
-	CEnumSetIter<T, sentinel_index>(const CEnumSetIter<T, sentinel_index> &) =
+	CEnumSetIter(const CEnumSetIter<T, sentinel_index> &) =
 		delete;
 
 	// ctor
-	explicit CEnumSetIter<T, sentinel_index>(
+	explicit CEnumSetIter(
 		const CEnumSet<T, sentinel_index> &enum_set)
 		: CBitSetIter(enum_set)
 	{
 	}
 
 	// dtor
-	~CEnumSetIter<T, sentinel_index>() = default;
+	~CEnumSetIter() = default;
 
 	// current enum
 	T

@@ -144,7 +144,7 @@ public:
 	typedef void (*DestroyEntryFuncPtr)(T *);
 
 	// ctor
-	CSyncHashtable<T, K>()
+	CSyncHashtable()
 		: m_buckets(nullptr),
 
 		  m_invalid_key(nullptr)
@@ -154,7 +154,7 @@ public:
 	// dtor
 	// deallocates hashtable internals, does not destroy
 	// client objects
-	~CSyncHashtable<T, K>()
+	~CSyncHashtable()
 	{
 		Cleanup();
 	}

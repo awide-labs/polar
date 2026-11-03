@@ -95,7 +95,7 @@ public:
 	CJobStateMachine(const CJobStateMachine &) = delete;
 
 	// ctor
-	CJobStateMachine<TEnumState, estSentinel, TEnumEvent, eevSentinel>() =
+	CJobStateMachine() =
 		default;
 
 	// dtor

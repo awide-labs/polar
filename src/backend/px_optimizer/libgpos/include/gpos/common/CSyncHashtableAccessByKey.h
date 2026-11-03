@@ -68,11 +68,11 @@ private:
 #endif	// GPOS_DEBUG
 
 public:
-	CSyncHashtableAccessByKey<T, K>(const CSyncHashtableAccessByKey<T, K> &) =
+	CSyncHashtableAccessByKey(const CSyncHashtableAccessByKey<T, K> &) =
 		delete;
 
 	// ctor
-	CSyncHashtableAccessByKey<T, K>(CSyncHashtable<T, K> &ht, const K &key)
+	CSyncHashtableAccessByKey(CSyncHashtable<T, K> &ht, const K &key)
 		: Base(ht, ht.GetBucketIndex(key)), m_key(key)
 	{
 	}
