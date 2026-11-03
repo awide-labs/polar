@@ -64,13 +64,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Expose 69 PolarDB-specific GUCs in `pg_settings` and
   `postgres --describe-config` so that Patroni can enumerate,
   validate, and track `pending_restart` for them (XCOM-124)
-- Add PX (parallel execution) infrastructure including cluster coordination
-  protocol, execution engine, and ORCA-based optimizer (XCOM-229)
-- Introduce system attributes `_px_worker_id` and `_root_ctid` for parallel
-  tuple processing (XCOM-229)
+- Add PX, a parallel query engine for clusters on shared storage: an
+  analytical query is split into parts that run in parallel on read-only
+  replicas, with plans built by the ORCA optimizer. Disabled by default,
+  enabled with `polar_enable_px`. DML, GROUPING SETS and temporary tables
+  are not supported yet (XCOM-229)
+- Authenticate PX connections between nodes with TLS certificates. Nodes
+  reject incoming PX connections until `polar_px_ca_file` is configured,
+  see `polar_px_peer_cert_file` and `polar_px_peer_key_file` for the
+  coordinator side (XCOM-229)
 
 ### Changed
 
+- Column names `_px_worker_id` and `_root_ctid` are now reserved for
+  internal use by PX; tables with such columns cannot be created or
+  restored (XCOM-229)
 - Added exponential backoff for the `Failed to get the instance memory
   usage` warning that previously flooded the logs when memory statistics
   were temporarily unavailable (XCOM-193)
