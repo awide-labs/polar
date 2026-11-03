@@ -122,6 +122,8 @@ RecvTupleChunk(MotionConn * conn, ChunkTransportState *transportStates)
 
 	while (bytesProcessed != conn->msgSize)
 	{
+		uint16		chunkDataSize;
+
 		if (conn->msgSize - bytesProcessed < TUPLE_CHUNK_HEADER_SIZE)
 		{
 			logChunkParseDetails(conn, transportStates->sliceTable->ic_instance_id);
@@ -133,7 +135,8 @@ RecvTupleChunk(MotionConn * conn, ChunkTransportState *transportStates)
 							   conn->msgSize, bytesProcessed, TUPLE_CHUNK_HEADER_SIZE)));
 		}
 
-		tcSize = TUPLE_CHUNK_HEADER_SIZE + (*(uint16 *) (conn->msgPos + bytesProcessed));
+		memcpy(&chunkDataSize, conn->msgPos + bytesProcessed, sizeof(uint16));
+		tcSize = TUPLE_CHUNK_HEADER_SIZE + chunkDataSize;
 
 		/* sanity check */
 		if (tcSize > px_interconnect_max_packet_size)
