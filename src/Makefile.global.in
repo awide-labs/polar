@@ -523,14 +523,14 @@ run-temp-cluster: temp-install
 		--port=$(if $(PGPORT),$(PGPORT),'5$(DEF_PGPORT)') \
 		--eg="$(extra_temp_cluster_gucs)" \
 		--ldp="$(CURDIR)/cluster_log" \
-		--wr=2 --nc
+		--wr=2 --nc --noipcrm
 
 .PHONY: cleanup-temp-cluster
 cleanup-temp-cluster: | submake-generated-headers
 	rm -rf $(top_srcdir)/src/Makefile.precheck # to prevent caching of PGPORT values
 	$(with_temp_install) BASE_DIR="$(abs_top_builddir)/tmp_install$(prefix)" '$(abs_top_builddir)'/build.sh \
 		--prefix='$(CURDIR)'/tmp_cluster \
-		--stop
+		--stop --noipcrm
 	rm -rf '$(CURDIR)'/tmp_cluster
 	rm -rf $(temp_sock_dir)
 

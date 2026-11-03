@@ -61,6 +61,7 @@ Usage:
     --ei,--extra-initdb=<initdb flag>, pass extra flag to initdb
     --eg,--extra-gucs - pass extra postgres GUCs to postgresql.conf (comma separated)
     --ldp,--log-dir-prefix - configure log directories for cluster instances (for CI)
+    --noipcrm, do not remove the user's IPC objects when stopping or cleaning the cluster
   Please lookup the following secion to find the default values for above options.
 
   Typical command patterns to kick off this script:
@@ -186,6 +187,7 @@ standby_num=0
 shutdown=off
 extra_gucs=""
 log_dir_prefix=""
+ipcrm=on
 
 #------------------------------------------------------------------------------
 # 3.Process Script Options
@@ -215,6 +217,7 @@ for arg do
     --fault-injector)           ;; # do nothing
     --eg=*|--extra-gucs=*)      extra_gucs="$val" ;;
     --ldp=*|--log-dir-prefix=*) log_dir_prefix="$val" ;;
+    --noipcrm)                  ipcrm=off ;;
     *)                          error "build.sh: invalid option $arg";
                                 error "Try \"./build.sh --help\" for more information.";
                                 exit 1 ;;
@@ -280,7 +283,9 @@ if [[ $init == "on" ]] || [[ $clean == "on" ]] || [[ $shutdown == "on" ]]; then
   for dir in $pg_primary_dir $pg_standby_dir_prefix* $pg_replica_dir_prefix*; do
     $base_dir/bin/pg_ctl -D $dir stop -mi || true
   done
-  ipcrm -a || echo "WARN: ipcrm -a failed (IPC owned by another user?)"
+  if [[ $ipcrm == "on" ]]; then
+    ipcrm -a || echo "WARN: ipcrm -a failed (IPC owned by another user?)"
+  fi
   if [[ $shutdown == "on" ]]; then
     info "The cluster is shut down"
     exit 0
