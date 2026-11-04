@@ -128,7 +128,25 @@ cmd_prepare() {
     return 1
   fi
 
-  if git -C "${wt}" merge --no-edit "${head_sha}" \
+  # Forward the branch as it would land on <lower>, unit by unit like the
+  # bot, so the recorded hunks are the ones the bot will meet.
+  local land="" unit="${head_sha}"
+  if [[ -n "${lower_sha:-}" ]]; then
+    land="$(cd "${wt}" && forward_landing "${lower_sha}" "${head_sha}")"
+  fi
+  if [[ -n "${land}" ]]; then
+    if (cd "${wt}" && FORWARD_REFS="${FORWARD_REFS:-none}" \
+          forward_steps "${lower}" "${higher}" "${land}"); then
+      log_success "forward-merge: this branch merges cleanly into ${higher}; nothing to record"
+      git worktree remove --force "${wt}"
+      return 0
+    fi
+    unit="$(git -C "${wt}" rev-parse -q --verify MERGE_HEAD)" || {
+      git worktree remove --force "${wt}" 2>/dev/null || true
+      log_error "forward-merge: could not forward this branch into ${higher} (see above)"
+      return 1
+    }
+  elif git -C "${wt}" merge --no-edit "${head_sha}" \
      || { [[ -z "$(git -C "${wt}" ls-files --unmerged)" ]] && git -C "${wt}" commit --no-edit; }; then
     log_success "forward-merge: this branch merges cleanly into ${higher}; nothing to record"
     git worktree remove --force "${wt}"
@@ -142,10 +160,14 @@ cmd_prepare() {
 Resolve the forward-merge to ${higher} once, then record it:
 
   cd "${wt}"
-  # fix the conflicts, or for a null-merge:  git merge --abort && git merge -s ours ${head_sha}
+  # fix the conflicts, or for a null-merge:  git merge --abort && git merge -s ours ${unit}
   git add -A
   cd "${root}"
   .ci/forward-merge/forward-merge.sh --record
+
+If the branch mixes commits with and without Forward-as-null, it is
+forwarded commit by commit: after --record, run --prepare again until it
+reports a clean merge.
 
 EOF
 }
