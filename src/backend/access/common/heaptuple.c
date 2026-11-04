@@ -67,6 +67,9 @@
 #include "utils/hsearch.h"
 #include "utils/memutils.h"
 
+/* POLAR px */
+#include "px/px_vars.h"
+/* POLAR end */
 
 /*
  * Does att's datatype allow packing into the 1-byte-header varlena format?
@@ -135,6 +138,18 @@ init_missing_cache()
 					&hash_ctl,
 					HASH_ELEM | HASH_CONTEXT | HASH_FUNCTION | HASH_COMPARE);
 }
+
+/* POLAR px */
+static Datum
+px_get_dummy_ctid()
+{
+	ItemPointer result = (ItemPointer) palloc(sizeof(ItemPointerData));
+
+	ItemPointerSet(result, InvalidBlockNumber, InvalidOffsetNumber);
+	return PointerGetDatum(result);
+}
+
+/* POLAR end */
 
 /* ----------------------------------------------------------------
  *						misc support routines
@@ -482,6 +497,12 @@ heap_attisnull(HeapTuple tup, int attnum, TupleDesc tupleDesc)
 		case MinTransactionIdAttributeNumber:
 		case MinCommandIdAttributeNumber:
 		case MaxTransactionIdAttributeNumber:
+
+			/* POLAR px */
+		case PxWorkerIdAttributeNumber:
+		case RootSelfItemPointerAttributeNumber:
+			/* POLAR end */
+
 		case MaxCommandIdAttributeNumber:
 			/* these are never null */
 			break;
@@ -756,6 +777,16 @@ heap_getsysattr(HeapTuple tup, int attnum, TupleDesc tupleDesc, bool *isnull)
 		case TableOidAttributeNumber:
 			result = ObjectIdGetDatum(tup->t_tableOid);
 			break;
+
+			/* POLAR px */
+		case PxWorkerIdAttributeNumber:
+			result = Int32GetDatum(PxIdentity.workerid);
+			break;
+		case RootSelfItemPointerAttributeNumber:
+			result = px_get_dummy_ctid();
+			break;
+			/* POLAR end */
+
 		default:
 			elog(ERROR, "invalid attnum: %d", attnum);
 			result = 0;			/* keep compiler quiet */

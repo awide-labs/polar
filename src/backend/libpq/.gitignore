@@ -1,0 +1,13 @@
+fe-auth-scram.c
+fe-auth.c
+fe-connect.c
+fe-exec.c
+fe-misc.c
+fe-protocol3.c
+fe-secure.c
+fe-trace.c
+getpeereid.c
+libpq-events.c
+pqexpbuffer.c
+fe-gssapi-common.c
+fe-secure-gssapi.c

@@ -43,6 +43,13 @@
 #ifndef POSTGRES_H
 #define POSTGRES_H
 
+/* POLAR px */
+#ifdef __cplusplus
+extern "C"
+{
+#endif
+/* POLAR end */
+
 #include "c.h"
 #include "utils/elog.h"
 #include "utils/palloc.h"
@@ -812,5 +819,11 @@ extern Datum Float8GetDatum(float8 X);
 #define Int64GetDatumFast(X)  PointerGetDatum(&(X))
 #define Float8GetDatumFast(X) PointerGetDatum(&(X))
 #endif
+
+/* POLAR px */
+#ifdef __cplusplus
+}
+#endif
+/* POLAR end */
 
 #endif							/* POSTGRES_H */

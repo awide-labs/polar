@@ -42,6 +42,10 @@
 #include "utils/resowner_private.h"
 #include "utils/syscache.h"
 
+/* POLAR px */
+#include "catalog/heap.h"
+/* POLAR end */
+
 /*
  * If a catcache invalidation is processed while we are in the middle of
  * creating a catcache entry (or list), it might apply to the entry we're
@@ -626,6 +630,58 @@ CatCacheInvalidate(CatCache *cache, uint32 hashValue)
 		}
 	}
 }
+
+/* POLAR px */
+/*
+ * heaptuple_from_pg_attribute:
+ * this function is needed to support system attributes _root_ctid and
+ * _polar_worker_id.
+ * */
+static HeapTuple
+heaptuple_from_pg_attribute(TupleDesc pg_attribute_desc,
+							const FormData_pg_attribute *new_attribute)
+{
+
+	Datum		values[Natts_pg_attribute];
+	bool		nulls[Natts_pg_attribute];
+
+	/* This is a tad tedious, but way cleaner than what we used to do... */
+	memset(values, 0, sizeof(values));
+	memset(nulls, false, sizeof(nulls));
+
+	values[Anum_pg_attribute_attrelid - 1] = ObjectIdGetDatum(new_attribute->attrelid);
+	values[Anum_pg_attribute_attname - 1] = NameGetDatum(&new_attribute->attname);
+	values[Anum_pg_attribute_atttypid - 1] = ObjectIdGetDatum(new_attribute->atttypid);
+	values[Anum_pg_attribute_attstattarget - 1] = Int32GetDatum(new_attribute->attstattarget);
+	values[Anum_pg_attribute_attlen - 1] = Int16GetDatum(new_attribute->attlen);
+	values[Anum_pg_attribute_attnum - 1] = Int16GetDatum(new_attribute->attnum);
+	values[Anum_pg_attribute_attndims - 1] = Int32GetDatum(new_attribute->attndims);
+	values[Anum_pg_attribute_attcacheoff - 1] = Int32GetDatum(new_attribute->attcacheoff);
+	values[Anum_pg_attribute_atttypmod - 1] = Int32GetDatum(new_attribute->atttypmod);
+	values[Anum_pg_attribute_attbyval - 1] = BoolGetDatum(new_attribute->attbyval);
+	values[Anum_pg_attribute_attalign - 1] = CharGetDatum(new_attribute->attalign);
+	values[Anum_pg_attribute_attstorage - 1] = CharGetDatum(new_attribute->attstorage);
+	values[Anum_pg_attribute_attcompression - 1] = CharGetDatum(new_attribute->attcompression);
+	values[Anum_pg_attribute_attnotnull - 1] = BoolGetDatum(new_attribute->attnotnull);
+	values[Anum_pg_attribute_atthasdef - 1] = BoolGetDatum(new_attribute->atthasdef);
+	values[Anum_pg_attribute_atthasmissing - 1] = BoolGetDatum(new_attribute->atthasmissing);
+	values[Anum_pg_attribute_attidentity - 1] = CharGetDatum(new_attribute->attidentity);
+	values[Anum_pg_attribute_attgenerated - 1] = CharGetDatum(new_attribute->attgenerated);
+	values[Anum_pg_attribute_attisdropped - 1] = BoolGetDatum(new_attribute->attisdropped);
+	values[Anum_pg_attribute_attislocal - 1] = BoolGetDatum(new_attribute->attislocal);
+	values[Anum_pg_attribute_attinhcount - 1] = Int32GetDatum(new_attribute->attinhcount);
+	values[Anum_pg_attribute_attcollation - 1] = ObjectIdGetDatum(new_attribute->attcollation);
+
+	/* start out with empty permissions and empty options */
+	nulls[Anum_pg_attribute_attacl - 1] = true;
+	nulls[Anum_pg_attribute_attoptions - 1] = true;
+	nulls[Anum_pg_attribute_attfdwoptions - 1] = true;
+	nulls[Anum_pg_attribute_attmissingval - 1] = true;
+
+	return heap_form_tuple(pg_attribute_desc, values, nulls);
+}
+
+/* POLAR end */
 
 /* ----------------------------------------------------------------
  *					   public functions
@@ -1485,23 +1541,92 @@ SearchCatCacheMiss(CatCache *cache,
 		if (IsBootstrapProcessingMode())
 			return NULL;
 
-		ct = CatalogCacheCreateEntry(cache, NULL, arguments,
-									 hashValue, hashIndex);
-
-		/* Creating a negative cache entry shouldn't fail */
-		Assert(ct != NULL);
-
-		CACHE_elog(DEBUG2, "SearchCatCache(%s): Contains %d/%d tuples",
-				   cache->cc_relname, cache->cc_ntup, CacheHdr->ch_ntup);
-		CACHE_elog(DEBUG2, "SearchCatCache(%s): put neg entry in bucket %d",
-				   cache->cc_relname, hashIndex);
+		/* POLAR px */
 
 		/*
-		 * We are not returning the negative entry to the caller, so leave its
-		 * refcount zero.
+		 * Handle hidden _px_worker_id and _root_ctid system attributes when
+		 * access to pg_attribute sys table
 		 */
+		if ((cache->id == ATTNUM &&
+			 (DatumGetInt16(arguments[1]) == PxWorkerIdAttributeNumber ||
+			  DatumGetInt16(arguments[1]) == RootSelfItemPointerAttributeNumber)) ||
+			(cache->id == ATTNAME &&
+			 (strcmp(DatumGetCString(arguments[1]), "_px_worker_id") == 0 ||
+			  strcmp(DatumGetCString(arguments[1]), "_root_ctid") == 0)))
+		{
+			AttrNumber	attno;
+			const FormData_pg_attribute *tmp_attr;
+#ifdef USE_ASSERT_CHECKING
+			const int	MAX_CAT_CACHE_CREATE_ENTRY_CALLS = 5;
+			int			n_cache_create_entry_calls;
+#endif
 
-		return NULL;
+			Assert(cache->cc_reloid == AttributeRelationId);
+
+			/* define target attribute number */
+			switch (cache->id)
+			{
+				case ATTNUM:
+					attno = DatumGetInt16(arguments[1]);
+					break;
+				case ATTNAME:
+					if (strcmp(DatumGetCString(arguments[1]), "_px_worker_id") == 0)
+						attno = PxWorkerIdAttributeNumber;
+					else if (strcmp(DatumGetCString(arguments[1]), "_root_ctid") == 0)
+						attno = RootSelfItemPointerAttributeNumber;
+					else
+						pg_unreachable();
+					break;
+				default:
+					pg_unreachable();
+			}
+
+			tmp_attr = SystemAttributeDefinition(attno);
+			ntp = heaptuple_from_pg_attribute(cache->cc_tupdesc, tmp_attr);
+
+			/*
+			 * pg_attribute tuple doesn't require detoasting and thus never
+			 * becomes stale but to preserve calling convention for
+			 * CatalogCacheCreateEntry() call we wrap it into loop until
+			 * resulting cache entry pointer becomes valid. This makes sense
+			 * in build with asserts that occasionally triggers returning zero
+			 * pointer
+			 */
+#ifdef USE_ASSERT_CHECKING
+			n_cache_create_entry_calls = 0;
+#endif
+			do
+			{
+				ct = CatalogCacheCreateEntry(cache, ntp, arguments, hashValue,
+											 hashIndex);
+				Assert(++n_cache_create_entry_calls <= MAX_CAT_CACHE_CREATE_ENTRY_CALLS);
+			} while (ct == NULL);
+
+			/* immediately set the refcount to 1 */
+			ResourceOwnerEnlargeCatCacheRefs(CurrentResourceOwner);
+			ct->refcount++;
+			ResourceOwnerRememberCatCacheRef(CurrentResourceOwner, &ct->tuple);
+		}
+		else					/* POLAR end */
+		{
+			ct = CatalogCacheCreateEntry(cache, NULL, arguments, hashValue,
+										 hashIndex);
+
+			/* Creating a negative cache entry shouldn't fail */
+			Assert(ct != NULL);
+
+			CACHE_elog(DEBUG2, "SearchCatCache(%s): Contains %d/%d tuples",
+					   cache->cc_relname, cache->cc_ntup, CacheHdr->ch_ntup);
+			CACHE_elog(DEBUG2, "SearchCatCache(%s): put neg entry in bucket %d",
+					   cache->cc_relname, hashIndex);
+
+			/*
+			 * We are not returning the negative entry to the caller, so leave
+			 * its refcount zero.
+			 */
+
+			return NULL;
+		}
 	}
 
 	CACHE_elog(DEBUG2, "SearchCatCache(%s): Contains %d/%d tuples",

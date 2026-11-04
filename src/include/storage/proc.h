@@ -344,6 +344,10 @@ struct PGPROC
 	/* Backend is bound to 1 session and serves only that session */
 	volatile bool polar_is_backend_dedicated;
 	struct PolarSessionContext *volatile polar_shared_session;
+
+	/* POLAR px */
+	pg_atomic_flag polar_px_is_executing;	/* whether this process is
+											 * executing PX? */
 	/* POLAR end */
 };
 
@@ -453,6 +457,13 @@ typedef struct PROC_HDR
 
 	/* POLAR wal_pipeliner process's latch */
 	Latch	   *volatile polar_wal_pipeliner_latch;
+
+	/* POLAR px */
+	/* Counter for assigning serial numbers to processes */
+	pg_atomic_uint32 pxSessionCounter;
+	pg_atomic_uint32 pxWorkerCounter;
+	pg_atomic_uint32 sqlRequestCounter;
+	/* POLAR end */
 } PROC_HDR;
 
 extern PGDLLIMPORT PROC_HDR *ProcGlobal;

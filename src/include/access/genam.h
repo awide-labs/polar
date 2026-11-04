@@ -238,4 +238,9 @@ extern void systable_inplace_update_begin(Relation relation,
 extern void systable_inplace_update_finish(void *state, HeapTuple tuple);
 extern void systable_inplace_update_cancel(void *state);
 
+/* POLAR px */
+void		index_initscan_px(IndexScanDesc scan);
+
+/* POLAR end */
+
 #endif							/* GENAM_H */

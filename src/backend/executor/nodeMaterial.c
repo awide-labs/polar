@@ -174,6 +174,24 @@ ExecInitMaterial(Material *node, EState *estate, int eflags)
 	matstate->ss.ps.state = estate;
 	matstate->ss.ps.ExecProcNode = ExecMaterial;
 
+	/* POLAR px */
+	if (node->px_strict)
+		eflags |= EXEC_FLAG_REWIND;
+
+	/*
+	 * If the Material node was inserted to protect the child node from
+	 * rescanning, don't eager free.
+	 *
+	 * XXX: The planner doesn't always set the flag for Material nodes that
+	 * are put directly on top of Motion nodes, so check for that, too.
+	 */
+	if (node->px_shield_child_from_rescans ||
+		IsA(outerPlan((Plan *) node), Motion))
+	{
+		eflags |= EXEC_FLAG_REWIND;
+	}
+	/* POLAR end */
+
 	/*
 	 * We must have a tuplestore buffering the subplan output to do backward
 	 * scan or mark/restore.  We also prefer to materialize the subplan output
@@ -203,6 +221,19 @@ ExecInitMaterial(Material *node, EState *estate, int eflags)
 	 * Materialization nodes don't need ExprContexts because they never call
 	 * ExecQual or ExecProject.
 	 */
+
+	/* TODO: pg15_px */
+#if 0
+
+	/*
+	 * POLAR px: if eflag contains EXEC_FLAG_REWIND or EXEC_FLAG_BACKWARD or
+	 * EXEC_FLAG_MARK, then this node is not eager free safe.
+	 */
+	matstate->delayEagerFree = eflags & (EXEC_FLAG_REWIND |
+										 EXEC_FLAG_BACKWARD |
+										 EXEC_FLAG_MARK);
+	/* POLAR end */
+#endif
 
 	/*
 	 * initialize child nodes
@@ -366,3 +397,39 @@ ExecReScanMaterial(MaterialState *node)
 		node->eof_underlying = false;
 	}
 }
+
+/* POLAR px */
+/*
+ * Release tuplestore resources when eager freeing. Eager free
+ *           is safe only when delayEagerFree is false.
+ */
+static void
+polar_ExecEagerFreeMaterial(MaterialState *node)
+{
+	if (node->tuplestorestate)
+	{
+		tuplestore_end(node->tuplestorestate);
+	}
+	node->tuplestorestate = NULL;
+}
+
+void
+ExecSquelchMaterial(MaterialState *node)
+{
+	/*
+	 * If this Material is shielding the underlying nodes from rescanning (for
+	 * example, if there is a Motion node below), then keep the tuplestore.
+	 * Also, don't recurse to the subtree in that case, because we might need
+	 * to read more tuples from it after a ReScan. Most likely we have already
+	 * read all the tuples from the underlying node in that case, but it's
+	 * possible that ExecMaterial hasn't been called even once yet, and we
+	 * haven't created the tuplestore yet.
+	 */
+	if (!node->delayEagerFree)
+	{
+		polar_ExecEagerFreeMaterial(node);
+		ExecSquelchNode(outerPlanState(node));
+	}
+}
+
+/* POLAR end */

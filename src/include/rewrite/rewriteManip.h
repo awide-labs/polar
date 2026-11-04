@@ -49,6 +49,12 @@ extern void IncrementVarSublevelsUp(Node *node, int delta_sublevels_up,
 extern void IncrementVarSublevelsUp_rtable(List *rtable,
 										   int delta_sublevels_up, int min_sublevels_up);
 
+/* POLAR px */
+extern void polar_IncrementVarSublevelsUpInTransformGroupedWindows(Node *node,
+																   int delta_sublevels_up, int min_sublevels_up);
+
+/* POLAR end */
+
 extern bool rangeTableEntry_used(Node *node, int rt_index,
 								 int sublevels_up);
 

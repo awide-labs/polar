@@ -1,0 +1,69 @@
+-- For target queries optionally specify EXPLAIN (COSTS OFF, VERBOSE) option from outside
+\getenv explain_only EXPLAIN_ONLY
+\set opt_explain ''
+\if :explain_only
+unrecognized value ":explain_only" for "\if expression": Boolean expected
+    \set opt_explain 'EXPLAIN (COSTS OFF, VERBOSE)'
+\endif
+set polar_enable_px = 1;
+-- simple SQL with assert
+-- expect assertion failure because more than 1 row returned
+:opt_explain select (select 1 union select 2);
+ERROR:  one or more assertions failed
+DETAIL:  Expected no more than one row to be returned by expression
+
+-- expect assertion failure because more than 1 row returned
+:opt_explain select (select generate_series(1,5));
+ERROR:  one or more assertions failed
+DETAIL:  Expected no more than one row to be returned by expression
+
+-- expect assertion pass
+:opt_explain select (select generate_series(1,1)) as series;
+ series 
+--------
+      1
+(1 row)
+
+-- PX query over tables with assert
+drop table if exists assert_test1;
+NOTICE:  table "assert_test1" does not exist, skipping
+create table assert_test1(id int);
+insert into assert_test1(id) select generate_series(1, 1000) as id order by id desc;
+analyze assert_test1;
+-- expect assertion failure because more than 1 row returned
+:opt_explain select * from assert_test1 where id = (select id from assert_test1);
+ERROR:  one or more assertions failed
+DETAIL:  Expected no more than one row to be returned by expression
+
+-- expect assertion pass because only 1 row returned
+:opt_explain select * from assert_test1 where id = (select id from assert_test1 where id = 1);
+ id 
+----
+  1
+(1 row)
+
+drop table if exists assert_test2;
+NOTICE:  table "assert_test2" does not exist, skipping
+create table assert_test2(id1 int, id2 int, id3 int, id4 int);
+insert into assert_test2(id1, id2, id3, id4) select
+    generate_series(1, 1000),
+    generate_series(1, 1000),
+    generate_series(1, 1000),
+    generate_series(1, 1000);
+analyze assert_test2;
+-- expect assertion failure because more than 1 row returned
+:opt_explain select * from assert_test2 where id2 = (select id3 from assert_test2);
+ERROR:  one or more assertions failed
+DETAIL:  Expected no more than one row to be returned by expression
+
+-- expect assertion pass because only 1 row returned
+:opt_explain select * from assert_test2 where id2 = (select id3 from assert_test2 where id4 = 1);
+ id1 | id2 | id3 | id4 
+-----+-----+-----+-----
+   1 |   1 |   1 |   1
+(1 row)
+
+-- More DML with assert to be test seperately...
+reset all;
+drop table assert_test1;
+drop table assert_test2;

@@ -14,6 +14,10 @@
 #ifndef PARAMS_H
 #define PARAMS_H
 
+/* POLAR px */
+#include "nodes/nodes.h"
+/* POLAR end */
+
 /* Forward declarations, to avoid including other headers */
 struct Bitmapset;
 struct ExprState;
@@ -156,6 +160,29 @@ typedef struct ParamsErrorCbData
 	const char *portalName;
 	ParamListInfo params;
 } ParamsErrorCbData;
+
+/* POLAR px */
+/*
+ * Serialized form of ParamExternData. This is used when query parameters
+ * are serialized, when dispatching a query from QC to PXs.
+ */
+typedef struct SerializedParamExternData
+{
+	NodeTag		type;
+
+	/* Fields from ParamExternData */
+	Datum		value;			/* parameter value */
+	bool		isnull;			/* is it NULL? */
+	uint16		pflags;			/* flag bits, see above */
+	Oid			ptype;			/* parameter's datatype, or 0 */
+
+	/* Extra information about the type */
+	int16		plen;
+	bool		pbyval;
+
+} SerializedParamExternData;
+
+/* POLAR end */
 
 /* Functions found in src/backend/nodes/params.c */
 extern ParamListInfo makeParamList(int numParams);

@@ -13,6 +13,8 @@ subdir = src/test/authentication
 top_builddir = ../../..
 include $(top_builddir)/src/Makefile.global
 
+export with_ssl
+
 check:
 	$(prove_check)
 

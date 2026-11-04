@@ -96,6 +96,7 @@ typedef struct MemoryContextMethods
 #ifdef MEMORY_CONTEXT_CHECKING
 	void		(*check) (MemoryContext context);
 #endif
+
 	/* POLAR px */
 	void		(*declare_accounting_root) (MemoryContext context);
 	Size		(*get_peak_usage) (MemoryContext context);

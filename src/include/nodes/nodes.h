@@ -45,6 +45,7 @@ typedef enum NodeTag
 	 */
 	T_Plan,
 	T_Result,
+	T_Plan_Start = T_Result,	/* POLAR px */
 	T_ProjectSet,
 	T_ModifyTable,
 	T_Append,
@@ -88,6 +89,8 @@ typedef enum NodeTag
 	T_SetOp,
 	T_LockRows,
 	T_Limit,
+	T_Plan_End = T_Limit,		/* POLAR px */
+
 	/* these aren't subclasses of Plan: */
 	T_NestLoopParam,
 	T_PlanRowMark,
@@ -536,7 +539,64 @@ typedef enum NodeTag
 	T_SupportRequestIndexCondition, /* in nodes/supportnodes.h */
 	T_SupportRequestWFuncMonotonic, /* in nodes/supportnodes.h */
 	/* POLAR AIO buffer align */
-	T_AlignedAllocRedirectContext
+	T_AlignedAllocRedirectContext,
+
+	/* POLAR px */
+	T_Sequence,
+	T_PX_Plan_Start = T_Sequence,
+	T_DynamicSeqScan,
+	T_ExternalScan,
+	T_DynamicIndexScan,
+	T_DynamicBitmapIndexScan,
+	T_DynamicBitmapHeapScan,
+	T_Motion,
+	T_ShareInputScan,
+	T_Repeat,
+	T_SplitUpdate,
+	T_RowTrigger,
+	T_AssertOp,
+	T_PartitionSelector,
+	T_PX_Plan_End = T_PartitionSelector,
+
+	T_PartitionBy,
+	T_PartitionRangeItem,
+	T_PartitionValuesSpec,
+	T_AlterPartitionId,
+	T_AlterPartitionCmd,
+	T_InheritPartitionCmd,
+	T_CreateFileSpaceStmt,
+	T_FileSpaceEntry,
+	T_DropFileSpaceStmt,
+	T_TableValueExpr,
+	T_DenyLoginInterval,
+	T_DenyLoginPoint,
+	T_ExpandStmtSpec,
+	T_AOVacuumPhaseConfig,
+	T_MotionState,
+	T_TupleDescNode,
+	T_SerializedParamExternData,
+	T_PxProcess,
+	T_SliceTable,
+	T_CursorPosInfo,
+	T_QueryDispatchDesc,
+	T_Flow,
+	T_DMLActionExpr,
+	T_PartSelectedExpr,
+	T_PartDefaultExpr,
+	T_PartBoundExpr,
+	T_PartBoundInclusionExpr,
+	T_PartBoundOpenExpr,
+	T_PartListRuleExpr,
+	T_PartListNullTestExpr,
+	T_PxExplain_StatHdr,		/* in px_explain.c */
+	T_PxPolicy,					/* in catalog/px_policy.h */
+	T_SequenceState,
+	T_ShareInputScanState,
+	T_PartitionSelectorState,
+	T_AssertOpState,
+	T_SplitUpdateState,
+	/* POLAR end */
+
 } NodeTag;
 
 /*
@@ -743,7 +803,16 @@ typedef enum JoinType
 	 * by the executor (nor, indeed, by most of the planner).
 	 */
 	JOIN_UNIQUE_OUTER,			/* LHS path must be made unique */
-	JOIN_UNIQUE_INNER			/* RHS path must be made unique */
+	JOIN_UNIQUE_INNER,			/* RHS path must be made unique */
+
+	/* POLAR px */
+
+	/*
+	 * If any NULL values are produced by inner side, return no join results.
+	 * Otherwise, same as LASJ
+	 */
+	JOIN_LASJ_NOTIN,			/* Left Anti Semi Join with Not-In semantic	*/
+	/* POLAR end */
 
 	/*
 	 * We might need additional join types someday.
@@ -860,5 +929,30 @@ typedef enum LimitOption
 	LIMIT_OPTION_WITH_TIES,		/* FETCH FIRST... WITH TIES */
 	LIMIT_OPTION_DEFAULT,		/* No limit present */
 } LimitOption;
+
+/* POLAR px */
+/*
+ * DispatchMethod - PX dispatch method.
+ *
+ * There are currently three possibilties, an initial value of undetermined,
+ * and a value for each of the ways the dispatch code implements.
+ */
+typedef enum DispatchMethod
+{
+	DISPATCH_UNDETERMINED = 0,	/* Used prior to determination. */
+	DISPATCH_SEQUENTIAL,		/* Dispatch on entry postgres process only. */
+	DISPATCH_PARALLEL			/* Dispatch on query executor and entry
+								 * processes. */
+
+} DispatchMethod;
+
+/*
+ * nodes/outfast.c. This special version of nodeToString is only used by serializeNode.
+ * It's a quick hack that allocates 8K buffer for StringInfo struct through initStringIinfoSizeOf
+ */
+extern char *nodeToBinaryStringFast(void *obj, int *length);
+extern Node *readNodeFromBinaryString(const char *str, int len);
+
+/* POLAR end */
 
 #endif							/* NODES_H */

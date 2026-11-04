@@ -92,4 +92,12 @@ extern char *InjectFault(
 #define SIMPLE_FAULT_INJECTOR(FaultName)
 #endif
 
+/* POLAR px */
+#ifdef FAULT_INJECTOR
+#define FAULT_COND(cond) (cond)
+#else
+#define FAULT_COND(cond) (false)
+#endif
+/* POLAR end */
+
 #endif							/* FAULTINJECTOR_H */

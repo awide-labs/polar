@@ -61,6 +61,8 @@ uninstall:
 NAME = regress
 OBJS = $(WIN32RES) regress.o
 
+SHLIB_LINK_INTERNAL = $(libpq)
+
 include $(top_srcdir)/src/Makefile.shlib
 
 all: all-lib
@@ -154,6 +156,12 @@ check_ss_oom: all
 	$(pg_regress_check) $(REGRESS_OPTS) --temp-config=temp_config --schedule=$(srcdir)/parallel_schedule --schedule=$(srcdir)/ss_schedule $(MAXCONNOPT) $(EXTRA_TESTS)
 	rm -f temp_config
 
+polar-px-check: all run-temp-cluster
+	$(with_temp_install) $(MAKE) bindir=$(temp_install_bindir) PGHOST=$(temp_sock_dir) polar-px-installcheck-plans && \
+	$(with_temp_install) $(MAKE) bindir=$(temp_install_bindir) PGHOST=$(temp_sock_dir) polar-px-installcheck ; \
+	ERRCODE=$$? ; \
+	$(MAKE) cleanup-temp-cluster && exit $$ERRCODE
+
 polar-check: all | temp-install
 	mkdir -p $(srcdir)/results/polar
 	$(pg_regress_check) $(REGRESS_OPTS) --schedule=$(srcdir)/polar_check_schedule $(MAXCONNOPT) $(EXTRA_TESTS)
@@ -167,6 +175,19 @@ installcheck: all
 polar-installcheck: all
 	mkdir -p $(srcdir)/results/polar
 	$(pg_regress_installcheck) $(REGRESS_OPTS) --port=$(PGPORT) --schedule=$(srcdir)/polar_check_schedule $(MAXCONNOPT) $(EXTRA_TESTS)
+
+# To enable concurrent execution of pg_regress related targets (e.g. check) we use separate outputdir for pg_regress files
+# (expected/results dir, regression.diffs, etc.)
+px_plans_subdir = px-plans
+polar-px-installcheck-plans: export EXPLAIN_ONLY=1
+polar-px-installcheck-plans: all
+	$(MKDIR_P) $(srcdir)/$(px_plans_subdir)/results/polar-px-dev
+	PATH="$(bindir):$$PATH" $(pg_regress_installcheck) $(REGRESS_OPTS) --load-extension=polar_monitor --outputdir=$(px_plans_subdir) --schedule=$(srcdir)/polar-px-dev-schedule-explain-only $(EXTRA_TESTS)
+
+px_res_subdir = px-results
+polar-px-installcheck: all
+	$(MKDIR_P) $(srcdir)/$(px_res_subdir)/results/polar-px-dev
+	PATH="$(bindir):$$PATH" $(pg_regress_installcheck) $(REGRESS_OPTS) --load-extension=polar_monitor --outputdir=$(px_res_subdir) --schedule=$(srcdir)/polar-px-dev-schedule $(EXTRA_TESTS)
 
 installcheck-parallel: all
 	$(pg_regress_installcheck) $(REGRESS_OPTS) --schedule=$(srcdir)/parallel_schedule $(MAXCONNOPT) $(EXTRA_TESTS)

@@ -38,6 +38,21 @@
 #include "nodes/plannodes.h"
 #include "nodes/readfuncs.h"
 
+/* POLAR px */
+#include "px/px_gang.h"
+
+/*
+ * Current position in the message that we are processing. We can keep
+ * this in a global variable because readNodeFromBinaryString() is not
+ * re-entrant. This is similar to the current position that pg_strtok()
+ * keeps, used by the normal stringToNode() function.
+ */
+static const char *read_str_ptr;
+
+/* read flag for plangen from PXOPT */
+static bool is_px_read_plangen = false;
+
+/* POLAR end */
 
 /*
  * Macros to simplify reading of different kinds of fields.  Use these
@@ -67,6 +82,14 @@
 	token = pg_strtok(&length);		/* skip :fldname */ \
 	token = pg_strtok(&length);		/* get field value */ \
 	local_node->fldname = atoi(token)
+
+/* POLAR px */
+/* Read an int16 field (anything written as ":fldname %hd") */
+#define READ_INT16_FIELD(fldname) \
+	token = pg_strtok(&length);		/* skip :fldname */ \
+	token = pg_strtok(&length);		/* get field value */ \
+	local_node->fldname = atoi(token)
+/* POLAR end */
 
 /* Read an unsigned integer field (anything written as ":fldname %u") */
 #define READ_UINT_FIELD(fldname) \
@@ -187,6 +210,12 @@
 #define nullable_string(token,length)  \
 	((length) == 0 ? NULL : debackslash(token, length))
 
+/* POLAR px */
+#define POLAR_MATCH(tokname) \
+	(({token = polar_pg_strtok(&length); }) && \
+	 length == sizeof(CppAsString(tokname)) && \
+	 memcmp(token, ":" CppAsString(tokname), length) == 0)
+/* POLAR end */
 
 /*
  * _readBitmapset
@@ -778,6 +807,15 @@ _readFuncExpr(void)
 	READ_OID_FIELD(inputcollid);
 	READ_NODE_FIELD(args);
 	READ_LOCATION_FIELD(location);
+
+	/* POLAR px */
+	if (POLAR_MATCH(isGlobalFunc))
+	{
+		READ_BOOL_FIELD(isGlobalFunc);
+	}
+	else
+		local_node->isGlobalFunc = false;
+	/* POLAR end */
 
 	READ_DONE();
 }
@@ -1616,6 +1654,23 @@ _readPlannedStmt(void)
 {
 	READ_LOCALS(PlannedStmt);
 
+	/* POLAR px */
+
+	/*
+	 * Write PLANGEN_PX at the beginning of _outPlannedStmt. So
+	 * is_px_read_plangen will be set to true at the beginning of
+	 * _readPlannedStmt. Other nodes will be read depend on
+	 * is_px_read_plangen.
+	 */
+	if (has_px_plangen_filed())
+	{
+		is_px_read_plangen = true;
+		READ_ENUM_FIELD(planGen, PlanGenerator);
+	}
+	else
+		is_px_read_plangen = false;
+	/* POLAR end */
+
 	READ_ENUM_FIELD(commandType, CmdType);
 	READ_UINT64_FIELD(queryId);
 	READ_BOOL_FIELD(hasReturning);
@@ -1638,6 +1693,33 @@ _readPlannedStmt(void)
 	READ_NODE_FIELD(utilityStmt);
 	READ_LOCATION_FIELD(stmt_location);
 	READ_INT_FIELD(stmt_len);
+
+	/* POLAR px */
+	if (is_px_read_plangen)
+	{
+		int			i;
+
+		/* read slices filed if there is any */
+		READ_INT_FIELD(numSlices);
+		if (local_node->numSlices > 0)
+		{
+			READ_INT_ARRAY(subplan_sliceIds, list_length(local_node->subplans));
+		}
+
+		local_node->slices = palloc(local_node->numSlices * sizeof(PlanSlice));
+		for (i = 0; i < local_node->numSlices; i++)
+		{
+			READ_INT_FIELD(slices[i].sliceIndex);
+			READ_INT_FIELD(slices[i].parentIndex);
+			READ_INT_FIELD(slices[i].gangType);
+			READ_INT_FIELD(slices[i].numsegments);
+			READ_INT_FIELD(slices[i].worker_idx);
+			READ_BOOL_FIELD(slices[i].directDispatch.isDirectDispatch);
+			READ_NODE_FIELD(slices[i].directDispatch.contentIds);
+		}
+		READ_INT_FIELD(nParamExec);
+	}
+	/* POLAR end */
 
 	READ_DONE();
 }
@@ -1666,6 +1748,14 @@ ReadCommonPlan(Plan *local_node)
 	READ_NODE_FIELD(initPlan);
 	READ_BITMAPSET_FIELD(extParam);
 	READ_BITMAPSET_FIELD(allParam);
+
+	/* POLAR px */
+	if (is_px_read_plangen)
+	{
+		READ_NODE_FIELD(flow);
+		READ_BOOL_FIELD(px_scan_partial);
+	}
+	/* POLAR end */
 }
 
 /*
@@ -1692,6 +1782,15 @@ _readResult(void)
 	ReadCommonPlan(&local_node->plan);
 
 	READ_NODE_FIELD(resconstantqual);
+
+	/* POLAR px */
+	if (is_px_read_plangen)
+	{
+		READ_INT_FIELD(numHashFilterCols);
+		READ_ATTRNUMBER_ARRAY(hashFilterColIdx, local_node->numHashFilterCols);
+		READ_OID_ARRAY(hashFilterFuncs, local_node->numHashFilterCols);
+	}
+	/* POLAR end */
 
 	READ_DONE();
 }
@@ -1759,6 +1858,15 @@ _readAppend(void)
 	READ_INT_FIELD(nasyncplans);
 	READ_INT_FIELD(first_partial_plan);
 	READ_NODE_FIELD(part_prune_info);
+
+	/* POLAR px */
+	if (POLAR_MATCH(join_prune_paramids))
+	{
+		READ_NODE_FIELD(join_prune_paramids);
+	}
+	else
+		local_node->join_prune_paramids = NIL;
+	/* POLAR end */
 
 	READ_DONE();
 }
@@ -2169,6 +2277,13 @@ ReadCommonJoin(Join *local_node)
 	READ_ENUM_FIELD(jointype, JoinType);
 	READ_BOOL_FIELD(inner_unique);
 	READ_NODE_FIELD(joinqual);
+
+	/* POLAR px */
+	if (is_px_read_plangen)
+	{
+		READ_BOOL_FIELD(prefetch_inner);
+	}
+	/* POLAR end */
 }
 
 /*
@@ -2248,9 +2363,22 @@ _readHashJoin(void)
 static Material *
 _readMaterial(void)
 {
-	READ_LOCALS_NO_FIELDS(Material);
+	READ_LOCALS(Material);
 
 	ReadCommonPlan(&local_node->plan);
+
+	/* POLAR px */
+	if (POLAR_MATCH(px_strict))
+	{
+		READ_BOOL_FIELD(px_strict);
+		READ_BOOL_FIELD(px_shield_child_from_rescans);
+	}
+	else
+	{
+		local_node->px_strict = false;
+		local_node->px_shield_child_from_rescans = false;
+	}
+	/* POLAR end */
 
 	READ_DONE();
 }
@@ -2301,9 +2429,16 @@ ReadCommonSort(Sort *local_node)
 static Sort *
 _readSort(void)
 {
-	READ_LOCALS_NO_FIELDS(Sort);
+	READ_LOCALS(Sort);
 
 	ReadCommonSort(local_node);
+
+	/* POLAR px */
+	if (is_px_read_plangen)
+	{
+		READ_BOOL_FIELD(noduplicates);
+	}
+	/* POLAR end */
 
 	READ_DONE();
 }
@@ -2362,6 +2497,13 @@ _readAgg(void)
 	READ_BITMAPSET_FIELD(aggParams);
 	READ_NODE_FIELD(groupingSets);
 	READ_NODE_FIELD(chain);
+
+	/* POLAR px */
+	if (is_px_read_plangen)
+	{
+		READ_BOOL_FIELD(streaming);
+	}
+	/* POLAR end */
 
 	READ_DONE();
 }
@@ -2747,6 +2889,229 @@ _readPartitionRangeDatum(void)
 	READ_DONE();
 }
 
+/* POLAR px */
+static PartitionSelector *
+_readPartitionSelector(void)
+{
+	READ_LOCALS(PartitionSelector);
+
+	READ_INT_FIELD(paramid);
+	READ_NODE_FIELD(part_prune_info);
+
+	ReadCommonPlan(&local_node->plan);
+
+	READ_DONE();
+}
+
+static ShareInputScan *
+_readShareInputScan(void)
+{
+	READ_LOCALS(ShareInputScan);
+
+	READ_BOOL_FIELD(cross_slice);
+	READ_INT_FIELD(share_id);
+	READ_INT_FIELD(producer_slice_id);
+	READ_INT_FIELD(this_slice_id);
+	READ_INT_FIELD(nconsumers);
+
+	ReadCommonScan(&local_node->scan);
+
+	READ_DONE();
+}
+
+/*
+ * _readSequence
+ */
+static Sequence *
+_readSequence(void)
+{
+	READ_LOCALS(Sequence);
+
+	ReadCommonPlan(&local_node->plan);
+	READ_NODE_FIELD(subplans);
+
+	READ_DONE();
+}
+
+/*
+ * _readAssertOp
+ */
+static AssertOp *
+_readAssertOp(void)
+{
+	READ_LOCALS(AssertOp);
+
+	READ_NODE_FIELD(errmessage);
+	READ_INT_FIELD(errcode);
+
+	ReadCommonPlan(&local_node->plan);
+
+	READ_DONE();
+}
+
+/*
+ * _readSplitUpdate
+ */
+static SplitUpdate *
+_readSplitUpdate(void)
+{
+	READ_LOCALS(SplitUpdate);
+
+	READ_INT_FIELD(actionColIdx);
+	READ_INT_FIELD(tupleoidColIdx);
+	READ_NODE_FIELD(insertColIdx);
+	READ_NODE_FIELD(deleteColIdx);
+
+	ReadCommonPlan(&local_node->plan);
+
+	READ_DONE();
+}
+
+/*
+ * _readDMLActionExpr
+ */
+static DMLActionExpr *
+_readDMLActionExpr(void)
+{
+	READ_LOCALS_NO_FIELDS(DMLActionExpr);
+
+	READ_DONE();
+}
+
+/*
+ * _readMotion
+ */
+static Motion *
+_readMotion(void)
+{
+	READ_LOCALS(Motion);
+
+	READ_INT_FIELD(motionID);
+	READ_ENUM_FIELD(motionType, MotionType);
+
+	Assert(local_node->motionType == MOTIONTYPE_GATHER ||
+		   local_node->motionType == MOTIONTYPE_GATHER_SINGLE ||
+		   local_node->motionType == MOTIONTYPE_HASH ||
+		   local_node->motionType == MOTIONTYPE_BROADCAST ||
+		   local_node->motionType == MOTIONTYPE_EXPLICIT);
+
+	READ_BOOL_FIELD(sendSorted);
+
+	READ_NODE_FIELD(hashExprs);
+	READ_OID_ARRAY(hashFuncs, list_length(local_node->hashExprs));
+
+	READ_INT_FIELD(numSortCols);
+	READ_ATTRNUMBER_ARRAY(sortColIdx, local_node->numSortCols);
+	READ_OID_ARRAY(sortOperators, local_node->numSortCols);
+	READ_OID_ARRAY(collations, local_node->numSortCols);
+	READ_BOOL_ARRAY(nullsFirst, local_node->numSortCols);
+
+	READ_INT_FIELD(segidColIdx);
+
+	ReadCommonPlan(&local_node->plan);
+
+	READ_DONE();
+}
+
+static SerializedParamExternData *
+_readSerializedParamExternData(void)
+{
+	READ_LOCALS(SerializedParamExternData);
+
+	READ_BOOL_FIELD(isnull);
+	READ_INT16_FIELD(pflags);
+	READ_OID_FIELD(ptype);
+	READ_INT16_FIELD(plen);
+	READ_BOOL_FIELD(pbyval);
+
+	token = pg_strtok(&length); /* skip :paramvalue */
+	if (local_node->isnull)
+		token = pg_strtok(&length); /* skip "<>" */
+	else
+		local_node->value = readDatum(local_node->pbyval);
+
+	READ_DONE();
+}
+
+static QueryDispatchDesc *
+_readQueryDispatchDesc(void)
+{
+	READ_LOCALS(QueryDispatchDesc);
+
+	READ_STRING_FIELD(intoTableSpaceName);
+	READ_NODE_FIELD(oidAssignments);
+	READ_NODE_FIELD(sliceTable);
+	READ_NODE_FIELD(cursorPositions);
+	READ_BOOL_FIELD(useChangedAOOpts);
+	READ_DONE();
+}
+
+static SliceTable *
+_readSliceTable(void)
+{
+	int			i;
+
+	READ_LOCALS(SliceTable);
+
+	READ_INT_FIELD(localSlice);
+	READ_INT_FIELD(numSlices);
+	local_node->slices = palloc0(local_node->numSlices * sizeof(ExecSlice));
+	for (i = 0; i < local_node->numSlices; i++)
+	{
+		READ_INT_FIELD(slices[i].sliceIndex);
+		READ_INT_FIELD(slices[i].rootIndex);
+		READ_INT_FIELD(slices[i].parentIndex);
+		READ_INT_FIELD(slices[i].planNumSegments);
+		READ_NODE_FIELD(slices[i].children);	/* List of int index */
+		READ_ENUM_FIELD(slices[i].gangType, GangType);
+		READ_NODE_FIELD(slices[i].segments);	/* List of int index */
+		READ_NODE_FIELD(slices[i].primaryProcesses);	/* List of (PXProcess *) */
+		READ_BITMAPSET_FIELD(slices[i].processesMap);
+	}
+	READ_BOOL_FIELD(hasMotions);
+
+	READ_INT_FIELD(instrument_options);
+	READ_INT_FIELD(ic_instance_id);
+
+	READ_DONE();
+}
+
+static PxProcess *
+_readPxProcess(void)
+{
+	READ_LOCALS(PxProcess);
+
+	READ_STRING_FIELD(listenerAddr);
+	READ_INT_FIELD(listenerPort);
+	READ_INT_FIELD(pid);
+	READ_INT_FIELD(contentid);
+
+	/* POLAR px */
+	if (POLAR_MATCH(contentCount))
+	{
+		READ_INT_FIELD(contentCount);
+		READ_INT_FIELD(identifier);
+	}
+	else
+	{
+		local_node->contentCount = 0;
+		local_node->identifier = 0;
+	}
+	if (POLAR_MATCH(remotePort))
+	{
+		READ_INT_FIELD(remotePort);
+	}
+	else
+	{
+		local_node->remotePort = -1;
+	}
+	/* POLAR end */
+
+	READ_DONE();
+}
+
+/* POLAR end */
+
 /*
  * parseNodeString
  *
@@ -3022,6 +3387,32 @@ parseNodeString(void)
 		return_value = _readPartitionBoundSpec();
 	else if (MATCH("PARTITIONRANGEDATUM", 19))
 		return_value = _readPartitionRangeDatum();
+
+	/* POLAR px */
+	else if (MATCH("SEQUENCE", 8))
+		return_value = _readSequence();
+	else if (MATCH("SHAREINPUTSCAN", 14))
+		return_value = _readShareInputScan();
+	else if (MATCH("PARTITIONSELECTOR", 17))
+		return_value = _readPartitionSelector();
+	else if (MATCH("DMLACTIONEXPR", 13))
+		return_value = _readDMLActionExpr();
+	else if (MATCH("ASSERTOP", 8))
+		return_value = _readAssertOp();
+	else if (MATCH("SPLITUPDATE", 11))
+		return_value = _readSplitUpdate();
+	else if (MATCH("MOTION", 6))
+		return_value = _readMotion();
+	else if (MATCH("SERIALIZEDPARAMEXTERNDATA", 25))
+		return_value = _readSerializedParamExternData();
+	else if (MATCH("QUERYDISPATCHDESC", 17))
+		return_value = _readQueryDispatchDesc();
+	else if (MATCH("PXPROCESS", 9))
+		return_value = _readPxProcess();
+	else if (MATCH("SLICETABLE", 10))
+		return_value = _readSliceTable();
+	/* POLAR end */
+
 	else
 	{
 		elog(ERROR, "badly formatted node string \"%.32s\"...", token);
@@ -3188,3 +3579,22 @@ readBoolCols(int numCols)
 
 	return bool_vals;
 }
+
+/* POLAR px */
+/*
+ * this function is opposite to nodeToBinaryStringFast in outfuncs.c
+ * We use nodeRead with string function, not a binary function.
+ */
+Node *
+readNodeFromBinaryString(const char *str_arg, int len pg_attribute_unused())
+{
+	Node	   *node;
+
+	read_str_ptr = str_arg;
+
+	node = (Node *) stringToNode((char *) read_str_ptr);
+
+	return node;
+}
+
+/* POLAR end*/

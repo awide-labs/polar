@@ -36,6 +36,13 @@ extern AttrNumber *extract_grouping_cols(List *groupClause, List *tlist);
 extern bool grouping_is_sortable(List *groupClause);
 extern bool grouping_is_hashable(List *groupClause);
 
+/* POLAR px */
+extern void polar_get_sortgroupclauses_tles(List *clauses, List *targetList,
+											List **tles, List **sortops, List **eqops);
+extern Index maxSortGroupRef(List *targetlist, bool include_orderedagg);
+
+/* POLAR end */
+
 extern PathTarget *make_pathtarget_from_tlist(List *tlist);
 extern List *make_tlist_from_pathtarget(PathTarget *target);
 extern PathTarget *copy_pathtarget(PathTarget *src);
@@ -48,6 +55,11 @@ extern void apply_pathtarget_labeling_to_tlist(List *tlist, PathTarget *target);
 extern void split_pathtarget_at_srfs(PlannerInfo *root,
 									 PathTarget *target, PathTarget *input_target,
 									 List **targets, List **targets_contain_srfs);
+
+/* POLAR px */
+extern List *tlist_members(Node *node, List *targetlist);
+
+/* POLAR end */
 
 /* Convenience macro to get a PathTarget with valid cost/width fields */
 #define create_pathtarget(root, tlist) \

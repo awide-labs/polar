@@ -161,6 +161,9 @@ extern PGDLLIMPORT bool Db_user_namespace;
 #define AUTH_REQ_SASL	   10	/* Begin SASL authentication */
 #define AUTH_REQ_SASL_CONT 11	/* Continue SASL authentication */
 #define AUTH_REQ_SASL_FIN  12	/* Final SASL message */
+/* POLAR px */
+#define AUTH_REQ_PX_QC	   21
+/* POLAR end */
 
 typedef uint32 AuthRequest;
 

@@ -2215,3 +2215,16 @@ read_dir_failed:
 	/* create the polar_replica_booted file after copy is done */
 	polar_create_replica_booted_file();
 }
+
+/* POLAR px */
+/*
+ * get AuthenticatedUserIsSuperuser
+ */
+bool
+px_authenticated_user_is_superuser(void)
+{
+	AssertState(OidIsValid(AuthenticatedUserId));
+	return AuthenticatedUserIsSuperuser;
+}
+
+/* POLAR end */

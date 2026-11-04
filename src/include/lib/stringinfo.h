@@ -158,4 +158,9 @@ extern void appendBinaryStringInfoNT(StringInfo str,
  */
 extern void enlargeStringInfo(StringInfo str, int needed);
 
+/* POLAR px */
+extern void initStringInfoOfSize(StringInfo str, int bufsize);
+
+/* POLAR end */
+
 #endif							/* STRINGINFO_H */

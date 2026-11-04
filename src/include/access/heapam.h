@@ -120,6 +120,7 @@ typedef enum
 extern TableScanDesc heap_beginscan(Relation relation, Snapshot snapshot,
 									int nkeys, ScanKey key,
 									ParallelTableScanDesc parallel_scan,
+									PXScanDesc px_scan, /* POLAR px */
 									uint32 flags);
 extern void heap_setscanlimits(TableScanDesc scan, BlockNumber startBlk,
 							   BlockNumber numBlks);

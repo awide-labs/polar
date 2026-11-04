@@ -249,6 +249,8 @@ static const char *const BuiltinTrancheNames[] = {
 	"polar_ss_db_role_setting",
 	/* LWTRANCHE_POLAR_SS_SESSION_CONTEXT: */
 	"polar_ss_session_context",
+	/* LWTRANCHE_POLAR_CLUSTER_INFO */
+	"polar_cluster_info"
 	/* POLAR end */
 };
 

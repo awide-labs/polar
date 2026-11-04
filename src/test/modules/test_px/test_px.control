@@ -1,0 +1,4 @@
+comment = 'Test code for Parallel Execution library'
+default_version = '1.0'
+module_pathname = '$libdir/test_px'
+relocatable = true

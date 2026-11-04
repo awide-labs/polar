@@ -99,6 +99,7 @@
 
 /* POLAR */
 #include "access/polar_logindex_redo.h"
+#include "replication/polar_cluster_info.h"
 #include "storage/polar_fd.h"
 
 /*
@@ -2268,6 +2269,11 @@ ProcessStandbyMessage(void)
 			polar_process_standby_promote();
 			break;
 
+			/* POLAR: 'm' means node info */
+		case 'm':
+			polar_process_node_info(&reply_message);
+			break;
+
 		default:
 			ereport(COMMERROR,
 					(errcode(ERRCODE_PROTOCOL_VIOLATION),
@@ -2981,6 +2987,12 @@ WalSndLoop(WalSndSendDataCallback send_data)
 		 */
 		if (POLAR_WALSND_RECEIVE_PROMOTE() && !polar_walrcv_receive_promote_reply)
 			polar_send_promote_reply();
+
+		/* Only primary sends cluster topology info to standby/replica nodes */
+		if (polar_is_primary())
+		{
+			polar_send_cluster_info(&output_message);
+		}
 
 		/* Try to flush pending output to the client */
 		if (pq_flush_if_writable() != 0)

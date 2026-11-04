@@ -13,6 +13,7 @@
 
 #include "access/xlogdefs.h"
 #include "access/xlogreader.h"
+#include "access/xlogutils.h"
 #include "datatype/timestamp.h"
 #include "lib/stringinfo.h"
 #include "nodes/pg_list.h"
@@ -360,6 +361,9 @@ extern struct ControlFileData *polar_get_control_file(void);
 extern bool polar_read_control_file(char *polar_ctl_file_path,
 									struct ControlFileData *polar_control_file_buffer,
 									int error_level, int *saved_errno);
+extern bool polar_in_master_mode(void);
+extern void polar_set_hot_standby_state(HotStandbyState state);
+extern HotStandbyState polar_get_hot_standby_state(void);
 extern int	get_sync_bit(int method);
 
 /* POLAR end */
@@ -416,5 +420,12 @@ extern void polar_wal_pipeline_set_local_recovery_mode(bool mode);
 extern void InitXLOGAccess(void);
 
 /* POLAR wal pipeline end */
+
+/* POLAR */
+extern void polar_set_available_state(bool state);
+extern bool polar_get_available_state(void);
+extern const char *polar_node_type_string(PolarNodeType type, int error_level);
+extern const char *polar_standby_state_string(int state, int error_level);
+
 
 #endif							/* XLOG_H */

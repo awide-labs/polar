@@ -17,6 +17,11 @@
 #include "access/htup.h"
 #include "nodes/pg_list.h"
 
+/* POLAR px */
+#include "parser/parse_coerce.h"
+#include "utils/relcache.h"
+/* POLAR end */
+
 /* avoid including subscripting.h here */
 struct SubscriptRoutines;
 
@@ -199,6 +204,63 @@ extern Oid	get_index_column_opclass(Oid index_oid, int attno);
 extern bool get_index_isreplident(Oid index_oid);
 extern bool get_index_isvalid(Oid index_oid);
 extern bool get_index_isclustered(Oid index_oid);
+
+/* POLAR px */
+typedef enum CmpType
+{
+	CmptEq,						/* equality */
+	CmptNEq,					/* inequality */
+	CmptLT,						/* less than */
+	CmptLEq,					/* less or equal to */
+	CmptGT,						/* greater than */
+	CmptGEq,					/* greater or equal to */
+	CmptOther					/* other operator */
+}			CmpType;
+
+extern char px_func_data_access(Oid funcid);
+extern char px_func_exec_location(Oid funcid);
+extern bool px_relation_exists(Oid oid);
+extern bool px_index_exists(Oid oid);
+extern bool px_type_exists(Oid oid);
+extern bool px_function_exists(Oid oid);
+extern bool px_operator_exists(Oid oid);
+extern bool px_aggregate_exists(Oid oid);
+extern Oid	px_get_aggregate(const char *aggname, Oid oidType);
+extern bool px_is_agg_ordered(Oid aggid);
+extern bool px_is_agg_partial_capable(Oid aggid);
+extern Oid	px_get_agg_transtype(Oid aggid);
+extern List *px_get_relation_keys(Oid relid);
+extern HeapTuple px_get_att_stats(Oid relid, AttrNumber attnum);
+extern List *px_get_func_output_arg_types(Oid funcid);
+extern List *px_get_func_arg_types(Oid funcid);
+extern char *px_get_type_name(Oid oid);
+extern bool px_has_update_triggers(Oid relid);
+
+extern bool px_check_constraint_exists(Oid oidCheckconstraint);
+extern List *px_get_check_constraint_oids(Oid relid);
+extern char *px_get_check_constraint_name(Oid oidCheckconstraint);
+extern Node *px_get_check_constraint_expr_tree(Oid oidCheckconstraint);
+extern Oid	px_get_check_constraint_relid(Oid oidCheckconstraint);
+
+extern bool px_has_subclass_slow(Oid relationId);
+extern bool px_child_distribution_mismatch(Relation rel);
+
+extern bool px_get_cast_func_external(Oid oidSrc, Oid oidDest, bool *is_binary_coercible, Oid *oidCastFunc, CoercionPathType *pathtype);
+extern Oid	px_get_comparison_operator(Oid oidLeft, Oid oidRight, CmpType cmpt);
+extern CmpType px_get_comparison_type(Oid oidOp);
+
+extern List *px_get_operator_opfamilies(Oid opno);
+extern List *px_get_index_opfamilies(Oid oidIndex);
+
+extern void px_pfree_ptr_array(char **ptrarray, int nelements);
+extern bool px_relation_is_partitioned(Oid oid);
+extern bool px_index_is_partitioned(Oid relid);
+
+extern Oid	polar_get_compatible_hash_opfamily(Oid opno);
+extern Oid	polar_get_compatible_legacy_hash_opfamily(Oid opno);
+extern Oid	polar_get_compatible_legacy_hash_opfamily(Oid opno);
+
+/* POLAR end */
 
 #define type_is_array(typid)  (get_element_type(typid) != InvalidOid)
 /* type_is_array_domain accepts both plain arrays and domains over arrays */

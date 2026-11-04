@@ -29,4 +29,9 @@ extern void ExecSortInitializeDSM(SortState *node, ParallelContext *pcxt);
 extern void ExecSortInitializeWorker(SortState *node, ParallelWorkerContext *pwcxt);
 extern void ExecSortRetrieveInstrumentation(SortState *node);
 
+/* POLAR px */
+extern void ExecSquelchSort(SortState *node);
+
+/* POLAR end */
+
 #endif							/* NODESORT_H */

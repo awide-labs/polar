@@ -30,4 +30,9 @@ extern void ExecReScanModifyTable(ModifyTableState *node);
 extern void ExecInitMergeTupleSlots(ModifyTableState *mtstate,
 									ResultRelInfo *resultRelInfo);
 
+/* POLAR px */
+extern void ExecSquelchModifyTable(ModifyTableState *node);
+
+/* POLAR end */
+
 #endif							/* NODEMODIFYTABLE_H */

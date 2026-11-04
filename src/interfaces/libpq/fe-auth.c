@@ -20,7 +20,14 @@
  *								of the authentication system
  */
 
-#include "postgres_fe.h"
+/*
+ * This file is compiled with both frontend and backend codes, symlinked by
+ * src/backend/Makefile, and use macro FRONTEND to switch.
+ *
+ * Include "c.h" to adopt pg C types. Don't include "postgres_fe.h",
+ * which only defines FRONTEND besides including "c.h"
+ */
+#include "c.h"
 
 #ifdef WIN32
 #include "win32.h"
@@ -880,6 +887,86 @@ check_expected_areq(AuthRequest areq, PGconn *conn)
 	return result;
 }
 
+/* POLAR px */
+#if defined(USE_SSL) && !defined(FRONTEND)
+
+extern EVP_PKEY *px_get_tls_private_key(void);
+
+#define exit_with_msg(msg) \
+do  { \
+	appendPQExpBufferStr(&conn->errorMessage, libpq_gettext(msg)); \
+	goto exit; \
+} while(0)
+
+static int
+px_decrypted_msg_sendauth(PGconn *conn, int payloadlen)
+{
+	size_t		raw_len = 0;
+	int			rc = STATUS_ERROR;
+	EVP_PKEY   *cert_key = NULL;
+	EVP_PKEY_CTX *ctx = NULL;
+	char	   *raw_text = NULL;
+	char	   *message = malloc(payloadlen);
+
+#define FAILED_TO_DECRYPT_MSG "failed to decrypt message"
+
+	if (!message)
+		exit_with_msg(FAILED_TO_DECRYPT_MSG ": "
+					  "out of memory\n");
+
+	if (pqGetnchar(message, payloadlen, conn))
+		exit_with_msg(FAILED_TO_DECRYPT_MSG ": "
+					  "failed to extract encrypted message\n");
+
+	if ((cert_key = px_get_tls_private_key()) == NULL)
+		exit_with_msg(FAILED_TO_DECRYPT_MSG ": "
+					  "failed to read polar_px_peer_key_file\n");
+
+	if ((ctx = EVP_PKEY_CTX_new(cert_key, NULL)) == NULL)
+		exit_with_msg(FAILED_TO_DECRYPT_MSG ": "
+					  "failed to create PKEY ctx\n");
+
+	if (EVP_PKEY_decrypt_init(ctx) != 1)
+		exit_with_msg(FAILED_TO_DECRYPT_MSG ": "
+					  "failed to init PKEY decrypt\n");
+
+	if (EVP_PKEY_id(cert_key) != EVP_PKEY_RSA)
+		exit_with_msg(FAILED_TO_DECRYPT_MSG ": "
+					  "\"polar_px_peer_key_file\" doesn't use RSA algo\n");
+
+	if (EVP_PKEY_CTX_set_rsa_padding(ctx, RSA_PKCS1_OAEP_PADDING) <= 0)
+		exit_with_msg(FAILED_TO_DECRYPT_MSG ": "
+					  "failed to set RSA padding\n");
+
+	if (EVP_PKEY_decrypt(ctx, NULL, &raw_len,
+						 (unsigned char *) message, payloadlen) != 1)
+		exit_with_msg(FAILED_TO_DECRYPT_MSG ": "
+					  "failed to calculate size of decrypted message\n");
+
+	if ((raw_text = malloc(raw_len)) == NULL)
+		exit_with_msg(FAILED_TO_DECRYPT_MSG ": "
+					  "out of memory\n");
+
+	if (EVP_PKEY_decrypt(ctx, (unsigned char *) raw_text, &raw_len,
+						 (unsigned char *) message, payloadlen) != 1)
+		exit_with_msg(FAILED_TO_DECRYPT_MSG "\n");
+
+	rc = pqPacketSend(conn, 'm', raw_text, raw_len);
+
+exit:
+	if (message)
+		free(message);
+	if (raw_text)
+		free(raw_text);
+
+	EVP_PKEY_CTX_free(ctx);
+
+	return rc;
+}
+
+#endif
+/* POLAR end */
+
 /*
  * pg_fe_sendauth
  *		client demux routine for processing an authentication request
@@ -1086,6 +1173,13 @@ pg_fe_sendauth(AuthRequest areq, int payloadlen, PGconn *conn)
 			if (pg_local_sendauth(conn) != STATUS_OK)
 				return STATUS_ERROR;
 			break;
+
+			/* POLAR px */
+#if defined(USE_SSL) && !defined(FRONTEND)
+		case AUTH_REQ_PX_QC:
+			return px_decrypted_msg_sendauth(conn, payloadlen);
+#endif
+			/* POLAR end */
 
 		default:
 			appendPQExpBuffer(&conn->errorMessage,

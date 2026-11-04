@@ -20,6 +20,10 @@
 #include "nodes/parsenodes.h"
 #include "utils/memutils.h"
 
+/* POLAR px */
+#include "px/px_def.h"
+/* POLAR end */
+
 
 /*
  * The "eflags" argument to ExecutorStart and the various ExecInitNode
@@ -249,6 +253,33 @@ extern void ExecEndNode(PlanState *node);
 extern bool ExecShutdownNode(PlanState *node);
 extern void ExecSetTupleBound(int64 tuples_needed, PlanState *child_node);
 
+/* POLAR px */
+extern void ExecSquelchNode(PlanState *node);
+extern void ExecutorCleanup_PX(QueryDesc *queryDesc);
+extern void standard_ExecEndNode(PlanState *node);
+extern bool should_px_executor(QueryDesc *queryDesc);
+extern bool polar_isJoinExprNull(List *joinExpr, ExprContext *econtext);
+
+typedef enum
+{
+	PX_IGNORE,
+	PX_ROOT_SLICE,
+	PX_NON_ROOT_ON_PX
+} PxExecIdentity;
+
+extern PxExecIdentity getPxExecIdentity(QueryDesc *queryDesc,
+										ScanDirection direction,
+										EState *estate);
+extern void ExecutorFinishup_PX(QueryDesc *queryDesc);
+extern void ExecAssignResultType(PlanState *planstate, TupleDesc tupDesc);
+extern void ExecAssignResultTypeFromTL(PlanState *planstate);
+
+PxVisitOpt
+			planstate_walk_node(PlanState *planstate,
+								PxVisitOpt (*walker) (PlanState *planstate, void *context),
+								void *context);
+
+/* POLAR end */
 
 /* ----------------------------------------------------------------
  *		ExecProcNode

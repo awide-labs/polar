@@ -4205,3 +4205,152 @@ polar_reset_program_error_handler(void)
 #endif							/* _WIN32 */
 }
 #endif
+
+/* POLAR px */
+/*
+ * px_elog_internalerror -- report an internal error
+ *
+ * Does not return; exits via longjmp to PG_CATCH error handler.
+ */
+void
+px_elog_internalerror(const char *filename, int lineno, const char *funcname)
+{
+	/*
+	 * Also, why aren't we allowing for a specific err message to be passed
+	 * in?
+	 */
+	if (errstart(ERROR, TEXTDOMAIN))
+	{
+		errcode(ERRCODE_INTERNAL_ERROR);
+		errmsg("Unexpected internal error");
+		errfinish(filename, lineno, funcname);
+	}
+	/* not reached */
+	abort();
+}
+
+/*
+ * Finish constructing an error like errfinish(), but instead of throwing it,
+ * return it to the caller as a palloc'd ErrorData object.
+ */
+ErrorData *
+px_errfinish_and_return(const char *filename, int lineno, const char *funcname)
+{
+	ErrorData  *edata = &errordata[errordata_stack_depth];
+	ErrorData  *edata_copy;
+	ErrorContextCallback *econtext;
+	MemoryContext oldcontext;
+	int			saved_errno;
+
+	recursion_depth++;
+	CHECK_STACK_DEPTH();
+	saved_errno = edata->saved_errno;
+
+	/* Save the last few bits of error state into the stack entry */
+	if (filename)
+	{
+		const char *slash;
+
+		/* keep only base name, useful especially for vpath builds */
+		slash = strrchr(filename, '/');
+		if (slash)
+			filename = slash + 1;
+		/* Some Windows compilers use backslashes in __FILE__ strings */
+		slash = strrchr(filename, '\\');
+		if (slash)
+			filename = slash + 1;
+	}
+	edata->filename = filename;
+	edata->lineno = lineno;
+	edata->funcname = funcname;
+
+	/*
+	 * Do processing in ErrorContext, which we hope has enough reserved space
+	 * to report an error.
+	 */
+	oldcontext = MemoryContextSwitchTo(ErrorContext);
+
+	/*
+	 * Call any context callback functions.  Errors occurring in callback
+	 * functions will be treated as recursive errors --- this ensures we will
+	 * avoid infinite recursion (see errstart).
+	 */
+	for (econtext = error_context_stack;
+		 econtext != NULL;
+		 econtext = econtext->previous)
+		(*econtext->callback) (econtext->arg);
+
+	MemoryContextSwitchTo(oldcontext);
+
+	edata_copy = CopyErrorData();
+
+	/* Now free up subsidiary data attached to stack entry, and release it */
+	if (edata->message)
+		pfree(edata->message);
+	if (edata->detail)
+		pfree(edata->detail);
+	if (edata->detail_log)
+		pfree(edata->detail_log);
+	if (edata->hint)
+		pfree(edata->hint);
+	if (edata->context)
+		pfree(edata->context);
+	if (edata->schema_name)
+		pfree(edata->schema_name);
+	if (edata->table_name)
+		pfree(edata->table_name);
+	if (edata->column_name)
+		pfree(edata->column_name);
+	if (edata->datatype_name)
+		pfree(edata->datatype_name);
+	if (edata->constraint_name)
+		pfree(edata->constraint_name);
+	if (edata->internalquery)
+		pfree(edata->internalquery);
+
+	errordata_stack_depth--;
+
+	/* Exit error-handling context */
+	recursion_depth--;
+
+	errno = saved_errno;
+
+	return edata_copy;
+}
+
+/*
+ * Convert SQLSTATE string to compact error code (ERRCODE_xxx).
+ */
+int
+px_sqlstate_to_errcode(const char *sqlstate)
+{
+	return MAKE_SQLSTATE(sqlstate[0], sqlstate[1], sqlstate[2],
+						 sqlstate[3], sqlstate[4]);
+}
+
+/*
+ * Return the SQLSTATE code for the error currently being handled, or 0.
+ *
+ * This is only intended for use in error handlers.
+ */
+int
+px_elog_geterrcode(void)
+{
+	return (errordata_stack_depth < 0)
+		? 0
+		: errordata[errordata_stack_depth].sqlerrcode;
+}
+
+/*
+ * Note: A pointer is returned.  Make a copy of the message
+ * before re-throwing or flushing the error state.
+ */
+char *
+elog_message(void)
+{
+	return (errordata_stack_depth < 0)
+		? NULL
+		: errordata[errordata_stack_depth].message;
+}
+
+/* POLAR end */

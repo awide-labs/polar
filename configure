@@ -735,6 +735,8 @@ with_submodule
 with_libunwind
 enable_minimal
 enable_fault_injector
+enable_gpos_debug
+enable_polar_px
 autodepend
 PKG_CONFIG_LIBDIR
 PKG_CONFIG_PATH
@@ -856,6 +858,8 @@ with_CC
 with_llvm
 enable_depend
 enable_cassert
+enable_polar_px
+enable_gpos_debug
 enable_fault_injector
 enable_minimal
 with_libunwind
@@ -1550,6 +1554,8 @@ Optional Features:
   --enable-tap-tests      enable TAP tests (requires Perl and IPC::Run)
   --enable-depend         turn on automatic dependency tracking
   --enable-cassert        enable assertion checks (for debugging)
+  --enable-polar-px       enable PX optimizer
+  --enable-gpos-debug     enable GPOS debug mode for PX optimizer
   --enable-fault-injector enable fault injector (for testing)
   --enable-minimal        enable minimal compile (for development)
   --disable-thread-safety disable thread-safety in client libraries
@@ -2903,6 +2909,7 @@ POLAR_RELEASE_DATE="20250831" # YYYYMMDD
 POLAR_VERSION="$PACKAGE_VERSION.$POLAR_MINORVERSION" # eg: 15.6.1.2
 POLAR_PG_VERSION="$PACKAGE_VERSION.$POLAR_MINORVERSION" # eg: 15.6.1.2
 POLARDB_VERSION="PolarDB V$PACKAGE_VERSION.$POLAR_MINORVERSION (open)" # eg: 15.6.1.2
+PX_VERSION="1.1"
 
 cat >>confdefs.h <<_ACEOF
 #define POLAR_COMMIT "$POLAR_COMMIT"
@@ -8331,6 +8338,74 @@ else
 fi
 
 
+
+#
+# Enable PX optimizer
+#
+
+
+# Check whether --enable-polar-px was given.
+if test "${enable_polar_px+set}" = set; then :
+  enableval=$enable_polar_px;
+  case $enableval in
+    yes)
+
+$as_echo "#define USE_PX 1" >>confdefs.h
+
+      ;;
+    no)
+      :
+      ;;
+    *)
+      as_fn_error $? "no argument expected for --enable-polar-px option" "$LINENO" 5
+      ;;
+  esac
+
+else
+  enable_polar_px=no
+
+fi
+
+
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: checking whether to build with PX... $enable_polar_px" >&5
+$as_echo "checking whether to build with PX... $enable_polar_px" >&6; }
+
+
+# Build PXOPT in debug if enable-gpos-debug
+
+
+# Check whether --enable-gpos-debug was given.
+if test "${enable_gpos_debug+set}" = set; then :
+  enableval=$enable_gpos_debug;
+  case $enableval in
+    yes)
+
+$as_echo "#define GPOS_DEBUG 1" >>confdefs.h
+
+      ;;
+    no)
+      :
+      ;;
+    *)
+      as_fn_error $? "no argument expected for --enable-gpos-debug option" "$LINENO" 5
+      ;;
+  esac
+
+else
+  enable_gpos_debug=no
+
+fi
+
+
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: checking whether to build with GPOS debug mode... $enable_gpos_debug" >&5
+$as_echo "checking whether to build with GPOS debug mode... $enable_gpos_debug" >&6; }
+
+
+if test "$PORTNAME" = darwin; then
+
+$as_echo "#define GPOS_Darwin 1" >>confdefs.h
+
+fi
 
 #
 # Enable fault injector
@@ -14466,6 +14541,64 @@ else
 fi
 
 fi
+
+fi
+
+
+
+# Check for xerces if PX is enabled.
+if test "$enable_polar_px" = yes; then
+
+{ $as_echo "$as_me:${as_lineno-$LINENO}: checking for strnicmp in -lxerces-c" >&5
+$as_echo_n "checking for strnicmp in -lxerces-c... " >&6; }
+if ${ac_cv_lib_xerces_c_strnicmp+:} false; then :
+  $as_echo_n "(cached) " >&6
+else
+  ac_check_lib_save_LIBS=$LIBS
+LIBS="-lxerces-c  $LIBS"
+cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+
+/* Override any GCC internal prototype to avoid an error.
+   Use char because int might match the return type of a GCC
+   builtin and then its argument prototype would still apply.  */
+#ifdef __cplusplus
+extern "C"
+#endif
+char strnicmp ();
+int
+main ()
+{
+return strnicmp ();
+  ;
+  return 0;
+}
+_ACEOF
+if ac_fn_c_try_link "$LINENO"; then :
+  ac_cv_lib_xerces_c_strnicmp=yes
+else
+  ac_cv_lib_xerces_c_strnicmp=no
+fi
+rm -f core conftest.err conftest.$ac_objext \
+    conftest$ac_exeext conftest.$ac_ext
+LIBS=$ac_check_lib_save_LIBS
+fi
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_cv_lib_xerces_c_strnicmp" >&5
+$as_echo "$ac_cv_lib_xerces_c_strnicmp" >&6; }
+if test "x$ac_cv_lib_xerces_c_strnicmp" = xyes; then :
+  cat >>confdefs.h <<_ACEOF
+#define HAVE_LIBXERCES_C 1
+_ACEOF
+
+  LIBS="-lxerces-c $LIBS"
+
+else
+  as_fn_error $? "library xerces-c is required to build with PX" "$LINENO" 5
+
+fi
+
+{ $as_echo "$as_me:${as_lineno-$LINENO}: checking for Xerces-C" >&5
+$as_echo_n "checking for Xerces-C... " >&6; }
 
 fi
 
@@ -20779,6 +20912,25 @@ fi
 
 cat >>confdefs.h <<_ACEOF
 #define PG_VERSION_STR "PostgreSQL $PG_VERSION (PolarDB $POLAR_PG_VERSION build $POLAR_COMMIT$debug_string) on $host_cpu-$host_os"
+_ACEOF
+
+
+
+
+cat >>confdefs.h <<_ACEOF
+#define PX_VERSION "$PX_VERSION"
+_ACEOF
+
+
+
+cat >>confdefs.h <<_ACEOF
+#define PX_VERSION_STR "PolarDB PX version $PX_VERSION"
+_ACEOF
+
+
+
+cat >>confdefs.h <<_ACEOF
+#define PX_VERSION_NUMBER 1.0
 _ACEOF
 
 

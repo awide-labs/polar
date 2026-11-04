@@ -76,9 +76,12 @@ distclean maintainer-clean:
 	@rm -rf autom4te.cache/
 	rm -f config.cache config.log config.status GNUmakefile
 
+# define dependency for top level polar-px-check from same-named target in test_px module
+$(call recurse,polar-px-check,src/test/modules/test_px)
+
 check-tests: | temp-install
-check polar-check check-tests installcheck polar-installcheck installcheck-parallel installcheck-tests: CHECKPREP_TOP=src/test/regress
-check polar-check check-tests installcheck polar-installcheck installcheck-parallel installcheck-tests: submake-generated-headers
+check polar-check polar-px-check check-tests installcheck polar-installcheck installcheck-parallel installcheck-tests: CHECKPREP_TOP=src/test/regress
+check polar-check polar-px-check check-tests installcheck polar-installcheck installcheck-parallel installcheck-tests: submake-generated-headers
 	$(MAKE) -C src/test/regress $@
 
 $(call recurse,check-world,src/test src/pl src/interfaces contrib external src/bin,check)
@@ -181,11 +184,11 @@ precheck-main-install:
 
 precheck-main: precheck-main-check precheck-main-install
 
-precheck: plcheck dccheck-lite datamax-check-lite precheck-main
+precheck: plcheck dccheck-lite datamax-check-lite polar-px-check precheck-main
 
 precheck-main-ci: precheck-main-check
 
-precheck-ci: precheck-main-ci plcheck datamax-check-lite
+precheck-ci: precheck-main-ci plcheck datamax-check-lite polar-px-check
 
 covcheck: coverage-html
 	$(top_srcdir)/src/tools/delta_coverage.pl -f coverage/delta_coverage.txt -p $(LAST_COMMIT)

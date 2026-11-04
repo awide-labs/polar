@@ -175,6 +175,28 @@ typedef struct ReplicationSlot
 	 * be POLAR_UNKNOWN.
 	 */
 	PolarNodeType polar_slot_node_type;
+
+	/* POLAR: node infos */
+	char		node_name[NAMEDATALEN]; /* dummy size, it's OK to truncate */
+	char		node_host[NI_MAXHOST];
+	int			node_port;
+	char		node_release_date[20];
+	char		node_version[20];
+	char		node_slot_name[NAMEDATALEN];
+	int			node_type;
+	int			node_state;
+	int			node_cpu;
+	int			node_cpu_quota;
+	int			node_memory;
+	int			node_memory_quota;
+	int			node_iops;
+	int			node_iops_quota;
+	int			node_connection;
+	int			node_connection_quota;
+	int			node_px_connection;
+	int			node_px_connection_quota;
+	int32		polar_sent_cluster_info_generation; /* The cluster info
+													 * generation we have sent */
 } ReplicationSlot;
 
 #define SlotIsPhysical(slot) ((slot)->data.database == InvalidOid)

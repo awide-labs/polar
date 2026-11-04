@@ -76,6 +76,14 @@
 #include "utils/spccache.h"
 #include "utils/syscache.h"
 
+/* POLAR px */
+#define PXScanNextPageSetFinish() \
+do {                              \
+	*finished = true;             \
+	return InvalidBlockNumber;    \
+} while(0)
+/* POLAR end */
+
 
 static HeapTuple heap_prepare_insert(Relation relation, HeapTuple tup,
 									 TransactionId xid, CommandId cid, int options);
@@ -124,6 +132,15 @@ static int	bottomup_sort_and_shrink(TM_IndexDeleteOp *delstate);
 static XLogRecPtr log_heap_new_cid(Relation relation, HeapTuple tup);
 static HeapTuple ExtractReplicaIdentity(Relation rel, HeapTuple tup, bool key_required,
 										bool *copy);
+
+/* POLAR px */
+static BlockNumber px_non_adps_scan_next_page(HeapScanDesc scan, BlockNumber page,
+											  ScanDirection dir, bool *finished);
+static BlockNumber px_scan_init(HeapScanDesc scan, ScanDirection dir);
+static BlockNumber px_scan_next_page(HeapScanDesc scan, BlockNumber page,
+									 ScanDirection dir, bool *finished);
+
+/* POLAR end */
 
 
 /*
@@ -264,6 +281,17 @@ AssertHasSnapshotForToast(Relation rel)
 #endif							/* USE_ASSERT_CHECKING */
 }
 
+/* POLAR px */
+/* use adaptive scan or not */
+static inline bool
+px_adaptive_scan_work_or_not(TableScanDesc scan)
+{
+	return (scan->px_scan->pxs_adaptive_scan &&
+			!scan->px_scan->pxs_prefetch_inner_scan);
+}
+
+/* POLAR end */
+
 /* ----------------------------------------------------------------
  *						 heap support routines
  * ----------------------------------------------------------------
@@ -290,6 +318,8 @@ initscan(HeapScanDesc scan, ScanKey key, bool keep_startblock)
 	 * might go into pages we already scanned.  To guarantee consistent
 	 * results for a non-MVCC snapshot, the caller must hold some higher-level
 	 * lock that ensures the interesting tuple(s) won't change.)
+	 *
+	 * TODO: pg15_px: adjust it for MPP case
 	 */
 	if (scan->rs_base.rs_parallel != NULL)
 	{
@@ -333,7 +363,24 @@ initscan(HeapScanDesc scan, ScanKey key, bool keep_startblock)
 		scan->rs_strategy = NULL;
 	}
 
-	if (scan->rs_base.rs_parallel != NULL)
+	/* POLAR px */
+	if (scan->rs_base.px_scan != NULL)
+	{
+		BlockNumber unit_count =
+			PXSCAN_BlockNum2UnitNum((scan->rs_nblocks + (PXSCAN_UNIT_SIZE - 1)));
+
+		scan->rs_base.rs_flags &= ~SO_ALLOW_SYNC;
+		scan->rs_startblock = 0;
+		scan->rs_base.px_scan->pxs_unit_count = unit_count;
+		scan->rs_base.px_scan->pxs_unit_processed = 0;
+
+		/* Adaptive paging needs all px workers */
+		if (!px_adaptive_scan_work_or_not(&scan->rs_base) &&
+			scan->rs_base.px_scan->pxs_worker_id + 1 > unit_count)
+			scan->rs_nblocks = 0;
+	}
+	/* POLAR end */
+	else if (scan->rs_base.rs_parallel != NULL)
 	{
 		/* For parallel scan, believe whatever ParallelTableScanDesc says. */
 		if (scan->rs_base.rs_parallel->phs_syncscan)
@@ -452,7 +499,10 @@ heapgetpage(TableScanDesc sscan, BlockNumber page)
 	 * for case that heap scan only needs to access the first page. Avoid
 	 * pre-reading unnecessary pages. For example, select *** limit 1.
 	 */
-	if (polar_bulk_read_size > 0 && ScanDirectionIsForward(scan->polar_scan_direction) && page != scan->rs_startblock)
+	if (polar_bulk_read_size > 0
+		&& ScanDirectionIsForward(scan->polar_scan_direction)
+		&& (page != scan->rs_startblock
+			|| scan->rs_base.px_scan != NULL /* POLAR px */ ))
 	{
 		BlockNumber polar_max_block_count = scan->rs_nblocks - page;
 
@@ -612,7 +662,19 @@ heapgettup(HeapScanDesc scan,
 				tuple->t_data = NULL;
 				return;
 			}
-			if (scan->rs_base.rs_parallel != NULL)
+
+			/* POLAR px */
+			if (scan->rs_base.px_scan != NULL)
+			{
+				page = px_scan_init(scan, dir);
+				if (page == InvalidBlockNumber)
+				{
+					scan->rs_nblocks = 0;
+					return;
+				}
+			}
+			/* POLAR end */
+			else if (scan->rs_base.rs_parallel != NULL)
 			{
 				ParallelBlockTableScanDesc pbscan =
 					(ParallelBlockTableScanDesc) scan->rs_base.rs_parallel;
@@ -685,7 +747,18 @@ heapgettup(HeapScanDesc scan,
 			 * Start from last page of the scan.  Ensure we take into account
 			 * rs_numblocks if it's been adjusted by heap_setscanlimits().
 			 */
-			if (scan->rs_numblocks != InvalidBlockNumber)
+			/* POLAR px */
+			if (scan->rs_base.px_scan != NULL)
+			{
+				page = px_scan_init(scan, dir);
+				if (page == InvalidBlockNumber)
+				{
+					scan->rs_nblocks = 0;
+					return;
+				}
+			}
+			/* POLAR end */
+			else if (scan->rs_numblocks != InvalidBlockNumber)
 				page = (scan->rs_startblock + scan->rs_numblocks - 1) % scan->rs_nblocks;
 			else if (scan->rs_startblock > 0)
 				page = scan->rs_startblock - 1;
@@ -826,7 +899,11 @@ heapgettup(HeapScanDesc scan,
 		/*
 		 * advance to next/prior page and detect end of scan
 		 */
-		if (backward)
+		/* POLAR px */
+		if (scan->rs_base.px_scan != NULL)
+			page = px_scan_next_page(scan, page, dir, &finished);
+		/* POLAR end */
+		else if (backward)
 		{
 			finished = (page == scan->rs_startblock) ||
 				(scan->rs_numblocks != InvalidBlockNumber ? --scan->rs_numblocks == 0 : false);
@@ -954,7 +1031,19 @@ heapgettup_pagemode(HeapScanDesc scan,
 				tuple->t_data = NULL;
 				return;
 			}
-			if (scan->rs_base.rs_parallel != NULL)
+
+			/* POLAR px */
+			if (scan->rs_base.px_scan != NULL)
+			{
+				page = px_scan_init(scan, dir);
+				if (page == InvalidBlockNumber)
+				{
+					scan->rs_nblocks = 0;
+					return;
+				}
+			}
+			/* POLAR end */
+			else if (scan->rs_base.rs_parallel != NULL)
 			{
 				ParallelBlockTableScanDesc pbscan =
 					(ParallelBlockTableScanDesc) scan->rs_base.rs_parallel;
@@ -1024,7 +1113,18 @@ heapgettup_pagemode(HeapScanDesc scan,
 			 * Start from last page of the scan.  Ensure we take into account
 			 * rs_numblocks if it's been adjusted by heap_setscanlimits().
 			 */
-			if (scan->rs_numblocks != InvalidBlockNumber)
+			/* POLAR px */
+			if (scan->rs_base.px_scan != NULL)
+			{
+				page = px_scan_init(scan, dir);
+				if (page == InvalidBlockNumber)
+				{
+					scan->rs_nblocks = 0;
+					return;
+				}
+			}
+			/* POLAR end */
+			else if (scan->rs_numblocks != InvalidBlockNumber)
 				page = (scan->rs_startblock + scan->rs_numblocks - 1) % scan->rs_nblocks;
 			else if (scan->rs_startblock > 0)
 				page = scan->rs_startblock - 1;
@@ -1139,7 +1239,11 @@ heapgettup_pagemode(HeapScanDesc scan,
 		 * if we get here, it means we've exhausted the items on this page and
 		 * it's time to move to the next.
 		 */
-		if (backward)
+		/* POLAR px */
+		if (scan->rs_base.px_scan != NULL)
+			page = px_scan_next_page(scan, page, dir, &finished);
+		/* POLAR end */
+		else if (backward)
 		{
 			finished = (page == scan->rs_startblock) ||
 				(scan->rs_numblocks != InvalidBlockNumber ? --scan->rs_numblocks == 0 : false);
@@ -1215,11 +1319,129 @@ heapgettup_pagemode(HeapScanDesc scan,
  * ----------------------------------------------------------------
  */
 
+/* POLAR px */
+/* px non-adaptive scan next page on shared storage */
+static BlockNumber
+px_non_adps_scan_next_page(HeapScanDesc scan, BlockNumber page, ScanDirection dir, bool *finished)
+{
+	PXUnitNumber oldIdx = PXSCAN_BlockNum2UnitNum(page);
+	PXScanDesc	px_scan = scan->rs_base.px_scan;
+	PXUnitNumber newIdx;
+
+	*finished = false;
+	Assert(oldIdx < px_scan->pxs_unit_count);
+
+	/* TODO: enable it when debug of heap scan will be enabled */
+#if 0
+	if (unlikely(polar_trace_heap_scan_flow))
+		PX_HEAPDEBUG_1;
+#endif
+
+	if (ScanDirectionIsBackward(dir))
+	{
+		if (page == 0)
+			PXScanNextPageSetFinish();
+
+		newIdx = PXSCAN_BlockNum2UnitNum(page - 1);
+		if (oldIdx == newIdx)
+			return --page;
+
+		if (oldIdx < px_scan->pxs_total_workers)
+			PXScanNextPageSetFinish();
+
+		/* skip to prev pfs extent 4MB */
+		oldIdx -= px_scan->pxs_total_workers;
+		px_scan->pxs_unit_processed++;
+		return (PXSCAN_UnitNum2BlockNum(oldIdx + 1)) - 1;
+	}
+	else
+	{
+		newIdx = PXSCAN_BlockNum2UnitNum(page + 1);
+		if (oldIdx == newIdx)
+		{
+			++page;
+			if (page >= scan->rs_nblocks)
+			{
+				PXScanNextPageSetFinish();
+			}
+			return page;
+		}
+
+		if (px_scan->pxs_unit_count - oldIdx <= px_scan->pxs_total_workers)
+			PXScanNextPageSetFinish();
+
+		/* skip to next pfs extent 4MB */
+		oldIdx += px_scan->pxs_total_workers;
+		px_scan->pxs_unit_processed++;
+		return PXSCAN_UnitNum2BlockNum(oldIdx);
+	}
+}
+
+/*
+ * scan get next page. There are two ways to get next page, dynamic seq
+ * scan and static seq scan. The default way is static seq scan.
+ */
+static BlockNumber
+px_scan_next_page(HeapScanDesc scan, BlockNumber page, ScanDirection dir, bool *finished)
+{
+	if (scan->rs_base.px_scan->pxs_adaptive_scan &&
+		!scan->rs_base.px_scan->pxs_prefetch_inner_scan)
+	{
+		/* TODO: enable it with adaptive paging feature */
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("Adaptive paging is not supported yet")));
+		return InvalidBlockNumber;
+	}
+	return px_non_adps_scan_next_page(scan, page, dir, finished);
+}
+
+/*
+ * seq scan init. This function should be called before when the px seq scan is
+ * first inited.
+ */
+static BlockNumber
+px_scan_init(HeapScanDesc scan, ScanDirection dir)
+{
+	/* use adaptive scan */
+	BlockNumber page = InvalidBlockNumber;
+
+	if (px_adaptive_scan_work_or_not(&scan->rs_base))
+	{
+		/* TODO: enable it with adaptive paging feature */
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("Adaptive paging is not supported yet")));
+	}
+	else
+	{
+		PXScanDesc	px_scan = scan->rs_base.px_scan;
+
+		if (ScanDirectionIsForward(dir))
+			page = PXSCAN_UnitNum2BlockNum(scan->rs_base.px_scan->pxs_worker_id);
+		else if (ScanDirectionIsBackward(dir))
+		{
+			if (PXSCAN_FirstWorker(px_scan->pxs_worker_id))
+				page = scan->rs_nblocks - 1;
+			else
+			{
+				Assert((px_scan->pxs_unit_count - px_scan->pxs_worker_id) > 0);
+				page = (PXSCAN_UnitNum2BlockNum(px_scan->pxs_unit_count - px_scan->pxs_worker_id)) - 1;
+			}
+		}
+		else
+			elog(ERROR, "px scan direction is invalid");
+	}
+	return page;
+}
+
+/* POLAR end */
 
 TableScanDesc
 heap_beginscan(Relation relation, Snapshot snapshot,
 			   int nkeys, ScanKey key,
 			   ParallelTableScanDesc parallel_scan,
+			   PXScanDesc px_scan,	/* POLAR px */
 			   uint32 flags)
 {
 	HeapScanDesc scan;
@@ -1244,6 +1466,13 @@ heap_beginscan(Relation relation, Snapshot snapshot,
 	scan->rs_base.rs_flags = flags;
 	scan->rs_base.rs_parallel = parallel_scan;
 	scan->rs_strategy = NULL;	/* set in initscan */
+
+	/* POLAR px */
+	scan->rs_base.px_scan = px_scan;
+
+	/* only allow one at mostly */
+	Assert(!(px_scan && parallel_scan));
+	/* POLAR end */
 
 	/*
 	 * Disable page-at-a-time mode if it's not a MVCC-safe snapshot.

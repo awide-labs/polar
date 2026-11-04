@@ -59,6 +59,13 @@ typedef struct ExplainState
 	bool		hide_workers;	/* set if we find an invisible Gather */
 	/* state related to the current plan node */
 	ExplainWorkersState *workers_state; /* needed if parallel plan */
+
+	/* POLAR px */
+	bool		slicetable;		/* print slice table */
+	bool		memory_detail;	/* print per-node memory usage */
+	struct PxExplain_ShowStatCtx *showstatctx;	/* EXPLAIN ANALYZE info */
+	ExecSlice  *currentSlice;
+	/* POLAR end */
 } ExplainState;
 
 /* Hook for plugins to get control in ExplainOneQuery() */
@@ -95,6 +102,11 @@ extern void ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into,
 
 extern void ExplainPrintPlan(ExplainState *es, QueryDesc *queryDesc);
 extern void ExplainPrintTriggers(ExplainState *es, QueryDesc *queryDesc);
+
+/* POLAR px */
+extern void ExplainPrintSliceTable(ExplainState *es, QueryDesc *queryDesc);
+
+/* POLAR end */
 
 extern void ExplainPrintJITSummary(ExplainState *es, QueryDesc *queryDesc);
 

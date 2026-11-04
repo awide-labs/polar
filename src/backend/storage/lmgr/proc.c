@@ -56,6 +56,12 @@
 #include "utils/timeout.h"
 #include "utils/timestamp.h"
 
+/* POLAR px */
+#include "common/hashfn.h"
+#include "postmaster/postmaster.h"
+#include "px/px_vars.h"
+/* POLAR end */
+
 /* GUC variables */
 int			DeadlockTimeout = 1000;
 int			StatementTimeout = 0;
@@ -185,6 +191,12 @@ InitProcGlobal(void)
 	pg_atomic_init_u32(&ProcGlobal->procArrayGroupFirst, INVALID_PGPROCNO);
 	pg_atomic_init_u32(&ProcGlobal->clogGroupFirst, INVALID_PGPROCNO);
 
+	/* POLAR px */
+	pg_atomic_init_u32(&ProcGlobal->pxSessionCounter, 0);
+	pg_atomic_init_u32(&ProcGlobal->pxWorkerCounter, 0);
+	pg_atomic_init_u32(&ProcGlobal->sqlRequestCounter, 0);
+	/* POLAR end */
+
 	/* POLAR wal pipeline */
 	ProcGlobal->polar_wal_pipeliner_latch = NULL;
 
@@ -307,6 +319,17 @@ InitProcGlobal(void)
 	SpinLockInit(ProcStructLock);
 }
 
+/* POLAR px */
+static void
+InitTraceId(const uint32 ip_hash, const uint16 port)
+{
+	sql_trace_id.ip_hash = ip_hash;
+	sql_trace_id.port = port;
+	sql_trace_id.seq = 0;
+}
+
+/* POLAR end */
+
 /*
  * InitProcess -- initialize a per-process data structure for this backend
  */
@@ -314,6 +337,12 @@ void
 InitProcess(void)
 {
 	PGPROC	   *volatile *procgloballist;
+
+	/* POLAR px */
+	int			pxLocalSessionId;	/* this backend's PGPROC serial num */
+	uint32		ip_hash = 0;
+
+	/* POLAR end */
 
 	/*
 	 * ProcGlobal should be set up already (if we are a backend, we inherit
@@ -388,6 +417,30 @@ InitProcess(void)
 	 */
 	if (IsUnderPostmaster && !IsAutoVacuumLauncherProcess() && !IsPolarDispatcher)
 		MarkPostmasterChildActive();
+
+	/* POLAR px */
+	/* initialize the PX execution status. It is set to false by default */
+	pg_atomic_init_flag(&MyProc->polar_px_is_executing);
+	if (px_role == PX_ROLE_PX)
+		pg_atomic_test_set_flag(&MyProc->polar_px_is_executing);	/* set to true */
+
+	/* infra for dist query tracing */
+	ip_hash = DatumGetUInt32(hash_any(
+									  (const unsigned char *) ListenAddresses, strlen(ListenAddresses)));
+	InitTraceId(ip_hash, (uint16) PostPortNumber);
+
+	/*
+	 * A nonzero px_session_id uniquely identifies an PX client session over
+	 * the lifetime of the entry postmaster process. A qDisp passes its
+	 * px_session_id down to all of its qExecs. If this is a qExec, we have
+	 * already received the px_session_id from the qDisp.
+	 */
+	pxLocalSessionId = pg_atomic_add_fetch_u32(&ProcGlobal->pxSessionCounter, 1);
+	if (px_role == PX_ROLE_QC && px_session_id == InvalidPxSessionId)
+		px_session_id = pxLocalSessionId;
+
+	elog(DEBUG1, "InitProcess(): px_session_id %d, px_role %d", px_session_id, px_role);
+	/* POLAR end */
 
 	/*
 	 * Initialize all fields of MyProc, except for those previously

@@ -1934,3 +1934,15 @@ seq_mask(char *page, BlockNumber blkno)
 
 	mask_unused_space(page);
 }
+
+/* POLAR px */
+void
+nextval_qc(Oid relid, int64 *plast, int64 *pcached, int64 *pincrement, bool *poverflow)
+{
+	*plast = nextval_internal(relid, true);
+	*pcached = last_used_seq->cached;
+	*pincrement = last_used_seq->increment;
+	*poverflow = !last_used_seq->last_valid;
+}
+
+/* POLAR end */

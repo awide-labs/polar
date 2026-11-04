@@ -14,6 +14,15 @@
  */
 #include "postgres_fe.h"
 
+/*
+ * This file is compiled with both frontend and backend codes, symlinked by
+ * src/backend/Makefile, and use macro FRONTEND to switch.
+ *
+ * Include "c.h" to adopt pg C types. Don't include "postgres_fe.h",
+ * which only defines FRONTEND besides including "c.h"
+ */
+#include "c.h"
+
 #include <ctype.h>
 #include <fcntl.h>
 #include <limits.h>
@@ -55,6 +64,10 @@ static void reportErrorPosition(PQExpBuffer msg, const char *query,
 static size_t build_startup_packet(PGconn *conn, char *packet,
 								   const PQEnvironmentOption *options);
 
+/* POLAR px */
+static void savePxStatMsg(PGresult *result, char *data, int len);
+
+/* POLAR end */
 
 /*
  * parseInput: if appropriate, parse input data from backend
@@ -428,6 +441,26 @@ pqParseInput3(PGconn *conn)
 					 * the COPY command.
 					 */
 					break;
+
+					/* POLAR px */
+				case 'Y':
+					/* POLAR px: statistical response from PX to QC */
+
+					/*
+					 * for certain queries, the stats may arrive before the
+					 * completion status -- for this case we're responsible
+					 * for allocating the result struct
+					 */
+					if (conn->result == NULL)
+						conn->result = PQmakeEmptyPGresult(conn, PGRES_COMMAND_OK);
+					if (conn->result)
+						savePxStatMsg(conn->result,
+									  conn->inBuffer + conn->inCursor,
+									  msgLength);
+					conn->inCursor += msgLength;
+					break;
+					/* POLAR end */
+
 				default:
 					appendPQExpBuffer(&conn->errorMessage,
 									  libpq_gettext("unexpected response from server; first received character was \"%c\"\n"),
@@ -953,6 +986,8 @@ pqGetErrorNotice3(PGconn *conn, bool isError)
 	 */
 	if (isError)
 	{
+		/* TODO: pg15_px: add saving pxstats messages */
+
 		pqClearAsyncResult(conn);	/* redundant, but be safe */
 		if (res)
 		{
@@ -2296,6 +2331,13 @@ build_startup_packet(PGconn *conn, char *packet,
 	if (conn->client_encoding_initial && conn->client_encoding_initial[0])
 		ADD_STARTUP_OPTION("client_encoding", conn->client_encoding_initial);
 
+	/* POLAR px: Add PX startup data */
+	if (conn->pxid && conn->pxid[0])
+		ADD_STARTUP_OPTION("pxid", conn->pxid);
+	if (conn->px_auth_cert && conn->px_auth_cert[0])
+		ADD_STARTUP_OPTION("px_auth_cert", conn->px_auth_cert);
+	/* POLAR end */
+
 	/* Add any environment-driven GUC settings needed */
 	for (next_eo = options; next_eo->envName; next_eo++)
 	{
@@ -2321,3 +2363,34 @@ build_startup_packet(PGconn *conn, char *packet,
 
 	return packet_len;
 }
+
+/* POLAR px */
+/*
+ * savePxStatMsg - attach PX statistics message to PGresult
+ */
+static void
+savePxStatMsg(PGresult *result, char *data, int len)
+{
+	pgPxStatCell *cell;
+
+	/* Allocate list element. */
+	cell = pqResultAlloc(result, sizeof(*cell), true);
+	if (!cell)
+		return;
+
+	/* Allocate an aligned buffer from the PGresult's memory pool. */
+	cell->data = (char *) pqResultAlloc(result, len, true);
+	if (!cell->data)
+		return;
+
+	/* Copy the message data. */
+	cell->len = len;
+	memcpy(cell->data, data, len);
+
+	/* Add to head of list. */
+	cell->next = result->pxstats;
+	result->pxstats = cell;
+	return;
+}
+
+/* POLAR end */

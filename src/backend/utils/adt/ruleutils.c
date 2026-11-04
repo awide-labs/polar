@@ -8066,6 +8066,13 @@ get_name_for_var_field(Var *var, int fieldno,
 				}
 			}
 			break;
+
+			/* POLAR px */
+		case RTE_TABLEFUNCTION:
+		case RTE_VOID:
+			/* No references should exist to a deleted RTE. */
+			break;
+			/* POLAR end */
 	}
 
 	/*
@@ -9847,6 +9854,12 @@ get_rule_expr(Node *node, deparse_context *context,
 		case T_TableFunc:
 			get_tablefunc((TableFunc *) node, context, showimplicit);
 			break;
+
+			/* POLAR px */
+		case T_DMLActionExpr:
+			appendStringInfo(buf, "DMLAction");
+			break;
+			/* POLAR end */
 
 		default:
 			elog(ERROR, "unrecognized node type: %d", (int) nodeTag(node));

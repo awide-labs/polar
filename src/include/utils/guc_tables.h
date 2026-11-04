@@ -125,6 +125,9 @@ enum config_group
 	POLAR_IO_MANAGEMENT,
 	POLAR_CSN,
 	POLAR_SHARED_SERVER,
+	/* POLAR px */
+	PX_WORKER_IDENTITY,
+	PX_ARRAY_TUNING,
 	/* POLAR end */
 	DEVELOPER_OPTIONS
 };
@@ -309,6 +312,18 @@ extern PGDLLIMPORT const char *const config_group_names[];
 extern PGDLLIMPORT const char *const config_type_names[];
 extern PGDLLIMPORT const char *const GucContext_Names[];
 extern PGDLLIMPORT const char *const GucSource_Names[];
+
+/* POLAR px */
+extern struct config_bool ConfigureNamesBool_px[];
+extern struct config_int ConfigureNamesInt_px[];
+extern struct config_enum ConfigureNamesEnum_px[];
+extern struct config_real ConfigureNamesReal_px[];
+extern struct config_string ConfigureNamesString_px[];
+
+extern int	px_get_num_guc_variables(void);
+extern void px_assign_sync_flag(struct config_generic **guc_variables, int size, bool predefine);
+
+/* POLAR end */
 
 /* get the current set of variables */
 extern struct config_generic **get_guc_variables(void);

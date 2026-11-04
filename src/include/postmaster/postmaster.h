@@ -52,6 +52,14 @@ extern PGDLLIMPORT int postmaster_alive_fds[2];
 #define POSTMASTER_FD_OWN		1	/* kept open by postmaster only */
 #endif
 
+/* POLAR px */
+#define POSTMASTER_IN_STARTUP_MSG "the database system is starting up"
+#define POSTMASTER_IN_RECOVERY_MSG "the database system is in recovery mode"
+#define POSTMASTER_IN_RECOVERY_DETAIL_MSG "last replayed record at"
+/* gpstate must be updated if this message changes */
+#define POSTMASTER_MIRROR_VERSION_DETAIL_MSG "- VERSION:"
+/* POLAR end */
+
 extern PGDLLIMPORT const char *progname;
 
 extern void PostmasterMain(int argc, char *argv[]) pg_attribute_noreturn();

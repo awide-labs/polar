@@ -115,6 +115,7 @@
 #include "postmaster/interrupt.h"
 #include "storage/pg_shmem.h"
 #include "storage/polar_bufmgr.h"
+#include "replication/polar_cluster_info.h"
 #include "storage/polar_fd.h"
 #include "storage/polar_flush.h"
 #include "utils/faultinjector.h"
@@ -646,6 +647,9 @@ typedef struct XLogCtlData
 
 	/* Record polar node type and polar vfs state */
 	pg_atomic_uint32 polar_node_state;
+
+	/* POLAR: put standbyState into shared memory */
+	HotStandbyState polar_hot_standby_state;
 
 	/*
 	 * Whether this node is available, it's used by external components. With
@@ -7275,6 +7279,8 @@ StartupXLOG(void)
 		UpdateControlFile();
 		/* POLAR: Set node type to be primary */
 		polar_set_node_type(POLAR_PRIMARY);
+		/* POLAR: Set polar_hot_standby_state to be STANDBY_DISABLED */
+		polar_set_hot_standby_state(STANDBY_DISABLED);
 		if (endOfRecoveryInfo->polar_logindex_promote_ro)
 		{
 			/*
@@ -11148,6 +11154,43 @@ polar_get_node_type(void)
 	return polar_node_type;
 }
 
+/*
+ * POLAR: judge node type is master or not, no matter whether polar_enable_shared_storage_mode
+ * is true.
+ *
+ * Note that if current node is not a master, this function will call the
+ * polar_node_type that will access the XLogCtl. So if the XLogCtl has not been
+ * initialed, for example the process is in reaper, please DO NOT call this
+ * function. It might be a good idea to use the polar_local_node_type.
+ */
+bool
+polar_in_master_mode(void)
+{
+	/* the node type must not be unknown */
+	Assert(polar_local_node_type != POLAR_UNKNOWN);
+
+	/*
+	 * For master, we can use local polar node type, because it would not be
+	 * changed after start.
+	 */
+	if (polar_local_node_type == POLAR_PRIMARY)
+		return true;
+
+	/*
+	 * If replica promote to master, we should update the type to master in
+	 * shared memory. So if local node type is not master, we should check its
+	 * value in shared memory, if it is promoted recently, it's time to record
+	 * the latest node type to local.
+	 */
+	if (polar_get_node_type() == POLAR_PRIMARY)
+	{
+		polar_local_node_type = POLAR_PRIMARY;
+		return true;
+	}
+
+	return false;
+}
+
 void
 polar_set_vfs_state(uint32 vfs_state)
 {
@@ -11467,6 +11510,25 @@ polar_get_fake_latest_lsn(void)
 }
 
 /*
+ * POLAR: interface to set and get hot_standby_state.
+ */
+void
+polar_set_hot_standby_state(HotStandbyState state)
+{
+	if (UsedShmemSegAddr != NULL && XLogCtl != NULL)
+		XLogCtl->polar_hot_standby_state = state;
+}
+
+HotStandbyState
+polar_get_hot_standby_state(void)
+{
+	if (UsedShmemSegAddr != NULL && XLogCtl != NULL)
+		return XLogCtl->polar_hot_standby_state;
+	else
+		return STANDBY_DISABLED;
+}
+
+/*
  * POLAR: interface to set and get polar_available_state.
  */
 void
@@ -11474,8 +11536,7 @@ polar_set_available_state(bool state)
 {
 	if (UsedShmemSegAddr != NULL && XLogCtl != NULL)
 		XLogCtl->polar_available_state = state;
-	/* FIXME: cluster info is not ready yet */
-	/* polar_update_cluster_info(); */
+	polar_update_cluster_info();
 }
 
 bool
@@ -11574,6 +11635,50 @@ ControlFileData *
 polar_get_control_file(void)
 {
 	return ControlFile;
+}
+
+const char *
+polar_node_type_string(PolarNodeType type, int error_level)
+{
+	switch (type)
+	{
+		case POLAR_UNKNOWN:
+			return "Unknown";
+		case POLAR_PRIMARY:
+			return "RW";
+		case POLAR_REPLICA:
+			return "RO";
+		case POLAR_STANDBY:
+			return "Standby";
+		case POLAR_STANDALONE_DATAMAX:
+			return "Standalone DataMax";
+		default:
+			elog(error_level, "Unknown node type: %d", type);
+			return "Unknown";
+	}
+}
+
+const char *
+polar_standby_state_string(int state, int error_level)
+{
+	switch (state)
+	{
+		case POLAR_NODE_OFFLINE:
+			return "Offline";
+		case POLAR_NODE_GOING_OFFLINE:
+			return "Going Offline";
+		case STANDBY_DISABLED:
+			return "Disabled";
+		case STANDBY_INITIALIZED:
+			return "Initialized";
+		case STANDBY_SNAPSHOT_PENDING:
+			return "Pending";
+		case STANDBY_SNAPSHOT_READY:
+			return "Ready";
+		default:
+			elog(error_level, "Unknown node state: %d", state);
+			return "Unknown";
+	}
 }
 
 /* POLAR end */

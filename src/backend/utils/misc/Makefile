@@ -28,11 +28,14 @@ OBJS = \
 	sampling.o \
 	superuser.o \
 	timeout.o \
-	tzparser.o 
+	tzparser.o
 
 ifeq ($(enable_fault_injector),yes)
 OBJS += faultinjector.o 
 endif
+
+OBJS += guc_px.o
+guc_px.o: $(top_srcdir)/src/include/utils/px_sync_guc_name.h $(top_srcdir)/src/include/utils/px_unsync_guc_name.h
 
 # This location might depend on the installation directories. Therefore
 # we can't substitute it into pg_config.h.

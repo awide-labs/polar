@@ -19,6 +19,7 @@ SUBDIRS += polar_monitor_preload
 SUBDIRS += polar_parameter_manager
 SUBDIRS += polar_password_policy
 SUBDIRS += polar_proxy_utils
+SUBDIRS += polar_px
 SUBDIRS += polar_resource_manager
 SUBDIRS += polar_smgrperf
 SUBDIRS += polar_stat_env

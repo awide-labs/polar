@@ -25,6 +25,7 @@
 #------------------------------------------------------------------------------
 IC="" WC="" EC="" DC="" NC=""
 COLORS=$(tput colors 2> /dev/null)
+CURRENT_DIR=$(dirname -- $BASH_SOURCE[0])
 if [ $? = 0 ] && [ $COLORS -gt 2 ]; then
   IC='\033[0;32m' WC='\033[1;35m' EC='\033[1;31m' DC='\033[0;34m' NC='\033[0m'
 fi
@@ -49,6 +50,7 @@ Usage:
     -m --minimal compile with minimal extention set
     --jobs=<jobs number for compile>, specifies CPU cores number for compiling
     --quiet=[on|off], configure with quiet mode or not, default on. more info for debug if off
+    --stop, stop existing cluster
     --clean, stop and clean existing cluster
     --nc,--nocompile, prevents recompile PolarDB
     --ni,--noinit, prevents init PolarDB cluster
@@ -57,7 +59,9 @@ Usage:
     --wr,--withreplica init the database with replica
     --ec,--extra-configure=<configure flag>, pass extra flag to configure
     --ei,--extra-initdb=<initdb flag>, pass extra flag to initdb
-
+    --eg,--extra-gucs - pass extra postgres GUCs to postgresql.conf (comma separated)
+    --ldp,--log-dir-prefix - configure log directories for cluster instances (for CI)
+    --noipcrm, do not remove the user's IPC objects when stopping or cleaning the cluster
   Please lookup the following secion to find the default values for above options.
 
   Typical command patterns to kick off this script:
@@ -98,12 +102,20 @@ function init_primary() {
   port=$3
 
   initdb_flag+=" -D $primary_dir ${extra_initdb_flag-}"
+  if [[ -n "${log_dir_prefix}" ]]; then
+    initdb_flag+=" > ${log_dir_prefix}/initdb.log 2>&1"
+    mkdir -m 700 -p $log_dir_prefix
+  fi
   info "Begin initdb, flag: $initdb_flag"
   eval "$base_dir/bin/initdb $initdb_flag"
-  cat src/backend/utils/misc/polardb.conf.sample >> $primary_dir/postgresql.conf
+  cat $CURRENT_DIR/src/backend/utils/misc/polardb.conf.sample >> $primary_dir/postgresql.conf
+  echo $extra_gucs | sed 's/,/\n/g' >> $primary_dir/postgresql.conf
   echo "port = $port" >> $primary_dir/postgresql.conf
   echo "polar_datadir = 'file-dio://$data_dir'" >> $primary_dir/postgresql.conf
   echo "host all all 0.0.0.0/0 md5" >> $primary_dir/pg_hba.conf
+  if [[ -n "${log_dir_prefix}" ]]; then
+    echo "log_directory = '${log_dir_prefix}/primary'" >> $primary_dir/postgresql.conf
+  fi
   mkdir -p $data_dir
   $base_dir/bin/polar-initdb.sh $primary_dir/ $data_dir/ primary localfs
   $base_dir/bin/pg_ctl -D $primary_dir start -c -o --cluster-name="${cluster_name-}primary"
@@ -132,6 +144,9 @@ function init_follower() {
     echo "port = $follower_port" >> $follower_dir/postgresql.conf
     echo "primary_conninfo = 'host=127.0.0.1 port=$port dbname=postgres application_name=$slot_name'" >> $follower_dir/postgresql.conf
     echo "primary_slot_name = $slot_name" >> $follower_dir/postgresql.conf
+    if [[ -n "${log_dir_prefix}" ]]; then
+      echo "log_directory = '${log_dir_prefix}/${follower_type}$i'" >> $follower_dir/postgresql.conf
+    fi
     touch $follower_dir/$follower_type.signal
     $base_dir/bin/pg_ctl -D $follower_dir start -c -o --cluster-name="${cluster_name-}$slot_name"
     connstr+="psql -h127.0.0.1 -p$follower_port postgres #$slot_name\n"
@@ -156,7 +171,7 @@ debug=on
 minimal=off
 compiler_flag="-g -Wall -fno-omit-frame-pointer"
 # disable origin rpath config because of our own rpath config in LDFLAGS
-configure_flag="--enable-depend --with-uuid=e2fs --disable-rpath --with-segsize=128"
+configure_flag="--enable-depend --with-uuid=e2fs --disable-rpath --with-segsize=128 --enable-polar-px"
 make_flag=""
 initdb_flag="-k -A trust"
 jobs=`getconf _NPROCESSORS_ONLN`
@@ -169,6 +184,10 @@ install=on
 compile=on
 replica_num=0
 standby_num=0
+shutdown=off
+extra_gucs=""
+log_dir_prefix=""
+ipcrm=on
 
 #------------------------------------------------------------------------------
 # 3.Process Script Options
@@ -181,6 +200,7 @@ for arg do
                                 cluster_name="$(basename $prefix)_" ;;
     --port=*)                   port="$val" ;;
     -h|--help)                  usage ;;
+    --stop)                     shutdown=on ;;
     --clean)                    clean=on ;;
     --nc|--noclean)             compile=off ;;
     --ni|--noinit)              init=off ;;
@@ -195,6 +215,9 @@ for arg do
     --ec=*|--extra-configure=*) extra_configure_flag="$val" ;;
     --ei=*|--extra-initdb=*)    extra_initdb_flag="$val" ;;
     --fault-injector)           ;; # do nothing
+    --eg=*|--extra-gucs=*)      extra_gucs="$val" ;;
+    --ldp=*|--log-dir-prefix=*) log_dir_prefix="$val" ;;
+    --noipcrm)                  ipcrm=off ;;
     *)                          error "build.sh: invalid option $arg";
                                 error "Try \"./build.sh --help\" for more information.";
                                 exit 1 ;;
@@ -231,7 +254,7 @@ if [[ $quiet == "on" ]]; then
 fi
 
 # 3.3 setup envs, do it in the end of Process Script Options
-base_dir=$prefix/tmp_polardb_pg_15_base
+base_dir="${BASE_DIR:-$prefix/tmp_polardb_pg_15_base}"
 pg_primary_dir=$prefix/tmp_polardb_pg_15_primary
 pg_data_dir=$prefix/tmp_polardb_pg_15_data
 pg_standby_dir_prefix=$prefix/tmp_polardb_pg_15_standby
@@ -255,13 +278,19 @@ fi
 #------------------------------------------------------------------------------
 # 4.Cleanup
 #------------------------------------------------------------------------------
-if [[ $init == "on" ]] || [[ $clean == "on" ]]; then
+if [[ $init == "on" ]] || [[ $clean == "on" ]] || [[ $shutdown == "on" ]]; then
   info "Begin stop and clean existing cluster, may raising errors, ignore them"
   for dir in $pg_primary_dir $pg_standby_dir_prefix* $pg_replica_dir_prefix*; do
     $base_dir/bin/pg_ctl -D $dir stop -mi || true
   done
+  if [[ $ipcrm == "on" ]]; then
+    ipcrm -a || echo "WARN: ipcrm -a failed (IPC owned by another user?)"
+  fi
+  if [[ $shutdown == "on" ]]; then
+    info "The cluster is shut down"
+    exit 0
+  fi
   rm -rf $pg_primary_dir $pg_data_dir $pg_standby_dir_prefix* $pg_standby_data_dir_prefix* $pg_replica_dir_prefix*
-  ipcrm -a || echo "WARN: ipcrm -a failed (IPC owned by another user?)"
 fi
 
 if [[ $compile == "on" ]] || [[ $clean == "on" ]]; then
@@ -291,7 +320,7 @@ fi
 
 # 6.1 Init and start PolarDB
 init_cluster $pg_primary_dir $pg_data_dir $port $pg_standby_dir_prefix $pg_standby_data_dir_prefix $pg_replica_dir_prefix
-echo "PGPORT=$port" >> src/Makefile.precheck
+echo "PGPORT=$port" >> $CURRENT_DIR/src/Makefile.precheck
 
 warn "Following command can be used to connect to PolarDB:"
 info "export PATH=$base_dir/bin:\$PATH"

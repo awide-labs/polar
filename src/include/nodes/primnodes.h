@@ -393,6 +393,10 @@ typedef struct WindowFunc
 	bool		winstar;		/* true if argument list was really '*' */
 	bool		winagg;			/* is function a simple aggregate? */
 	int			location;		/* token location, or -1 if unknown */
+
+	/* POLAR px */
+	bool		windistinct;	/* TRUE if it's agg(DISTINCT ...) */
+	/* POLAR end */
 } WindowFunc;
 
 /*
@@ -432,6 +436,15 @@ typedef struct WindowFunc
  * Note: for the cases where a container is returned, if refexpr yields a R/W
  * expanded container, then the implementation is allowed to modify that
  * object in-place and return the same object.
+ *
+ * Examples:
+ * 1. arr[3]
+ *    refupperindexpr = [3], reflowerindexpr = NIL, refassgnexpr = NULL (fetch)
+ * 2. arr[2:4]
+ *    refupperindexpr = [4], reflowerindexpr = [2], refassgnexpr = NULL (slice
+ * 			fetch)
+ * 3. UPDATE t SET arr[3] = 10
+ *    same subscript fields, but refassgnexpr = 10 (assignment path)
  */
 typedef struct SubscriptingRef
 {
@@ -502,6 +515,15 @@ typedef struct FuncExpr
 	Oid			inputcollid;	/* OID of collation that function should use */
 	List	   *args;			/* arguments to the function */
 	int			location;		/* token location, or -1 if unknown */
+
+	/* POLAR px */
+
+	/*
+	 * Valid for base-relations, true if polar_global_function pseudo-function
+	 * was specified as modifier in FROM-clause
+	 */
+	bool		isGlobalFunc;
+	/* POLAR end */
 } FuncExpr;
 
 /*
@@ -687,7 +709,12 @@ typedef enum SubLinkType
 	EXPR_SUBLINK,
 	MULTIEXPR_SUBLINK,
 	ARRAY_SUBLINK,
-	CTE_SUBLINK					/* for SubPlans only */
+	CTE_SUBLINK,				/* for SubPlans only */
+
+	/* POLAR px */
+	NOT_EXISTS_SUBLINK			/* GPORCA uses NOT_EXIST_SUBLINK to implement
+								 * correlated left anti semijoin. */
+	/* POLAR end */
 } SubLinkType;
 
 
@@ -774,6 +801,13 @@ typedef struct SubPlan
 	/* Estimated execution costs: */
 	Cost		startup_cost;	/* one-time setup cost */
 	Cost		per_call_cost;	/* cost for each subplan evaluation */
+
+	/* POLAR px */
+	List	   *extParam;		/* indices of input Params from ancestor plan */
+	bool		is_initplan;	/* PX: Is the subplan implemented as an
+								 * initplan? */
+	bool		is_multirow;	/* PX: May the subplan return more than */
+	/* POLAR end */
 } SubPlan;
 
 /*
@@ -1589,5 +1623,18 @@ typedef struct OnConflictExpr
 	int			exclRelIndex;	/* RT index of 'excluded' relation */
 	List	   *exclRelTlist;	/* tlist of the EXCLUDED pseudo relation */
 } OnConflictExpr;
+
+/* POLAR px */
+/*
+ * DMLActionExpr
+ *
+ * Represents the expression which introduces the action in a SplitUpdate statement
+ */
+typedef struct DMLActionExpr
+{
+	Expr		xpr;
+} DMLActionExpr;
+
+/* POLAR end */
 
 #endif							/* PRIMNODES_H */

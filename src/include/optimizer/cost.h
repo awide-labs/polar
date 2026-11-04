@@ -71,6 +71,13 @@ extern PGDLLIMPORT bool enable_partition_pruning;
 extern PGDLLIMPORT bool enable_async_append;
 extern PGDLLIMPORT int constraint_exclusion;
 
+/* POLAR px */
+extern PGDLLIMPORT bool enable_groupagg;
+extern bool px_enable_hashjoin_size_heuristic;
+extern bool px_enable_predicate_propagation;
+
+/* POLAR end */
+
 extern double index_pages_fetched(double tuples_fetched, BlockNumber pages,
 								  double index_pages, PlannerInfo *root);
 extern void cost_seqscan(Path *path, PlannerInfo *root, RelOptInfo *baserel,

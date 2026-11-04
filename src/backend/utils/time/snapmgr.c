@@ -74,6 +74,9 @@
 #include "utils/timestamp.h"
 #include "access/heapam.h"
 
+/* POLAR px */
+#include "px/px_snapshot.h"
+/* POLAR end */
 
 /*
  * GUC parameters
@@ -1122,6 +1125,9 @@ AtEOXact_Snapshot(bool isCommit, bool resetXmin)
 		SnapshotResetXmin();
 
 	Assert(resetXmin || MyProc->xmin == 0);
+	/* POLAR px */
+	pxsn_set_snapshot(InvalidSnapshot);
+	/* POLAR end */
 }
 
 

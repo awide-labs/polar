@@ -24,6 +24,8 @@ OBJS = \
 	walreceiverfuncs.o \
 	walsender.o
 
+OBJS += polar_cluster_info.o
+
 SUBDIRS = logical
 
 include $(top_srcdir)/src/backend/common.mk

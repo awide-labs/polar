@@ -35,4 +35,10 @@ extern void *nodeRead(const char *token, int tok_len);
  */
 extern Node *parseNodeString(void);
 
+/* POLAR px */
+extern bool has_px_plangen_filed(void);
+extern const char *polar_pg_strtok(int *length);
+
+/* POLAR end */
+
 #endif							/* READFUNCS_H */

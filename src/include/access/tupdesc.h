@@ -88,6 +88,25 @@ typedef struct TupleDescData
 }			TupleDescData;
 typedef struct TupleDescData *TupleDesc;
 
+/* POLAR px */
+/*
+ * When dispatching a planned statement from QC to PXs, we need to be able
+ * to transmit TupleDescs. TupleDesc doesn't have the Node header, so for
+ * convenience of the read and out functions, we wrap them in TupleDescNode
+ * structs, which do.
+ *
+ * These are never serialized on disk, only in the read/outfast protocol,
+ * as part of PlannedStmts.
+ */
+typedef struct tupleDescNode
+{
+	NodeTag		type;
+	int			natts;
+	TupleDesc	tuple;
+} TupleDescNode;
+
+/* POLAR end */
+
 /* Accessor for the i'th attribute of tupdesc. */
 #define TupleDescAttr(tupdesc, i) (&(tupdesc)->attrs[(i)])
 

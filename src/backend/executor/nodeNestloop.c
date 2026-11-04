@@ -335,6 +335,11 @@ ExecInitNestLoop(NestLoop *node, EState *estate, int eflags)
 									  ExecGetResultType(innerPlanState(nlstate)),
 									  &TTSOpsVirtual);
 			break;
+			/* POLAR px */
+		case JOIN_LASJ_NOTIN:
+			elog(ERROR, "Left Anti Semi Join not supported in NestLoop Join");
+			break;
+			/* POLAR end */
 		default:
 			elog(ERROR, "unrecognized join type: %d",
 				 (int) node->join.jointype);

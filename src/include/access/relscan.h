@@ -21,6 +21,68 @@
 #include "storage/spin.h"
 #include "utils/relcache.h"
 
+/* POLAR px */
+#include "utils/guc.h"
+/* POLAR end */
+
+/*
+ * Shared state for parallel heap scan.
+ *
+ * Each backend participating in a parallel heap scan has its own
+ * HeapScanDesc in backend-private memory, and those objects all contain
+ * a pointer to this structure.  The information here must be sufficient
+ * to properly initialize each new HeapScanDesc as workers join the scan,
+ * and it must act as a font of block numbers for those workers.
+ */
+typedef struct ParallelHeapScanDescData
+{
+	Oid			phs_relid;		/* OID of relation to scan */
+	bool		phs_syncscan;	/* report location to syncscan logic? */
+	BlockNumber phs_nblocks;	/* # blocks in relation at start of scan */
+	slock_t		phs_mutex;		/* mutual exclusion for setting startblock */
+	BlockNumber phs_startblock; /* starting block number */
+	pg_atomic_uint64 phs_nallocated;	/* number of blocks allocated to
+										 * workers so far. */
+	bool		phs_snapshot_any;	/* SnapshotAny, not phs_snapshot_data? */
+	char		phs_snapshot_data[FLEXIBLE_ARRAY_MEMBER];
+} ParallelHeapScanDescData;
+
+
+/* POLAR px */
+/*
+ *  share storage extent size:
+ *  default is 4MB = 2^22 just like polarFS
+ * 	BLCKSZ = 8KB = 2^13
+ * 	PXSCAN_UNIT_BIT = 22 - 13 = 9
+ * 	one share storage extent contains 2^9 blocks
+ */
+
+#define PXSCAN_UNIT_BIT (px_scan_unit_bit)
+#define PXSCAN_UNIT_SIZE (px_scan_unit_size)
+#define PXSCAN_BlockNum2UnitNum(blockno) ((blockno) >>  PXSCAN_UNIT_BIT)
+#define PXSCAN_UnitNum2BlockNum(unitno) ((unitno) <<  PXSCAN_UNIT_BIT)
+#define PXSCAN_FirstWorker(workerid) ((workerid) == 0)
+typedef uint32 PXUnitNumber;
+
+typedef struct PXScanDescData
+{
+	int			pxs_plan_id;	/* id for multi seqscan task */
+	int			pxs_worker_id;	/* local segment index for current px workers */
+	int			pxs_total_workers;	/* local segment total count for current
+									 * px workers */
+	BlockNumber pxs_fetch_end;	/* end page number of per fetch */
+	BlockNumber pxs_unit_processed; /* unit(4M) processed count of current
+									 * local segment */
+	BlockNumber pxs_unit_count; /* total unit(4M) count need processed */
+	int64_t		pxs_scan_round; /* multi times scan */
+	bool		pxs_adaptive_scan;	/* adaptive scan */
+	bool		pxs_prefetch_inner_scan;	/* current is a prefetch inner
+											 * scan */
+} PXScanDescData;
+
+typedef PXScanDescData *PXScanDesc;
+
+/* POLAR end */
 
 struct ParallelTableScanDescData;
 
@@ -48,6 +110,11 @@ typedef struct TableScanDescData
 
 	struct ParallelTableScanDescData *rs_parallel;	/* parallel scan
 													 * information */
+
+	/* POLAR px */
+	/* parallel execution scan information */
+	PXScanDesc	px_scan;
+	/* POLAR end */
 } TableScanDescData;
 typedef struct TableScanDescData *TableScanDesc;
 
@@ -164,6 +231,10 @@ typedef struct IndexScanDescData
 
 	/* parallel index scan information, in shared memory */
 	struct ParallelIndexScanDescData *parallel_scan;
+
+	/* POLAR px */
+	PXScanDesc	px_scan;
+	/* POLAR end */
 }			IndexScanDescData;
 
 /* Generic structure for parallel scans */

@@ -75,6 +75,10 @@ typedef enum
 	WAIT_EVENT_SSL_OPEN_SERVER,
 	WAIT_EVENT_WAL_SENDER_WAIT_WAL,
 	WAIT_EVENT_WAL_SENDER_WRITE_DATA,
+
+	/* POLAR px */
+	WAIT_EVENT_PX_MOTION_WAIT_RECV,
+	/* POLAR end */
 } WaitEventClient;
 
 /* ----------

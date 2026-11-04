@@ -3,8 +3,10 @@
 
 # Generated subdirectories
 /tmp_check/
+/tmp_cluster/
 /results/
 /log/
+/tmp_cluster_log/
 
 # Note: regression.* are only left behind on a failure; that's why they're not ignored
 #/regression.diffs

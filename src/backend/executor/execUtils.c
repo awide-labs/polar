@@ -65,6 +65,10 @@
 #include "utils/rel.h"
 #include "utils/typcache.h"
 
+/* POLAR px */
+#include "px/px_vars.h"
+/* POLAR end */
+
 
 static bool tlist_matches_tupdesc(PlanState *ps, List *tlist, int varno, TupleDesc tupdesc);
 static void ShutdownExprContext(ExprContext *econtext, bool isCommit);
@@ -100,6 +104,10 @@ CreateExecutorState(void)
 	qcontext = AllocSetContextCreate(CurrentMemoryContext,
 									 "ExecutorState",
 									 ALLOCSET_DEFAULT_SIZES);
+
+	/* POLAR px */
+	MemoryContextDeclareAccountingRoot(qcontext);
+	/* POLAR end */
 
 	/*
 	 * Make the EState node within the per-query context.  This way, we don't
@@ -164,6 +172,19 @@ CreateExecutorState(void)
 
 	estate->es_jit_flags = 0;
 	estate->es_jit = NULL;
+
+	/* POLAR px */
+	estate->es_sliceTable = NULL;
+	estate->interconnect_context = NULL;
+	estate->motionlayer_context = NULL;
+	estate->es_interconnect_is_setup = false;
+	estate->active_recv_id = -1;
+	estate->es_got_eos = false;
+	estate->cancelUnfinished = false;
+	estate->dispatcherState = NULL;
+	estate->currentSliceId = 0;
+	estate->eliminateAliens = false;
+	/* POLAR end */
 
 	/*
 	 * Return the executor state structure
@@ -799,7 +820,7 @@ ExecGetRangeTableRelation(EState *estate, Index rti)
 
 		Assert(rte->rtekind == RTE_RELATION);
 
-		if (!IsParallelWorker())
+		if (!IsParallelWorker() && px_role != PX_ROLE_PX)
 		{
 			/*
 			 * In a normal query, we should already have the appropriate lock,

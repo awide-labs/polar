@@ -79,4 +79,15 @@ extern bool has_stored_generated_columns(PlannerInfo *root, Index rti);
 extern Bitmapset *get_dependent_generated_columns(PlannerInfo *root, Index rti,
 												  Bitmapset *target_cols);
 
+/* POLAR px */
+extern void px_estimate_rel_size(RelOptInfo *relOptInfo,
+								 Relation rel,
+								 int32 *attr_widths,
+								 BlockNumber *pages,
+								 double *tuples,
+								 double *allvisfrac);
+extern double px_estimate_partitioned_numtuples(Relation rel);
+
+/* POLAR end */
+
 #endif							/* PLANCAT_H */

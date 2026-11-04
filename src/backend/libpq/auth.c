@@ -42,6 +42,13 @@
 #include "utils/memutils.h"
 #include "utils/timestamp.h"
 
+/* POLAR px */
+#include "px/px_gang.h"
+#include "px/px_vars.h"
+#include "replication/polar_cluster_info.h"
+#include "storage/lwlock.h"
+/* POLAR end */
+
 /*----------------------------------------------------------------
  * Global authentication functions
  *----------------------------------------------------------------
@@ -376,14 +383,37 @@ set_authn_id(Port *port, const char *id)
 
 	if (Log_connections)
 	{
-		ereport(LOG,
-				errmsg("connection authenticated: identity=\"%s\" method=%s "
-					   "(%s:%d)",
-					   port->authn_id, hba_authname(port->hba->auth_method), HbaFileName,
-					   port->hba->linenumber));
+		/*
+		 * TODO: pg15_px: remove the 2nd branch when QC auth mechanics will be
+		 * based on hba rules
+		 */
+		if (port->hba)
+			ereport(LOG,
+					errmsg("connection authenticated: identity=\"%s\" method=%s "
+						   "(%s:%d)",
+						   port->authn_id, hba_authname(port->hba->auth_method), HbaFileName,
+						   port->hba->linenumber));
+		else
+			ereport(LOG,
+					errmsg("connection authenticated: identity=\"%s\"", port->authn_id));
 	}
 }
 
+static void
+px_auth_qc(Port *port)
+{
+	if (px_enable_auth_on_qe)
+	{
+#ifdef USE_SSL
+		px_auth_qc_tls(port);
+#else
+		ereport(FATAL,
+				(errcode(ERRCODE_INVALID_AUTHORIZATION_SPECIFICATION),
+				 errmsg("authentication failed for query coordinator"),
+				 errdetail("TLS is not supported by this build")));
+#endif
+	}
+}
 
 /*
  * Client authentication starts here.  If there is an error, this
@@ -394,6 +424,27 @@ ClientAuthentication(Port *port)
 {
 	int			status = STATUS_ERROR;
 	const char *logdetail = NULL;
+
+	/* POLAR px */
+
+	/*
+	 * If this is a QC to PX connection, we might be able to short circuit
+	 * client authentication.
+	 */
+	if (px_role == PX_ROLE_PX)
+	{
+		if (px_auth_systemid != GetSystemIdentifier())
+			ereport(FATAL,
+					(errcode(ERRCODE_INVALID_AUTHORIZATION_SPECIFICATION),
+					 errmsg("authentication failed for query coordinator"),
+					 errdetail("invalid system id for cluster")));
+
+		px_auth_qc(port);
+		set_authn_id(port, PX_INTERNAL_USER);
+		sendAuthRequest(port, AUTH_REQ_OK, NULL, 0);
+		return;
+	}
+	/* POLAR end */
 
 	/*
 	 * Get the authentication method to use for this frontend/database

@@ -44,6 +44,7 @@ SUBDIRS += test_buffer
 SUBDIRS += test_logindex test_slru test_local_cache test_procpool
 SUBDIRS += test_polar_rsc
 SUBDIRS += test_coredump_handler
+SUBDIRS += test_px
 # POLAR end
 
 ifeq ($(with_ssl),openssl)

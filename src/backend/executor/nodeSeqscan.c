@@ -33,6 +33,10 @@
 #include "executor/nodeSeqscan.h"
 #include "utils/rel.h"
 
+/* POLAR px */
+#include "px/px_vars.h"
+/* POLAR end */
+
 static TupleTableSlot *SeqNext(SeqScanState *node);
 
 /* ----------------------------------------------------------------
@@ -64,13 +68,26 @@ SeqNext(SeqScanState *node)
 
 	if (scandesc == NULL)
 	{
-		/*
-		 * We reach here if the scan is not parallel, or if we're serially
-		 * executing a scan that was planned to be parallel.
-		 */
-		scandesc = table_beginscan(node->ss.ss_currentRelation,
-								   estate->es_snapshot,
-								   0, NULL);
+		/* POLAR px */
+		if (px_role == PX_ROLE_PX && px_is_executing &&
+			node->ss.ps.plan->px_scan_partial)
+		{
+			scandesc = table_beginscan_px(node->ss.ss_currentRelation,
+										  estate->es_snapshot, 0, NULL);
+			scandesc->px_scan->pxs_plan_id = node->ss.ps.plan->plan_node_id;
+		}
+		/* POLAR end */
+		else
+		{
+
+			/*
+			 * We reach here if the scan is not parallel, or if we're serially
+			 * executing a scan that was planned to be parallel.
+			 */
+			scandesc = table_beginscan(node->ss.ss_currentRelation,
+									   estate->es_snapshot,
+									   0, NULL);
+		}
 		node->ss.ss_currentScanDesc = scandesc;
 	}
 

@@ -98,6 +98,11 @@ extern PGDLLIMPORT volatile sig_atomic_t LogMemoryContextPending;
 extern PGDLLIMPORT volatile sig_atomic_t MemoryContextDumpPending;
 extern PGDLLIMPORT volatile sig_atomic_t IdleStatsUpdateTimeoutPending;
 
+/* POLADR px */
+extern PGDLLIMPORT volatile sig_atomic_t QueryFinishPending;
+
+/* POLADR end */
+
 extern PGDLLIMPORT volatile sig_atomic_t CheckClientConnectionPending;
 extern PGDLLIMPORT volatile sig_atomic_t ClientConnectionLost;
 
@@ -625,4 +630,10 @@ extern void polar_copy_dirs_from_shared_storage_to_local(void);
 extern PGDLLIMPORT bool polar_enable_replica_copydata_optimization;
 
 /* POLAR end */
+
+/* POLAR px */
+extern bool px_authenticated_user_is_superuser(void);
+
+/*POLAR end */
+
 #endif							/* MISCADMIN_H */

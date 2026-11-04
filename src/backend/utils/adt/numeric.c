@@ -11500,3 +11500,35 @@ accum_sum_combine(NumericSumAccum *accum, NumericSumAccum *accum2)
 
 	free_var(&tmp_var);
 }
+
+/* POLAR px */
+/*
+ * Convert numeric to float8; if out of range, return +/- HUGE_VAL
+ */
+double
+numeric_to_double_no_overflow(Numeric num)
+{
+	char	   *tmp;
+	double		val;
+	char	   *endptr;
+
+	tmp = DatumGetCString(DirectFunctionCall1(numeric_out,
+											  NumericGetDatum(num)));
+
+	/* unlike float8in, we ignore ERANGE from strtod */
+	val = strtod(tmp, &endptr);
+	if (*endptr != '\0')
+	{
+		/* shouldn't happen ... */
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_TEXT_REPRESENTATION),
+				 errmsg("invalid input syntax for type %s: \"%s\"",
+						"double precision", tmp)));
+	}
+
+	pfree(tmp);
+
+	return val;
+}
+
+/* POLAR end */

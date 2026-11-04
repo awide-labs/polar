@@ -119,4 +119,9 @@ extern void record_plan_function_dependency(PlannerInfo *root, Oid funcid);
 extern void record_plan_type_dependency(PlannerInfo *root, Oid typid);
 extern bool extract_query_dependencies_walker(Node *node, PlannerInfo *root);
 
+/* POLAR px */
+extern void polar_extract_plan_dependencies(PlannerInfo *root, Plan *plan);
+
+/* POLAR end */
+
 #endif							/* PLANMAIN_H */

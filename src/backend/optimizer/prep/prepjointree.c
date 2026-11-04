@@ -1213,6 +1213,10 @@ pull_up_simple_subquery(PlannerInfo *root, Node *jtnode, RangeTblEntry *rte,
 				case RTE_CTE:
 				case RTE_NAMEDTUPLESTORE:
 				case RTE_RESULT:
+					/* POLAR px */
+				case RTE_TABLEFUNCTION:
+				case RTE_VOID:
+					/* POLAR end */
 					/* these can't contain any lateral references */
 					break;
 			}
@@ -2295,6 +2299,17 @@ replace_vars_in_jointree(Node *jtnode,
 						/* these shouldn't be marked LATERAL */
 						Assert(false);
 						break;
+
+						/* POLAR px */
+					case RTE_TABLEFUNCTION:
+						rte->functions = (List *)
+							pullup_replace_vars((Node *) rte->functions,
+												context);
+						break;
+					case RTE_VOID:
+						Assert(false);
+						break;
+						/* POLAR end */
 				}
 			}
 		}

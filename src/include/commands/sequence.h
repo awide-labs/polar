@@ -54,6 +54,12 @@ typedef FormData_pg_sequence_data *Form_pg_sequence_data;
 /* XLOG stuff */
 #define XLOG_SEQ_LOG			0x00
 
+/* POLAR px */
+#define SEQ_NEXTVAL_FALSE			'f'
+#define SEQ_NEXTVAL_TRUE			't'
+#define SEQ_NEXTVAL_QUERY_RESPONSE	'?'
+/* POLAR end */
+
 typedef struct xl_seq_rec
 {
 	RelFileNode node;
@@ -75,5 +81,10 @@ extern void seq_redo(XLogReaderState *rptr);
 extern void seq_desc(StringInfo buf, XLogReaderState *rptr);
 extern const char *seq_identify(uint8 info);
 extern void seq_mask(char *pagedata, BlockNumber blkno);
+
+/* POLAR px */
+extern void nextval_qc(Oid relid, int64 *plast, int64 *pcached, int64 *pincrement, bool *poverflow);
+
+/* POLAR end */
 
 #endif							/* SEQUENCE_H */

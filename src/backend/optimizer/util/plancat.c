@@ -55,6 +55,11 @@
 #include "utils/snapmgr.h"
 #include "utils/syscache.h"
 
+/* POLAR px */
+#include "utils/guc.h"
+#include "catalog/pg_inherits.h"
+/* POLAR end */
+
 /* GUC parameter */
 int			constraint_exclusion = CONSTRAINT_EXCLUSION_PARTITION;
 
@@ -2585,3 +2590,97 @@ set_baserel_partition_constraint(Relation relation, RelOptInfo *rel)
 		rel->partition_qual = partconstr;
 	}
 }
+
+/* POLAR px */
+/*
+ * px_estimate_rel_size - estimate # pages and # tuples in a table or index
+ *
+ * If attr_widths isn't NULL, it points to the zero-index entry of the
+ * relation's attr_width[] cache; we fill this in if we have need to compute
+ * the attribute widths for estimation purposes.
+ */
+void
+px_estimate_rel_size(RelOptInfo *relOptInfo,
+					 Relation rel,
+					 int32 *attr_widths,
+					 BlockNumber *pages,
+					 double *tuples,
+					 double *allvisfrac)
+{
+	estimate_rel_size(rel, attr_widths, pages, tuples, allvisfrac);
+	return;
+}
+
+
+/*
+ * Get the total size of a partitioned table, including all partitions.
+ *
+ * Only used with PXOPT, currently. This is slightly different from
+ * px_estimate_rel_size(), in that if the relation is a partitioned table
+ * (or general inherited table, but PXOPT doesn't deal with general general
+ * inheritance), this sums up the estimates from the child tables. Also, if
+ * px_optimizer_enable_relsize_collection is off, and none of the partitions have been
+ * analyzed, this returns 0 rather than the default constant estimate.
+ */
+double
+px_estimate_partitioned_numtuples(Relation rel)
+{
+	List	   *inheritors;
+	ListCell   *lc;
+	double		totaltuples;
+
+	if (rel->rd_rel->reltuples > 0)
+		return rel->rd_rel->reltuples;
+
+	inheritors = find_all_inheritors(RelationGetRelid(rel),
+									 AccessShareLock,
+									 NULL);
+	totaltuples = 0;
+	foreach(lc, inheritors)
+	{
+		Oid			childid = lfirst_oid(lc);
+		Relation	childrel;
+		double		childtuples;
+
+		if (childid != RelationGetRelid(rel))
+			childrel = try_table_open(childid, NoLock);
+		else
+			childrel = rel;
+
+		/* not yet vacuumed/analyzed tables have statistics set to -1 */
+		if (childrel->rd_rel->reltuples < 0)
+		{
+			if (px_enable_relsize_collection)
+			{
+				RelOptInfo *dummy_reloptinfo;
+				BlockNumber numpages;
+				double		allvisfrac;
+
+				dummy_reloptinfo = makeNode(RelOptInfo);
+
+				px_estimate_rel_size(dummy_reloptinfo,
+									 childrel,
+									 NULL,
+									 &numpages,
+									 &childtuples,
+									 &allvisfrac);
+				pfree(dummy_reloptinfo);
+
+				/* estimate_rel_size can return -1 */
+				childtuples = Max(childtuples, 0);
+			}
+			else
+				childtuples = 0;
+		}
+		else
+			childtuples = childrel->rd_rel->reltuples;
+
+		totaltuples += childtuples;
+
+		if (childrel != rel)
+			table_close(childrel, NoLock);
+	}
+	return totaltuples;
+}
+
+/* POLAR end */

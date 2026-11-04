@@ -35,7 +35,19 @@
 #define PG_AUTOCONF_FILENAME		"postgresql.auto.conf"
 
 /* POLAR */
+/*
+ * Size of static PX buffer. The buffer is used to collect log messages
+ * produced by PX planner during optimization stage.
+ */
+#define PXOPT_ERROR_BUFFER_SIZE 		(10 * 1024 * 1024)
+
+/*
+ * MAX audit log len is set to size of px error buffer to collect debugging
+ * information about px_optimizer decisions.
+ */
+#define POLAR_MAX_AUDIT_LOG_LEN 		PXOPT_ERROR_BUFFER_SIZE
 #define POLAR_DEFAULT_MAX_AUDIT_LOG_LEN 2048
+/* POLAR end */
 
 /*
  * Certain options can only be set at certain times. The rules are
@@ -697,6 +709,7 @@ extern char *polar_commit;
 extern char *polar_version;
 extern char *polardb_version;
 extern char *polar_release_date;
+extern char *polar_instance_name;
 
 extern bool polar_allow_huge_alloc;
 extern bool polar_disable_escape_inside_gbk_character;
@@ -707,9 +720,287 @@ extern bool polar_enable_track_lock_timing;
 extern bool polar_enable_track_network_stat;
 extern bool polar_enable_track_network_timing;
 
+/* POLAR px */
+typedef struct PxFunctionOidArray
+{
+	int			count;
+	int			oid[FLEXIBLE_ARRAY_MEMBER];
+} PxFunctionOidArray;
+
+extern void *guc_malloc(int elevel, size_t size);
+extern int	guc_name_compare(const char *namea, const char *nameb);
+
+extern bool px_enable_check_workers;
+extern bool px_info_debug;
+extern bool px_enable_replay_wait;
+extern bool px_enable_transaction;
+extern bool px_enable_plan_cache;
+extern bool px_enable_sort_distinct;
+extern bool px_enable_join_prefetch_inner;
+extern int	px_max_workers_number;
+extern bool px_enable_plpgsql;
+extern bool px_enable_procedure;
+extern bool px_enable_prepare_statement;
+extern bool px_enable_check_csn;
+extern bool px_enable_create_table_as;
+
+extern bool px_execute_pruned_plan;
+extern bool px_enable_print;
+extern bool px_debug_cancel_print;
+extern bool px_log_dispatch_stats;
+extern bool px_optimizer_enable_relsize_collection;
+
+/* Macros to define the level of memory accounting to show in EXPLAIN ANALYZE */
+#define EXPLAIN_MEMORY_VERBOSITY_SUPPRESS	0	/* Suppress memory reporting
+												 * in explain analyze */
+#define EXPLAIN_MEMORY_VERBOSITY_SUMMARY	1	/* Summary of memory usage for
+												 * each owner in explain
+												 * analyze */
+#define EXPLAIN_MEMORY_VERBOSITY_DETAIL		2	/* Detail memory accounting
+												 * tree for each slice in
+												 * explain analyze */
+
+/* Optimizer related gucs */
+extern bool polar_enable_px;
+extern bool px_enable_executor;
+extern bool px_enable_join;
+extern bool px_enable_window_function;
+extern bool px_enable_subquery;
+extern int	px_dop_per_node;
+extern bool px_enable_cte;
+extern bool px_enable_spi_read_all_namespaces;
+extern bool px_enable_transaction;
+extern bool px_enable_join_prefetch_inner;
+extern bool px_enable_check_workers;
+
+/* ORCA related definitions */
+#define OPTIMIZER_XFORMS_COUNT	400 /* number of transformation rules */
+
+/* types of optimizer failures */
+#define OPTIMIZER_ALL_FAIL 			0	/* all failures */
+#define OPTIMIZER_UNEXPECTED_FAIL 	1	/* unexpected failures */
+#define OPTIMIZER_EXPECTED_FAIL 	2	/* expected failures */
+
+/* optimizer minidump mode */
+#define OPTIMIZER_MINIDUMP_FAIL		0	/* create optimizer minidump on
+										 * failure */
+#define OPTIMIZER_MINIDUMP_ALWAYS 	1	/* always create optimizer minidump */
+
+/* optimizer cost model */
+#define OPTIMIZER_GPDB_CALIBRATED	1	/* GPDB's calibrated cost model */
+#define OPTIMIZER_POLARDB			2	/* PolarDB's cost model */
+
+/*  TODO: pg15_px: adjust it to future Shared Server related options */
+#define GUC_PX_NEED_SYNC		0x40000000	/* guc value is synced between
+											 * master and primary */
+#define GUC_PX_NO_SYNC			0x80000000	/* guc value is not synced between
+											 * master and primary */
+
+/* array of xforms disable flags */
+extern bool optimizer_xforms[OPTIMIZER_XFORMS_COUNT];
+extern char *px_optimizer_search_strategy_path;
+
+/* GUCs to tell Optimizer to enable a physical operator */
+extern bool px_optimizer_enable_indexjoin;
+extern bool px_optimizer_enable_motions_masteronly_queries;
+extern bool px_optimizer_enable_motions;
+extern bool px_optimizer_enable_motion_broadcast;
+extern bool px_optimizer_enable_motion_gather;
+extern bool px_optimizer_enable_motion_redistribute;
+extern bool px_optimizer_enable_sort;
+extern bool px_optimizer_enable_materialize;
+extern bool px_optimizer_enable_partition_propagation;
+extern bool px_optimizer_enable_partition_selection;
+extern bool px_optimizer_enable_outerjoin_rewrite;
+extern bool px_optimizer_enable_multiple_distinct_aggs;
+extern bool px_optimizer_enable_hashjoin_redistribute_broadcast_children;
+extern bool px_optimizer_enable_broadcast_nestloop_outer_child;
+extern bool px_optimizer_enable_streaming_material;
+extern bool px_optimizer_enable_gather_on_segment_for_dml;
+extern bool px_optimizer_enable_assert_maxonerow;
+extern bool px_optimizer_enable_constant_expression_evaluation;
+extern bool px_optimizer_enable_outerjoin_to_unionall_rewrite;
+extern bool px_optimizer_enable_ctas;
+extern bool px_optimizer_enable_dml;
+extern bool px_optimizer_enable_dml_triggers;
+extern bool px_optimizer_enable_dml_constraints;
+extern bool px_optimizer_enable_direct_dispatch;
+extern bool px_optimizer_enable_master_only_queries;
+extern bool px_optimizer_enable_dynamictablescan;
+extern bool px_optimizer_enable_dynamicindexscan;
+extern bool px_optimizer_expand_fulljoin;
+extern bool px_optimizer_enable_hashagg;
+extern bool px_optimizer_enable_groupagg;
+extern bool px_optimizer_enable_mergejoin;
+extern bool px_optimizer_enable_hashjoin;
+extern bool px_optimizer_enable_seqscan;
+extern bool px_optimizer_enable_seqsharescan;
+extern bool px_optimizer_enable_indexscan;
+extern bool px_optimizer_enable_shareindexscan;
+extern bool px_optimizer_enable_dynamicshareindexscan;
+extern bool px_optimizer_enable_indexonlyscan;
+extern bool px_optimizer_enable_brinscan;
+extern bool px_optimizer_enable_bitmapscan;
+extern bool px_optimizer_enable_nestloopjoin;
+extern bool px_optimizer_enable_lasj_notin;
+extern bool px_optimizer_enable_crossproduct;
+
+/* Optimizer related gucs */
+extern bool px_optimizer_log;
+extern int	px_optimizer_log_failure;
+extern bool px_optimizer_trace_fallback;
+extern int	px_optimizer_cost_model;
+extern bool px_optimizer_metadata_caching;
+extern int	px_optimizer_mdcache_size;
+
+/* Optimizer debugging GUCs */
+extern bool px_optimizer_print_query;
+extern bool px_optimizer_print_plan;
+extern bool px_optimizer_print_xform;
+extern bool px_optimizer_print_memo_after_exploration;
+extern bool px_optimizer_print_memo_after_implementation;
+extern bool px_optimizer_print_memo_after_optimization;
+extern bool px_optimizer_print_job_scheduler;
+extern bool px_optimizer_print_expression_properties;
+extern bool px_optimizer_print_group_properties;
+extern bool px_optimizer_print_optimization_context;
+extern bool px_optimizer_print_optimization_stats;
+extern bool px_optimizer_print_xform_results;
+extern bool px_optimizer_print_memo_enforcement;
+extern bool px_optimizer_print_required_columns;
+extern bool px_optimizer_print_equiv_distr_specs;
+
+/* Optimizer plan enumeration related GUCs */
+extern bool px_optimizer_enumerate_plans;
+extern bool px_optimizer_sample_plans;
+extern int	px_optimizer_plan_id;
+extern int	px_optimizer_samples_number;
+
+/* Cardinality estimation related GUCs used by the Optimizer */
+extern bool px_optimizer_extract_dxl_stats;
+extern bool px_optimizer_extract_dxl_stats_all_nodes;
+extern bool px_optimizer_print_missing_stats;
+extern bool px_optimizer_dpe_stats;
+extern bool px_optimizer_enable_derive_stats_all_groups;
+extern double px_optimizer_damping_factor_filter;
+extern double px_optimizer_damping_factor_join;
+extern double px_optimizer_damping_factor_groupby;
+
+/* Costing or tuning related GUCs used by the Optimizer */
+extern int	px_optimizer_segments;
+extern int	px_optimizer_penalize_broadcast_threshold;
+extern double px_optimizer_cost_threshold;
+extern double px_optimizer_nestloop_factor;
+extern double px_optimizer_sort_factor;
+extern double px_optimizer_share_tablescan_factor;
+extern double px_optimizer_share_indexscan_factor;
+
+/* Optimizer hints */
+extern int	px_optimizer_array_expansion_threshold;
+extern int	px_optimizer_join_order_threshold;
+extern int	px_optimizer_join_arity_for_associativity_commutativity;
+extern int	px_optimizer_cte_inlining_bound;
+extern int	px_optimizer_push_group_by_below_setop_threshold;
+extern bool px_optimizer_force_multistage_agg;
+extern bool px_optimizer_force_expanded_distinct_aggs;
+extern bool px_optimizer_force_agg_skew_avoidance;
+extern bool px_optimizer_penalize_skew;
+extern bool px_optimizer_prune_computed_columns;
+extern bool px_optimizer_push_requirements_from_consumer_to_producer;
+extern bool px_optimizer_enforce_subplans;
+extern bool px_optimizer_apply_left_outer_to_union_all_disregarding_stats;
+extern bool px_optimizer_use_external_constant_expression_evaluation_for_ints;
+extern bool px_optimizer_remove_order_below_dml;
+extern bool px_optimizer_multilevel_partitioning;
+extern bool px_optimizer_cte_inlining;
+extern bool px_optimizer_enable_space_pruning;
+extern bool px_optimizer_use_px_allocators;
+extern bool px_enable_opfamily_for_distribution;
+
+extern int	px_optimizer_minidump;
+extern int	px_optimizer_join_order;
+extern bool px_optimizer_force_three_stage_scalar_dqa;
+extern bool px_optimizer_parallel_union;
+extern bool px_optimizer_array_constraints;
+extern bool px_optimizer_enable_eageragg;
+extern bool px_optimizer_prune_unused_columns;
+extern bool px_optimizer_enable_associativity;
+
+/* GUCs for slice table*/
+extern int	px_max_slices;
+extern char *polar_px_nodes;
+extern char *polar_px_ignore_function;
+extern PxFunctionOidArray *px_function_oid_array;
+extern bool px_use_master;
+extern bool px_use_standby;
+extern bool polar_px_ignore_unusable_nodes;
+extern bool polar_enable_send_node_info;
+extern bool polar_enable_send_cluster_info;
+
+/* The number of blocks to scan table */
+extern int	px_scan_unit_size;
+extern int	px_scan_unit_bit;
+extern bool px_enable_adaptive_scan;
+extern bool px_enable_adps_explain_analyze;
+
+extern bool px_interconnect_udpic_network_enable_ipv6;
+extern bool px_enable_dispatch_async;
+extern bool px_enable_udp_testmode;
+extern bool px_enable_tcp_testmode;
+extern bool px_enable_remove_redundant_results;
+extern bool px_enable_btbuild;
+extern bool px_enable_btbuild_cic_phase2;
+extern int	px_btbuild_batch_size;
+extern int	px_btbuild_mem_size;
+extern int	px_btbuild_queue_size;
+extern bool px_enable_cte_shared_scan;
+extern int	polar_bt_write_page_buffer_size;
+extern bool px_enable_partition;
+extern bool px_enable_partition_hash;
+extern bool px_enable_relsize_collection;
+extern bool px_enable_tableless_scan;
+extern bool px_enable_pre_optimizer_check;
+extern bool px_enable_left_index_nestloop_join;
+extern bool px_enable_result_hash_filter;
+extern bool px_enable_insert_select;
+extern bool px_enable_insert_partition_table;
+extern int	px_wait_lock_timeout;
+extern int	px_insert_dop_num;
+extern bool px_enable_insert_from_tableless;
+extern bool px_enable_insert_order_sensitive;
+extern bool px_enable_partitionwise_join;
+extern bool px_enable_update;
+extern int	px_update_dop_num;
+extern bool px_enable_delete;
+extern int	px_delete_dop_num;
+extern bool px_optimizer_remove_superfluous_order;
+extern bool px_enable_sort_distinct;
+
+extern bool px_allow_strat_seqscan;
+extern bool px_allow_strat_seqscan;
+extern bool px_allow_strat_bitmapscan;
+extern bool px_allow_sync_seqscan;
+extern bool px_allow_sync_bitmapscan;
+extern bool px_allow_pagemode_seqscan;
+extern bool px_allow_pagemode_bitmapscan;
+
+/* Polar QC authentication */
+extern char *px_peer_cert_file;
+extern char *px_peer_key_file;
+extern char *px_ca_file;
+extern bool px_enable_auth_on_qe;
+
+/* optimizer join heuristic models */
+#define JOIN_ORDER_IN_QUERY				0
+#define JOIN_ORDER_GREEDY_SEARCH		1
+#define JOIN_ORDER_EXHAUSTIVE_SEARCH	2
+#define JOIN_ORDER_EXHAUSTIVE2_SEARCH	3
+
+extern void px_need_reload_ca(const char *newval, void *extra);
+extern void px_need_reload_cert_pkey(const char *newval, void *extra);
+
 /* POLAR end */
 
 extern bool polar_find_in_string_list(const char *itemname, const char *stringlist);
-
 
 #endif							/* GUC_H */

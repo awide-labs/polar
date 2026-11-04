@@ -466,3 +466,85 @@ nodeRead(const char *token, int tok_len)
 
 	return (void *) result;
 }
+
+/* POLAR px */
+/*
+ * For a serialize plan, to find the PLANGEN_PX from it.
+ * PLANGEN_PX is used to deserialize some nodes from parallel execution
+ * plan.
+ */
+bool
+has_px_plangen_filed(void)
+{
+	const char *local_str;
+	bool		has_px_plangen = false;
+
+	local_str = pg_strtok_ptr;
+
+	while (*local_str == ' ')
+		local_str++;
+
+	if (strncmp(local_str, ":planGen", 8) == 0)
+		has_px_plangen = true;
+	return has_px_plangen;
+}
+
+/*
+ * Based on function pg_strtok, but don't modify pg_strtok_ptr
+ * We only want to get token value
+ */
+const char *
+polar_pg_strtok(int *length)
+{
+	const char *local_str;		/* working pointer to string */
+	const char *ret_str;		/* start of token to return */
+
+	local_str = pg_strtok_ptr;
+
+	while (*local_str == ' ' || *local_str == '\n' || *local_str == '\t')
+		local_str++;
+
+	if (*local_str == '\0')
+	{
+		*length = 0;
+		pg_strtok_ptr = local_str;
+		return NULL;			/* no more tokens */
+	}
+
+	/*
+	 * Now pointing at start of next token.
+	 */
+	ret_str = local_str;
+
+	if (*local_str == '(' || *local_str == ')' ||
+		*local_str == '{' || *local_str == '}')
+	{
+		/* special 1-character token */
+		local_str++;
+	}
+	else
+	{
+		/* Normal token, possibly containing backslashes */
+		while (*local_str != '\0' &&
+			   *local_str != ' ' && *local_str != '\n' &&
+			   *local_str != '\t' &&
+			   *local_str != '(' && *local_str != ')' &&
+			   *local_str != '{' && *local_str != '}')
+		{
+			if (*local_str == '\\' && local_str[1] != '\0')
+				local_str += 2;
+			else
+				local_str++;
+		}
+	}
+
+	*length = local_str - ret_str;
+
+	/* Recognize special case for "empty" token */
+	if (*length == 2 && ret_str[0] == '<' && ret_str[1] == '>')
+		*length = 0;
+
+	return ret_str;
+}
+
+/* POLAR end */

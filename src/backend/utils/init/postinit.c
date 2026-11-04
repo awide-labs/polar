@@ -81,6 +81,11 @@ int			polar_max_super_conns;
 
 /* POLAR end */
 
+#ifdef USE_PX
+extern void InitPXOPT(void);
+extern void TerminatePXOPT(void);
+#endif
+
 static HeapTuple GetDatabaseTuple(const char *dbname);
 static HeapTuple GetDatabaseTupleByOid(Oid dboid);
 static void PerformAuthentication(Port *port);
@@ -734,6 +739,17 @@ InitPostgres(const char *in_dbname, Oid dboid,
 	 * Once I have done this, I am visible to other backends!
 	 */
 	InitProcessPhase2();
+
+#ifdef USE_PX
+	/* Initialize PXOPT */
+	px_OptimizerMemoryContext =
+		AllocSetContextCreate(TopMemoryContext,
+							  "PXOPT Top-level Memory Context",
+							  ALLOCSET_DEFAULT_MINSIZE,
+							  ALLOCSET_DEFAULT_INITSIZE,
+							  ALLOCSET_DEFAULT_MAXSIZE);
+	InitPXOPT();
+#endif
 
 	/*
 	 * Initialize my entry in the shared-invalidation manager's array of
@@ -1417,6 +1433,12 @@ ShutdownPostgres(int code, Datum arg)
 {
 	/* Make sure we've killed any active transaction */
 	AbortOutOfAnyTransaction();
+
+#ifdef USE_PX
+	TerminatePXOPT();
+	if (px_OptimizerMemoryContext != NULL)
+		MemoryContextDelete(px_OptimizerMemoryContext);
+#endif
 
 	/*
 	 * Shared Server exit callback function that must be called before release

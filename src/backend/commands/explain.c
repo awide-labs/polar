@@ -40,6 +40,17 @@
 #include "utils/typcache.h"
 #include "utils/xml.h"
 
+/* POLAR px */
+#include "parser/parse_clause.h"
+#include "px/px_vars.h"
+#include "px/px_hash.h"
+#include "px/px_gang.h"
+#include "px/px_adaptive_paging.h"
+#include "px/px_dispatchresult.h"
+#include "executor/execUtils_px.h"
+#include "explain_px.c"
+/* POLAR end */
+
 
 /* Hook for plugins to get control in ExplainOneQuery() */
 ExplainOneQuery_hook_type ExplainOneQuery_hook = NULL;
@@ -154,7 +165,15 @@ static void ExplainJSONLineEnding(ExplainState *es);
 static void ExplainYAMLLineStarting(ExplainState *es);
 static void escape_yaml(StringInfo buf, const char *str);
 
+/* POLAR px */
+static void show_dispatch_info(ExecSlice *slice, ExplainState *es, Plan *plan);
+static void show_motion_keys(PlanState *planstate, List *hashExpr, int nkeys, AttrNumber *keycols,
+							 const char *qlabel, List *ancestors, ExplainState *es);
+static void show_result_hash_filter(const char *qlabel,
+									ResultState *resultstate,
+									ExplainState *es);
 
+/* POLAR end */
 
 /*
  * ExplainQuery -
@@ -219,6 +238,10 @@ ExplainQuery(ParseState *pstate, ExplainStmt *stmt,
 								opt->defname, p),
 						 parser_errposition(pstate, opt->location)));
 		}
+		/* POLAR px */
+		else if (strcmp(opt->defname, "slicetable") == 0)
+			es->slicetable = defGetBoolean(opt);
+		/* POLAR end */
 		else
 			ereport(ERROR,
 					(errcode(ERRCODE_SYNTAX_ERROR),
@@ -243,6 +266,11 @@ ExplainQuery(ParseState *pstate, ExplainStmt *stmt,
 
 	/* if the summary was not set explicitly, set default value */
 	es->summary = (summary_set) ? es->summary : es->analyze;
+
+	/* POLAR px */
+	if (px_explain_memory_verbosity >= EXPLAIN_MEMORY_VERBOSITY_DETAIL)
+		es->memory_detail = true;
+	/* POLAR end */
 
 	query = castNode(Query, stmt->query);
 	if (IsQueryIdEnabled())
@@ -539,6 +567,11 @@ ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
 	if (es->wal)
 		instrument_option |= INSTRUMENT_WAL;
 
+	/* POLAR px */
+	if (es->memory_detail)
+		instrument_option |= INSTRUMENT_MEMORY_DETAIL;
+	/* POLAR end */
+
 	/*
 	 * We always collect timing for the entire statement, even when node-level
 	 * timing is off, so we don't look at es->timing here.  (We could skip
@@ -566,6 +599,18 @@ ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
 	queryDesc = CreateQueryDesc(plannedstmt, queryString,
 								GetActiveSnapshot(), InvalidSnapshot,
 								dest, params, queryEnv, instrument_option);
+	/* POLAR px */
+	/* Allocate workarea for summary stats. */
+	if (es->analyze && queryDesc->plannedstmt->planGen == PLANGEN_PX)
+	{
+		queryDesc->instrument_options |= INSTRUMENT_PX;
+		/* Attach workarea to QueryDesc so ExecSetParamPlan() can find it. */
+		queryDesc->showstatctx = pxexplain_showExecStatsBegin(queryDesc,
+															  starttime);
+	}
+	else
+		queryDesc->showstatctx = NULL;
+	/* POLAR end */
 
 	/* Select execution options */
 	if (es->analyze)
@@ -591,6 +636,12 @@ ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
 
 		/* run the plan */
 		ExecutorRun(queryDesc, dir, 0L, true);
+
+		/* POLAR px */
+		/* Wait for completion of all qExec processes. */
+		if (queryDesc->estate->dispatcherState && queryDesc->estate->dispatcherState->primaryResults)
+			pxdisp_checkDispatchResult(queryDesc->estate->dispatcherState, DISPATCH_WAIT_NONE);
+		/* POLAR end */
 
 		/* run cleanup too */
 		ExecutorFinish(queryDesc);
@@ -634,6 +685,22 @@ ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
 
 		ExplainPropertyFloat("Planning Time", "ms", 1000.0 * plantime, 3, es);
 	}
+
+	/* POLAR px */
+	if (queryDesc->plannedstmt->planGen == PLANGEN_PX)
+		ExplainPropertyText("Optimizer", "PolarDB PX Optimizer", es);
+
+	/* Print slice table */
+	if (es->slicetable)
+		ExplainPrintSliceTable(es, queryDesc);
+
+	/*
+	 * Display per-slice and whole-query statistics.
+	 */
+	if (es->analyze && queryDesc->plannedstmt->planGen == PLANGEN_PX)
+		pxexplain_showExecStatsEnd(queryDesc->plannedstmt, queryDesc->showstatctx,
+								   queryDesc->estate, es);
+	/* POLAR end */
 
 	/* Print info about runtime of triggers */
 	if (es->analyze)
@@ -758,11 +825,41 @@ ExplainPrintPlan(ExplainState *es, QueryDesc *queryDesc)
 {
 	Bitmapset  *rels_used = NULL;
 	PlanState  *ps;
+	EState	   *estate;
 
 	/* Set up ExplainState fields associated with this plan tree */
 	Assert(queryDesc->plannedstmt != NULL);
 	es->pstmt = queryDesc->plannedstmt;
 	es->rtable = queryDesc->plannedstmt->rtable;
+
+	/* POLAR px */
+	/* Find slice table entry for the root slice. */
+	estate = queryDesc->estate;
+	if (queryDesc->plannedstmt->planGen == PLANGEN_PX)
+	{
+		es->showstatctx = queryDesc->showstatctx;
+		es->currentSlice = getCurrentSlice(estate, LocallyExecutingSliceIndex(estate));
+
+		/*
+		 * Get local stats if root slice was executed here in the qDisp, as
+		 * long as we haven't already gathered the statistics. This can happen
+		 * when an executor hook generates EXPLAIN output.
+		 */
+		if (es->analyze && !es->showstatctx->stats_gathered)
+		{
+			if (px_role != PX_ROLE_PX && (!es->currentSlice || sliceRunsOnQC(es->currentSlice)))
+				pxexplain_localExecStats(queryDesc->planstate, es->showstatctx);
+
+			/* Fill in the plan's Instrumentation with stats from qExecs. */
+			if (estate->dispatcherState && estate->dispatcherState->primaryResults)
+				pxexplain_recvExecStats(queryDesc->planstate,
+										estate->dispatcherState->primaryResults,
+										LocallyExecutingSliceIndex(estate),
+										es->showstatctx);
+		}
+	}
+	/* POLAR end */
+
 	ExplainPreScanNode(queryDesc->planstate, &rels_used);
 	es->rtable_names = select_rtable_names_for_explain(es->rtable, rels_used);
 	es->deparse_cxt = deparse_context_for_plan_tree(queryDesc->plannedstmt,
@@ -792,6 +889,67 @@ ExplainPrintPlan(ExplainState *es, QueryDesc *queryDesc)
 	 */
 	ExplainPrintSettings(es);
 }
+
+/* POLAR px */
+/*
+ * ExplainPrintSliceTable -
+ *	  convert the MPP slice table text and append it to es->str
+ */
+void
+ExplainPrintSliceTable(ExplainState *es, QueryDesc *queryDesc)
+{
+	SliceTable *sliceTable = queryDesc->estate->es_sliceTable;
+	int			numSlices = (sliceTable ? sliceTable->numSlices : 0);
+
+	ExplainOpenGroup("Slice Table", "Slice Table", false, es);
+
+	for (int i = 0; i < numSlices; i++)
+	{
+		ExecSlice  *slice = &sliceTable->slices[i];
+		const char *gangType = "???";
+
+		switch (slice->gangType)
+		{
+			case GANGTYPE_UNALLOCATED:
+				gangType = "Dispatcher";
+				break;
+			case GANGTYPE_PRIMARY_READER:
+				gangType = "Reader";
+				break;
+			default:
+				break;
+		}
+
+		if (es->format == EXPLAIN_FORMAT_TEXT)
+		{
+			appendStringInfo(es->str, "Slice %d: %s; root %d; parent %d; gang size %d",
+							 i,
+							 gangType,
+							 slice->rootIndex,
+							 slice->parentIndex,
+							 list_length(slice->segments));
+			if (slice->gangType == GANGTYPE_SINGLETON_READER)
+				appendStringInfo(es->str, "; segment %d", linitial_int(slice->segments));
+			appendStringInfoString(es->str, "\n");
+		}
+		else
+		{
+			ExplainOpenGroup("Slice", NULL, true, es);
+			ExplainPropertyInteger("Slice ID", NULL, i, es);
+			ExplainPropertyText("Gang Type", gangType, es);
+			ExplainPropertyInteger("Root", NULL, slice->rootIndex, es);
+			ExplainPropertyInteger("Parent", NULL, slice->parentIndex, es);
+			ExplainPropertyInteger("Gang Size", NULL, list_length(slice->segments), es);
+			if (slice->gangType == GANGTYPE_SINGLETON_READER)
+				ExplainPropertyInteger("Segment", NULL, linitial_int(slice->segments), es);
+			ExplainCloseGroup("Slice", NULL, true, es);
+		}
+	}
+
+	ExplainCloseGroup("Slice Table", "Slice Table", false, es);
+}
+
+/* POLAR end */
 
 /*
  * ExplainPrintTriggers -
@@ -1157,6 +1315,29 @@ ExplainNode(PlanState *planstate, List *ancestors,
 	int			save_indent = es->indent;
 	bool		haschildren;
 
+	/* POLAR px */
+	int			motion_recv = -1;
+	int			motion_snd = -1;
+	ExecSlice  *save_currentSlice = es->currentSlice;
+	ExecSlice  *parentSlice = NULL;
+
+	/*
+	 * If this is a Motion node, we're descending into a new slice.
+	 */
+	if (IsA(plan, Motion))
+	{
+		Motion	   *pMotion = (Motion *) plan;
+		SliceTable *sliceTable = planstate->state->es_sliceTable;
+
+		if (sliceTable)
+		{
+			es->currentSlice = &sliceTable->slices[pMotion->motionID];
+			parentSlice = (es->currentSlice->parentIndex == -1) ? NULL :
+				&sliceTable->slices[es->currentSlice->parentIndex];
+		}
+	}
+	/* POLAR end */
+
 	/*
 	 * Prepare per-worker output buffers, if needed.  We'll append the data in
 	 * these to the main output string further down.
@@ -1397,10 +1578,71 @@ ExplainNode(PlanState *planstate, List *ancestors,
 		case T_Hash:
 			pname = sname = "Hash";
 			break;
+			/* POLAR px */
+		case T_Motion:
+			{
+				Motion	   *pMotion = (Motion *) plan;
+
+				Assert(plan->lefttree);
+
+				motion_snd = list_length(es->currentSlice->segments);
+				motion_recv = (parentSlice == NULL ? 1 : list_length(parentSlice->segments));
+
+				switch (pMotion->motionType)
+				{
+					case MOTIONTYPE_GATHER:
+						sname = "PX Coordinator";
+						motion_recv = 1;
+						break;
+					case MOTIONTYPE_GATHER_SINGLE:
+						sname = "PX Explicit Coordinator";
+						motion_recv = 1;
+						break;
+					case MOTIONTYPE_HASH:
+						sname = "PX Hash";
+						break;
+					case MOTIONTYPE_BROADCAST:
+						sname = "PX Broadcast";
+						break;
+					case MOTIONTYPE_EXPLICIT:
+						sname = "PX Explicit Hash";
+						break;
+					default:
+						sname = "???";
+						break;
+				}
+
+				pname = psprintf("%s %d:%d", sname, motion_snd, motion_recv);
+			}
+			break;
+		case T_AssertOp:
+			pname = sname = "Assert";
+			break;
+			/* POLAR end */
 		default:
 			pname = sname = "???";
 			break;
 	}
+
+	/* POLAR px */
+	if ((es->pstmt->planGen == PLANGEN_PX) && (IsA(plan, SeqScan) ||
+											   IsA(plan, IndexScan) ||
+											   IsA(plan, IndexOnlyScan) ||
+											   IsA(plan, BitmapIndexScan) ||
+											   IsA(plan, BitmapHeapScan) ||
+											   IsA(plan, SampleScan)))
+	{
+		if (plan->px_scan_partial)
+		{
+			pname = psprintf("%s %s", "Partial", pname);
+		}
+		else
+		{
+			pname = psprintf("%s %s", "Full", pname);
+		}
+	}
+	/* POLAR end */
+
 
 	ExplainOpenGroup("Plan",
 					 relationship ? NULL : "Plan",
@@ -1412,6 +1654,23 @@ ExplainNode(PlanState *planstate, List *ancestors,
 		{
 			ExplainIndentText(es);
 			appendStringInfo(es->str, "%s\n", plan_name);
+
+			/* POLAR px */
+
+			/*
+			 * Show slice information after the plan name.
+			 *
+			 * Note: If the top node was a Motion node, we print the slice
+			 * *above* the Motion here. We will print the slice below the
+			 * Motion, below.
+			 */
+			if (IsA(plan, Motion))
+			{
+				show_dispatch_info(save_currentSlice, es, plan);
+				appendStringInfoChar(es->str, '\n');
+			}
+			/* POLAR end */
+
 			es->indent++;
 		}
 		if (es->indent)
@@ -1425,11 +1684,33 @@ ExplainNode(PlanState *planstate, List *ancestors,
 		if (plan->async_capable)
 			appendStringInfoString(es->str, "Async ");
 		appendStringInfoString(es->str, pname);
+
+		/* POLAR px */
+
+		/*
+		 * Print information about the current slice. In order to not make the
+		 * output too verbose, only print it at the slice boundaries, ie. at
+		 * Motion nodes. (We already switched the "current slice" to the slice
+		 * below the Motion.)
+		 */
+		if (IsA(plan, Motion))
+			show_dispatch_info(es->currentSlice, es, plan);
+		/* POLAR end */
+
 		es->indent++;
 	}
 	else
 	{
 		ExplainPropertyText("Node Type", sname, es);
+
+		/* POLAR px */
+		if (nodeTag(plan) == T_Motion)
+		{
+			ExplainPropertyInteger("Senders", NULL, motion_snd, es);
+			ExplainPropertyInteger("Receivers", NULL, motion_recv, es);
+		}
+		/* POLAR end */
+
 		if (strategy)
 			ExplainPropertyText("Strategy", strategy, es);
 		if (partialmode)
@@ -1528,6 +1809,11 @@ ExplainNode(PlanState *planstate, List *ancestors,
 					case JOIN_ANTI:
 						jointype = "Anti";
 						break;
+						/* POLAR px */
+					case JOIN_LASJ_NOTIN:
+						jointype = "Left Anti Semi (Not-In)";
+						break;
+						/* POLAR end */
 					default:
 						jointype = "???";
 						break;
@@ -2024,6 +2310,12 @@ ExplainNode(PlanState *planstate, List *ancestors,
 			if (plan->qual)
 				show_instrumentation_count("Rows Removed by Filter", 1,
 										   planstate, es);
+			/* POLAR px */
+			if (castNode(ResultState, planstate)->hashFilter)
+				show_result_hash_filter("HashFilter",
+										castNode(ResultState, planstate),
+										es);
+			/* POLAR end */
 			break;
 		case T_ModifyTable:
 			show_modifytable_info(castNode(ModifyTableState, planstate), ancestors,
@@ -2036,9 +2328,33 @@ ExplainNode(PlanState *planstate, List *ancestors,
 			show_memoize_info(castNode(MemoizeState, planstate), ancestors,
 							  es);
 			break;
+			/* POLAR px */
+		case T_Motion:
+			{
+				Motion	   *pMotion = (Motion *) plan;
+
+				if (pMotion->sendSorted || pMotion->motionType == MOTIONTYPE_HASH)
+					show_motion_keys(planstate,
+									 pMotion->hashExprs,
+									 pMotion->numSortCols,
+									 pMotion->sortColIdx,
+									 "Merge Key",
+									 ancestors, es);
+			}
+			break;
+		case T_AssertOp:
+			show_upper_qual(plan->qual, "Assert Cond", planstate, ancestors, es);
+			break;
+			/* POLAR end */
 		default:
 			break;
 	}
+
+	/* POLAR px */
+	/* Show executor statistics */
+	if (planstate->instrument && planstate->instrument->need_px)
+		pxexplain_showExecStats(planstate, es);
+	/* POLAR end */
 
 	/*
 	 * Prepare per-worker JIT instrumentation.  As with the overall JIT
@@ -2116,6 +2432,26 @@ ExplainNode(PlanState *planstate, List *ancestors,
 		default:
 			break;
 	}
+
+	/* POLAR px */
+	/* dynamic paging analyze */
+	if (es->analyze &&
+		nodeTag(plan) == T_SeqScan &&
+		es->summary &&
+		polar_enable_px &&
+		px_adaptive_paging &&
+		px_enable_adps_explain_analyze)
+	{
+		char	   *msg_pages = NULL;
+
+		px_adps_analyze_result(plan->plan_node_id, &msg_pages);
+		if (msg_pages)
+		{
+			ExplainPropertyText("Dynamic Pages Per Worker", msg_pages, es);
+			pfree(msg_pages);
+		}
+	}
+	/* POLAR end */
 
 	/* Get ready to display the child plans */
 	haschildren = planstate->initPlan ||
@@ -2203,6 +2539,10 @@ ExplainNode(PlanState *planstate, List *ancestors,
 	ExplainCloseGroup("Plan",
 					  relationship ? NULL : "Plan",
 					  true, es);
+
+	/* POLAR px */
+	es->currentSlice = save_currentSlice;
+	/* POLAR end */
 }
 
 /*
@@ -3427,6 +3767,22 @@ show_instrumentation_count(const char *qlabel, int which,
 			ExplainPropertyFloat(qlabel, NULL, 0.0, 0, es);
 	}
 }
+
+/* POLAR px */
+static void
+show_result_hash_filter(const char *qlabel, ResultState *resultstate,
+						ExplainState *es)
+{
+	if (!resultstate->hashFilter)
+		return;
+
+	appendStringInfoSpaces(es->str, es->indent * 2);
+	appendStringInfo(es->str, "%s: workers=%d, nattrs=%d\n",
+					 qlabel, resultstate->hashFilter->numsegs,
+					 resultstate->hashFilter->natts);
+}
+
+/* POLAR end */
 
 /*
  * Show extra information for a ForeignScan node.
@@ -5020,3 +5376,127 @@ escape_yaml(StringInfo buf, const char *str)
 {
 	escape_json(buf, str);
 }
+
+/* POLAR px */
+static void
+show_dispatch_info(ExecSlice *slice, ExplainState *es, Plan *plan)
+{
+	int			segments;
+
+	/*
+	 * In non-parallel query, there is no slice information.
+	 */
+	if (!slice)
+		return;
+
+	switch (slice->gangType)
+	{
+		case GANGTYPE_UNALLOCATED:
+		case GANGTYPE_ENTRYDB_READER:
+			segments = 0;
+			break;
+
+		case GANGTYPE_PRIMARY_WRITER:
+		case GANGTYPE_PRIMARY_READER:
+		case GANGTYPE_SINGLETON_READER:
+			{
+				segments = list_length(slice->segments);
+				break;
+			}
+
+		default:
+			segments = 0;		/* keep compiler happy */
+			Assert(false);
+			break;
+	}
+
+	if (es->format == EXPLAIN_FORMAT_TEXT)
+	{
+		if (segments == 0)
+			appendStringInfo(es->str, "  (slice%d)", slice->sliceIndex);
+		else if (slice->primaryGang && px_log_gang >= PXVARS_VERBOSITY_DEBUG)
+
+			/*
+			 * In px 5 there was a unique gang_id for each gang, this was
+			 * retired since px 6, so we use the px identifier from the first
+			 * segment of the gang to identify each gang.
+			 */
+			appendStringInfo(es->str, "  (slice%d; gang-notsupport-yet; segments: %d)",
+							 slice->sliceIndex,
+							 segments);
+		else
+			appendStringInfo(es->str, "  (slice%d; segments: %d)",
+							 slice->sliceIndex, segments);
+	}
+	else
+	{
+		ExplainPropertyInteger("Slice", NULL, slice->sliceIndex, es);
+
+		/* TODO */
+#if 0
+		if (slice->primaryGang && px_log_gang >= PXVARS_VERBOSITY_DEBUG)
+			ExplainPropertyInteger("Gang", NULL, slice->primaryGang->db_descriptors[0]->identifier, es);
+#endif
+
+		ExplainPropertyInteger("Segments", NULL, segments, es);
+		ExplainPropertyText("Gang Type", gangTypeToString(slice->gangType), es);
+	}
+}
+
+
+/*
+ * Show the hash and merge keys for a Motion node.
+ */
+static void
+show_motion_keys(PlanState *planstate, List *hashExpr, int nkeys, AttrNumber *keycols,
+				 const char *qlabel, List *ancestors, ExplainState *es)
+{
+	Plan	   *plan = planstate->plan;
+	List	   *context;
+	char	   *exprstr;
+	bool		useprefix = list_length(es->rtable) > 1;
+	int			keyno;
+	List	   *result = NIL;
+
+	if (!nkeys && !hashExpr)
+		return;
+
+	/* Set up deparse context */
+	context = set_deparse_context_plan(es->deparse_cxt,
+									   planstate->plan,
+									   ancestors);
+
+	/* Merge Receive ordering key */
+	for (keyno = 0; keyno < nkeys; keyno++)
+	{
+		/* find key expression in tlist */
+		AttrNumber	keyresno = keycols[keyno];
+		TargetEntry *target = get_tle_by_resno(plan->targetlist, keyresno);
+
+		/* Deparse the expression, showing any top-level cast */
+		if (target)
+			exprstr = deparse_expression((Node *) target->expr, context,
+										 useprefix, true);
+		else
+		{
+			elog(WARNING, "Gather Exchange %s error: no tlist item %d",
+				 qlabel, keyresno);
+			exprstr = "*BOGUS*";
+		}
+
+		result = lappend(result, exprstr);
+	}
+
+	if (list_length(result) > 0)
+		ExplainPropertyList(qlabel, result, es);
+
+	/* Hashed repartitioning key */
+	if (hashExpr)
+	{
+		/* Deparse the expression */
+		exprstr = deparse_expression((Node *) hashExpr, context, useprefix, true);
+		ExplainPropertyText("Hash Key", exprstr, es);
+	}
+}
+
+/* POLAR end */

@@ -28,4 +28,6 @@ OBJS = \
 	tlist.o \
 	var.o
 
+OBJS += px_walkers.o
+
 include $(top_srcdir)/src/backend/common.mk

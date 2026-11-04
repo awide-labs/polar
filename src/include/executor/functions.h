@@ -58,4 +58,9 @@ extern bool check_sql_fn_retval_ext(List *queryTreeLists,
 
 extern DestReceiver *CreateSQLFunctionDestReceiver(void);
 
+/* POLAR px */
+extern void querytree_safe_for_px(Node *node);
+
+/* POLAR end */
+
 #endif							/* FUNCTIONS_H */

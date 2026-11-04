@@ -422,6 +422,12 @@ markTargetListOrigin(ParseState *pstate, TargetEntry *tle,
 				tle->resorigcol = ste->resorigcol;
 			}
 			break;
+
+			/* POLAR px */
+		case RTE_TABLEFUNCTION:
+		case RTE_VOID:
+			break;
+			/* POLAR end */
 	}
 }
 
@@ -1687,6 +1693,13 @@ expandRecordVariable(ParseState *pstate, Var *var, int levelsup)
 				/* else fall through to inspect the expression */
 			}
 			break;
+
+			/* POLAR px */
+		case RTE_VOID:
+			Insist(0);
+		case RTE_TABLEFUNCTION:
+			break;
+			/* POLAR end */
 	}
 
 	/*
@@ -1866,6 +1879,9 @@ FigureColnameInternal(Node *node, char **name)
 				case ANY_SUBLINK:
 				case ROWCOMPARE_SUBLINK:
 				case CTE_SUBLINK:
+					/* POLAR px */
+				case NOT_EXISTS_SUBLINK:
+					/* POLAR end */
 					break;
 			}
 			break;

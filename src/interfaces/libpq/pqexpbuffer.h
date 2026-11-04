@@ -179,4 +179,9 @@ extern void appendPQExpBufferChar(PQExpBuffer str, char ch);
 extern void appendBinaryPQExpBuffer(PQExpBuffer str,
 									const char *data, size_t datalen);
 
+/* POLAR px */
+extern bool appendPQExpBufferVA(PQExpBuffer str, const char *fmt, va_list args) pg_attribute_printf(2, 0);
+
+/* POLAR end */
+
 #endif							/* PQEXPBUFFER_H */

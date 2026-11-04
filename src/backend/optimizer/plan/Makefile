@@ -22,4 +22,8 @@ OBJS = \
 	setrefs.o \
 	subselect.o
 
+ifeq ($(enable_polar_px),yes)
+OBJS += px_opt.o
+endif
+
 include $(top_srcdir)/src/backend/common.mk

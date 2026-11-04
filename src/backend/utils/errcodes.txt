@@ -253,6 +253,8 @@ Section: Class 25 - Invalid Transaction State
 25P02    E    ERRCODE_IN_FAILED_SQL_TRANSACTION                              in_failed_sql_transaction
 25P03    E    ERRCODE_IDLE_IN_TRANSACTION_SESSION_TIMEOUT                    idle_in_transaction_session_timeout
 25P04    E    ERRCODE_TRANSACTION_TIMEOUT                                    polar_transaction_timeout
+# POLAR px
+25M01    E    ERRCODE_PX_OPERATION_CANCELED                                  px_operation_canceled
 
 Section: Class 26 - Invalid SQL Statement Name
 
@@ -439,6 +441,8 @@ Section: Class 58 - System Error (errors external to PostgreSQL itself)
 58030    E    ERRCODE_IO_ERROR                                               io_error
 58P01    E    ERRCODE_UNDEFINED_FILE                                         undefined_file
 58P02    E    ERRCODE_DUPLICATE_FILE                                         duplicate_file
+# POLAR px
+58M01    E    ERRCODE_PX_INTERCONNECTION_ERROR                               px_interconnection_error
 
 Section: Class 72 - Snapshot Failure
 # (class borrowed from Oracle)
@@ -496,3 +500,7 @@ Section: Class XX - Internal Error
 XX000    E    ERRCODE_INTERNAL_ERROR                                         internal_error
 XX001    E    ERRCODE_DATA_CORRUPTED                                         data_corrupted
 XX002    E    ERRCODE_INDEX_CORRUPTED                                        index_corrupted
+
+Section: Class PX - Internal Error
+
+PX000    E    ERRCODE_PX_INTERNAL_ERROR                                      px_internal_error

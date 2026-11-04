@@ -57,6 +57,7 @@
 #include "postmaster/polar_async_lock_replay.h"
 #include "postmaster/polar_dispatcher.h"
 #include "storage/polar_memutils.h"
+#include "replication/polar_cluster_info.h"
 #include "storage/polar_rsc.h"
 #include "storage/polar_xlogbuf.h"
 #include "access/polar_csnlog.h"
@@ -213,6 +214,9 @@ CalculateShmemSize(int *num_semaphores)
 	size = add_size(size, polar_ss_dispatcher_shmem_size());
 	size = add_size(size, polar_ss_session_context_shmem_size());
 	/* POLAR end */
+
+	/* POLAR: add shared memory size for flashback log */
+	size = add_size(size, polar_cluster_info_shmem_size());
 
 	/*
 	 * NOTE NOTE NOTE: DO NOT ADD YOUR ADD_SIZE FUNCTION BELOW ME !!!
@@ -438,6 +442,9 @@ CreateSharedMemoryAndSemaphores(void)
 
 	/* POLAR: init async lock replay share memory */
 	polar_alr_shmem_init();
+
+	/* POLAR: init cluster info share memory struct */
+	polar_cluster_info_shmem_init();
 
 	/*
 	 * Set up lock manager

@@ -206,4 +206,10 @@ extern void SharedRecordTypmodRegistryInit(SharedRecordTypmodRegistry *,
 
 extern void SharedRecordTypmodRegistryAttach(SharedRecordTypmodRegistry *);
 
+/* POLAR px */
+extern int32 getNextRecordTypmod(void);
+extern List *build_tuple_node_list(int start);
+
+/* POLAR end */
+
 #endif							/* TYPCACHE_H */

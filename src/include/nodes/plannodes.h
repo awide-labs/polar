@@ -22,6 +22,9 @@
 #include "nodes/parsenodes.h"
 #include "nodes/primnodes.h"
 
+/* POLAR px */
+#include "nodes/plannodes_px.h"
+/*POLAR end*/
 
 /* ----------------------------------------------------------------
  *						node definitions
@@ -89,6 +92,18 @@ typedef struct PlannedStmt
 	/* statement location in source string (copied from Query) */
 	int			stmt_location;	/* start location, or -1 if unknown */
 	int			stmt_len;		/* length in bytes; 0 means "rest of string" */
+
+	/* POLAR px */
+	PlanGenerator planGen;		/* optimizer generation */
+	int		   *subplan_sliceIds;	/* Slice IDs for initplans. Size equals
+									 * 'subplans'. 0 for non-initplans */
+	int			nParamExec;		/* number of PARAM_EXEC Params used */
+	int			numSlices;
+	struct PlanSlice *slices;
+	/* What is the memory reserved for this query's execution? */
+	uint64		query_mem;
+	/* POLAR end */
+
 } PlannedStmt;
 
 /* macro for fetching the Plan associated with a SubPlan node */
@@ -159,6 +174,43 @@ typedef struct Plan
 	 */
 	Bitmapset  *extParam;
 	Bitmapset  *allParam;
+
+	/* POLAR px */
+
+	/*
+	 * PX needs to keep track of the characteristics of flow of output tuple
+	 * of Plan nodes.
+	 */
+	Flow	   *flow;
+
+	/*
+	 * PX:  How should this plan tree be dispatched?  Initially this is set to
+	 * DISPATCH_UNDETERMINED and, in non-root nodes, may remain so. However,
+	 * in Plan nodes at the root of any separately dispatchable plan fragment,
+	 * it must be set to a specific dispatch type.
+	 */
+	DispatchMethod dispatch;
+
+	/*
+	 * PX: if we're going to direct dispatch, point it at a particular id.
+	 *
+	 * For motion nodes, this direct dispatch data is for the slice rooted at
+	 * the motion node (the sending side!) For other nodes, it is for the
+	 * slice rooted at this plan so it must be a root plan for a query Note
+	 * that for nodes that are internal to a slice then this data is not set.
+	 */
+	DirectDispatchInfo directDispatch;
+
+	/*
+	 * The parent motion node of a plan node.
+	 */
+	struct Plan *motionNode;
+	bool		px_scan_partial;
+	/**
+	 * How much memory (in KB) should be used to execute this plan node?
+	 */
+	uint64		operatorMemKB;
+	/* POLAR end */
 } Plan;
 
 /* ----------------
@@ -187,6 +239,12 @@ typedef struct Result
 {
 	Plan		plan;
 	Node	   *resconstantqual;
+
+	/* POLAR px */
+	int			numHashFilterCols;
+	AttrNumber *hashFilterColIdx;
+	Oid		   *hashFilterFuncs;
+	/* POLAR end */
 } Result;
 
 /* ----------------
@@ -265,6 +323,15 @@ typedef struct Append
 
 	/* Info for run-time subplan pruning; NULL if we're not doing that */
 	struct PartitionPruneInfo *part_prune_info;
+
+	/* POLAR px */
+
+	/*
+	 * Info for run-time join pruning, using Partition Selector nodes. These
+	 * param IDs contain additional Bitmapsets containing selected partitions.
+	 */
+	List	   *join_prune_paramids;
+	/* POLAR end */
 } Append;
 
 /* ----------------
@@ -738,6 +805,11 @@ typedef struct Join
 	JoinType	jointype;
 	bool		inner_unique;
 	List	   *joinqual;		/* JOIN quals (in addition to plan.qual) */
+
+	/* POLAR px */
+	bool		prefetch_inner; /* to avoid deadlock in PX */
+	bool		prefetch_joinqual;	/* to avoid deadlock in PX */
+	/* POLAR end */
 } Join;
 
 /* ----------------
@@ -785,6 +857,11 @@ typedef struct MergeJoin
 	Oid		   *mergeCollations;	/* per-clause OIDs of collations */
 	int		   *mergeStrategies;	/* per-clause ordering (ASC or DESC) */
 	bool	   *mergeNullsFirst;	/* per-clause nulls ordering */
+
+	/* POLAR px */
+	bool		unique_outer;	/* PX-OLAP true => outer is unique in merge
+								 * key */
+	/* POLAR end */
 } MergeJoin;
 
 /* ----------------
@@ -803,6 +880,10 @@ typedef struct HashJoin
 	 * perform lookups in the hashtable over the inner plan.
 	 */
 	List	   *hashkeys;
+
+	/* POLAR px */
+	List	   *hashqualclauses;
+	/* POLAR end */
 } HashJoin;
 
 /* ----------------
@@ -812,6 +893,11 @@ typedef struct HashJoin
 typedef struct Material
 {
 	Plan		plan;
+
+	/* POLAR px */
+	bool		px_strict;
+	bool		px_shield_child_from_rescans;
+	/* POLAR end */
 } Material;
 
 /* ----------------
@@ -851,6 +937,10 @@ typedef struct Sort
 	Oid		   *sortOperators;	/* OIDs of operators to sort them by */
 	Oid		   *collations;		/* OIDs of collations */
 	bool	   *nullsFirst;		/* NULLS FIRST/LAST directions */
+
+	/* POLAR px */
+	bool		noduplicates;	/* TRUE if sort should discard duplicates */
+	/* POLAR end */
 } Sort;
 
 /* ----------------
@@ -907,6 +997,11 @@ typedef struct Agg
 	/* Note: planner provides numGroups & aggParams only in HASHED/MIXED case */
 	List	   *groupingSets;	/* grouping sets to use */
 	List	   *chain;			/* chained Agg/Sort nodes */
+
+	/* POLAR px */
+	/* Stream entries when out of memory instead of spilling to disk */
+	bool		streaming;
+	/* POLAR end */
 } Agg;
 
 /* ----------------
@@ -1016,6 +1111,10 @@ typedef struct Hash
 	bool		skewInherit;	/* is outer join rel an inheritance tree? */
 	/* all other info is in the parent HashJoin node */
 	Cardinality rows_total;		/* estimate total rows if parallel_aware */
+
+	/* POLAR px */
+	bool		rescannable;	/* PX: true => save rows for rescan */
+	/* POLAR end */
 } Hash;
 
 /* ----------------
@@ -1346,5 +1445,163 @@ typedef enum MonotonicFunction
 	MONOTONICFUNC_DECREASING = (1 << 1),
 	MONOTONICFUNC_BOTH = MONOTONICFUNC_INCREASING | MONOTONICFUNC_DECREASING
 } MonotonicFunction;
+
+/* POLAR px */
+
+/* ----------------
+ * POLAR px: Motion Node
+ * ----------------
+ */
+typedef struct Motion
+{
+	Plan		plan;
+
+	MotionType	motionType;
+	bool		sendSorted;		/* if true, output should be sorted */
+	int			motionID;		/* required by AMS  */
+
+	/* For Hash */
+	List	   *hashExprs;		/* list of hash expressions */
+	Oid		   *hashFuncs;		/* corresponding hash functions */
+
+	/* For Explicit */
+	AttrNumber	segidColIdx;	/* index of the segid column in the target
+								 * list */
+
+	/* The following field is only used when sendSorted == true */
+	int			numSortCols;	/* number of sort-key columns */
+	AttrNumber *sortColIdx;		/* their indexes in the target list */
+	Oid		   *sortOperators;	/* OIDs of operators to sort them by */
+	Oid		   *collations;		/* OIDs of collations */
+	bool	   *nullsFirst;		/* NULLS FIRST/LAST directions */
+
+	/* sender slice info */
+	PlanSlice  *senderSliceInfo;
+} Motion;
+
+/* ----------------
+ * POLAR px: AssertOp node
+ * ----------------
+ */
+typedef struct AssertOp
+{
+	Plan		plan;
+	int			errcode;		/* SQL error code */
+	List	   *errmessage;		/* error message */
+} AssertOp;
+
+/* ----------------
+ * POLAR px: SplitUpdate node
+ * ----------------
+ */
+typedef struct SplitUpdate
+{
+	Plan		plan;
+	AttrNumber	actionColIdx;	/* index of action column into the target list */
+	AttrNumber	tupleoidColIdx; /* index of tuple oid column into the target
+								 * list */
+	List	   *insertColIdx;	/* list of columns to INSERT into the target
+								 * list */
+	List	   *deleteColIdx;	/* list of columns to DELETE into the target
+								 * list */
+
+} SplitUpdate;
+
+/* ----------------
+ * POLAR px: shareinputscan node
+ * ----------------
+ */
+typedef struct ShareInputScan
+{
+	Scan		scan;			/* The ShareInput */
+	bool		cross_slice;
+	int			share_id;
+
+	/*
+	 * Slice that produces the tuplestore for this shared scan.
+	 *
+	 * As a special case, in a plan that has only one slice, this may be left
+	 * to -1. The executor node ignores this when there is only one slice.
+	 */
+	int			producer_slice_id;
+
+	/*
+	 * Slice id that this ShareInputScan node runs in. If it's different from
+	 * current slice ID, this ShareInputScan is "alien" to the current slice
+	 * and doesn't need to be executed at all (in this slice). It is used to
+	 * skip IPC in alien nodes.
+	 *
+	 * Like producer_slice_id, this can be left to -1 if there is only one
+	 * slice in the plan tree.
+	 */
+	int			this_slice_id;
+
+	/* Number of consumer slices participating, not including the producer. */
+	int			nconsumers;
+} ShareInputScan;
+
+/* ----------------
+ * POLAR px: Repeat node
+ *   Repeatly output the results of the subplan.
+ *
+ * The repetition for each result tuple from the subplan is determined
+ * by the value from a specified column.
+ * ----------------
+ */
+typedef struct Repeat
+{
+	Plan		plan;
+
+	/*
+	 * An expression to represent the number of times an input tuple to be
+	 * repeatly outputted by this node.
+	 *
+	 * Currently, this expression should result in an integer.
+	 */
+	Expr	   *repeatCountExpr;
+
+	/*
+	 * The GROUPING value. This is used for grouping extension
+	 * distinct-qualified queries. The distinct-qualified plan generated
+	 * through dqgroup.c may have a Join Plan node on the top, which can not
+	 * properly handle GROUPING values. We let the Repeat node to handle this
+	 * case.
+	 */
+	uint64		grouping;
+} Repeat;
+
+/*
+ * POLAR px: Sequence node
+ *   Execute a list of subplans in the order of left-to-right, and return
+ * the results of the last subplan.
+ */
+typedef struct Sequence
+{
+	Plan		plan;
+	List	   *subplans;
+} Sequence;
+
+
+/* ----------------
+ * PartitionSelector node
+ *
+ * PartitionSelector performs partition pruning based on rows seen on
+ * the "other" side of a join. It performs partition pruning similar to
+ * run-time partition pruning in an Append node, but it is performed based
+ * on the rows seen, instead of executor params. The set of surviving
+ * partitions is made available to the Append node, by storing it in a
+ * special executor param, identified by 'paramid' field.
+ * ----------------
+ */
+typedef struct PartitionSelector
+{
+	Plan		plan;
+
+	struct PartitionPruneInfo *part_prune_info;
+	int32		paramid;		/* result is stored here */
+
+} PartitionSelector;
+
+/* POLAR end */
 
 #endif							/* PLANNODES_H */

@@ -18,8 +18,11 @@
 
 #ifdef ENABLE_GSS
 
-void		pg_GSS_error(const char *mprefix, PGconn *conn,
-						 OM_uint32 maj_stat, OM_uint32 min_stat);
+#define pg_GSS_error(mprefix, conn, maj_stat, min_stat) \
+	pg_GSS_error_fe((mprefix), (conn), (maj_stat), (min_stat))
+
+void		pg_GSS_error_fe(const char *mprefix, PGconn *conn,
+							OM_uint32 maj_stat, OM_uint32 min_stat);
 bool		pg_GSS_have_cred_cache(gss_cred_id_t *cred_out);
 int			pg_GSS_load_servicename(PGconn *conn);
 

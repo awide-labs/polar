@@ -56,6 +56,7 @@
 
 /* POLAR */
 #include "storage/polar_fd.h"
+#include "replication/polar_cluster_info.h"
 #include "replication/syncrep.h"
 /* POLAR end */
 
@@ -384,6 +385,20 @@ ReplicationSlotCreate(const char *name, bool db_specific,
 	slot->candidate_restart_lsn = InvalidXLogRecPtr;
 	slot->polar_replica_lock_lsn = InvalidXLogRecPtr;
 	slot->polar_slot_node_type = POLAR_UNKNOWN;
+	slot->node_name[0] = '\0';
+	slot->node_host[0] = '\0';
+	slot->node_port = 0;
+	slot->node_release_date[0] = '\0';
+	slot->node_version[0] = '\0';
+	slot->node_slot_name[0] = '\0';
+	slot->node_type = POLAR_UNKNOWN;
+	slot->node_state = POLAR_NODE_OFFLINE;
+
+	/*
+	 * POLAR: it means we don't want send cluster info to this slot, unless
+	 * the slot report node info
+	 */
+	slot->polar_sent_cluster_info_generation = POLAR_CLUSTER_INFO_INVALID_GENERATION;
 
 	/*
 	 * Create the slot on disk.  We haven't actually marked the slot allocated
@@ -611,8 +626,12 @@ void
 ReplicationSlotRelease(void)
 {
 	ReplicationSlot *slot = MyReplicationSlot;
+	bool		update_cluster_info;
 
 	Assert(slot != NULL && slot->active_pid != 0);
+
+	/* POLAR: slot data will be reset, save it */
+	update_cluster_info = SlotIsPhysical(slot);
 
 	if (slot->data.persistency == RS_EPHEMERAL)
 	{
@@ -658,6 +677,13 @@ ReplicationSlotRelease(void)
 	MyProc->statusFlags &= ~PROC_IN_LOGICAL_DECODING;
 	ProcGlobal->statusFlags[MyProc->pgxactoff] = MyProc->statusFlags;
 	LWLockRelease(ProcArrayLock);
+
+	if (update_cluster_info)
+	{
+		/* POLAR: slot is down, update cluster info generation */
+		elog(LOG, "release slot");
+		polar_update_cluster_info();
+	}
 }
 
 /*
@@ -2205,6 +2231,21 @@ RestoreSlotFromDisk(const char *slotdir)
 
 		slot->in_use = true;
 		slot->active_pid = 0;
+
+		slot->node_name[0] = '\0';
+		slot->node_host[0] = '\0';
+		slot->node_port = 0;
+		slot->node_release_date[0] = '\0';
+		slot->node_version[0] = '\0';
+		slot->node_slot_name[0] = '\0';
+		slot->node_type = POLAR_UNKNOWN;
+		slot->node_state = POLAR_NODE_OFFLINE;
+
+		/*
+		 * POLAR: it means we don't want send cluster info to this slot,
+		 * unless the slot report node info
+		 */
+		slot->polar_sent_cluster_info_generation = POLAR_CLUSTER_INFO_INVALID_GENERATION;
 
 		restored = true;
 		break;

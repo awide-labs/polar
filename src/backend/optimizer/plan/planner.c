@@ -52,6 +52,7 @@
 #include "optimizer/planmain.h"
 #include "optimizer/planner.h"
 #include "optimizer/prep.h"
+#include "optimizer/px_opt.h"
 #include "optimizer/subselect.h"
 #include "optimizer/tlist.h"
 #include "parser/analyze.h"
@@ -66,6 +67,10 @@
 #include "utils/selfuncs.h"
 #include "utils/syscache.h"
 
+/* POLAR px */
+#include "px/px_vars.h"
+/* POLAR end */
+
 /* GUC parameters */
 double		cursor_tuple_fraction = DEFAULT_CURSOR_TUPLE_FRACTION;
 int			force_parallel_mode = FORCE_PARALLEL_OFF;
@@ -76,6 +81,12 @@ planner_hook_type planner_hook = NULL;
 
 /* Hook for plugins to get control when grouping_planner() plans upper rels */
 create_upper_paths_hook_type create_upper_paths_hook = NULL;
+
+/* POLAR px */
+/* Bool for Insert PX Planner */
+bool		found_insert_select = false;
+
+/* POLAR px */
 
 
 /* Expression kind codes for preprocess_expression */
@@ -252,6 +263,20 @@ static bool group_by_has_partkey(RelOptInfo *input_rel,
 								 List *groupClause);
 static int	common_prefix_cmp(const void *a, const void *b);
 
+/* POLAR px */
+static void tag_should_jit(PlannedStmt *result, bool pxopt);
+static bool check_disable_px_planner_walker(Node *node, void *context);
+static bool contains_ignore_functions_checker(const Oid func_oid, void *context);
+static bool contains_returns_set_func(Node *node);
+static bool contains_not_supported_func(Node *node);
+static bool contains_supported_func_checker(Expr *node);
+static bool should_px_planner(Query *current_parse);
+
+/* refer from trigger.c */
+Datum		pg_trigger_depth(PG_FUNCTION_ARGS);
+
+/* POLAR end */
+
 
 /*****************************************************************************
  *
@@ -292,6 +317,28 @@ standard_planner(Query *parse, const char *query_string, int cursorOptions,
 	Plan	   *top_plan;
 	ListCell   *lp,
 			   *lr;
+
+	/* POLAR px */
+
+	/*
+	 * Entry of using PXOPT planner. should_px_planner make some rules, only
+	 * the parse tree matches the rules can go to PXOPT and get a parallel
+	 * planner.
+	 */
+	local_px_insert_dop_num = px_insert_dop_num;
+	px_workerid_funcid = InvalidOid;
+	if (should_px_planner(parse))
+	{
+		px_is_planning = true;
+		result = px_optimize_query(parse, boundParams);
+		px_is_planning = false;
+		if (result)
+		{
+			tag_should_jit(result, true);
+			return result;
+		}
+	}
+	/* POLAR end */
 
 	/*
 	 * Set up global state for this planner invocation.  This data is needed
@@ -7547,4 +7594,619 @@ group_by_has_partkey(RelOptInfo *input_rel,
 	}
 
 	return true;
+}
+
+/* POLAR px */
+static bool
+contains_ignore_functions_checker(const Oid func_oid, void *context)
+{
+	int			i;
+
+	if (!px_function_oid_array)
+		return false;
+
+	for (i = 0; i < px_function_oid_array->count; i++)
+	{
+		if (func_oid == px_function_oid_array->oid[i])
+		{
+			elog(DEBUG1, "px ignore function oid hit : %d", func_oid);
+			return true;
+		}
+	}
+	return false;
+}
+
+static bool
+contains_returns_set_func(Node *node)
+{
+	if (node == NULL)
+		return false;
+
+	if (IsA(node, FuncExpr))
+	{
+		FuncExpr   *expr = (FuncExpr *) node;
+
+		if (expr->funcretset)
+			return true;
+		/* else fall through to check args */
+	}
+
+	if (IsA(node, OpExpr))
+	{
+		OpExpr	   *expr = (OpExpr *) node;
+
+		if (expr->opretset)
+			return true;
+		/* else fall through to check args */
+	}
+
+	return false;
+}
+
+static bool
+contains_supported_func_checker(Expr *node)
+{
+#define FOREACH_CHECK_EXPR_WITH_ARG(TYPE) \
+	{								\
+		TYPE *expr = (TYPE *)node;	\
+		if (!contains_supported_func_checker(expr->arg))	\
+			return false;									\
+		return true;										\
+	}
+
+#define FOREACH_CHECK_EXPR_WITH_ARGS(TYPE) \
+	{								\
+		TYPE *expr = (TYPE *)node;	\
+		ListCell *lc = NULL;		\
+		foreach(lc, expr->args)		\
+		{							\
+			Expr *child_expr = (Expr *) lfirst(lc);				\
+			if (!contains_supported_func_checker(child_expr))	\
+				return false;									\
+		}														\
+		return true;											\
+	}
+
+	if (node == NULL)
+		return true;
+
+	switch (nodeTag(node))
+	{
+		case T_Var:
+		case T_Const:
+		case T_BoolExpr:
+		case T_CaseTestExpr:
+		case T_SubLink:
+		case T_ArrayExpr:
+		case T_SubscriptingRef:
+			return true;
+
+		case T_BooleanTest:
+			FOREACH_CHECK_EXPR_WITH_ARG(BooleanTest);
+		case T_NullTest:
+			FOREACH_CHECK_EXPR_WITH_ARG(NullTest);
+		case T_RelabelType:
+			FOREACH_CHECK_EXPR_WITH_ARG(RelabelType);
+		case T_CoerceToDomain:
+			FOREACH_CHECK_EXPR_WITH_ARG(CoerceToDomain);
+		case T_CoerceViaIO:
+			FOREACH_CHECK_EXPR_WITH_ARG(CoerceViaIO);
+		case T_ArrayCoerceExpr:
+			FOREACH_CHECK_EXPR_WITH_ARG(ArrayCoerceExpr);
+		case T_OpExpr:
+			FOREACH_CHECK_EXPR_WITH_ARGS(OpExpr);
+		case T_NullIfExpr:
+			FOREACH_CHECK_EXPR_WITH_ARGS(NullIfExpr);
+		case T_ScalarArrayOpExpr:
+			FOREACH_CHECK_EXPR_WITH_ARGS(ScalarArrayOpExpr);
+		case T_DistinctExpr:
+			FOREACH_CHECK_EXPR_WITH_ARGS(DistinctExpr);
+		case T_CoalesceExpr:
+			FOREACH_CHECK_EXPR_WITH_ARGS(CoalesceExpr);
+		case T_MinMaxExpr:
+			FOREACH_CHECK_EXPR_WITH_ARGS(MinMaxExpr);
+		case T_FuncExpr:
+			FOREACH_CHECK_EXPR_WITH_ARGS(FuncExpr);
+		case T_WindowFunc:
+			FOREACH_CHECK_EXPR_WITH_ARGS(WindowFunc);
+		case T_Aggref:
+			{
+				Aggref	   *expr = (Aggref *) node;
+				ListCell   *lc = NULL;
+
+				foreach(lc, expr->args)
+				{
+					TargetEntry *tle = (TargetEntry *) lfirst(lc);
+
+					if (!contains_supported_func_checker(tle->expr))
+						return false;
+				}
+				return true;
+			}
+		case T_CaseExpr:
+			{
+				CaseExpr   *expr = (CaseExpr *) node;
+				ListCell   *lc = NULL;
+
+				if (!contains_supported_func_checker(expr->arg))
+					return false;
+
+				if (!contains_supported_func_checker(expr->defresult))
+					return false;
+
+				foreach(lc, expr->args)
+				{
+					CaseWhen   *child_expr = (CaseWhen *) lfirst(lc);
+
+					if (!contains_supported_func_checker(child_expr->expr))
+						return false;
+					if (!contains_supported_func_checker(child_expr->result))
+						return false;
+				}
+				return true;
+			}
+		default:
+			return false;
+	}
+	return false;
+}
+
+static bool
+contains_not_supported_func(Node *node)
+{
+	if (node == NULL)
+		return false;
+
+	if (IsA(node, TargetEntry))
+	{
+		TargetEntry *target_entry = (TargetEntry *) node;
+
+		if (NULL == target_entry->expr)
+			return false;
+
+		return !contains_supported_func_checker(target_entry->expr);
+	}
+
+	switch (nodeTag(node))
+	{
+		case T_RowExpr:
+		case T_RowCompareExpr:
+		case T_FieldSelect:
+		case T_FieldStore:
+		case T_CoerceToDomainValue:
+		case T_CurrentOfExpr:
+		case T_GroupingFunc:
+			return true;
+		default:
+			return false;
+	}
+	return false;
+}
+
+static bool
+contains_multilevel_partitions(Relation rel, LOCKMODE lockmode)
+{
+	PartitionDesc pdesc;
+
+	if (rel->rd_rel->relkind != RELKIND_PARTITIONED_TABLE)
+		return false;
+
+	pdesc = RelationGetPartitionDesc(rel, true);
+	for (int i = 0; i < pdesc->nparts; i++)
+	{
+		char		rel_kind = get_rel_relkind(pdesc->oids[i]);
+
+		if (rel_kind == RELKIND_PARTITIONED_TABLE)
+			return true;
+	}
+
+	return false;
+}
+
+/* tag plan with jit */
+static void
+tag_should_jit(PlannedStmt *result, bool pxopt)
+{
+	Plan	   *top_plan;
+
+	if (!result)
+		return;
+
+	result->jitFlags = PGJIT_NONE;
+	top_plan = result->planTree;
+
+	if (jit_enabled && jit_above_cost >= 0 &&
+		top_plan->total_cost > jit_above_cost)
+	{
+		result->jitFlags |= PGJIT_PERFORM;
+
+		/*
+		 * Decide how much effort should be put into generating better code.
+		 */
+		if (jit_optimize_above_cost >= 0 &&
+			top_plan->total_cost > jit_optimize_above_cost)
+			result->jitFlags |= PGJIT_OPT3;
+		if (jit_inline_above_cost >= 0 &&
+			top_plan->total_cost > jit_inline_above_cost)
+			result->jitFlags |= PGJIT_INLINE;
+
+		/*
+		 * Decide which operations should be JITed.
+		 */
+		if (jit_expressions)
+			result->jitFlags |= PGJIT_EXPR;
+
+		/* px not support deform */
+		if (jit_tuple_deforming && !pxopt)
+			result->jitFlags |= PGJIT_DEFORM;
+	}
+	return;
+}
+
+static bool
+check_disable_px_planner_walker(Node *node, void *context)
+{
+#define CHECK_RETURN_HELP_LOG(condition, msg)	\
+	if ((condition))							\
+	{											\
+		elog(DEBUG1, "PX Failed: " msg);		\
+		return true;							\
+	}
+
+#define CHECK_RETURN_HELP_LOG_ARG(condition, msg, intarg)	\
+	if ((condition))										\
+	{														\
+		elog(DEBUG1, "PX Failed: " msg, intarg);			\
+		return true;										\
+	}
+
+	ListCell   *lc,
+			   *lf;
+	Query	   *query;
+	bool		has_join,
+				has_same_column_cnt;
+	bool		has_not_support_node;
+
+	if (node == NULL)
+		return false;
+
+	if (px_enable_pre_optimizer_check)
+	{
+		if (IsA(node, Var))
+		{
+			Var		   *expr = (Var *) node;
+
+			CHECK_RETURN_HELP_LOG(0 == expr->varattno, "sql with whole row var was not supported in px");
+		}
+
+		if (IsA(node, FuncExpr))
+		{
+			FuncExpr   *expr = (FuncExpr *) node;
+
+			CHECK_RETURN_HELP_LOG(expr->funcvariadic, "sql with variadic function was not supported in px");
+		}
+
+		if (!IsA(node, Query))
+		{
+			/* Check for px ignore functions in node itself */
+			has_not_support_node = polar_px_ignore_function &&
+				px_function_oid_array &&
+				px_function_oid_array->count > 0 &&
+				check_functions_in_node(node,
+										contains_ignore_functions_checker, context);
+			CHECK_RETURN_HELP_LOG(has_not_support_node, "sql with px ignore functions was not supported in px");
+
+			has_not_support_node = contains_not_supported_func(node);
+			CHECK_RETURN_HELP_LOG_ARG(has_not_support_node, "sql with function %d was not supported in px",
+									  nodeTag(node));
+
+			has_not_support_node = !contains_returns_set_func(node) &&
+				IsA(node, NextValueExpr);
+			CHECK_RETURN_HELP_LOG_ARG(has_not_support_node, "sql with returns_set functions %d was not supported in px",
+									  nodeTag(node));
+
+			return expression_tree_walker(node, check_disable_px_planner_walker,
+										  context);
+		}
+	}
+	else
+	{
+		if (!IsA(node, Query))
+		{
+			/* Check for px ignore functions in node itself */
+			has_not_support_node = polar_px_ignore_function &&
+				px_function_oid_array &&
+				px_function_oid_array->count > 0 &&
+				check_functions_in_node(node,
+										contains_ignore_functions_checker, context);
+			CHECK_RETURN_HELP_LOG(has_not_support_node, "sql with px ignore functions was not supported in px");
+
+			return expression_tree_walker(node, check_disable_px_planner_walker,
+										  context);
+		}
+	}
+
+	/* Query node */
+	query = (Query *) node;
+	has_join = query->rtable && query->rtable->length != 1;
+	has_same_column_cnt =
+		(list_length(query->distinctClause) != list_length(query->targetList));
+
+	CHECK_RETURN_HELP_LOG(!px_enable_tableless_scan && !query->rtable, "sql without rtable can`t run on px node");
+
+	/* POLAR px: ordered sensitive */
+	if ((query->sortClause || !query->rtable) && found_insert_select)
+	{
+		if (px_enable_insert_order_sensitive && 1 != local_px_insert_dop_num)
+		{
+			elog(DEBUG1, "PX multi insert Failed: px_enable_insert_order_sensitive is on. One writer worker should be used");
+			local_px_insert_dop_num = 1;
+		}
+	}
+	/* POLAR end */
+
+	/* check insert select from tableless_scan */
+	if (found_insert_select && !query->rtable)
+	{
+		CHECK_RETURN_HELP_LOG(1 == local_px_insert_dop_num, "Insert worker is only one, select from tableless doesn't use PX");
+		CHECK_RETURN_HELP_LOG(!px_enable_insert_from_tableless, "polar_px_enable_insert_from_tableless is off");
+	}
+
+	if (px_enable_pre_optimizer_check)
+	{
+		CHECK_RETURN_HELP_LOG(query->hasDistinctOn && has_same_column_cnt, "sql with distionct on was not supported in px");
+
+		CHECK_RETURN_HELP_LOG(query->hasRecursive, "sql with recursive cte was not supported in px");
+
+		CHECK_RETURN_HELP_LOG(query->hasModifyingCTE, "sql with modifying cte cte was not supported in px");
+
+		CHECK_RETURN_HELP_LOG(query->hasForUpdate, "sql with for update was not supported in px");
+
+		CHECK_RETURN_HELP_LOG(query->hasRowSecurity, "sql with row security was not supported in px");
+
+		CHECK_RETURN_HELP_LOG(query->groupingSets, "sql with groupingsets was not allowed in px");
+	}
+
+	CHECK_RETURN_HELP_LOG(!px_enable_join && has_join, "sql with join was not allowed in px");
+
+	CHECK_RETURN_HELP_LOG(!px_enable_subquery && query->hasSubLinks, "sql with subquery was not allowed in px");
+
+	CHECK_RETURN_HELP_LOG(!px_enable_window_function && query->hasWindowFuncs, "sql with window function was not allowed in px");
+
+	CHECK_RETURN_HELP_LOG(!px_enable_cte && query->cteList, "sql with cte was not allowed in px");
+
+	foreach(lc, query->rtable)
+	{
+		RangeTblEntry *rte = lfirst_node(RangeTblEntry, lc);
+
+		CHECK_RETURN_HELP_LOG(!px_enable_partition && rte->relkind == RELKIND_PARTITIONED_TABLE, "sql with partition table was not allowed in px");
+
+		switch (rte->rtekind)
+		{
+			case RTE_RELATION:
+				if (rte->relkind == RELKIND_RELATION ||
+					rte->relkind == RELKIND_PARTITIONED_TABLE)
+				{
+					/* px workers option */
+					Oid			relid = rte->relid;
+					LOCKMODE	lockmode = AccessShareLock;
+					Relation	rel = table_open(relid, lockmode);
+					bool		has_multilevel_partitions;
+
+					/*----------
+					 * No use PXOPT:
+					 * 1. temp table
+					 * 2. table have any children
+					 * 3. system catalogs
+					 *----------
+					 */
+
+					if (rel->rd_islocaltemp ||
+						(has_subclass(relid) && rte->relkind == RELKIND_RELATION) ||
+						rel->rd_id < FirstNormalObjectId)
+					{
+						table_close(rel, lockmode);
+
+						CHECK_RETURN_HELP_LOG(true, "sql not match some conditions was not allowed in px");
+					}
+
+					/*
+					 * XXX: per-relation storage option `px_workers` is
+					 * disabled
+					 */
+#if 0
+
+					/*----------
+					 * For a relation (if partitioned, together with all of
+					 * its descendant relations):
+					 * 1. Reloption 'px_workers' set to negative
+					 * 2. GUC param 'polar_px_enable_check_workers' is enabled
+					 * while 'px_workers' is not set (or set to 0)
+					 *
+					 * If any condition above is met, then we should not use
+					 * PX.
+					 *----------
+					 */
+					if ((min_px_workers = polar_relation_get_parallel_query_nodes(rel, lockmode)) < 0 ||
+						(px_enable_check_workers && min_px_workers == 0))
+					{
+						heap_close(rel, lockmode);
+
+						CHECK_RETURN_HELP_LOG(true, "px_workers was not allowed in px");
+					}
+#endif
+
+					has_multilevel_partitions = contains_multilevel_partitions(rel, lockmode);
+					if (has_multilevel_partitions && !px_optimizer_multilevel_partitioning)
+					{
+						table_close(rel, lockmode);
+						CHECK_RETURN_HELP_LOG(true, "sql with multilevel partition was not allowed in px");
+					}
+
+					table_close(rel, lockmode);
+				}
+				else if (rte->relkind != RELKIND_VIEW &&
+						 rte->relkind != RELKIND_MATVIEW)
+				{
+					CHECK_RETURN_HELP_LOG(true, "only support relkind_relation and view/matview under RTE_RELATION");
+				}
+				break;
+			case RTE_SUBQUERY:
+				CHECK_RETURN_HELP_LOG(!px_enable_subquery, "sql with subquery was not allowed in px");
+
+				if (check_disable_px_planner_walker((Node *) rte->subquery, context))
+					return true;
+				break;
+			case RTE_FUNCTION:
+				foreach(lf, rte->functions)
+				{
+					RangeTblFunction *rtf = lfirst_node(RangeTblFunction, lf);
+
+					if (rtf &&
+						rtf->funcexpr &&
+						IsA(rtf->funcexpr, FuncExpr) &&
+						((FuncExpr *) (rtf->funcexpr))->isGlobalFunc)
+						px_use_global_function = true;
+					else
+						CHECK_RETURN_HELP_LOG(true, "sql with function was not allowed in px");
+				}
+				break;
+			case RTE_JOIN:
+			case RTE_CTE:
+				break;
+			case RTE_TABLEFUNC:
+			case RTE_VALUES:
+			case RTE_TABLEFUNCTION:
+			case RTE_VOID:
+			case RTE_NAMEDTUPLESTORE:
+			default:
+				CHECK_RETURN_HELP_LOG_ARG(true, "the RTEKIND is not supported %d",
+										  rte->rtekind);
+		}
+	}
+
+	return query_tree_walker(query, check_disable_px_planner_walker, context, 0);
+}
+
+static bool
+should_px_planner(Query *current_parse)
+{
+	bool		is_check_disable_px_planner_walker;
+
+	/*
+	 * do not step into PXOPT, when sql invoked on px. px scanner just scan
+	 * part of all data pages, so new sql on px need scan all data pages.
+	 */
+	if (px_role == PX_ROLE_PX)
+	{
+		elog(DEBUG1, "PX Failed: planner can`t run on px node");
+		return false;
+	}
+
+	if (NULL == current_parse)
+	{
+		elog(ERROR, "current_parse should not be null");
+	}
+
+	/* Polar PX Only enable CMD_INSERT */
+	if (CMD_INSERT == current_parse->commandType)
+	{
+		/* If px_enable_insert_select is off, no use PXOPT */
+		if (!px_enable_insert_select)
+		{
+			elog(DEBUG1, "PX Failed: param px_enable_insert_select is off");
+			return false;
+		}
+
+		/* Insert into .. VALUES(only one node) Case */
+		if (1 == current_parse->rtable->length)
+		{
+			if (1 == px_insert_dop_num)
+			{
+				elog(DEBUG1, "PX Failed: Insert worker is only one, select from tableless doesn't use PX");
+				return false;
+			}
+			if (!px_enable_insert_from_tableless)
+			{
+				elog(DEBUG1, "polar_px_enable_insert_from_tableless is off");
+				return false;
+			}
+		}
+	}
+	else if (CMD_UPDATE == current_parse->commandType)
+	{
+		if (!px_enable_update)
+		{
+			elog(DEBUG1, "PX Failed: param px_enable_update is off");
+			return false;
+		}
+	}
+	else if (CMD_DELETE == current_parse->commandType)
+	{
+		if (!px_enable_delete)
+		{
+			elog(DEBUG1, "PX Failed: param px_enable_delete is off");
+			return false;
+		}
+		if (current_parse->hasModifyingCTE)
+		{
+			elog(DEBUG1, "PX Failed: parallel delete can't support ModifyingCTE");
+			return false;
+		}
+	}
+	else
+	{
+		/* Only select and insert can run in px */
+		if (CMD_SELECT != current_parse->commandType)
+		{
+			elog(DEBUG1, "PX Failed: px can't support and CMD_UTILITY");
+			return false;
+		}
+	}
+
+	/* If polar_enable_px set to off, no use PXOPT */
+	if (!polar_is_stmt_enable_px())
+	{
+		elog(DEBUG1, "PX Failed: param polar_enable_px is off");
+		return false;
+	}
+
+	/* Trigger is not support */
+	if (pg_trigger_depth(NULL) != 0)
+	{
+		elog(DEBUG1, "PX Failed: sql in trigger can`t run on px node");
+		return false;
+	}
+
+	/*----------
+	 * If current context is in transaction, no use PXOPT.
+	 * 1. PX can not see the changed data from ddl on QC.
+	 * 2. Dead lock could happen when drop a table and then select it.
+	 *----------
+	 */
+	if (!px_enable_transaction && IsTransactionBlock())
+	{
+		elog(DEBUG1, "PX Failed: sql in transaction can`t run on px node");
+		return false;
+	}
+
+	/*
+	 * Polar px TODO: for sequence function, currval and nextval, replica can
+	 * not execute nextval. But "select * from xxx where currval(xxx)" will
+	 * use parallel execution, it will make some errors.
+	 */
+	if (CMD_INSERT == current_parse->commandType)
+		found_insert_select = true;
+
+	is_check_disable_px_planner_walker =
+		check_disable_px_planner_walker((Node *) current_parse, NULL);
+
+	found_insert_select = false;
+
+	if (!is_check_disable_px_planner_walker)
+	{
+		return true;
+	}
+
+	return false;
 }

@@ -1,0 +1,61 @@
+# src/test/regress/polar-px-dev-schedule
+# This should probably be in an order similar to parallel_schedule.
+
+# ----------
+# POLAR
+# Some cases can not pass in POLARDB, ignore them.
+# NOTICE: polar_ignore must add at the beginning of the schedule file
+# ----------
+polar_dir: polar-px-dev
+
+test: px_init
+test: gporca
+test: assertop
+test: result_hash_filter
+
+# test: polar-px-dev/plpgsql
+# test: polar-px-dev/olap_setup
+# test: polar-px-dev/qp_functions_in_contexts_setup
+# test: polar-px-dev/bfv_olap
+# test: polar-px-dev/bfv_aggregate
+# test: polar-px-dev/aggregate_with_groupingsets
+# test: polar-px-dev/explain_analyze
+# test: polar-px-dev/polar_px_btbuild
+# test: polar-px-dev/with_clause
+# test: polar-px-dev/qp_with_clause
+# test: polar-px-dev/qp_with_functional_inlining
+# test: polar-px-dev/qp_with_functional_noinlining
+# test: polar-px-dev/qp_functions_in_with
+# test: polar-px-dev/shared_scan
+# test: polar-px-dev/polar_px_btbuild_bulkwrite
+# test: polar-px-dev/bfv_partition_plans
+# test: polar-px-dev/partition_indexing
+# test: polar-px-dev/partition_subquery
+# test: polar-px-dev/bfv_index
+# test: polar-px-dev/polar_px_btbuild_concurrently
+# test: polar-px-dev/left_semi_join
+# test: polar-px-dev/polar_global_function
+# test: polar-px-dev/tableless_scan
+# test: polar-px-dev/dynamic_partition_pruning_range
+# test: polar-px-dev/dynamic_partition_pruning_hash
+# test: polar-px-dev/result_hash_filter
+# test: polar-px-dev/const_expr_in_nested_loop
+# test: polar-px-dev/crash_in_nested_loop
+# test: polar-px-dev/assertop
+# test: polar-px-dev/px_parallel_dml
+# test: polar-px-dev/polar_partition
+# # test: polar-px-dev/polar_partition_huge
+# test: polar-px-dev/left_index_nestloop_join
+# test: polar-px-dev/polar_partition_hash
+# test: polar-px-dev/polar_partition_alter_px_workers
+# test: polar-px-dev/squelch_deadlock
+# test: polar-px-dev/polar_partitionwise_join
+# test: polar-px-dev/px_parallel_update
+# test: polar-px-dev/polar_px_adaptive_scan
+# test: polar-px-dev/px_bugfix
+# test: polar-px-dev/polar_multilevel_partition
+# test: polar-px-dev/polar_multilevel_hash_partition
+# test: polar-px-dev/polar_partition1_fromorca
+# test: polar-px-dev/px_spi_select
+# test: polar-px-dev/polar_px_create_table_as
+# test: polar-px-dev/polar_px_analyze_detail
