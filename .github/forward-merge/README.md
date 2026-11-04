@@ -67,6 +67,12 @@ inside the prepare worktree), or skip the work entirely with either:
 
 Footers must be in their own paragraph (a blank line before them).
 
+A footer covers only its own commit. Landed changes are forwarded one at a
+time, grouped into runs of the same intent, and a pull request that mixes
+commits with and without the footer is forwarded commit by commit, followed
+by a null-merge of its merge commit. The label covers the whole pull
+request.
+
 ## Secrets and variables
 
 | Name | Kind | Required | Description |
