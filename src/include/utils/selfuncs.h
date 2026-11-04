@@ -241,7 +241,8 @@ extern Selectivity scalararraysel_containment(PlannerInfo *root,
 											  int varRelid);
 
 /* POLAR px */
-double convert_timevalue_to_scalar(Datum value, Oid typid, bool *failure);
+double		convert_timevalue_to_scalar(Datum value, Oid typid, bool *failure);
+
 /* POLAR end */
 
 #endif							/* SELFUNCS_H */

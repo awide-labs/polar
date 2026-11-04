@@ -65,6 +65,7 @@ extern PGDLLIMPORT MemoryContext CurTransactionContext;
 extern PGDLLIMPORT MemoryContext px_DispatcherContext;
 extern PGDLLIMPORT MemoryContext px_InterconnectContext;
 extern PGDLLIMPORT MemoryContext px_OptimizerMemoryContext;
+
 /* POLAR end */
 
 /* This is a transient link to the active portal's memory context: */
@@ -105,6 +106,7 @@ extern void MemoryContextAllowInCriticalSection(MemoryContext context,
 /* POLAR px: statistics */
 extern void MemoryContextDeclareAccountingRoot(MemoryContext context);
 extern Size MemoryContextGetPeakSpace(MemoryContext context);
+
 /* POLAR end */
 
 #ifdef MEMORY_CONTEXT_CHECKING

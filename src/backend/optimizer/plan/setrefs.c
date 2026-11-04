@@ -68,7 +68,8 @@ typedef struct
 {
 	PlannerInfo *root;
 	plan_tree_base_prefix base;
-} polar_extract_plan_dependencies_context;
+}			polar_extract_plan_dependencies_context;
+
 /* POLAR end */
 
 typedef struct
@@ -3445,7 +3446,7 @@ extract_query_dependencies_walker(Node *node, PlannerInfo *context)
 
 /* POLAR px */
 static bool
-polar_extract_plan_dependencies_walker(Node *node, polar_extract_plan_dependencies_context *context)
+polar_extract_plan_dependencies_walker(Node *node, polar_extract_plan_dependencies_context * context)
 {
 	if (node == NULL)
 		return false;
@@ -3483,4 +3484,5 @@ polar_extract_plan_dependencies(PlannerInfo *root, Plan *plan)
 
 	(void) polar_extract_plan_dependencies_walker((Node *) plan, &context);
 }
+
 /* POLAR end */

@@ -384,8 +384,8 @@ set_authn_id(Port *port, const char *id)
 	if (Log_connections)
 	{
 		/*
-		 * TODO: pg15_px: remove the 2nd branch when QC auth mechanics will
-		 * be based on hba rules
+		 * TODO: pg15_px: remove the 2nd branch when QC auth mechanics will be
+		 * based on hba rules
 		 */
 		if (port->hba)
 			ereport(LOG,

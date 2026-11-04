@@ -179,11 +179,11 @@ ExecInitMaterial(Material *node, EState *estate, int eflags)
 		eflags |= EXEC_FLAG_REWIND;
 
 	/*
-	 * If the Material node was inserted to protect the child node from rescanning, don't
-	 * eager free.
+	 * If the Material node was inserted to protect the child node from
+	 * rescanning, don't eager free.
 	 *
-	 * XXX: The planner doesn't always set the flag for Material nodes that are put
-	 * directly on top of Motion nodes, so check for that, too. 
+	 * XXX: The planner doesn't always set the flag for Material nodes that
+	 * are put directly on top of Motion nodes, so check for that, too.
 	 */
 	if (node->px_shield_child_from_rescans ||
 		IsA(outerPlan((Plan *) node), Motion))
@@ -222,11 +222,12 @@ ExecInitMaterial(Material *node, EState *estate, int eflags)
 	 * ExecQual or ExecProject.
 	 */
 
-	// TODO: pg15_px
+	/* TODO: pg15_px */
 #if 0
+
 	/*
-	 * POLAR px: if eflag contains EXEC_FLAG_REWIND or EXEC_FLAG_BACKWARD
-	 *           or EXEC_FLAG_MARK, then this node is not eager free safe.
+	 * POLAR px: if eflag contains EXEC_FLAG_REWIND or EXEC_FLAG_BACKWARD or
+	 * EXEC_FLAG_MARK, then this node is not eager free safe.
 	 */
 	matstate->delayEagerFree = eflags & (EXEC_FLAG_REWIND |
 										 EXEC_FLAG_BACKWARD |
@@ -430,4 +431,5 @@ ExecSquelchMaterial(MaterialState *node)
 		ExecSquelchNode(outerPlanState(node));
 	}
 }
+
 /* POLAR end */

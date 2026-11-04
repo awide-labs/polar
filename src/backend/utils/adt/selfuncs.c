@@ -5729,14 +5729,14 @@ get_variable_numdistinct(VariableStatData *vardata, bool *isdefault)
 					stadistinct = 1.0;	/* only 1 value */
 					break;
 
-				/* POLAR px */
+					/* POLAR px */
 				case PxWorkerIdAttributeNumber:
 					stadistinct = getPxWorkerCount();
 					break;
 				case RootSelfItemPointerAttributeNumber:
 					stadistinct = 0.0;	/* means "unknown" */
 					break;
-				/* POLAR end */
+					/* POLAR end */
 
 				default:
 					stadistinct = 0.0;	/* means "unknown" */

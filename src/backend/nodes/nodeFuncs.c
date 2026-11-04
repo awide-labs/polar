@@ -251,11 +251,11 @@ exprType(const Node *expr)
 			type = exprType((Node *) ((const PlaceHolderVar *) expr)->phexpr);
 			break;
 
-		/* POLAR px */
+			/* POLAR px */
 		case T_DMLActionExpr:
 			type = INT4OID;
 			break;
-		/* POLAR end */
+			/* POLAR end */
 
 		default:
 			elog(ERROR, "unrecognized node type: %d", (int) nodeTag(expr));
@@ -972,11 +972,11 @@ exprCollation(const Node *expr)
 			coll = exprCollation((Node *) ((const PlaceHolderVar *) expr)->phexpr);
 			break;
 
-		/* POLAR px */
+			/* POLAR px */
 		case T_DMLActionExpr:
 			coll = InvalidOid;
 			break;
-		/* POLAR end */
+			/* POLAR end */
 
 		default:
 			elog(ERROR, "unrecognized node type: %d", (int) nodeTag(expr));
@@ -2383,11 +2383,11 @@ expression_tree_walker(Node *node,
 			}
 			break;
 
-		/* POLAR px */
+			/* POLAR px */
 		case T_DMLActionExpr:
 		case T_PartitionSelector:
 			break;
-		/* POLAR end */
+			/* POLAR end */
 
 		default:
 			elog(ERROR, "unrecognized node type: %d",
@@ -2585,7 +2585,7 @@ range_table_entry_walker(RangeTblEntry *rte,
 			/* nothing to do */
 			break;
 
-		/* POLAR px */
+			/* POLAR px */
 		case RTE_TABLEFUNCTION:
 			if (walker(rte->subquery, context))
 				return true;
@@ -2594,7 +2594,7 @@ range_table_entry_walker(RangeTblEntry *rte,
 			break;
 		case RTE_VOID:
 			break;
-		/* POLAR end */
+			/* POLAR end */
 	}
 
 	if (walker(rte->securityQuals, context))
@@ -3374,17 +3374,17 @@ expression_tree_mutator(Node *node,
 			}
 			break;
 
-		/* POLAR px */
+			/* POLAR px */
 		case T_DMLActionExpr:
 			{
 				DMLActionExpr *action_expr = (DMLActionExpr *) node;
 				DMLActionExpr *new_action_expr;
 
 				FLATCOPY(new_action_expr, action_expr, DMLActionExpr);
-				return (Node *)new_action_expr;
+				return (Node *) new_action_expr;
 			}
 			break;
-		/* POLAR end */
+			/* POLAR end */
 
 		default:
 			elog(ERROR, "unrecognized node type: %d",
@@ -3561,14 +3561,14 @@ range_table_mutator(List *rtable,
 				/* nothing to do */
 				break;
 
-			/* POLAR px */
+				/* POLAR px */
 			case RTE_TABLEFUNCTION:
 				MUTATE(newrte->functions, rte->functions, List *);
 				MUTATE(newrte->subquery, rte->subquery, Query *);
 				break;
 			case RTE_VOID:
 				break;
-			/* POLAR end */
+				/* POLAR end */
 		}
 		MUTATE(newrte->securityQuals, rte->securityQuals, List *);
 		newrt = lappend(newrt, newrte);

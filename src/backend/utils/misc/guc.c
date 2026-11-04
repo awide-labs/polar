@@ -8536,7 +8536,7 @@ build_guc_variables(void)
 	size_guc_variables = size_vars;
 
 	/* POLAR px */
-	px_assign_sync_flag(guc_variables, num_guc_variables, true /* predefine */);
+	px_assign_sync_flag(guc_variables, num_guc_variables, true /* predefine */ );
 	/* POLAR end */
 
 	/* POLAR: parameter manage check flag */
@@ -17524,4 +17524,5 @@ px_get_num_guc_variables(void)
 {
 	return num_guc_variables;
 }
+
 /* POLAR end */

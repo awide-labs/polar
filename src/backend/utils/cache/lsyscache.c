@@ -2123,6 +2123,7 @@ px_trigger_enabled(char tgenabled)
 	{
 		case TRIGGER_FIRES_ON_ORIGIN:
 			/* fallthrough */
+
 			/*
 			 * FIXME: we should probably return false when
 			 * SessionReplicationRole isn't SESSION_REPLICATION_ROLE_ORIGIN,
@@ -2157,25 +2158,27 @@ px_has_update_triggers(Oid relid)
 
 	if (relation->rd_rel->relhastriggers)
 	{
-		bool	found = false;
+		bool		found = false;
 
 		if (relation->trigdesc == NULL)
 			RelationBuildTriggers(relation);
 
 		if (relation->trigdesc)
 		{
-			int i = 0;
+			int			i = 0;
+
 			for (i = 0; i < relation->trigdesc->numtriggers && !found; i++)
 			{
-				Trigger *trigger = &relation->trigdesc->triggers[i];
+				Trigger    *trigger = &relation->trigdesc->triggers[i];
+
 				found = px_trigger_enabled(trigger->tgenabled) &&
 					(trigger->tgtype & TRIGGER_TYPE_UPDATE);
 			}
 		}
 
 		/*
-		 * GPDB_96_MERGE_FIXME: Check child rels for partitioned table.
-		 * Why is this not allowed?
+		 * GPDB_96_MERGE_FIXME: Check child rels for partitioned table. Why is
+		 * this not allowed?
 		 */
 		if (found)
 			result = true;
@@ -2185,6 +2188,7 @@ px_has_update_triggers(Oid relid)
 
 	return result;
 }
+
 /* POLAR end */
 
 

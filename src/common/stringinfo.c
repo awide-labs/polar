@@ -355,4 +355,5 @@ initStringInfoOfSize(StringInfo str, int size)
 	str->data[0] = '\0';
 	str->cursor = 0;
 }
+
 /* POLAR end */

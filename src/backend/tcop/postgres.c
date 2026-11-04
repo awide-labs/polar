@@ -224,6 +224,7 @@ sql_mapping_hook_type sql_mapping_hook = NULL;
 /* POLAR px */
 /* use this flag to check interrupt when px initialize, like DoingCommandRead */
 static bool px_check_interrupt = false;
+
 /* POLAR end */
 
 /* ----------------------------------------------------------------
@@ -266,10 +267,11 @@ static void polar_process_client_readwrite_cancel_interrupt(void);
 
 /* POLAR px */
 static void exec_px_query(const char *query_string,
-			   const char * serializedQuerytree, int serializedQuerytreelen,
-			   const char * serializedPlantree, int serializedPlantreelen,
-			   const char * serializedParams, int serializedParamslen,
-			   const char * serializedQueryDispatchDesc, int serializedQueryDispatchDesclen);
+						  const char *serializedQuerytree, int serializedQuerytreelen,
+						  const char *serializedPlantree, int serializedPlantreelen,
+						  const char *serializedParams, int serializedParamslen,
+						  const char *serializedQueryDispatchDesc, int serializedQueryDispatchDesclen);
+
 /* POLAR end */
 
 /* ----------------------------------------------------------------
@@ -454,13 +456,13 @@ SocketBackend(StringInfo inBuf)
 			doing_extended_query_message = false;
 			break;
 
-		/* POLAR px */
-		/* dispatched statement from QC */
+			/* POLAR px */
+			/* dispatched statement from QC */
 		case 'M':
 			maxmsglen = PQ_LARGE_MESSAGE_LIMIT;
 			doing_extended_query_message = false;
 			break;
-		/* POLAR end */
+			/* POLAR end */
 
 		case 'F':				/* fastpath function call */
 			maxmsglen = PQ_LARGE_MESSAGE_LIMIT;
@@ -4528,6 +4530,7 @@ PostgresMain(const char *dbname, const char *username)
 
 	/* POLAR px */
 	unsigned int px_workers_num = 0;
+
 	/* POLAR end */
 
 	/*
@@ -4856,11 +4859,15 @@ PostgresMain(const char *dbname, const char *username)
 		px_check_interrupt = true;
 		px_setup();
 		on_proc_exit(px_cleanup, 0);
-		/* after px_setup, a new socket is ready to use between QC and PX, so make pxWorkerCounter++ */
+
+		/*
+		 * after px_setup, a new socket is ready to use between QC and PX, so
+		 * make pxWorkerCounter++
+		 */
 		if (px_max_workers_number > 0 &&
 			(px_workers_num = pg_atomic_add_fetch_u32(&ProcGlobal->pxWorkerCounter, 1)) >= px_max_workers_number)
-				elog(ERROR, "over px max workers, already %u workers, max %d workers",
-							px_workers_num, px_max_workers_number);
+			elog(ERROR, "over px max workers, already %u workers, max %d workers",
+				 px_workers_num, px_max_workers_number);
 		sendPXDetails();
 		px_check_interrupt = false;
 	}
@@ -5139,16 +5146,16 @@ PostgresMain(const char *dbname, const char *username)
 				}
 				break;
 
-			/* POLAR px */
-			/* dispatched statement from QC */
+				/* POLAR px */
+				/* dispatched statement from QC */
 			case 'M':
 				{
 					/*
 					 * This is exactly like 'Q' above except we peel off and
 					 * set the snapshot information right away.
 					 *
-					 * Since PortalDefineQuery() does not take NULL query string,
-					 * we initialize it with a constant empty string.
+					 * Since PortalDefineQuery() does not take NULL query
+					 * string, we initialize it with a constant empty string.
 					 */
 #define INT32_DECODE(value) \
 	value = pq_getmsgint(&input_message, 4);
@@ -5167,17 +5174,17 @@ PostgresMain(const char *dbname, const char *username)
 					const char *serializedQueryDispatchDesc = NULL;
 					const char *serializedSnapshot = NULL;
 
-					int recv_px_serialize_version;
+					int			recv_px_serialize_version;
 					TimestampTz statementStart;
-					int suid;
-					Oid ouid;
-					Oid cuid;
-					int queryStringlen = 0;
-					int serializedQuerytreelen = 0;
-					int serializedPlantreelen = 0;
-					int serializedParamslen = 0;
-					int serializedQueryDispatchDesclen = 0;
-					int serializedSnapshotlen = 0;
+					int			suid;
+					Oid			ouid;
+					Oid			cuid;
+					int			queryStringlen = 0;
+					int			serializedQuerytreelen = 0;
+					int			serializedPlantreelen = 0;
+					int			serializedParamslen = 0;
+					int			serializedQueryDispatchDesclen = 0;
+					int			serializedSnapshotlen = 0;
 
 					if (px_role != PX_ROLE_PX)
 						ereport(ERROR,
@@ -5185,7 +5192,7 @@ PostgresMain(const char *dbname, const char *username)
 								 errmsg("PX protocol messages are only supported in QC - PX connections")));
 
 					/* Set statement_timestamp() */
- 					SetCurrentStatementStartTimestamp();
+					SetCurrentStatementStartTimestamp();
 
 					elog(DEBUG1, "Message type %c received by from libpq, len = %d", firstchar, input_message.len);
 
@@ -5209,44 +5216,46 @@ PostgresMain(const char *dbname, const char *username)
 					STR_DECODE(serializedSnapshotlen, serializedSnapshot);
 
 					/*
-					 * GUC "is_supersuer" only provide value for SHOW to display,
-					 * so it's useless on segments. SessionUserIsSuperuser is
-					 * also designed to determine the value of is_superuser, so
-					 * setting it to false on segments is fine.
+					 * GUC "is_supersuer" only provide value for SHOW to
+					 * display, so it's useless on segments.
+					 * SessionUserIsSuperuser is also designed to determine
+					 * the value of is_superuser, so setting it to false on
+					 * segments is fine.
 					 */
 					if (suid > 0)
-						SetSessionAuthorization(suid, false); /* Set the session UserId */
+						SetSessionAuthorization(suid, false);	/* Set the session
+																 * UserId */
 
 					if (ouid > 0 && ouid != GetSessionUserId())
-						SetCurrentRoleId(ouid, false); /* Set the outer UserId */
+						SetCurrentRoleId(ouid, false);	/* Set the outer UserId */
 
 					if (cuid > 0)
-						SetUserIdAndContext(cuid, false); /* Set current userid */
+						SetUserIdAndContext(cuid, false);	/* Set current userid */
 
 					if (serializedSnapshotlen != 0)
 						pxsn_set_serialized_snapshot(serializedSnapshot, serializedSnapshotlen);
 
-					elog((px_enable_print ? LOG : DEBUG5), 
-						"px dispatched stmt from QC: %s. sendTime:%ld,recvTime:%ld",
-						queryString, statementStart, 
-						GetCurrentStatementStartTimestamp());
+					elog((px_enable_print ? LOG : DEBUG5),
+						 "px dispatched stmt from QC: %s. sendTime:%ld,recvTime:%ld",
+						 queryString, statementStart,
+						 GetCurrentStatementStartTimestamp());
 
-					if (0 == serializedQuerytreelen && 
+					if (0 == serializedQuerytreelen &&
 						0 == serializedPlantreelen)
 						exec_simple_query(queryString);
 					else
 						exec_px_query(queryString,
-									   serializedQuerytree, serializedQuerytreelen,
-									   serializedPlantree, serializedPlantreelen,
-									   serializedParams, serializedParamslen,
-									   serializedQueryDispatchDesc, serializedQueryDispatchDesclen);
+									  serializedQuerytree, serializedQuerytreelen,
+									  serializedPlantree, serializedPlantreelen,
+									  serializedParams, serializedParamslen,
+									  serializedQueryDispatchDesc, serializedQueryDispatchDesclen);
 
 					SetUserIdAndContext(GetOuterUserId(), false);
 
 					send_ready_for_query = true;
 				}
 				break;
-			/* POLAR end */
+				/* POLAR end */
 
 			case 'P':			/* parse */
 				{

@@ -208,14 +208,14 @@ extern bool get_index_isclustered(Oid index_oid);
 /* POLAR px */
 typedef enum CmpType
 {
-	CmptEq,		/* equality */
-	CmptNEq,	/* inequality */
-	CmptLT, 	/* less than */
-	CmptLEq,	/* less or equal to */
-	CmptGT,		/* greater than */
-	CmptGEq, 	/* greater or equal to */
-	CmptOther	/* other operator */
-} CmpType;
+	CmptEq,						/* equality */
+	CmptNEq,					/* inequality */
+	CmptLT,						/* less than */
+	CmptLEq,					/* less or equal to */
+	CmptGT,						/* greater than */
+	CmptGEq,					/* greater or equal to */
+	CmptOther					/* other operator */
+}			CmpType;
 
 extern char px_func_data_access(Oid funcid);
 extern char px_func_exec_location(Oid funcid);
@@ -256,9 +256,10 @@ extern void px_pfree_ptr_array(char **ptrarray, int nelements);
 extern bool px_relation_is_partitioned(Oid oid);
 extern bool px_index_is_partitioned(Oid relid);
 
-extern Oid polar_get_compatible_hash_opfamily(Oid opno);
-extern Oid polar_get_compatible_legacy_hash_opfamily(Oid opno);
-extern Oid polar_get_compatible_legacy_hash_opfamily(Oid opno);
+extern Oid	polar_get_compatible_hash_opfamily(Oid opno);
+extern Oid	polar_get_compatible_legacy_hash_opfamily(Oid opno);
+extern Oid	polar_get_compatible_legacy_hash_opfamily(Oid opno);
+
 /* POLAR end */
 
 #define type_is_array(typid)  (get_element_type(typid) != InvalidOid)

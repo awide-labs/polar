@@ -92,7 +92,7 @@ typedef struct ApplyShareInputContextPerShare
 {
 	int			producer_slice_id;
 	Bitmapset  *participant_slices;
-} ApplyShareInputContextPerShare;
+}			ApplyShareInputContextPerShare;
 
 typedef struct ApplyShareInputContext
 {
@@ -100,8 +100,8 @@ typedef struct ApplyShareInputContext
 	List	   *curr_rtable;
 
 	/*
-	 * Populated in dag_to_tree() (or collect_shareinput_producers() for ORCA),
-	 * used in replace_shareinput_targetlists()
+	 * Populated in dag_to_tree() (or collect_shareinput_producers() for
+	 * ORCA), used in replace_shareinput_targetlists()
 	 */
 	Plan	  **shared_plans;
 	int			shared_input_count;
@@ -110,17 +110,19 @@ typedef struct ApplyShareInputContext
 	 * State for replace_shareinput_targetlists()
 	 */
 	int		   *share_refcounts;
-	int			share_refcounts_sz;		/* allocated sized of 'share_refcounts' */
+	int			share_refcounts_sz; /* allocated sized of 'share_refcounts' */
 
 	/*
 	 * State for apply_sharinput_xslice() walkers.
 	 */
 	PlanSlice  *slices;			/* root->glob->slices */
 	List	   *motStack;		/* stack of motionIds leading to current node */
-	ApplyShareInputContextPerShare *shared_inputs; /* one for each share */
-	Bitmapset  *qdShares;		/* share_ids that are referenced from QD slices */
+	ApplyShareInputContextPerShare *shared_inputs;	/* one for each share */
+	Bitmapset  *qdShares;		/* share_ids that are referenced from QD
+								 * slices */
 
-} ApplyShareInputContext;
+}			ApplyShareInputContext;
+
 /* POLAR end */
 
 /*----------
@@ -177,7 +179,7 @@ typedef struct PlannerGlobal
 	PartitionDirectory partition_directory; /* partition descriptors */
 
 	/* POLAR px */
-	int		   *subplan_sliceIds; /* Slice IDs for initplans */
+	int		   *subplan_sliceIds;	/* Slice IDs for initplans */
 	int			nParamExec;		/* number of PARAM_EXEC Params used */
 	ApplyShareInputContext share;	/* workspace for GPDB plan sharing */
 
@@ -435,7 +437,8 @@ struct PlannerInfo
 	bool		partColsUpdated;
 
 	/* POLAR px */
-	List       *list_cteplaninfo; /* list of CtePlannerInfo, one for each CTE */
+	List	   *list_cteplaninfo;	/* list of CtePlannerInfo, one for each
+									 * CTE */
 	int			numMotions;
 
 	PlannerConfig *config;		/* Planner configuration */

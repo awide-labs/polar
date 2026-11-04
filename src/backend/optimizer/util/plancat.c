@@ -2600,12 +2600,12 @@ set_baserel_partition_constraint(Relation relation, RelOptInfo *rel)
  * the attribute widths for estimation purposes.
  */
 void
-px_estimate_rel_size(RelOptInfo   *relOptInfo,
-					 Relation      rel,
-					 int32        *attr_widths,
-					 BlockNumber  *pages,
-					 double       *tuples,
-					 double       *allvisfrac)
+px_estimate_rel_size(RelOptInfo *relOptInfo,
+					 Relation rel,
+					 int32 *attr_widths,
+					 BlockNumber *pages,
+					 double *tuples,
+					 double *allvisfrac)
 {
 	estimate_rel_size(rel, attr_widths, pages, tuples, allvisfrac);
 	return;
@@ -2653,7 +2653,7 @@ px_estimate_partitioned_numtuples(Relation rel)
 			if (px_enable_relsize_collection)
 			{
 				RelOptInfo *dummy_reloptinfo;
-				BlockNumber	numpages;
+				BlockNumber numpages;
 				double		allvisfrac;
 
 				dummy_reloptinfo = makeNode(RelOptInfo);
@@ -2682,4 +2682,5 @@ px_estimate_partitioned_numtuples(Relation rel)
 	}
 	return totaltuples;
 }
+
 /* POLAR end */

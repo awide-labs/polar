@@ -7201,11 +7201,11 @@ is_projection_capable_path(Path *path)
 		case T_MergeAppend:
 		case T_RecursiveUnion:
 
-		/* POLAR px */
+			/* POLAR px */
 		case T_Motion:
 		case T_ShareInputScan:
 		case T_PartitionSelector:
-		/* POLAR end */
+			/* POLAR end */
 
 			return false;
 		case T_CustomScan:
@@ -7258,12 +7258,12 @@ is_projection_capable_plan(Plan *plan)
 		case T_MergeAppend:
 		case T_RecursiveUnion:
 
-		/* POLAR px */
+			/* POLAR px */
 		case T_Motion:
 		case T_ShareInputScan:
 		case T_Sequence:
 		case T_PartitionSelector:
-		/* POLAR end */
+			/* POLAR end */
 
 			return false;
 		case T_CustomScan:

@@ -4068,4 +4068,5 @@ polar_isJoinExprNull(List *joinExpr, ExprContext *econtext)
 
 	return joinkeys_null;
 }
+
 /* POLAR end */

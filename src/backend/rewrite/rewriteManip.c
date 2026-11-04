@@ -700,20 +700,18 @@ typedef struct
 	int			min_sublevels_up;
 
 	/* POLAR px */
+
 	/*
-	 * MPP-19436: when a query mixes window function with group by or aggregates,
-	 * then a transformation will turn the original structure Q into an outer
-	 * query Q' and an inner query Q''
-	 * Q ->  Q'
-	 *       |
-	 *       |->Q''
-	 * All the structures will be copied from Q to Q'' except ctelists.
-	 * This causes Q'', and its inner structures, to have dangling cte references, since
-	 * ctelists are kept in Q'. In such a case, we need to ignore min_sublevels_up and
-	 * increment by delta_sublevels_up.
+	 * MPP-19436: when a query mixes window function with group by or
+	 * aggregates, then a transformation will turn the original structure Q
+	 * into an outer query Q' and an inner query Q'' Q ->  Q' | |->Q'' All the
+	 * structures will be copied from Q to Q'' except ctelists. This causes
+	 * Q'', and its inner structures, to have dangling cte references, since
+	 * ctelists are kept in Q'. In such a case, we need to ignore
+	 * min_sublevels_up and increment by delta_sublevels_up.
 	 *
 	 */
-	bool		        ignore_min_sublevels_up;
+	bool		ignore_min_sublevels_up;
 	/* POLAR end */
 } IncrementVarSublevelsUp_context;
 
@@ -772,6 +770,7 @@ IncrementVarSublevelsUp_walker(Node *node,
 				rte->ctelevelsup += context->delta_sublevels_up;
 
 			/* POLAR px */
+
 			/*
 			 * Fix for MPP-19436: in transformGroupedWindows, min_sublevels_up
 			 * is ignored. For RTE refer to the original query ctelist should
@@ -827,7 +826,7 @@ IncrementVarSublevelsUp(Node *node, int delta_sublevels_up,
 /* POLAR px */
 void
 polar_IncrementVarSublevelsUpInTransformGroupedWindows(Node *node,
-		int delta_sublevels_up, int min_sublevels_up)
+													   int delta_sublevels_up, int min_sublevels_up)
 {
 	IncrementVarSublevelsUp_context context;
 
@@ -844,6 +843,7 @@ polar_IncrementVarSublevelsUpInTransformGroupedWindows(Node *node,
 									(void *) &context,
 									QTW_EXAMINE_RTES_BEFORE);
 }
+
 /* POLAR end */
 
 /*

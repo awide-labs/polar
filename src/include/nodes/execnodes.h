@@ -715,44 +715,45 @@ typedef struct EState
 
 
 	/* Data structure for node sharing */
-	List      *es_sharenode;
+	List	   *es_sharenode;
 
-	int         active_recv_id;
-	void       *motionlayer_context;  /* Motion Layer state */
-	struct ChunkTransportState *interconnect_context; /* Interconnect state */
+	int			active_recv_id;
+	void	   *motionlayer_context;	/* Motion Layer state */
+	struct ChunkTransportState *interconnect_context;	/* Interconnect state */
 
 	/* PX used resources */
-	bool        es_interconnect_is_setup;   /* is interconnect set-up?    */
+	bool		es_interconnect_is_setup;	/* is interconnect set-up?    */
 
-	bool        es_got_eos;         /* was end-of-stream recieved? */
+	bool		es_got_eos;		/* was end-of-stream recieved? */
 
-	bool        cancelUnfinished;   /* when we're cleaning up, we need to make sure that we know it */
+	bool		cancelUnfinished;	/* when we're cleaning up, we need to make
+									 * sure that we know it */
 
 	/* results from qExec processes */
 	struct PxDispatcherState *dispatcherState;
 
 	/* PX: EXPLAIN ANALYZE statistics */
-	struct PxExplain_ShowStatCtx  *showstatctx;
+	struct PxExplain_ShowStatCtx *showstatctx;
 
 	/* PX: partitioning state info */
 	/* TOOD */
 	/* PartitionState *es_partition_state; */
 
 	/*
-	 * The slice number for the current node that is being processed.
-	 * During the tree traversal in ExecInitPlan stage, this field is set
-	 * by Motion and InitPlan nodes.
+	 * The slice number for the current node that is being processed. During
+	 * the tree traversal in ExecInitPlan stage, this field is set by Motion
+	 * and InitPlan nodes.
 	 */
-	int         currentSliceId;
+	int			currentSliceId;
 
 	/* max plan tree line id */
-	int         max_plan_line_id;
+	int			max_plan_line_id;
 
 	/* Should the executor skip past the alien plan nodes */
-	bool eliminateAliens;
+	bool		eliminateAliens;
 
 	/* Current positions of cursors used in CURRENT OF expressions */
-	List       *es_cursorPositions;
+	List	   *es_cursorPositions;
 
 	/* POLAR end */
 } EState;
@@ -1162,14 +1163,14 @@ typedef struct PlanState
 
 	/* POLAR px */
 	bool		squelched;		/* has ExecSquelchNode() been called already? */
-	int			plan_line_id;  	/* plan tree line id for current node */
+	int			plan_line_id;	/* plan tree line id for current node */
 
 	/*
 	 * EXPLAIN ANALYZE statistics collection
 	 */
-	struct StringInfoData  *pxexplainbuf;  /* EXPLAIN ANALYZE report buf */
+	struct StringInfoData *pxexplainbuf;	/* EXPLAIN ANALYZE report buf */
 	MemoryContext node_context;
-	void      (*pxexplainfun)(struct PlanState *planstate, struct StringInfoData *buf);
+	void		(*pxexplainfun) (struct PlanState *planstate, struct StringInfoData *buf);
 	/* POLAR end */
 } PlanState;
 
@@ -2088,9 +2089,11 @@ typedef struct NestLoopState
 	TupleTableSlot *nl_NullInnerTupleSlot;
 
 	/* POLAR px */
-	List		*nl_InnerJoinKeys;        /* list of ExprState nodes */
-	List		*nl_OuterJoinKeys;        /* list of ExprState nodes */
-	bool		nl_qualResultForNull;     /* the value of the join condition when one of the sides contains a NULL */
+	List	   *nl_InnerJoinKeys;	/* list of ExprState nodes */
+	List	   *nl_OuterJoinKeys;	/* list of ExprState nodes */
+	bool		nl_qualResultForNull;	/* the value of the join condition
+										 * when one of the sides contains a
+										 * NULL */
 	/* POLAR end */
 } NestLoopState;
 
@@ -2194,7 +2197,7 @@ typedef struct HashJoinState
 
 	/* POLAR px */
 	bool		hj_nonequijoin; /* set true if force hash table to keep nulls */
-	bool		hj_InnerEmpty;  /* set to true if inner side is empty */
+	bool		hj_InnerEmpty;	/* set to true if inner side is empty */
 	bool		prefetch_inner;
 	/* POLAR end */
 } HashJoinState;
@@ -2222,8 +2225,9 @@ typedef struct MaterialState
 	Tuplestorestate *tuplestorestate;
 
 	/* POLAR px */
-	bool		delayEagerFree;	/* is is safe to free memory used by this node,
-								 * when this node has outputted its last row? */
+	bool		delayEagerFree; /* is is safe to free memory used by this
+								 * node, when this node has outputted its last
+								 * row? */
 	/* POLAR end */
 } MaterialState;
 
@@ -2340,9 +2344,11 @@ typedef struct SortState
 	SharedSortInfo *shared_info;	/* one entry per worker */
 
 	/* POLAR px */
-	bool		delayEagerFree;		/* is it safe to free memory used by this node,
-									 * when this node has outputted its last row? */
-	TuplesortInstrumentation sortstats; /* holds stats, if the Sort is eagerly free'd */
+	bool		delayEagerFree; /* is it safe to free memory used by this
+								 * node, when this node has outputted its last
+								 * row? */
+	TuplesortInstrumentation sortstats; /* holds stats, if the Sort is eagerly
+										 * free'd */
 	/* POLAR end */
 } SortState;
 
@@ -2770,8 +2776,10 @@ typedef struct HashState
 
 	/* POLAR px */
 	bool		hs_keepnull;	/* Keep nulls */
-	bool		hs_quit_if_hashkeys_null;	/* quit building hash table if hashkeys are all null */
-	bool		hs_hashkeys_null;	/* found an instance wherein hashkeys are all null */
+	bool		hs_quit_if_hashkeys_null;	/* quit building hash table if
+											 * hashkeys are all null */
+	bool		hs_hashkeys_null;	/* found an instance wherein hashkeys are
+									 * all null */
 	/* POLAR end */
 } HashState;
 
@@ -2875,7 +2883,7 @@ typedef struct SplitUpdateState
 								 * action. */
 	TupleTableSlot *insertTuple;	/* tuple to Insert */
 	TupleTableSlot *deleteTuple;	/* tuple to Delete */
-} SplitUpdateState;
+}			SplitUpdateState;
 
 /*
  * ExecNode for AssertOp.
@@ -2885,7 +2893,7 @@ typedef struct SplitUpdateState
 typedef struct AssertOpState
 {
 	PlanState	ps;
-} AssertOpState;
+}			AssertOpState;
 
 
 typedef enum MotionStateType
@@ -2894,7 +2902,7 @@ typedef enum MotionStateType
 								 * active in a slice (neither send nor recv) */
 	MOTIONSTATE_SEND,			/* The motion is sender */
 	MOTIONSTATE_RECV,			/* The motion is recver */
-} MotionStateType;
+}			MotionStateType;
 
 /* ----------------
  *         MotionState information
@@ -2907,41 +2915,51 @@ typedef struct MotionState
 	bool		stopRequested;	/* set when we want transfer to stop */
 
 	/* For motion send */
-	bool		sentEndOfStream;	/* set when end-of-stream has successfully been sent */
-	List	   *hashExprs;		/* state struct used for evaluating the hash expressions */
-	struct PxHash *pxhash;	/* hash api object */
-	int			numHashSegments;	/* number of segments to use when calculating hash */
+	bool		sentEndOfStream;	/* set when end-of-stream has successfully
+									 * been sent */
+	List	   *hashExprs;		/* state struct used for evaluating the hash
+								 * expressions */
+	struct PxHash *pxhash;		/* hash api object */
+	int			numHashSegments;	/* number of segments to use when
+									 * calculating hash */
 
 	/* For Motion recv */
-	int			routeIdNext;	/* for a sorted motion node, the routeId to get next (same as
-								 * the routeId last returned ) */
-	bool		tupleheapReady; /* for a sorted motion node, false until we have a tuple from
-								 * each source worker_idx */
+	int			routeIdNext;	/* for a sorted motion node, the routeId to
+								 * get next (same as the routeId last returned
+								 * ) */
+	bool		tupleheapReady; /* for a sorted motion node, false until we
+								 * have a tuple from each source worker_idx */
 
 	/* For sorted Motion recv */
 	int			numSortCols;
 	SortSupport sortKeys;
 	TupleTableSlot **slots;
-	struct binaryheap *tupleheap; /* binary heap of slot indices */
+	struct binaryheap *tupleheap;	/* binary heap of slot indices */
 	int			lastSortColIdx;
 
 	/* The following can be used for debugging, usage stats, etc.  */
-	int			numTuplesFromChild;	/* Number of tuples received from child */
-	int			numTuplesToAMS;		/* Number of tuples from child that were sent to AMS */
+	int			numTuplesFromChild; /* Number of tuples received from child */
+	int			numTuplesToAMS; /* Number of tuples from child that were sent
+								 * to AMS */
 	int			numTuplesFromAMS;	/* Number of tuples received from AMS */
-	int			numTuplesToParent;	/* Number of tuples either from child or AMS that were sent to parent */
+	int			numTuplesToParent;	/* Number of tuples either from child or
+									 * AMS that were sent to parent */
 
-	struct timeval otherTime;   /* time accumulator used in sending motion node to keep track of time
-								 * spent getting the next tuple (not sending). this could mean time spent
-								 * in another motion node receiving. */
+	struct timeval otherTime;	/* time accumulator used in sending motion
+								 * node to keep track of time spent getting
+								 * the next tuple (not sending). this could
+								 * mean time spent in another motion node
+								 * receiving. */
 
-	struct timeval motionTime;  /* time accumulator for time spent in motion node.  For sending motion node
-								 * it is just the amount of time actually sending the tuple thru the
-								 * interconnect.  For receiving motion node, it is the time spent waiting
-								 * and processing of the next incoming tuple.
-								 */
+	struct timeval motionTime;	/* time accumulator for time spent in motion
+								 * node.  For sending motion node it is just
+								 * the amount of time actually sending the
+								 * tuple thru the interconnect.  For receiving
+								 * motion node, it is the time spent waiting
+								 * and processing of the next incoming tuple. */
 
-	Oid		   *outputFunArray;	/* output functions for each column (debug only) */
+	Oid		   *outputFunArray; /* output functions for each column (debug
+								 * only) */
 
 	int			numInputSegs;	/* the number of segments on the sending slice */
 
@@ -2949,7 +2967,7 @@ typedef struct MotionState
 
 	CmdType		commandType;	/* For Motion Query Type */
 
-} MotionState;
+}			MotionState;
 
 /* ----------------
  *	 PartitionSelectorState information
@@ -2967,8 +2985,8 @@ typedef struct PartitionSelectorState
 	PlanState	ps;				/* its first field is NodeTag */
 
 	struct PartitionPruneState *prune_state;
-	Bitmapset *part_prune_result;
-} PartitionSelectorState;
+	Bitmapset  *part_prune_result;
+}			PartitionSelectorState;
 
 typedef struct SequenceState
 {
@@ -2980,13 +2998,14 @@ typedef struct SequenceState
 	 * True if no subplan has been executed.
 	 */
 	bool		initState;
-} SequenceState;
+}			SequenceState;
 
 extern struct MotionState *getMotionState(struct PlanState *ps, int sliceIndex);
-extern int LocallyExecutingSliceIndex(EState *estate);
-extern int PrimaryWriterSliceIndex(EState *estate);
-extern int RootSliceIndex(EState *estate);
+extern int	LocallyExecutingSliceIndex(EState *estate);
+extern int	PrimaryWriterSliceIndex(EState *estate);
+extern int	RootSliceIndex(EState *estate);
 extern uint64 polar_PlanStateOperatorMemKB(const PlanState *ps);
+
 /* POLAR end */
 
 #endif							/* EXECNODES_H */

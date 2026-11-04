@@ -155,6 +155,7 @@ bool		enable_async_append = true;
 
 /* POLAR px */
 bool		enable_groupagg = true;
+
 /* POLAR end */
 
 typedef struct

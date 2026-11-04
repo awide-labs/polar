@@ -63,6 +63,7 @@ MemoryContext CurTransactionContext = NULL;
 MemoryContext px_DispatcherContext = NULL;
 MemoryContext px_InterconnectContext = NULL;
 MemoryContext px_OptimizerMemoryContext = NULL;
+
 /* POLAR end */
 
 /* This is a transient link to the active portal's memory context: */
@@ -1698,4 +1699,5 @@ MemoryContextGetPeakSpace(MemoryContext context)
 	AssertArg(MemoryContextIsValid(context));
 	return (*context->methods->get_peak_usage) (context);
 }
+
 /* POLAR end */
