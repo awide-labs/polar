@@ -60,7 +60,9 @@ main() {
   ensure_merge_base "${base}" "${head}" || true
   ensure_merge_base "$(stable_branch_ref "${next}")" "${head}" || true
 
-  if [[ "$(forward_intent "${next}" "${base}" "${head}")" == "null" ]]; then
+  local pending
+  pending="$(forward_units "${next}" "${base}" "${head}" | grep -v ' null$' || true)"
+  if [[ -z "${pending}" ]]; then
     log_success "can-forward-merge: change is marked null-merge for ${next}; pairing satisfied"
     exit 0
   fi
