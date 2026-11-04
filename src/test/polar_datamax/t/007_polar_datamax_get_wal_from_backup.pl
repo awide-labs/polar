@@ -1,6 +1,9 @@
 # Test for datamax get wal from backup set
 use strict;
 use warnings;
+use FindBin;
+use lib $FindBin::RealBin;
+use PolarDatamaxUtils;
 use PostgreSQL::Test::Cluster;
 use File::Path 'rmtree';
 use Test::More tests=>17;
@@ -31,77 +34,6 @@ $node_standby1->polar_standby_build_data;
 $node_standby1->append_conf('postgresql.conf', "polar_wal_pipeline_enable = false");
 $node_standby1->append_conf('postgresql.conf', "polar_logindex_mem_size = 0");
 
-# get current wal file 
-sub polar_get_walfile
-{
-	my ($node, $is_datamax) = @_;
-	my $polar_waldir = $node->polar_get_datadir;
-	my $name = $node->name;
-	if ($is_datamax == 1)
-	{
-		$polar_waldir = "$polar_waldir/polar_datamax/pg_wal";
-	}
-	else
-	{
-		$polar_waldir = "$polar_waldir/pg_wal";
-	}
-	my $walfile = readpipe("ls $polar_waldir");
-	my @wal_array = split('\n', $walfile);
-	print "current walfile of node $name:\n";
-	foreach my $i (@wal_array)  
-	{ 
-		print "$i\n";
-	}
-	return @wal_array;
-}
-
-# judge whether wal file is the same
-sub polar_walfile_compare
-{
-	my ($walfile1, $walfile2, $waldir1, $waldir2, $last_segno) = @_;
-	my $ret = 0;
-	foreach my $i (@$walfile1)  
-	{ 
-		if ($i le $last_segno)
-		{
-			if(grep { $_ eq $i } @$walfile2)
-			{
-				my $wal1 = $waldir1 . "/" . $i;
-                my $md51 = readpipe("md5sum $wal1");
-                $md51 = (split(" ",$md51))[0];
-                $wal1 = $waldir2 . "/" . $i;
-                my $md52 = readpipe("md5sum $wal1");
-                $md52 = (split(" ",$md52))[0];
-                if ($md51 eq $md52)
-                {
-                    $ret = 1;
-                }
-				else
-				{
-					$ret = 0;
-					last;
-				}
-			}
-			else
-			{
-				$ret = 0;
-				last;
-			}
-		}
-	}
-	return $ret;
-}
-
-sub get_wal_from_backup
-{
-	my ($self, $backup, $datamax_pfs, $backup_pfs) = @_;
-	my $pgdata  = $self->polar_get_datadir;
-	my $name    = $self->name; 
-	print "### node \"$name\" get wal from backup_set \"$backup\" \n";
-	my $ret = system("polar_tools datamax-get-wal -D $pgdata -M $datamax_pfs -b $backup -m $backup_pfs");
-	return $ret;
-}
-
 # clear content of archive_test
 rmtree($backup_dir) or warn "cannot rmtree '$backup_dir'";
 mkdir $backup_dir, 0755 or warn "cannot mkdir '$backup_dir'";
@@ -130,9 +62,7 @@ do
 $val_after = $node_master->safe_psql('postgres',
 		'INSERT INTO test_table(val) SELECT coalesce(max(val),0) + 1 AS newval FROM test_table RETURNING val');
 my $insert_lsn = $node_master->lsn('insert');
-
-my $last_segno = $node_master->safe_psql('postgres', "select pg_walfile_name('$insert_lsn');");
-print "last_segno: $last_segno\n";
+print "insert_lsn: $insert_lsn\n";
 
 ### 1. create new datamax, get wal from backup_set before start datamax and streaming from master
 my $primary_system_identifier = $node_master->polar_get_system_identifier;
@@ -158,13 +88,10 @@ system("rm -rf $datamax_dirfile");
 my $copy_ret = get_wal_from_backup($node_datamax, $backup_dir, 'l', 'l');
 print "copy wal from backup set result: $copy_ret\n";
 ok($copy_ret == 0, "datamax copy from backup set success");
-my $backup_walfile = readpipe("ls $backup_dir");
-my @backup_wal = split('\n', $backup_walfile);
-my @datamax_wal = polar_get_walfile($node_datamax, 1);
-my $datamax_waldir = $node_datamax->polar_get_datadir;
-$datamax_waldir = "$datamax_waldir/polar_datamax/pg_wal";
+polar_get_walfile($node_datamax, 1);
 $result = 0;
-$result = polar_walfile_compare(\@backup_wal, \@datamax_wal, $backup_dir, $datamax_waldir, $last_segno);
+$result = polar_walfile_compare($backup_dir, polar_waldir($node_datamax, 1),
+	$insert_lsn, polar_wal_segment_size($node_master));
 print "datamax wal compares with backup set result: $result\n";
 ok($result == 1, "datamax wal is the same as backup set\n"); 
 
