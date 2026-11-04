@@ -184,11 +184,11 @@ precheck-main-install:
 
 precheck-main: precheck-main-check precheck-main-install
 
-precheck: plcheck dccheck-lite datamax-check-lite precheck-main
+precheck: plcheck dccheck-lite datamax-check-lite polar-px-check precheck-main
 
 precheck-main-ci: precheck-main-check
 
-precheck-ci: precheck-main-ci plcheck datamax-check-lite
+precheck-ci: precheck-main-ci plcheck datamax-check-lite polar-px-check
 
 covcheck: coverage-html
 	$(top_srcdir)/src/tools/delta_coverage.pl -f coverage/delta_coverage.txt -p $(LAST_COMMIT)

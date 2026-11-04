@@ -171,7 +171,7 @@ debug=on
 minimal=off
 compiler_flag="-g -Wall -fno-omit-frame-pointer"
 # disable origin rpath config because of our own rpath config in LDFLAGS
-configure_flag="--enable-depend --with-uuid=e2fs --disable-rpath --with-segsize=128"
+configure_flag="--enable-depend --with-uuid=e2fs --disable-rpath --with-segsize=128 --enable-polar-px"
 make_flag=""
 initdb_flag="-k -A trust"
 jobs=`getconf _NPROCESSORS_ONLN`

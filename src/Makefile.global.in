@@ -520,7 +520,7 @@ run-temp-cluster: temp-install
 	$(MKDIR_P) $(temp_sock_dir)
 	$(with_temp_install) BASE_DIR="$(abs_top_builddir)/tmp_install$(prefix)" '$(abs_top_builddir)'/build.sh \
 		--prefix='$(CURDIR)'/tmp_cluster \
-		--port=$(if $(PGPORT),$(PGPORT),'5$(DEF_PGPORT)') \
+		$(if $(PGPORT),--port=$(PGPORT)) \
 		--eg="$(extra_temp_cluster_gucs)" \
 		--ldp="$(CURDIR)/cluster_log" \
 		--wr=2 --nc --noipcrm
