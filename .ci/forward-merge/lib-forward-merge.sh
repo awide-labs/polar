@@ -61,7 +61,8 @@ forward_refs() {
 
 # Conventional-Commits-compliant message for the forward-merge commit, so it
 # passes .ci/check_commit_format.sh (the brought commits are exempt as
-# merge-carried, but the merge commit itself is validated).
+# merge-carried, but the merge commit itself is validated, including the
+# 72-character limit on the subject).
 # Usage: forward_merge_message <source> <next> <intent> <base_ref> <head>
 forward_merge_message() {
   local source="${1:?}" next="${2:?}" intent="${3:?}" base="${4:?}" head="${5:?}"
@@ -69,7 +70,7 @@ forward_merge_message() {
   low="$(stable_branch_num "${source}")"
   high="$(stable_branch_num "${next}")"
   if [[ "${intent}" == "null" ]]; then
-    subject="chore(merge): null-merge PolarDB ${low} commits already present in PolarDB ${high}"
+    subject="chore(merge): null-merge PolarDB ${low} commits already in PolarDB ${high}"
   else
     subject="chore(merge): forward PolarDB ${low} changes to PolarDB ${high}"
   fi
