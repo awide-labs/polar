@@ -85,6 +85,8 @@ select_next_blkno(BlockNumber current_blkno, BlockNumber begin_blkno, BlockNumbe
 {
 	BlockNumber next_blkno = InvalidBlockNumber;
 
+	Assert(bs > 0 && bs <= end_blkno - begin_blkno);
+
 	if (sequential)
 	{
 		if (current_blkno == InvalidBlockNumber)
@@ -287,6 +289,9 @@ polar_smgrperf_read(PG_FUNCTION_ARGS)
 	if (end_blkno <= begin_blkno || end_blkno > MAX_NBLOCKS)
 		elog(ERROR, "\"end_blkno\" should be in (%d, %d], current %d", begin_blkno, MAX_NBLOCKS, end_blkno);
 
+	if (bs > end_blkno - begin_blkno)
+		elog(ERROR, "\"bs\" should be in [1, %d], current %d", end_blkno - begin_blkno, bs);
+
 	REPORT_PERF_STATS_PREPARE(true);
 
 	while (true)
@@ -322,6 +327,9 @@ polar_smgrperf_write(PG_FUNCTION_ARGS)
 
 	if (end_blkno <= begin_blkno || end_blkno > MAX_NBLOCKS)
 		elog(ERROR, "\"end_blkno\" should be in (%d, %d], current %d", begin_blkno, MAX_NBLOCKS, end_blkno);
+
+	if (bs > end_blkno - begin_blkno)
+		elog(ERROR, "\"bs\" should be in [1, %d], current %d", end_blkno - begin_blkno, bs);
 
 	REPORT_PERF_STATS_PREPARE(true);
 
