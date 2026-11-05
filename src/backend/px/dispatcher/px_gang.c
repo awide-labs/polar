@@ -162,7 +162,7 @@ AllocateGang(PxDispatcherState *ds, GangType type, List *segments)
 bool
 segment_failure_due_to_recovery(const char *error_message)
 {
-	char	   *fatal = NULL,
+	const char *fatal = NULL,
 			   *ptr = NULL;
 	int			fatal_len = 0;
 
