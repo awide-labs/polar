@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [15.18.2] - 2026-11-05
+
 ### Added
 
 - Add `'w'` back-pressure marker in ReadyForQuery and switch the
@@ -277,4 +279,5 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   is 3 or 5, cutting idle-system latency from ~100ms to single-digit
   milliseconds (XCOM-160)
 
-[unreleased]: https://github.com/awide-labs/polar/compare/6fcfdc2993a..POLARDB_15_STABLE
+[unreleased]: https://github.com/awide-labs/polar/compare/v15.18.2..POLARDB_15_STABLE
+[15.18.2]: https://github.com/awide-labs/polar/compare/6fcfdc2993a..v15.18.2
