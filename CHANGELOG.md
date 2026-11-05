@@ -111,6 +111,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `none`, `cancel_query`, `terminate_idle_backend` and
   `terminate_any_backend` had no effect. Instances using the default
   setting are not affected (XCOM-232)
+- Fixed `polar_smgrperf_read`/`polar_smgrperf_write` raising a floating-point
+  exception (division by zero) or reading an out-of-range block when the `bs`
+  argument exceeded the `[begin_blkno, end_blkno)` range. Both entry points
+  now reject such `bs` values with a clear error (XCOM-221)
 - Fixed an out-of-memory failure after crash restart with zero-copy
   I/O. The syslogger kept the previous shared-memory generation alive,
   so two full copies stayed resident. The fix requires PolarFS 3.2.0
