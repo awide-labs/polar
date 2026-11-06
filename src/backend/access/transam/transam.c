@@ -514,6 +514,7 @@ polar_xact_get_csn(TransactionId transactionId, CommitSeqNo snapCSN,
 			polar_cached_csn_xid = transactionId;
 			polar_cached_csn = csn;
 			cachedFetchXid = transactionId;
+			cachedFetchXidStatus = status;
 			cachedCommitLSN = lsn;
 		}
 	}
