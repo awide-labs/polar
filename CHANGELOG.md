@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [17.11.2] - 2026-11-06
+
 ### Added
 
 - Add DataMax standalone mode, a dedicated log-storage node that streams
@@ -295,4 +297,5 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   partitions (currently 64), with each partition having its own lock, control
   structure and statistics (XCOM-38)
 
-[unreleased]: https://github.com/awide-labs/polar/compare/248cd221718..POLARDB_17_STABLE
+[unreleased]: https://github.com/awide-labs/polar/compare/v17.11.2..POLARDB_17_STABLE
+[17.11.2]: https://github.com/awide-labs/polar/compare/248cd221718..v17.11.2
