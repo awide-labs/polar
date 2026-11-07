@@ -81,6 +81,26 @@ like($stderr, qr/INFO:  Summary:/, 'polar_smgrperf_extend (fallocate) ok');
 $node_primary->safe_psql('postgres',
 	'set statement_timeout=0; select polar_smgrperf_prepare()');
 
+# Verify that bs larger than the block range is rejected cleanly instead of
+# triggering division by zero or out-of-range block access.
+$node_primary->psql(
+	'postgres',
+	'select polar_smgrperf_read(51, 0, 50, false)',
+	stderr => \$stderr);
+like(
+	$stderr,
+	qr/ERROR:  "bs" should be in \[1, 50\], current 51/,
+	'polar_smgrperf_read rejects bs larger than the block range');
+
+$node_primary->psql(
+	'postgres',
+	'select polar_smgrperf_write(51, 0, 50, false)',
+	stderr => \$stderr);
+like(
+	$stderr,
+	qr/ERROR:  "bs" should be in \[1, 50\], current 51/,
+	'polar_smgrperf_write rejects bs larger than the block range');
+
 $node_primary->psql(
 	'postgres',
 	'select polar_smgrperf_read()',
