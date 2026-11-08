@@ -336,16 +336,14 @@ pg_itoa(int16 i, char *a)
 	return pg_ltoa((int32) i, a);
 }
 
-/* GCC 13.3 emits -Wstringop-overflow warning in pg_ultoa_n and pg_ulltoa_n
- * functions. Disable this warning via pragma to avoid compilation error.
- *
- * Same bugs exist in GCC 14.2, so disable for it too.
+/*
+ * With -fsanitize=nonnull-attribute (part of -fsanitize=undefined), GCC adds
+ * a NULL check of the memcpy() destination and then emits
+ * -Wstringop-overflow for the copies in pg_ultoa_n and pg_ulltoa_n on that
+ * path. GCC 12.5 through 16.2 and trunk do so, and none of them warns here
+ * without the sanitizer; sanitizer builds define USE_UBSAN.
  */
-
-#if (defined(__GNUC__) && !defined(__clang__) && \
-	((__GNUC__ == 13 && __GNUC_MINOR__ < 4) || \
-	 (__GNUC__ == 14 && __GNUC_MINOR__ < 3)		\
-    ))
+#if defined(__GNUC__) && !defined(__clang__) && defined(USE_UBSAN)
 #define STRINGOP_WARNING_BUGGY
 #endif
 

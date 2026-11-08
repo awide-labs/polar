@@ -511,6 +511,22 @@ XLogInsert(RmgrId rmid, uint8 info)
 }
 
 /*
+ * With -fsanitize=nonnull-attribute (part of -fsanitize=undefined), GCC adds
+ * a NULL check of the memcpy() destination and then emits -Warray-bounds and
+ * -Wstringop-overflow for the copies into hdr_scratch on that path. GCC 14.1
+ * through 16.2 and trunk do so; sanitizer builds define USE_UBSAN.
+ */
+#if defined(__GNUC__) && !defined(__clang__) && defined(USE_UBSAN)
+#define MEMCPY_WARNING_BUGGY
+#endif
+
+#ifdef MEMCPY_WARNING_BUGGY
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Warray-bounds"
+#pragma GCC diagnostic ignored "-Wstringop-overflow"
+#endif
+
+/*
  * Assemble a WAL record from the registered data and buffers into an
  * XLogRecData chain, ready for insertion with XLogInsertRecord().
  *
@@ -890,6 +906,10 @@ XLogRecordAssemble(RmgrId rmid, uint8 info,
 
 	return &hdr_rdt;
 }
+
+#ifdef MEMCPY_WARNING_BUGGY
+#pragma GCC diagnostic pop
+#endif
 
 /*
  * Create a compressed version of a backup block image.
