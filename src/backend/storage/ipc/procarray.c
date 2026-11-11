@@ -2556,8 +2556,8 @@ polar_split_wait_for_lsn(XLogRecPtr target_lsn)
 	/* All time units are in usec */
 	int			max_delay = polar_proxy_wait_max_delay_us;
 	int			delay = 10;
-	int			total_wait = 0;
-	int			timeout = polar_proxy_wait_timeout_ms * 1000;
+	int64		total_wait = 0;
+	int64		timeout = (int64) polar_proxy_wait_timeout_ms * 1000;
 
 	current_lsn = GetXLogReplayRecPtr(NULL);
 
@@ -2600,7 +2600,7 @@ polar_split_wait_for_lsn(XLogRecPtr target_lsn)
 	}
 
 	if (unlikely(polar_enable_xact_split_debug))
-		elog(LOG, "PROXY: LSN wait done: replay=%X/%X, waited_us=%d, success=%d",
+		elog(LOG, "PROXY: LSN wait done: replay=%X/%X, waited_us=" INT64_FORMAT ", success=%d",
 			 (uint32) (current_lsn >> 32), (uint32) current_lsn, total_wait, current_lsn >= target_lsn);
 }
 
