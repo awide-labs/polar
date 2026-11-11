@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- The LSN-based session-consistency wait now respects large
+  `polar_proxy_wait_timeout_ms` values. Before, a timeout above
+  2147483 ms (about 35 minutes) made a replica give up on its first
+  check instead of waiting, so strict mode raised a spurious "LSN wait
+  timeout" error and best-effort mode returned stale data (XCOM-234).
+
 ## [17.11.2] - 2026-11-06
 
 ### Added

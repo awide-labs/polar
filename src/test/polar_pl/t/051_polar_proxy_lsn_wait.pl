@@ -140,6 +140,39 @@ for my $bad ('garbage', '-1', '12345abc')
 	like($err, qr/ERROR/, "parser rejects '$bad'");
 }
 
+# ---------------------------------------------------------------------
+# 5. Large timeout must not overflow the int32 deadline.
+#    polar_proxy_wait_timeout_ms is converted to usec via *1000.  Before
+#    the fix this multiplication was done in int32, so any value above
+#    INT_MAX/1000 (2147483 ms) wrapped negative and the strict-mode wait
+#    errored out on its very first iteration instead of actually waiting.
+#    Use an unreachable target so the wait can only terminate via (a) the
+#    overflow-driven "LSN wait timeout" ERROR, or (b) the statement_timeout
+#    safety net planted below.  A correct int64 deadline must reach (b),
+#    never (a).
+# ---------------------------------------------------------------------
+my $big_timeout = 2147484;    # INT_MAX/1000 + 1: used to overflow int32
+
+($stdout, $stderr) = ('', '');
+my $rc_big = $node_replica->psql(
+	'postgres',
+	qq(
+		SET statement_timeout = '2s';
+		SET polar_proxy_wait_timeout_ms = $big_timeout;
+		SET polar_consistency_mode = 'strict';
+		SET polar_xact_split_wait_lsn = '$future_lsn';
+		SELECT count(*) FROM t;
+	),
+	stdout => \$stdout,
+	stderr => \$stderr,
+	on_error_die => 0);
+
+isnt($rc_big, 0, 'large timeout: query aborts (unreachable target)');
+like($stderr, qr/statement timeout/,
+	'large timeout: deadline waited for the real timeout, not an overflow ERROR');
+unlike($stderr, qr/polar_proxy_lsn_wait_timeout/,
+	'large timeout: no spurious LSN-wait-timeout ERROR from int32 overflow');
+
 $node_primary->stop;
 $node_replica->stop;
 done_testing();
