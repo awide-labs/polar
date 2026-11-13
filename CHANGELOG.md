@@ -9,7 +9,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 
 - Add `polar_wal_buffer_insert_locks` to configure the number of WAL
-  insertion locks (default: 256). Increasing this setting can improve
+  insertion locks. The default is raised from 64 to 256, which improves
   throughput when many sessions commit at once, particularly with WAL
   pipelining enabled and fast storage. Changing the setting requires a
   server restart. (XCOM-238)

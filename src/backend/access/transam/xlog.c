@@ -618,13 +618,6 @@ static SessionBackupState sessionBackupState = SESSION_BACKUP_NONE;
 
 /*
  * Shared state data for WAL insertion.
- *
- * POLAR: the end of reserved WAL, and the start of the record before it, used
- * to live here as CurrBytePos/PrevBytePos behind insertpos_lck.  The packed
- * counter (see XLogReserveCounter) is now the allocation itself and holds both --
- * read the first with polar_xlog_current_bytepos() and the pair with
- * polar_xlog_reserve_tail().  Nothing shadows them here, so there is no second copy to
- * keep in step.
  */
 typedef struct XLogCtlInsert
 {
@@ -2917,11 +2910,11 @@ WALInsertLockRelease(void)
 		int			i;
 
 		/*
-		 * POLAR: the only point quiet enough to restart the reservation
-		 * counter's byte fields.  Must happen while we still hold every lock
-		 * -- once they are released, backends are claiming positions again
-		 * and rewriting the packed counter underneath them corrupts their
-		 * positions.  Normally a compare and a return.
+		 * Periodic overflow check of the reservation counter's byte fields.
+		 * Must happen while we still hold every lock -- once they are
+		 * released, backends are claiming positions again and rewriting the
+		 * packed counter underneath them corrupts their positions.  Normally
+		 * a compare and a return.
 		 */
 		polar_xlog_reserve_maybe_reseed();
 
@@ -6242,10 +6235,10 @@ XLOGShmemInit(void)
 		ShmemInitStruct("Control File", sizeof(ControlFileData), &foundCFile);
 
 	/*
-	 * POLAR: packed WAL reservation counter.  The CAS requires the counter to
-	 * be 16-byte aligned; ShmemInitStruct hands out cache-line aligned
-	 * blocks, and packed sits at offset 0.  Allocated as its own shmem block
-	 * so it cannot perturb the Insert cache line.
+	 * Packed WAL reservation counter.  The CAS requires the counter to be
+	 * 16-byte aligned; ShmemInitStruct hands out cache-line aligned blocks,
+	 * and packed sits at offset 0.  Allocated as its own shmem block so it
+	 * cannot perturb the Insert cache line.
 	 */
 	polar_xlog_reserve_counter = ShmemInitStruct("XLOG reserve counter",
 												 sizeof(XLogReserveCounter),
@@ -7408,7 +7401,7 @@ StartupXLOG(void)
 	 */
 	Insert = &XLogCtl->Insert;
 
-	/* POLAR: hand the insert position to the reservation counter. */
+	/* Hand the insert position to the reservation counter. */
 	polar_xlog_reserve_reseed(XLogRecPtrToBytePos(EndOfLog),
 							  XLogRecPtrToBytePos(endOfRecoveryInfo->lastRec),
 							  polar_xlog_queue_pwrite());
@@ -7584,13 +7577,13 @@ StartupXLOG(void)
 		polar_logindex_promote_xlog_queue(polar_logindex_redo_instance);
 
 	/*
-	 * POLAR: every branch above resets the xlog queue, so the queue position
-	 * the reservation counter cached when it was seeded above no longer
-	 * describes it.  Re-seed before any reservation hands out a position from
-	 * a base the ring no longer agrees with.  WAL insertion is still
-	 * disallowed here, so the counter holds exactly what the seed above put
-	 * there; a start that takes no promote branch feeds those same positions
-	 * straight back and only picks up pwrite afresh.
+	 * Every branch above resets the xlog queue, so the queue position the
+	 * reservation counter cached when it was seeded above no longer describes
+	 * it.  Re-seed before any reservation hands out a position from a base
+	 * the ring no longer agrees with.  WAL insertion is still disallowed
+	 * here, so the counter holds exactly what the seed above put there; a
+	 * start that takes no promote branch feeds those same positions straight
+	 * back and only picks up pwrite afresh.
 	 */
 	{
 		uint64		prev_bytepos;
