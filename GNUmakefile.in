@@ -153,11 +153,12 @@ cpluspluscheck: submake-generated-headers
 LAST_COMMIT = HEAD~1
 PROVE_FLAGS = "--timer"
 
+precheck precheck-main: export PG_TEST_EXTRA = kerberos ldap ssl
 precheck-main: | temp-install
-	$(MAKE) check-world EXTRA_TESTS=numeric_big PG_TEST_EXTRA='kerberos ssl' USE_MODULE_DB=1 PROVE_FLAGS="$(PROVE_FLAGS)"
-	$(MAKE) installcheck-world EXTRA_TESTS=numeric_big PG_TEST_EXTRA='kerberos ssl' USE_MODULE_DB=1 NO_TAP_TESTS=1
-	$(MAKE) polar-check PG_TEST_EXTRA='kerberos ssl' USE_MODULE_DB=1 PROVE_FLAGS="$(PROVE_FLAGS)"
-	$(MAKE) polar-installcheck PG_TEST_EXTRA='kerberos ssl' USE_MODULE_DB=1 NO_TAP_TESTS=1
+	$(MAKE) check-world EXTRA_TESTS=numeric_big USE_MODULE_DB=1 PROVE_FLAGS="$(PROVE_FLAGS)"
+	$(MAKE) installcheck-world EXTRA_TESTS=numeric_big USE_MODULE_DB=1 NO_TAP_TESTS=1
+	$(MAKE) polar-check USE_MODULE_DB=1 PROVE_FLAGS="$(PROVE_FLAGS)"
+	$(MAKE) polar-installcheck USE_MODULE_DB=1 NO_TAP_TESTS=1
 
 precheck: plcheck dccheck-lite precheck-main
 
