@@ -3221,7 +3221,7 @@ struct config_int ConfigureNamesInt[] =
 		{"polar_wal_buffer_insert_locks", PGC_POSTMASTER, WAL_SETTINGS,
 			gettext_noop("Set the number of locks for wal buffer insert."),
 			NULL,
-			POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_CHANGEABLE
+			POLAR_GUC_IS_VISIBLE | POLAR_GUC_IS_CHANGEABLE
 		},
 		&polar_wal_buffer_insert_locks,
 
