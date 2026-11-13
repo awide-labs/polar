@@ -140,7 +140,7 @@ int			polar_max_non_super_wal_snd = -1;
 int			polar_logical_repl_xlog_bulk_read_size;
 
 /*
- * POLAR: Maximum XLOG meta in a WAL data message.
+ * Maximum XLOG meta in a WAL data message.
  *
  * Defaults to MAX_SEND_SIZE, the batch size of the file based path this
  * replaces: the per-message costs are the same ones described there, and the
