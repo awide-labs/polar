@@ -143,7 +143,7 @@ bool		polar_enable_read_from_wal_buffers = true;
 int			polar_replica_max_wal_sender_timeout = 100;
 
 /*
- * POLAR: Maximum XLOG meta in a WAL data message.
+ * Maximum XLOG meta in a WAL data message.
  *
  * Defaults to MAX_SEND_SIZE, the batch size of the file based path this
  * replaces: the per-message costs are the same ones described there, and the
