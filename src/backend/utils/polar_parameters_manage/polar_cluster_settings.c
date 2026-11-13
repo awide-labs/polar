@@ -138,7 +138,7 @@ polar_mount_and_extra_load_polar_settings(const bool polar_is_show_guc_mode)
 	 * there is a high probability that there are other postgres services for
 	 * users. mount vfs may failed, so only read local cache file.
 	 *
-	 * the caller only sets this for a GUC whose value is printed right after
+	 * The caller only sets this for a GUC whose value is printed right after
 	 * this, before shared storage is ever touched.  A runtime-computed GUC is
 	 * printed much later, past ReadControlFile(), so for those the caller
 	 * clears this and forces a read-only mount instead.

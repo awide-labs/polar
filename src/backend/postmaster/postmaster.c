@@ -1007,6 +1007,18 @@ PostmasterMain(int argc, char *argv[])
 	polar_vfs_force_readonly_mount = runtime_computed_variable;
 
 	/*
+	 * A runtime-computed GUC will be printed later on.  As we initialize a
+	 * server startup sequence, silence any log messages that may show up in
+	 * the output generated.  FATAL and more severe messages are useful to
+	 * show, even if one would only expect at least PANIC.  LOG entries are
+	 * hidden.  Do it before SelectConfigFiles(), which mounts shared storage
+	 * and logs about it; the override wins over postgresql.conf.
+	 */
+	if (runtime_computed_variable)
+		SetConfigOption("log_min_messages", "FATAL", PGC_SUSET,
+						PGC_S_OVERRIDE);
+
+	/*
 	 * Locate the proper configuration files and data directory, and read
 	 * postgresql.conf for the first time.
 	 */
@@ -1040,16 +1052,6 @@ PostmasterMain(int argc, char *argv[])
 			puts(config_val ? config_val : "");
 			ExitPostmaster(0);
 		}
-
-		/*
-		 * A runtime-computed GUC will be printed later on.  As we initialize
-		 * a server startup sequence, silence any log messages that may show
-		 * up in the output generated.  FATAL and more severe messages are
-		 * useful to show, even if one would only expect at least PANIC.  LOG
-		 * entries are hidden.
-		 */
-		SetConfigOption("log_min_messages", "FATAL", PGC_SUSET,
-						PGC_S_OVERRIDE);
 	}
 
 	/* Verify that DataDir looks reasonable */

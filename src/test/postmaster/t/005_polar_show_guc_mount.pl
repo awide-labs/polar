@@ -44,18 +44,15 @@ sub run_show_guc
 }
 
 # Runtime-computed GUCs: the value is only valid after ReadControlFile() has
-# read pg_control from shared storage.  The postmaster must mount read-only
-# for them instead of skipping the mount, and must not crash.
+# read pg_control from shared storage, so a printed value means the postmaster
+# mounted it instead of skipping the mount.  Log messages below FATAL are
+# silenced for these, including the ones about mounting shared storage.
 for my $guc ('shared_memory_size', 'shared_memory_size_in_huge_pages')
 {
 	my ($rc, $out, $err) = run_show_guc($guc);
 	is($rc, 0, "-C $guc exits successfully") or diag("stderr:\n$err");
 	like($out, qr/^\d+\s*$/, "-C $guc prints a value");
-	like(
-		$err,
-		qr{Database will be in readonly \(forced\) mode},
-		"-C $guc mounts shared storage read-only");
-	unlike($err, qr/PANIC:/, "-C $guc does not crash");
+	is($err, '', "-C $guc prints no log messages");
 }
 
 done_testing();
