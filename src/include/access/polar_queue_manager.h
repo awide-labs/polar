@@ -56,6 +56,15 @@ extern int	polar_xlog_queue_buffers;
 
 #define POLAR_XLOG_QUEUE_DATA_KEEP_RATIO (0.6)
 
+/*
+ * How many records the logindex saver pops before letting the data-keep
+ * reference catch up again.  The reference is what pins the ring's read
+ * position, so waiting until the pop loop drains means writers blocked in
+ * polar_ringbuf_wait_for_space() are released in one batch after a walk over
+ * the whole backlog.  Catching up as we go keeps both bounded.
+ */
+#define POLAR_XLOG_QUEUE_KEEP_DATA_INTERVAL (4096)
+
 #define POLAR_COPY_QUEUE_CONTENT(ref, offset, _dst, _size) \
 	do {\
 		ssize_t len = polar_ringbuf_read_next_pkt((ref), (offset), \

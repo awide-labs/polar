@@ -184,6 +184,193 @@ test_single_ringbuf()
 	free(data);
 }
 
+/* Reservations advance pwrite before their packet headers are published. */
+static void
+test_keep_data_publish_frontier(void)
+{
+	uint8	   *data = calloc(1, RINGBUF_SIZE);
+	polar_ringbuf_t rbuf;
+	polar_ringbuf_ref_t ref;
+	uint64		first,
+				pending,
+				later;
+	const uint32 pktlen = 16;
+	const uint64 pkt_size = POLAR_RINGBUF_PKT_SIZE(pktlen);
+
+	rbuf = polar_ringbuf_init(data, RINGBUF_SIZE, LWTRANCHE_POLAR_XLOG_QUEUE);
+	Assert(polar_ringbuf_new_ref(rbuf, true, &ref, "test_keep_data"));
+
+	/* Even a zero keep ratio must not step over an unpublished reservation. */
+	first = polar_ringbuf_pkt_reserve(rbuf, pkt_size);
+	polar_ringbuf_ref_keep_data(&ref, 0.0f);
+	Assert(polar_ringbuf_avail(&ref) == pkt_size);
+	Assert(pg_atomic_read_u64(&rbuf->pread) == first);
+
+	polar_ringbuf_set_pkt_length(rbuf, first, pktlen);
+	polar_ringbuf_set_pkt_flag(rbuf, first,
+							   POLAR_RINGBUF_PKT_WAL_META | POLAR_RINGBUF_PKT_READY);
+	pending = polar_ringbuf_pkt_reserve(rbuf, pkt_size);
+	later = polar_ringbuf_pkt_reserve(rbuf, pkt_size);
+	polar_ringbuf_set_pkt_length(rbuf, later, pktlen);
+	polar_ringbuf_set_pkt_flag(rbuf, later,
+							   POLAR_RINGBUF_PKT_WAL_META | POLAR_RINGBUF_PKT_READY);
+
+	/* Stop at the gap, even when a later reservation has been published. */
+	polar_ringbuf_ref_keep_data(&ref, 0.0f);
+	Assert(polar_ringbuf_avail(&ref) == 2 * pkt_size);
+	Assert(pg_atomic_read_u64(&rbuf->pread) == pending);
+
+	/* Once the gap is published, both remaining packets can be discarded. */
+	polar_ringbuf_set_pkt_length(rbuf, pending, pktlen);
+	polar_ringbuf_set_pkt_flag(rbuf, pending,
+							   POLAR_RINGBUF_PKT_WAL_META | POLAR_RINGBUF_PKT_READY);
+	polar_ringbuf_ref_keep_data(&ref, 0.0f);
+	Assert(polar_ringbuf_avail(&ref) == 0);
+	Assert(pg_atomic_read_u64(&rbuf->pread) == later + pkt_size);
+
+	polar_ringbuf_release_ref(&ref);
+	free(data);
+}
+
+/* Walsenders temporarily promote weak references while draining the queue. */
+static void
+test_promoted_ringbuf_ref(void)
+{
+	uint8	   *data = calloc(1, RINGBUF_SIZE);
+	polar_ringbuf_t rbuf;
+	polar_ringbuf_ref_t ref;
+	uint64		idx;
+	uint32		pktlen;
+	uint8		sent[16] = "promoted packet";
+	uint8		received[sizeof(sent)];
+
+	rbuf = polar_ringbuf_init(data, RINGBUF_SIZE, LWTRANCHE_POLAR_XLOG_QUEUE);
+	Assert(polar_ringbuf_new_ref(rbuf, false, &ref, "test_promoted"));
+	Assert(!ref.strong && !ref.promoted);
+
+	idx = polar_ringbuf_pkt_reserve(rbuf, POLAR_RINGBUF_PKT_SIZE(sizeof(sent)));
+	polar_ringbuf_set_pkt_length(rbuf, idx, sizeof(sent));
+	Assert(polar_ringbuf_pkt_write(rbuf, idx, 0, sent, sizeof(sent)) == sizeof(sent));
+	polar_ringbuf_set_pkt_flag(rbuf, idx,
+							   POLAR_RINGBUF_PKT_WAL_META | POLAR_RINGBUF_PKT_READY);
+
+	Assert(polar_ringbuf_get_ref(&ref));
+	Assert(!ref.strong && ref.promoted && rbuf->slot[ref.slot].strong);
+	Assert(polar_ringbuf_next_ready_pkt(&ref, &pktlen) == POLAR_RINGBUF_PKT_WAL_META);
+	Assert(pktlen == sizeof(sent));
+	Assert(polar_ringbuf_read_next_pkt(&ref, 0, received, sizeof(received)) == sizeof(received));
+	Assert(memcmp(sent, received, sizeof(sent)) == 0);
+
+	polar_ringbuf_update_ref(&ref);
+	Assert(polar_ringbuf_avail(&ref) == 0);
+	Assert(pg_atomic_read_u64(&rbuf->slot[ref.slot].pread) == idx + POLAR_RINGBUF_PKT_SIZE(sizeof(sent)));
+	polar_ringbuf_update_keep_data(rbuf);
+	Assert(pg_atomic_read_u64(&rbuf->pread) == idx + POLAR_RINGBUF_PKT_SIZE(sizeof(sent)));
+
+	Assert(polar_ringbuf_clear_ref(&ref));
+	Assert(!ref.strong && !ref.promoted && !rbuf->slot[ref.slot].strong);
+	Assert(polar_ringbuf_valid_ref(&ref));
+	polar_ringbuf_release_ref(&ref);
+	free(data);
+}
+
+/* keep_data() leaves the ring's read position alone when the keeper stays. */
+#define KEEP_DATA_CHECK(rbuf, keeper, ratio, keeper_pread, ring_pread) \
+	do { \
+		polar_ringbuf_ref_keep_data((keeper), (ratio)); \
+		Assert(pg_atomic_read_u64(&(rbuf)->slot[(keeper)->slot].pread) == (keeper_pread)); \
+		polar_ringbuf_update_keep_data(rbuf); \
+		Assert(pg_atomic_read_u64(&(rbuf)->pread) == (ring_pread)); \
+	} while (0)
+
+/* A reader still pins the ring after the data-keep reference skips past it. */
+static void
+test_keep_data_consumed_position(void)
+{
+	uint8	   *data = calloc(1, RINGBUF_SIZE);
+	polar_ringbuf_t rbuf;
+	polar_ringbuf_ref_t keeper;
+	polar_ringbuf_ref_t reader;
+	uint64		first;
+	uint64		pending;
+	uint64		later;
+	uint32		pktlen;
+	const uint32 payload_size = 16;
+	const size_t pkt_size = POLAR_RINGBUF_PKT_SIZE(payload_size);
+	int			i;
+
+	rbuf = polar_ringbuf_init(data, RINGBUF_SIZE, LWTRANCHE_POLAR_XLOG_QUEUE);
+	Assert(polar_ringbuf_new_ref(rbuf, true, &reader, "test_keep_reader"));
+
+	/* The reader consumes a few packets before the keeper exists. */
+	for (i = 0; i < 3; i++)
+	{
+		uint64		idx = polar_ringbuf_pkt_reserve(rbuf, pkt_size);
+
+		polar_ringbuf_set_pkt_length(rbuf, idx, payload_size);
+		polar_ringbuf_set_pkt_flag(rbuf, idx,
+								   POLAR_RINGBUF_PKT_WAL_META | POLAR_RINGBUF_PKT_READY);
+		Assert(polar_ringbuf_next_ready_pkt(&reader, &pktlen) == POLAR_RINGBUF_PKT_WAL_META);
+		polar_ringbuf_update_ref(&reader);
+	}
+	polar_ringbuf_update_keep_data(rbuf);
+	Assert(polar_ringbuf_new_ref(rbuf, true, &keeper, "test_keep_jump"));
+
+	pg_atomic_write_u64(&rbuf->slot[keeper.slot].visit, 0);
+
+	first = polar_ringbuf_pkt_reserve(rbuf, pkt_size);
+	polar_ringbuf_set_pkt_length(rbuf, first, payload_size);
+	polar_ringbuf_set_pkt_flag(rbuf, first,
+							   POLAR_RINGBUF_PKT_WAL_META | POLAR_RINGBUF_PKT_READY);
+	pending = polar_ringbuf_pkt_reserve(rbuf, pkt_size);
+	Assert(pg_atomic_read_u64(&rbuf->slot[keeper.slot].pread) == first);
+	Assert(pg_atomic_read_u64(&rbuf->pread) == first);
+
+	/* Keeper level with the reader; it stops at the unpublished packet. */
+	KEEP_DATA_CHECK(rbuf, &keeper, 1.0f, first, first);
+	KEEP_DATA_CHECK(rbuf, &keeper, 0.0f, pending, first);
+	Assert(pg_atomic_read_u64(&rbuf->slot[keeper.slot].visit)
+		   < pg_atomic_read_u64(&rbuf->slot[reader.slot].visit));
+
+	/* Keeper ahead of the reader, which still pins the first packet. */
+	KEEP_DATA_CHECK(rbuf, &keeper, 1.0f, pending, first);
+	KEEP_DATA_CHECK(rbuf, &keeper, 0.0f, pending, first);
+
+	Assert(polar_ringbuf_next_ready_pkt(&reader, &pktlen) == POLAR_RINGBUF_PKT_WAL_META);
+	polar_ringbuf_update_ref(&reader);
+	Assert(pg_atomic_read_u64(&rbuf->slot[reader.slot].pread) == pending);
+	polar_ringbuf_set_pkt_length(rbuf, pending, payload_size);
+	polar_ringbuf_set_pkt_flag(rbuf, pending,
+							   POLAR_RINGBUF_PKT_WAL_META | POLAR_RINGBUF_PKT_READY);
+
+	/* Level again, with the next packet published. */
+	KEEP_DATA_CHECK(rbuf, &keeper, 1.0f, pending, pending);
+	KEEP_DATA_CHECK(rbuf, &keeper, 0.0f, pending + pkt_size, pending);
+
+	/* Ahead again, the reader pins the newly published packet. */
+	KEEP_DATA_CHECK(rbuf, &keeper, 1.0f, pending + pkt_size, pending);
+
+	later = polar_ringbuf_pkt_reserve(rbuf, pkt_size);
+	Assert(later == pending + pkt_size);
+	polar_ringbuf_set_pkt_length(rbuf, later, payload_size);
+	polar_ringbuf_set_pkt_flag(rbuf, later,
+							   POLAR_RINGBUF_PKT_WAL_META | POLAR_RINGBUF_PKT_READY);
+	for (i = 0; i < 2; i++)
+	{
+		Assert(polar_ringbuf_next_ready_pkt(&reader, &pktlen) == POLAR_RINGBUF_PKT_WAL_META);
+		polar_ringbuf_update_ref(&reader);
+	}
+	Assert(pg_atomic_read_u64(&rbuf->slot[reader.slot].pread) == later + pkt_size);
+
+	/* Keeper behind the reader pins the ring itself. */
+	KEEP_DATA_CHECK(rbuf, &keeper, 1.0f, later, later);
+	KEEP_DATA_CHECK(rbuf, &keeper, 0.0f, later + pkt_size, later + pkt_size);
+
+	polar_ringbuf_release_ref(&reader);
+	polar_ringbuf_release_ref(&keeper);
+	free(data);
+}
+
 static void
 test_ringbuf_sigterm(SIGNAL_ARGS)
 {
@@ -420,6 +607,9 @@ test_ringbuf(PG_FUNCTION_ARGS)
 {
 	test_fix_pktlen_overflow();
 	test_single_ringbuf();
+	test_keep_data_publish_frontier();
+	test_promoted_ringbuf_ref();
+	test_keep_data_consumed_position();
 	test_stat_counters();
 	test_ringbuf_bgworker();
 	PG_RETURN_VOID();

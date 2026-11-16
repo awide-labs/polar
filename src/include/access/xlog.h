@@ -41,6 +41,7 @@ extern PGDLLIMPORT int wal_segment_size;
 extern PGDLLIMPORT int min_wal_size_mb;
 extern PGDLLIMPORT int max_wal_size_mb;
 extern PGDLLIMPORT int wal_keep_size_mb;
+extern PGDLLIMPORT int polar_wal_buffer_insert_locks;
 extern PGDLLIMPORT int max_slot_wal_keep_size_mb;
 extern PGDLLIMPORT int XLOGbuffers;
 extern PGDLLIMPORT int XLogArchiveTimeout;

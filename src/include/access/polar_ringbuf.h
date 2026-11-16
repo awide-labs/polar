@@ -43,14 +43,26 @@ typedef struct polar_ringbuf_slot_t
 {
 	/* Is this a strong reference? */
 	bool		strong;
-	/* The read position of the ring buffer */
-	uint64		pread;
 
 	/*
-	 * The times of read operation And compare visit times to get least read
-	 * position
+	 * The read position of the ring buffer.
+	 *
+	 * Published by the owning reference in polar_ringbuf_update_ref() and
+	 * read by polar_ringbuf_update_pread()/polar_ringbuf_evict_ref() while
+	 * holding rbuf->lock exclusively.  The owner also reads it without that
+	 * lock; monitoring reads it under the shared lock.
+	 *
+	 * A strong reference publishes it without taking the lock at all (it can
+	 * never be evicted, so nobody else writes this slot), hence the atomic.
 	 */
-	uint64		visit;
+	pg_atomic_uint64 pread;
+
+	/*
+	 * The times of read operation.  Statistics only: the least read position
+	 * is the minimum over the slots' pread, which is monotonic and therefore
+	 * directly comparable.
+	 */
+	pg_atomic_uint64 visit;
 	/* Each reference has one identity number */
 	uint64		ref_num;
 	char		ref_name[POLAR_RINGBUF_MAX_REF_NAME + 1];
@@ -65,8 +77,17 @@ typedef struct polar_ringbuf_ref_t
 	uint64		ref_num;
 	/* The slot number this reference occupied */
 	int			slot;
-	/* Is this a strong reference? */
+	/* Was this reference created strong, and so never evictable? */
 	bool		strong;
+
+	/*
+	 * Is the slot currently promoted to strong by this reference?  Set
+	 * between polar_ringbuf_get_ref() and polar_ringbuf_clear_ref(); always
+	 * false for a reference that is already strong.  While it is set the slot
+	 * cannot be evicted, so the owner may publish its read position without
+	 * the lock; see polar_ringbuf_update_ref().
+	 */
+	bool		promoted;
 	char		ref_name[POLAR_RINGBUF_MAX_REF_NAME + 1];
 } polar_ringbuf_ref_t;
 
@@ -178,23 +199,30 @@ polar_ringbuf_pkt_len(polar_ringbuf_t rbuf, uint64 idx)
 {
 	uint32		len;
 	uint8	   *buf = (uint8 *) &len;
-	size_t		phys,
-				split,
-				todo = sizeof(len);
+	const size_t todo = sizeof(len);
+	size_t		phys;
 
 	/* packet len is saved from idx+1 */
 	phys = POLAR_RINGBUF_IDX(rbuf, idx + 1);
-	split = ((phys + todo) > rbuf->size) ? rbuf->size - phys : 0;
 
-	if (unlikely(split > 0))
+	/*
+	 * The copy is duplicated into both branches rather than shared: a single
+	 * call site reached with a runtime size cannot be inlined, even when the
+	 * size is a constant four on the path that matters.  Given its own site,
+	 * the common path folds to a load instead of a call into memcpy(); this
+	 * runs several times per packet, and a four byte call is nearly all call
+	 * overhead.  The wrapping path keeps its two runtime-sized calls; the
+	 * length field straddles the end of the ring only once per wrap.
+	 */
+	if (unlikely(phys + todo > rbuf->size))
 	{
-		memcpy(buf, rbuf->data + phys, split);
-		buf += split;
-		todo -= split;
-		phys = 0;
-	}
+		size_t		split = rbuf->size - phys;
 
-	memcpy(buf, rbuf->data + phys, todo);
+		memcpy(buf, rbuf->data + phys, split);
+		memcpy(buf + split, rbuf->data, todo - split);
+	}
+	else
+		memcpy(buf, rbuf->data + phys, todo);
 
 	return len;
 }
@@ -205,6 +233,7 @@ extern void polar_ringbuf_release_ref(polar_ringbuf_ref_t *ref);
 extern bool polar_ringbuf_get_ref(polar_ringbuf_ref_t *ref);
 extern bool polar_ringbuf_clear_ref(polar_ringbuf_ref_t *ref);
 extern void polar_ringbuf_update_ref(polar_ringbuf_ref_t *ref);
+extern void polar_ringbuf_advance_ref(polar_ringbuf_ref_t *ref, uint32 pktlen);
 
 extern ssize_t polar_ringbuf_pkt_write(polar_ringbuf_t rbuf, uint64 idx, int offset, uint8 *buf, size_t len);
 extern ssize_t polar_ringbuf_read_next_pkt(polar_ringbuf_ref_t *ref,
@@ -239,6 +268,16 @@ polar_ringbuf_free_size(polar_ringbuf_t rbuf)
 }
 
 /*
+ * Is the reservation ending at end safe to write?  Use the caller's pread
+ * snapshot so readiness and backoff decisions can observe the same progress.
+ */
+static inline bool
+polar_ringbuf_reservation_ready(polar_ringbuf_t rbuf, uint64 end, uint64 pread)
+{
+	return (ssize_t) (end - pread) <= (ssize_t) (rbuf->size - 1);
+}
+
+/*
  * The data that is available or reserved for read.
  * With monotonic counters: avail = pwrite - slot_pread (always >= 0).
  */
@@ -248,7 +287,7 @@ polar_ringbuf_avail(polar_ringbuf_ref_t *ref)
 	polar_ringbuf_t rbuf = ref->rbuf;
 
 	return (ssize_t) (pg_atomic_read_u64(&rbuf->pwrite) -
-					  rbuf->slot[ref->slot].pread);
+					  pg_atomic_read_u64(&rbuf->slot[ref->slot].pread));
 }
 
 /*
@@ -262,12 +301,22 @@ polar_ringbuf_avail(polar_ringbuf_ref_t *ref)
  * Returns the monotonic position; use POLAR_RINGBUF_IDX() when accessing
  * rbuf->data[].
  *
- * Concurrent callers must serialize on an exclusive lock (e.g. the caller's
- * own spinlock, as XLogInsertRecord uses insertpos_lck).  Future work: the
- * read+write pair can be replaced with pg_atomic_fetch_add_u64() to make
- * reservation lock-free, once the surrounding critical section (e.g. the
- * paired CurrBytePos/PrevBytePos update in ReserveXLogInsertLocation) no
- * longer needs the spinlock.
+ * The read+write pair is not atomic, so it rests on the queue having a single
+ * producer at any one moment.  For the xlog queue the producer is whichever the
+ * node's role makes it: the walreceiver on a replica or datamax
+ * (polar_xlog_recv_queue_push()), the startup process replaying WAL on a standby
+ * (polar_standby_xlog_send_queue_push()), or local WAL insertion on a primary.
+ * These roles do not overlap.  A node in recovery cannot insert WAL, and a
+ * datamax node never leaves recovery (FinishWalRecovery() diverts into
+ * polar_datamax_main() and never returns).  A standby being promoted blocks in
+ * XLogShutdownWalRcv() until the walreceiver has stopped, then stops replay
+ * before it resets the queue and enables local insertion.
+ *
+ * WAL insertion no longer reserves here at all -- it takes its queue position
+ * from the same CAS that hands out the byte range, and accounts for it with
+ * pg_atomic_fetch_add_u64().  That add and this read-modify-write would
+ * interleave badly, so a second concurrent producer would break the queue even
+ * though each side looks safe on its own.
  */
 static inline uint64
 polar_ringbuf_pkt_reserve(polar_ringbuf_t rbuf, size_t len)
@@ -287,7 +336,7 @@ static inline uint8
 polar_ringbuf_next_ready_pkt(polar_ringbuf_ref_t *ref, uint32 *pktlen)
 {
 	polar_ringbuf_t rbuf = ref->rbuf;
-	uint64		idx = rbuf->slot[ref->slot].pread;
+	uint64		idx = pg_atomic_read_u64(&rbuf->slot[ref->slot].pread);
 	size_t		phys = POLAR_RINGBUF_IDX(rbuf, idx);
 
 	*pktlen = 0;
@@ -346,7 +395,6 @@ polar_ringbuf_set_pkt_flag(polar_ringbuf_t rbuf, uint64 idx, uint8 flag)
 	rbuf->data[POLAR_RINGBUF_IDX(rbuf, idx)] = flag;
 }
 
-extern polar_ringbuf_slot_t *polar_get_min_visit_slot_except_keep(polar_ringbuf_t rbuf, int keep_slot);
 extern void polar_prs_stat_reset(polar_ringbuf_t rbuf);
 
 #endif

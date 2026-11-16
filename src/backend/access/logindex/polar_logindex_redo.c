@@ -2308,6 +2308,7 @@ polar_logindex_primary_save(polar_logindex_redo_ctl_t instance)
 	DecodedXLogRecord *decoded;
 	static XLogReaderState *state = NULL;
 	static TimestampTz last_flush_time = 0;
+	uint64		popped = 0;
 
 	if (!instance || !instance->xlog_queue)
 		return;
@@ -2323,6 +2324,16 @@ polar_logindex_primary_save(polar_logindex_redo_ctl_t instance)
 	{
 		if (polar_xlog_remove_payload(&decoded->header))
 			polar_logindex_save_lsn(instance, state);
+
+		/*
+		 * Popping advances our own reference, but the ring's read position is
+		 * pinned by the data-keep one, so writers waiting in
+		 * polar_ringbuf_wait_for_space() stay blocked until it catches up.
+		 * Doing that only after the loop drains releases them in one batch,
+		 * behind a walk over the entire backlog; keep it moving instead.
+		 */
+		if (++popped % POLAR_XLOG_QUEUE_KEEP_DATA_INTERVAL == 0)
+			polar_xlog_send_queue_keep_data(instance->xlog_queue);
 	}
 
 	polar_xlog_send_queue_keep_data(instance->xlog_queue);

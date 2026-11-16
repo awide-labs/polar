@@ -92,6 +92,7 @@
 #include "storage/dsm_impl.h"
 #include "storage/fd.h"
 #include "storage/large_object.h"
+#include "storage/lwlock.h"
 #include "storage/pg_shmem.h"
 #include "storage/polar_session_context.h"
 #include "storage/predicate.h"
@@ -132,6 +133,7 @@
 #include "storage/bulk_write.h"
 #include "storage/polar_fd.h"
 #include "storage/polar_rsc.h"
+#include "storage/polar_shmem_tune.h"
 #include "storage/polar_zc.h"
 #include "storage/polar_xlogbuf.h"
 #include "utils/polar_local_cache.h"
@@ -722,6 +724,13 @@ static const struct config_enum_entry huge_pages_options[] = {
 	{NULL, 0, false}
 };
 
+static const struct config_enum_entry huge_pages_status_options[] = {
+	{"off", HUGE_PAGES_OFF, false},
+	{"on", HUGE_PAGES_ON, false},
+	{"unknown", HUGE_PAGES_UNKNOWN, false},
+	{NULL, 0, false}
+};
+
 static const struct config_enum_entry recovery_prefetch_options[] = {
 	{"off", RECOVERY_PREFETCH_OFF, false},
 	{"on", RECOVERY_PREFETCH_ON, false},
@@ -952,6 +961,7 @@ int			ssl_renegotiation_limit;
  */
 int			huge_pages;
 int			huge_page_size;
+int			huge_pages_status = HUGE_PAGES_UNKNOWN;
 
 /* POLAR */
 /* polar_commit, format:d31084e9d11 */
@@ -1665,6 +1675,37 @@ static struct config_bool ConfigureNamesBool[] =
 			GUC_NO_RESET_ALL | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_CHANGABLE
 		},
 		&polar_enable_zero_copy,
+		true,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"polar_shmem_numa_interleave", PGC_POSTMASTER, POLAR_STORAGE,
+			gettext_noop("Enables NUMA interleaving of the main shared-memory segment."),
+			gettext_noop("Spreads the segment's pages across NUMA nodes with CPUs instead of "
+						 "leaving each on the node that first touches it. Memory-only nodes "
+						 "are excluded. Has no effect with fewer than two nodes with CPUs, "
+						 "or when the postmaster runs under an explicit memory policy such as "
+						 "numactl."),
+			GUC_NO_RESET_ALL | POLAR_GUC_IS_VISIBLE | POLAR_GUC_IS_CHANGABLE
+		},
+		&polar_shmem_numa_interleave,
+		true,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"polar_shmem_prefault", PGC_POSTMASTER, POLAR_STORAGE,
+			gettext_noop("Enables prefaulting of the shared-memory segment at startup."),
+			gettext_noop("Faults in the whole shared-memory segment in a background worker "
+						 "at startup, under its inherited NUMA policy. This reduces "
+						 "huge-page allocation and zeroing during queries without "
+						 "blocking the postmaster. Pages not yet prefaulted are still "
+						 "faulted on demand. Only has effect when shared memory uses "
+						 "huge pages."),
+			GUC_NO_RESET_ALL | POLAR_GUC_IS_VISIBLE | POLAR_GUC_IS_CHANGABLE
+		},
+		&polar_shmem_prefault,
 		true,
 		NULL, NULL, NULL
 	},
@@ -3576,6 +3617,18 @@ static struct config_int ConfigureNamesInt[] =
 	},
 
 	{
+		{"polar_send_xlog_meta_size", PGC_SIGHUP, REPLICATION_SENDING,
+			gettext_noop("The max size(bytes) of xlog meta to send for walsender."),
+			NULL,
+			GUC_UNIT_BYTE | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_CHANGABLE
+		},
+		&polar_send_xlog_meta_size,
+		/* MAX_SEND_SIZE, spelled out because walsender.c keeps it private */
+		XLOG_BLCKSZ * 16, 0, 16 * 1024 * 1024,
+		NULL, NULL, NULL
+	},
+
+	{
 		{"polar_recovery_bulk_read_size", PGC_SIGHUP, WAL_RECOVERY,
 			gettext_noop("Number of WAL pages to read from storage in one I/O during recovery."),
 			NULL,
@@ -3595,6 +3648,22 @@ static struct config_int ConfigureNamesInt[] =
 		&polar_hostid,
 		/* -1 means this variable is disabled */
 		1, 1, POLAR_MAX_PDB_HOSTID,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"polar_wal_buffer_insert_locks", PGC_POSTMASTER, POLAR_STORAGE,
+			gettext_noop("Number of WAL insertion locks."),
+			NULL,
+			POLAR_GUC_IS_VISIBLE | POLAR_GUC_IS_CHANGABLE
+		},
+		&polar_wal_buffer_insert_locks,
+
+		/*
+		 * Keep below MAX_SIMUL_LWLOCKS: WALInsertLockAcquireExclusive() takes
+		 * them all at once.
+		 */
+		256, 1, MAX_SIMUL_LWLOCKS / 2,
 		NULL, NULL, NULL
 	},
 
@@ -7954,6 +8023,17 @@ static struct config_enum ConfigureNamesEnum[] =
 		},
 		&huge_pages,
 		HUGE_PAGES_TRY, huge_pages_options,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"huge_pages_status", PGC_INTERNAL, PRESET_OPTIONS,
+			gettext_noop("Indicates the status of huge pages."),
+			NULL,
+			GUC_NOT_IN_SAMPLE | GUC_DISALLOW_IN_FILE
+		},
+		&huge_pages_status,
+		HUGE_PAGES_UNKNOWN, huge_pages_status_options,
 		NULL, NULL, NULL
 	},
 

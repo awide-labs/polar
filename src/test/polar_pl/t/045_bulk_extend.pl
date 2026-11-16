@@ -40,6 +40,10 @@ $node_primary->append_conf('postgresql.conf', "enable_seqscan = off");
 $node_primary->start;
 my $backup_name = 'my_backup';
 
+# Keep the primary from recycling WAL the standby has not received yet
+# when it crash-restarts below
+$node_primary->polar_create_slot('standby');
+
 # Take backup
 $node_primary->backup($backup_name);
 
@@ -47,6 +51,7 @@ $node_primary->backup($backup_name);
 my $node_standby = PostgreSQL::Test::Cluster->new('standby');
 $node_standby->init_from_backup($node_primary, $backup_name,
 	has_streaming => 1);
+$node_standby->append_conf('postgresql.conf', "primary_slot_name = standby");
 $node_standby->start;
 
 $node_primary->safe_psql('postgres', 'CREATE EXTENSION amcheck');

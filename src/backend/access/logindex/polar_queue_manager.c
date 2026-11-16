@@ -688,6 +688,7 @@ polar_xlog_send_queue_raw_data_pop(polar_ringbuf_ref_t *ref,
 	while (polar_ringbuf_avail(ref) > 0
 		   && polar_ringbuf_next_ready_pkt(ref, &pktlen) != POLAR_RINGBUF_PKT_INVALID_TYPE)
 	{
+		uint8	   *pkt = data + sizeof(uint32);
 		ssize_t		len;
 
 		/*
@@ -698,7 +699,16 @@ polar_xlog_send_queue_raw_data_pop(polar_ringbuf_ref_t *ref,
 		if (pktlen + sizeof(uint32) > free_size)
 			break;
 
-		polar_ringbuf_read_next_pkt(ref, 0, (uint8 *) &lsn, sizeof(XLogRecPtr));
+		/*
+		 * Copy the packet out before deciding whether to keep it: the
+		 * record's end lsn is its first field, so this reads it without a
+		 * second pass over the ring buffer.  Bailing out below leaves the
+		 * bytes where they are, unaccounted for and overwritten by the next
+		 * call.
+		 */
+		len = polar_ringbuf_read_next_pkt(ref, 0, pkt, pktlen);
+		POLAR_ASSERT_PANIC(len == pktlen);
+		memcpy(&lsn, pkt, sizeof(lsn));
 
 		/*
 		 * Pop XLOG which is already been written out and flushed to disk.
@@ -719,23 +729,20 @@ polar_xlog_send_queue_raw_data_pop(polar_ringbuf_ref_t *ref,
 		}
 
 		memcpy(data, &pktlen, sizeof(uint32));
-		len = sizeof(uint32);
-		data += sizeof(uint32);
-		len += polar_ringbuf_read_next_pkt(ref, 0, data, pktlen);
-		POLAR_ASSERT_PANIC(len == pktlen + sizeof(uint32));
+		len += sizeof(uint32);
 
 		if (unlikely(polar_enable_debug))
 		{
 			uint32		xlog_len;
 
-			memcpy(&xlog_len, data + sizeof(lsn), sizeof(xlog_len));
+			memcpy(&xlog_len, pkt + sizeof(lsn), sizeof(xlog_len));
 
 			elog(LOG, "%s lsn=%X/%X", PG_FUNCNAME_MACRO, LSN_FORMAT_ARGS(lsn - xlog_len));
 		}
 
-		data += pktlen;
+		data += len;
 
-		polar_ringbuf_update_ref(ref);
+		polar_ringbuf_advance_ref(ref, pktlen);
 		copy_size += len;
 		free_size -= len;
 
@@ -839,20 +846,35 @@ polar_xlog_queue_update_reader(XLogReaderState *state, XLogRecPtr read_rec_ptr, 
 	state->latestPagePtr = end_page_ptr;
 }
 
+/*
+ * Read the packet header the reference is positioned on: the record's end lsn
+ * followed by its length on disk.  The two fields are adjacent, so take them
+ * in one pass rather than walking the ring buffer once per field.
+ */
+static void
+polar_xlog_queue_read_head(polar_ringbuf_ref_t *ref, XLogRecPtr *end_rec_ptr,
+						   uint32 *xlog_len)
+{
+	char		head[POLAR_XLOG_HEAD_SIZE];
+	ssize_t		offset = 0;
+
+	POLAR_COPY_QUEUE_CONTENT(ref, offset, head, sizeof(head));
+
+	memcpy(end_rec_ptr, head, sizeof(*end_rec_ptr));
+	memcpy(xlog_len, head + sizeof(*end_rec_ptr), sizeof(*xlog_len));
+}
+
 static XLogRecPtr
 polar_xlog_queue_remove_outdate(polar_ringbuf_ref_t *ref, XLogReaderState *state)
 {
 	uint32		pktlen = 0;
-	ssize_t		offset;
 	uint32		xlog_len;
 	XLogRecPtr	read_rec_ptr,
 				end_rec_ptr;
 
 	do
 	{
-		offset = 0;
-		POLAR_COPY_QUEUE_CONTENT(ref, offset, &end_rec_ptr, sizeof(XLogRecPtr));
-		POLAR_COPY_QUEUE_CONTENT(ref, offset, &xlog_len, sizeof(uint32));
+		polar_xlog_queue_read_head(ref, &end_rec_ptr, &xlog_len);
 		read_rec_ptr = end_rec_ptr - xlog_len;
 
 		if (read_rec_ptr < state->DecodeRecPtr)
@@ -917,21 +939,21 @@ polar_xlog_queue_decode_record(polar_ringbuf_ref_t *ref, ssize_t offset, uint32 
 	return decoded;
 }
 
+/*
+ * Pop the packet the reference is positioned on, whose header the caller has
+ * already read, and keep going while a packet turns out to start before
+ * state->currRecPtr.
+ */
 static DecodedXLogRecord *
-polar_xlog_queue_pop_record(polar_ringbuf_ref_t *ref, uint32 pktlen, XLogReaderState *state, bool decode_payload)
+polar_xlog_queue_pop_record(polar_ringbuf_ref_t *ref, uint32 pktlen,
+							XLogRecPtr end_rec_ptr, uint32 xlog_len,
+							XLogReaderState *state, bool decode_payload)
 {
-	uint32		xlog_len;
-	XLogRecPtr	read_rec_ptr,
-				end_rec_ptr;
-	ssize_t		offset;
 	DecodedXLogRecord *decode_record = NULL;
 
-	do
+	for (;;)
 	{
-		offset = 0;
-		POLAR_COPY_QUEUE_CONTENT(ref, offset, &end_rec_ptr, sizeof(XLogRecPtr));
-		POLAR_COPY_QUEUE_CONTENT(ref, offset, &xlog_len, sizeof(uint32));
-		read_rec_ptr = end_rec_ptr - xlog_len;
+		XLogRecPtr	read_rec_ptr = end_rec_ptr - xlog_len;
 
 		/*
 		 * The read_rec_ptr is exactlly the first byte of wal record, but the
@@ -939,13 +961,25 @@ polar_xlog_queue_pop_record(polar_ringbuf_ref_t *ref, uint32 pktlen, XLogReaderS
 		 * words, state->currRecPtr may be lower than read_rec_ptr.
 		 */
 		if (likely(read_rec_ptr >= state->currRecPtr))
-			decode_record = polar_xlog_queue_decode_record(ref, offset, pktlen,
+			decode_record = polar_xlog_queue_decode_record(ref, POLAR_XLOG_HEAD_SIZE, pktlen,
 														   read_rec_ptr, end_rec_ptr,
 														   state, decode_payload);
-		polar_ringbuf_update_ref(ref);
+
+		/*
+		 * pktlen is the length polar_ringbuf_next_ready_pkt() already decoded
+		 * out of the packet header, so advance with it directly instead of
+		 * making polar_ringbuf_update_ref() go back and read that header
+		 * again.
+		 */
+		polar_ringbuf_advance_ref(ref, pktlen);
+
+		if (decode_record != NULL || polar_ringbuf_avail(ref) == 0 ||
+			polar_ringbuf_next_ready_pkt(ref, &pktlen) != POLAR_RINGBUF_PKT_WAL_META)
+			break;
+
+		polar_xlog_queue_read_head(ref, &end_rec_ptr, &xlog_len);
 	}
-	while (decode_record == NULL && polar_ringbuf_avail(ref) > 0 &&
-		   polar_ringbuf_next_ready_pkt(ref, &pktlen) == POLAR_RINGBUF_PKT_WAL_META);
+
 	return decode_record;
 }
 
@@ -984,7 +1018,15 @@ polar_xlog_queue_ref_pop_ahead(polar_ringbuf_ref_t *ref, XLogReaderState *state,
 					}
 				}
 				else
-					decode_record = polar_xlog_queue_pop_record(ref, pktlen, state, decode_payload);
+				{
+					XLogRecPtr	end_rec_ptr;
+					uint32		xlog_len;
+
+					polar_xlog_queue_read_head(ref, &end_rec_ptr, &xlog_len);
+					decode_record = polar_xlog_queue_pop_record(ref, pktlen,
+																end_rec_ptr, xlog_len,
+																state, decode_payload);
+				}
 
 				break;
 			}
@@ -1315,6 +1357,7 @@ polar_xlog_send_queue_record_pop(polar_ringbuf_t queue, XLogReaderState *state)
 	uint8		pkt_type;
 	char	   *errormsg = NULL;
 	DecodedXLogRecord *decoded = NULL;
+	static XLogRecPtr flush_lsn = InvalidXLogRecPtr;
 	static polar_ringbuf_ref_t ref =
 	{
 		.slot = -1
@@ -1329,7 +1372,8 @@ polar_xlog_send_queue_record_pop(polar_ringbuf_t queue, XLogReaderState *state)
 	if (polar_ringbuf_avail(&ref) > 0
 		&& (pkt_type = polar_ringbuf_next_ready_pkt(&ref, &pktlen)) != POLAR_RINGBUF_PKT_INVALID_TYPE)
 	{
-		XLogRecPtr	lsn = InvalidXLogRecPtr;
+		XLogRecPtr	end_rec_ptr;
+		uint32		xlog_len;
 
 		if (pkt_type != POLAR_RINGBUF_PKT_WAL_META)
 		{
@@ -1337,15 +1381,40 @@ polar_xlog_send_queue_record_pop(polar_ringbuf_t queue, XLogReaderState *state)
 				 pkt_type, ref.ref_name);
 		}
 
-		polar_ringbuf_read_next_pkt(&ref, 0, (uint8 *) &lsn, sizeof(XLogRecPtr));
+		/*
+		 * Read the packet header once.  The flush test below needs the end
+		 * lsn and the decode needs both fields, so peeking at the lsn on its
+		 * own would walk the ring buffer twice for the same twelve bytes.
+		 */
+		polar_xlog_queue_read_head(&ref, &end_rec_ptr, &xlog_len);
 
 		/* Primary save logindex when xlog is flushed */
-		if (lsn > GetFlushRecPtr(NULL))
-			return NULL;
+		if (XLogRecPtrIsInvalid(flush_lsn) || end_rec_ptr > flush_lsn)
+		{
+			flush_lsn = GetFlushRecPtr(NULL);
+
+			if (end_rec_ptr > flush_lsn)
+				return NULL;
+		}
 
 		XLogReleasePreviousRecord(state);
 		POLAR_ASSERT_PANIC(!XLogReaderHasQueuedRecordOrError(state));
-		polar_xlog_queue_ref_pop_ahead(&ref, state, false);
+
+		/*
+		 * Go straight to the pop, rather than through
+		 * polar_xlog_queue_ref_pop_ahead(), which would redo the availability
+		 * and packet-ready checks just made above.  Its other branches cannot
+		 * apply here: the type check above rejects everything but WAL_META,
+		 * and xlog_queue_catch_up is process-local and set when this
+		 * reference is created, so the file-reading paths (unusable anyway,
+		 * since the saver allocates its reader with no page_read callback)
+		 * are unreachable in this process.
+		 */
+		polar_xlog_queue_pop_record(&ref, pktlen, end_rec_ptr, xlog_len, state, false);
+
+		if (unlikely(polar_enable_debug))
+			elog(LOG, "%s lsn=%X/%X", PG_FUNCNAME_MACRO, LSN_FORMAT_ARGS(state->DecodeRecPtr));
+
 		decoded = XLogNextRecord(state, &errormsg);
 
 		if (decoded == NULL)
