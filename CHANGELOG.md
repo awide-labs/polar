@@ -20,6 +20,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `PANIC: For xlog send queue there should be only WAL META`, all writing
   sessions could hang, or a replica could stop replaying WAL and fail
   queries with `Read a future page due to timeout` (XCOM-237).
+- Fixed a bug where a checkpoint could clear the status flags of another
+  backend. This happened when the checkpoint invalidated a replication
+  slot that kept too much WAL (`max_slot_wal_keep_size`). As a result,
+  VACUUM on the primary could remove rows that were still needed by a
+  standby using `hot_standby_feedback` without a replication slot, and
+  queries on that standby were cancelled. Backported from PostgreSQL
+  15.20 (XCOM-235)
 
 ### Performance
 
