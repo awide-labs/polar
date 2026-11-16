@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- Add the read-only `huge_pages_status` GUC for checking whether the
+  server is using huge pages, especially with `huge_pages = try`. Check it
+  with `SHOW huge_pages_status;`. Backported from PostgreSQL 17
+  (XCOM-236)
+
 ## [15.18.2] - 2026-11-05
 
 ### Added
