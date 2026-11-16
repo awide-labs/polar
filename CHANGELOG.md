@@ -11,6 +11,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Fixed `pg_ctl promote` of a standby returning before recovery finished,
   so a query right after promote could still fail or see the server in
   recovery (XCOM-240)
+- Fixed a bug where a checkpoint could clear the status flags of another
+  backend. This happened when the checkpoint invalidated a replication
+  slot that kept too much WAL (`max_slot_wal_keep_size`). As a result,
+  VACUUM on the primary could remove rows that were still needed by a
+  standby using `hot_standby_feedback` without a replication slot, and
+  queries on that standby were cancelled. Backported from upstream
+  PostgreSQL (XCOM-235)
 - Fixed a race on weakly ordered CPUs, such as ARM, in which a session
   writing to the in-memory WAL queue could overwrite WAL that the logindex
   saver or a walsender was still reading from the queue (XCOM-237).
