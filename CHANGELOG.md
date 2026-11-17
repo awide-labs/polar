@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- Rebased on PostgreSQL 17.12, which includes fixes for several security
+  vulnerabilities (XCOM-241)
 - Increase the default value of `polar_wal_buffer_insert_locks` from 8 to
   256. A higher number of WAL insertion locks can improve throughput when
   many sessions commit at once, particularly with WAL pipelining enabled and
