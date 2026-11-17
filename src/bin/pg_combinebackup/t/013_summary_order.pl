@@ -19,6 +19,8 @@ $primary->init(allows_streaming => 1);
 $primary->append_conf('postgresql.conf', <<EOF);
 summarize_wal = on
 autovacuum = off
+# let VACUUM truncate the heap without keeping bulk-extended pages
+polar_heap_bulk_extend_size = 0
 EOF
 $primary->start;
 
