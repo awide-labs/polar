@@ -129,15 +129,20 @@ $node_datamax->reload;
 $replay_ret = 0;
 $replay_ret = replay_check($node_standby);
 ok($replay_ret == 1, "standby replay data success");
-my $standby_ret = $node_standby->safe_psql('postgres',"select txid_current_snapshot();");
+# An open snapshot pins the standby's xmin, so what it feeds back stays
+# $standby_xmin whatever the master runs meanwhile (e.g. autovacuum).
+my $standby_session = $node_standby->background_psql('postgres');
+$standby_session->query_safe('BEGIN ISOLATION LEVEL REPEATABLE READ');
+my $standby_ret = $standby_session->query_safe('SELECT txid_current_snapshot()');
 my($standby_xmin, $standby_xmax, $standby_xip) = split /:/, $standby_ret;
 wait_xmin_update_ready($node_datamax, $node_standby->name, $standby_xmin);
 wait_xmin_update_ready($node_master, $node_datamax->name, $standby_xmin);
 $datamax_xmin = get_slot_xmins($node_datamax, $node_standby->name, "xmin IS NOT NULL");
 $master_xmin = get_slot_xmins($node_master, $node_datamax->name, "xmin IS NOT NULL");
 print "standby_xmin: $standby_xmin, datamax_xmin: $datamax_xmin, master_xmin: $master_xmin\n";
-ok($datamax_xmin <= $standby_xmin, 'datamax record standby xmin when feedback is enabled both on datamax and standby');
-ok($master_xmin >= $standby_xmin, 'datamax feedback standby xmin to master when feedback is enabled both on datamax and standby');
+is($datamax_xmin, $standby_xmin, 'datamax record standby xmin when feedback is enabled both on datamax and standby');
+is($master_xmin, $standby_xmin, 'datamax feedback standby xmin to master when feedback is enabled both on datamax and standby');
+$standby_session->quit;
 
 # 3. enable hot_standby_feedback on datamax, disable hot_standby_feedback on standby
 note "enable hot_standby_feedback on datamax, disable hot_standby_feedback on standby";
@@ -163,12 +168,15 @@ $node_datamax->reload;
 $replay_ret = 0;
 $replay_ret = replay_check($node_standby);
 ok($replay_ret == 1, "standby replay data success");
-$standby_ret = $node_standby->safe_psql('postgres',"select txid_current_snapshot();");
+$standby_session = $node_standby->background_psql('postgres');
+$standby_session->query_safe('BEGIN ISOLATION LEVEL REPEATABLE READ');
+$standby_ret = $standby_session->query_safe('SELECT txid_current_snapshot()');
 ($standby_xmin, $standby_xmax, $standby_xip) = split /:/, $standby_ret;
 wait_xmin_update_ready($node_datamax, $node_standby->name, $standby_xmin);
 $datamax_xmin = get_slot_xmins($node_datamax, $node_standby->name, "xmin IS NOT NULL");
 $master_xmin = get_slot_xmins($node_master, $node_datamax->name, "xmin IS NULL");
-ok($datamax_xmin <= $standby_xmin, 'datamax record standby xmin when feedback is enabled on standby but disabled on datamax');
+is($datamax_xmin, $standby_xmin, 'datamax record standby xmin when feedback is enabled on standby but disabled on datamax');
+$standby_session->quit;
 is($master_xmin, '', 'master xmin is null when feedback is enabled on standby but disabled on datamax');
 
 # test for datamax starting streaming from last valid lsn
