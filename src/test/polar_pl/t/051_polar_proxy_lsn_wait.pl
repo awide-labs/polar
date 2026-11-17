@@ -30,6 +30,13 @@ use warnings;
 use PostgreSQL::Test::Cluster;
 use PostgreSQL::Test::Utils;
 use Test::More;
+use Time::HiRes ();
+
+my $stopped_waiter_pid;
+END
+{
+	kill 'CONT', $stopped_waiter_pid if defined $stopped_waiter_pid;
+}
 
 # Encode a uint64 byte offset as the textual form the strict parser
 # accepts (plain unsigned integer; the GUC is uint64, not pg_lsn 'X/Y'
@@ -181,6 +188,37 @@ like($stderr, qr/polar_proxy_lsn_wait_timeout/,
 	'strict: stable detail token present');
 
 # ---------------------------------------------------------------------
+# 4. Finite waits clamp the final sleep to the remaining deadline.
+# ---------------------------------------------------------------------
+my $clamp_stats_before = get_wait_stats($node_replica);
+
+($stdout, $stderr) = ('', '');
+$node_replica->psql(
+	'postgres',
+	qq(
+		SET polar_proxy_wait_timeout_ms = 15;
+		SET polar_proxy_wait_max_delay_us = 10000;
+		SET polar_consistency_mode = 'best_effort';
+		SET polar_xact_split_wait_lsn = '$future_lsn';
+		SELECT count(*) FROM t;
+	),
+	stdout => \$stdout,
+	stderr => \$stderr);
+
+like($stderr, qr/polar_proxy_lsn_wait_timeout/,
+	'sleep clamp: finite wait reaches timeout');
+
+my $clamp_stats_after = get_wait_stats($node_replica);
+my $clamped_requested_sleep_us =
+  $clamp_stats_after->{requested_sleep_us_total}
+  - $clamp_stats_before->{requested_sleep_us_total};
+
+cmp_ok($clamped_requested_sleep_us, '>', 0,
+	'sleep clamp: requested sleep is recorded');
+cmp_ok($clamped_requested_sleep_us, '<=', 15000,
+	'sleep clamp: requested sleep does not exceed the deadline');
+
+# ---------------------------------------------------------------------
 # 5. Interruption - expose one wait event for the full loop, then cancel.
 # ---------------------------------------------------------------------
 my ($waiter, $waiter_pid) =
@@ -238,7 +276,7 @@ my $stats_after = get_wait_stats($node_replica);
 
 is(
 	$stats_after->{calls_total} - $stats_before->{calls_total},
-	6,
+	7,
 	'stats: all replay-wait calls counted');
 is(
 	$stats_after->{ready_immediately_total}
@@ -247,7 +285,7 @@ is(
 	'stats: immediate calls counted');
 is(
 	$stats_after->{waited_total} - $stats_before->{waited_total},
-	4,
+	5,
 	'stats: sleep-loop entries counted');
 is(
 	$stats_after->{completed_after_wait_total}
@@ -257,7 +295,7 @@ is(
 is(
 	$stats_after->{best_effort_timeout_total}
 	  - $stats_before->{best_effort_timeout_total},
-	1,
+	2,
 	'stats: best-effort timeout counted');
 is(
 	$stats_after->{strict_timeout_total}
@@ -306,7 +344,7 @@ for my $metric (
 	$wait_histogram_delta +=
 	  $stats_after->{$metric} - $stats_before->{$metric};
 }
-is($wait_histogram_delta, 4, 'stats: wait histogram is non-overlapping');
+is($wait_histogram_delta, 5, 'stats: wait histogram is non-overlapping');
 
 my $gap_histogram_delta = 0;
 for my $metric (
@@ -316,7 +354,7 @@ for my $metric (
 	$gap_histogram_delta +=
 	  $stats_after->{$metric} - $stats_before->{$metric};
 }
-is($gap_histogram_delta, 6, 'stats: gap histogram is non-overlapping');
+is($gap_histogram_delta, 7, 'stats: gap histogram is non-overlapping');
 
 is(
 	$stats_after->{calls_total},
@@ -327,6 +365,83 @@ is(
 	  + $stats_after->{interrupted_total}
 	  + $stats_after->{waiters_current},
 	'stats: required call accounting identity holds');
+
+my $delayed_stats_before = get_wait_stats($node_replica);
+$node_replica->safe_psql('postgres', 'SELECT pg_wal_replay_pause()');
+$node_primary->safe_psql('postgres', 'INSERT INTO t VALUES (10000)');
+$node_replica->poll_query_until('postgres',
+	"SELECT pg_get_wal_replay_pause_state() = 'paused'")
+  or die 'replay did not pause';
+my $delayed_lsn =
+  $node_primary->safe_psql('postgres', "SELECT $LSN_NUMERIC");
+my $delayed_waiter = $node_replica->background_psql('postgres');
+my $delayed_pid = $delayed_waiter->query_safe('SELECT pg_backend_pid()');
+$delayed_waiter->query_until(qr//, qq(
+	SET polar_proxy_wait_timeout_ms = 10000;
+	SET polar_consistency_mode = 'strict';
+	SET polar_xact_split_wait_lsn = '$delayed_lsn';
+	SELECT 'delayed_rows=' || count(*) FROM t;
+));
+ok($node_replica->poll_query_until('postgres',
+	"SELECT wait_event = 'PolarProxyLsnWait' FROM pg_stat_activity WHERE pid = $delayed_pid"),
+	'delayed success: backend enters wait loop');
+$node_replica->safe_psql('postgres', 'SELECT pg_wal_replay_resume()');
+ok(pump_until($delayed_waiter->{run}, $delayed_waiter->{timeout},
+	\$delayed_waiter->{stdout}, qr/delayed_rows=1002/),
+	'delayed success: query sees replayed insert');
+$delayed_waiter->quit();
+my $delayed_stats_after = get_wait_stats($node_replica);
+is($delayed_stats_after->{completed_after_wait_total}
+	- $delayed_stats_before->{completed_after_wait_total}, 1,
+	'delayed success: completion counted');
+
+SKIP:
+{
+	skip 'SIGSTOP is unavailable on Windows', 6 if $windows_os;
+	$node_replica->safe_psql('postgres', 'SELECT pg_wal_replay_pause()');
+	$node_primary->safe_psql('postgres', 'INSERT INTO t VALUES (10001)');
+	$node_replica->poll_query_until('postgres',
+		"SELECT pg_get_wal_replay_pause_state() = 'paused'")
+	  or die 'replay did not pause';
+	my $late_lsn =
+	  $node_primary->safe_psql('postgres', "SELECT $LSN_NUMERIC");
+	my $late_stats_before = get_wait_stats($node_replica);
+	my $late_waiter =
+	  $node_replica->background_psql('postgres', on_error_stop => 0);
+	my $late_pid = $late_waiter->query_safe('SELECT pg_backend_pid()');
+	$late_waiter->query_until(qr//, qq(
+		SET polar_proxy_wait_timeout_ms = 1000;
+		SET polar_proxy_wait_max_delay_us = 10000;
+		SET polar_consistency_mode = 'strict';
+		SET polar_xact_split_wait_lsn = '$late_lsn';
+		SELECT 'late_rows=' || count(*) FROM t;
+	));
+	ok($node_replica->poll_query_until('postgres',
+		"SELECT wait_event = 'PolarProxyLsnWait' FROM pg_stat_activity WHERE pid = $late_pid"),
+		'late replay: backend enters wait loop');
+	# Let the loop settle into its long polling sleeps before stopping
+	# the backend, so the stop lands inside a sleep and the resumed
+	# iteration observes the reached target instead of re-checking
+	# the deadline.
+	Time::HiRes::sleep(0.1);
+	is(kill('STOP', $late_pid), 1, 'late replay: stop waiting backend');
+	$stopped_waiter_pid = $late_pid;
+	Time::HiRes::sleep(1.1);
+	$node_replica->safe_psql('postgres', 'SELECT pg_wal_replay_resume()');
+	$node_primary->wait_for_catchup($node_replica);
+	is(kill('CONT', $late_pid), 1, 'late replay: resume after target and deadline');
+	undef $stopped_waiter_pid;
+	ok(pump_until($late_waiter->{run}, $late_waiter->{timeout},
+		\$late_waiter->{stdout}, qr/late_rows=1003/),
+		'late replay: reached target takes precedence over the deadline');
+	unlike($late_waiter->{stderr}, qr/polar_proxy_lsn_wait_timeout/,
+		'late replay: no timeout once the target was reached');
+	my $late_stats_after = get_wait_stats($node_replica);
+	is($late_stats_after->{completed_after_wait_total}
+	  - $late_stats_before->{completed_after_wait_total}, 1,
+		'late replay: late success counted as completed');
+	$late_waiter->quit();
+}
 
 # ---------------------------------------------------------------------
 # 8. Large timeout must not overflow the int32 deadline.

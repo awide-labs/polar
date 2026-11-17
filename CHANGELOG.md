@@ -15,6 +15,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Fixed replica LSN waits for Polar Proxy lasting longer than
+  polar_proxy_wait_timeout_ms when the backend is delayed by the OS scheduler.
+  (XCOM-250)
 - `polar_tools datamax-get-wal` now refuses to run while the datamax node
   is up, so it cannot overwrite `polar_datamax_meta` at the same time as
   walreceiver (XCOM-252)
