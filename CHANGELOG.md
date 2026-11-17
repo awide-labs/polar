@@ -17,6 +17,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- A transaction that imports a snapshot with `SET TRANSACTION SNAPSHOT`,
+  such as a parallel `pg_dump` worker, now sees the data as of the export.
+  Before, with `polar_csn_enable` on, it also saw transactions committed
+  between the export and the import (XCOM-242)
 - Fixed WAL streaming failures after a crash for clients that start from
   a replication slot's position. This could occur if the slot was created
   and advanced during the same checkpoint. For example, `pg_receivewal`

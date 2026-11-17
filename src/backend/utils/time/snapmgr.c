@@ -516,6 +516,9 @@ SetTransactionSnapshot(Snapshot sourcesnap, VirtualTransactionId *sourcevxid,
 			   sourcesnap->subxcnt * sizeof(TransactionId));
 	CurrentSnapshot->suboverflowed = sourcesnap->suboverflowed;
 	CurrentSnapshot->takenDuringRecovery = sourcesnap->takenDuringRecovery;
+	/* in CSN mode, visibility is decided by these, not by the xid arrays */
+	CurrentSnapshot->polar_snapshot_csn = sourcesnap->polar_snapshot_csn;
+	CurrentSnapshot->polar_csn_xid_snapshot = sourcesnap->polar_csn_xid_snapshot;
 	/* NB: curcid should NOT be copied, it's a local matter */
 
 	CurrentSnapshot->snapXactCompletionCount = 0;
