@@ -70,16 +70,31 @@ my $snap = $exporter->query_safe('SELECT pg_export_snapshot()');
 my $snapfile = slurp_file($standby->data_dir . "/pg_snapshots/$snap");
 note("exported snapshot $snap:\n$snapfile");
 
+# With polar_csn_enable, a recovery snapshot is defined by its CSN and
+# exports no running XIDs, so only the visibility check below applies.
+my $csn_enabled =
+  $standby->safe_psql('postgres', 'show polar_csn_enable') eq 'on';
+
 like($snapfile, qr/^rec:1$/m, 'snapshot was taken during recovery');
-like($snapfile, qr/^sof:1$/m, 'snapshot is suboverflowed');
+SKIP:
+{
+	skip "no running XIDs are exported with polar_csn_enable", 1
+	  if $csn_enabled;
+	like($snapfile, qr/^sof:1$/m, 'snapshot is suboverflowed');
+}
 
 my ($xmin) = $snapfile =~ /^xmin:(\d+)$/m;
 my ($xmax) = $snapfile =~ /^xmax:(\d+)$/m;
 ok( $xmin <= $deleter_xid && $deleter_xid < $xmax,
 	'running XID falls inside the exported xmin/xmax range');
 
-like($snapfile, qr/^sxp:$deleter_xid$/m,
-	'running XID appears in exported subxip array');
+SKIP:
+{
+	skip "no running XIDs are exported with polar_csn_enable", 1
+	  if $csn_enabled;
+	like($snapfile, qr/^sxp:$deleter_xid$/m,
+		'running XID appears in exported subxip array');
+}
 
 # Let both deleters commit, and let the standby replay that
 $deleter->query_safe('COMMIT');
