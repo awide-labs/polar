@@ -6,13 +6,84 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- Increase the default value of `polar_wal_buffer_insert_locks` from 8 to
+  256. A higher number of WAL insertion locks can improve throughput when
+  many sessions commit at once, particularly with WAL pipelining enabled and
+  fast storage. Changing the setting requires a server restart. (XCOM-238)
+
 ### Fixed
 
+- Fixed WAL streaming failures after a crash for clients that start from
+  a replication slot's position. This could occur if the slot was created
+  and advanced during the same checkpoint. For example, `pg_receivewal`
+  with an empty directory could fail with "requested WAL segment ... has
+  already been removed". Standbys and replicas were not affected. (XCOM-240)
+- Fixed query failures on replicas when a node created a replication slot
+  during a checkpoint that started with no existing slots. The checkpoint
+  could invalidate the new slot and remove required WAL, causing
+  "requested WAL segment ... has already been removed" errors. (XCOM-240)
+- Fixed false crash reports during smart and fast shutdown: the WAL
+  pipeliner's normal exit after the shutdown checkpoint was treated as a
+  crash, causing the postmaster to report an abnormal shutdown and exit
+  with status 1 (XCOM-240)
+- Fixed `postgres -C shared_memory_size_in_huge_pages` (and
+  `-C shared_memory_size`) aborting at startup on a shared-storage node
+  with `PANIC: control file ".../global/pg_control" not exist`. These
+  values are computed from the control file on shared storage, which is
+  now mounted read-only before it is read. (XCOM-235)
+- Fixed incorrect operation of the XLog queue when it becomes
+  completely full: a reader could mistake a stale entry for a new one
+  and consume invalid WAL data instead of waiting (XCOM-235)
+- Fixed `pg_ctl promote` of a standby returning before recovery finished,
+  so a query right after promote could still fail or see the server in
+  recovery (XCOM-240)
+- Fixed a bug where a checkpoint could clear the status flags of another
+  backend. This happened when the checkpoint invalidated a replication
+  slot that kept too much WAL (`max_slot_wal_keep_size`). As a result,
+  VACUUM on the primary could remove rows that were still needed by a
+  standby using `hot_standby_feedback` without a replication slot, and
+  queries on that standby were cancelled. Backported from upstream
+  PostgreSQL (XCOM-235)
+- Fixed a race on weakly ordered CPUs, such as ARM, in which a session
+  writing to the in-memory WAL queue could overwrite WAL that the logindex
+  saver or a walsender was still reading from the queue (XCOM-237).
+- Fixed a rare failure of the in-memory WAL queue when sessions waiting
+  for queue space had reserved most of it. The primary could restart with
+  `PANIC: For xlog send queue there should be only WAL META`, all writing
+  sessions could hang, or a replica could stop replaying WAL and fail
+  queries with `Read a future page due to timeout` (XCOM-237).
+- Fixed `huge_pages_status` showing `unknown` instead of `on` or `off` when
+  zero-copy I/O (`polar_enable_zero_copy`) is in use on shared storage
+  (XCOM-236)
 - The LSN-based session-consistency wait now respects large
   `polar_proxy_wait_timeout_ms` values. Before, a timeout above
   2147483 ms (about 35 minutes) made a replica give up on its first
   check instead of waiting, so strict mode raised a spurious "LSN wait
   timeout" error and best-effort mode returned stale data (XCOM-234).
+
+### Performance
+
+- Speed up catch-up for shared-storage replicas by sending WAL metadata
+  in larger batches: up to 128kB instead of 1kB (XCOM-239)
+- Reduce CPU overhead for WAL streaming to shared-storage replicas
+  and logindex saving on the primary by avoiding repeated parsing of
+  WAL queue headers (XCOM-239)
+- Reduce contention when many sessions insert WAL concurrently by removing
+  the global spinlock from WAL space reservation. (XCOM-238)
+- Eliminated multi-second transaction commit stalls under heavy write
+  load when the in-memory WAL queue is full (XCOM-237).
+- Reduced CPU overhead of logindex saving and WAL streaming to shared-storage
+  replicas (XCOM-240)
+- Prefault huge-page shared memory in a background worker during startup to
+  reduce memory-allocation work during query processing without blocking the
+  postmaster. Enabled by default with `polar_shmem_prefault` (XCOM-236)
+- Interleave the main shared-memory area across available NUMA nodes with
+  CPUs on multi-NUMA-node Linux servers for more predictable memory access,
+  excluding memory-only CXL, HBM and PMEM nodes. Explicit `numactl` policies
+  are preserved. Enabled by default with
+  `polar_shmem_numa_interleave` (XCOM-236)
 
 ## [17.11.2] - 2026-11-06
 

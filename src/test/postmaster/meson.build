@@ -7,6 +7,7 @@ tests += {
   'tap': {
     'tests': [
       't/004_negotiate.pl',
+      't/005_wal_pipeliner_shutdown.pl',
     ],
   },
 }

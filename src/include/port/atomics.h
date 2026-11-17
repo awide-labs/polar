@@ -438,6 +438,27 @@ pg_atomic_sub_fetch_u32(volatile pg_atomic_uint32 *ptr, int32 sub_)
 	return pg_atomic_sub_fetch_u32_impl(ptr, sub_);
 }
 
+#ifdef PG_HAVE_ATOMIC_U128_SUPPORT
+/*
+ * 128-bit atomics are provided only where compare-and-swap is lock-free.
+ * Unlike the u32 and u64 APIs, there is no locking fallback.
+ */
+static inline void
+pg_atomic_init_u128(volatile pg_atomic_uint128 *ptr, uint128 val)
+{
+	AssertPointerAlignment(ptr, 16);
+	pg_atomic_init_u128_impl(ptr, val);
+}
+
+static inline bool
+pg_atomic_compare_exchange_u128(volatile pg_atomic_uint128 *ptr,
+								uint128 *expected, uint128 newval)
+{
+	AssertPointerAlignment(ptr, 16);
+	return pg_atomic_compare_exchange_u128_impl(ptr, expected, newval);
+}
+#endif
+
 /* ----
  * The 64 bit operations have the same semantics as their 32bit counterparts
  * if they are available. Check the corresponding 32bit function for

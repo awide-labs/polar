@@ -53,6 +53,14 @@
 #define		POLAR_DATAMAX_MODE	0x04
 
 bool		polar_mount_pfs_readonly_mode = true;
+
+/*
+ * Force a read-only mount regardless of node type.  Set by postmaster
+ * when "postgres -C <runtime-computed guc>" is used: that path runs the
+ * startup sequence far enough to read pg_control from shared storage, but
+ * never writes to it, and it may run while the primary is already up.
+ */
+bool		polar_vfs_force_readonly_mount = false;
 int			polar_vfs_switch = POLAR_VFS_SWITCH_LOCAL;
 bool		polar_vfs_is_dio_mode = false;
 

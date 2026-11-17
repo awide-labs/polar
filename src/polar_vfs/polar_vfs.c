@@ -222,7 +222,12 @@ polar_vfs_init(void)
 	if (!polar_enable_shared_storage_mode)
 		return;
 
-	if (polar_in_replica_mode_or_force_mount(&do_force_mount))
+	if (polar_vfs_force_readonly_mount)
+	{
+		mode = "readonly (forced)";
+		flag = POLAR_VFS_RD;
+	}
+	else if (polar_in_replica_mode_or_force_mount(&do_force_mount))
 	{
 		mode = "readonly";
 		flag = POLAR_VFS_RD;

@@ -38,6 +38,7 @@
 #include "access/polar_logindex_redo.h"
 #include "postmaster/polar_async_lock_replay.h"
 #include "postmaster/polar_parallel_bgwriter.h"
+#include "storage/polar_shmem_tune.h"
 
 /*
  * The postmaster's list of registered background workers, in private memory.
@@ -144,6 +145,9 @@ static const struct
 	},
 	{
 		"polar_alr_worker_main", polar_alr_worker_main
+	},
+	{
+		"polar_shmem_prefault_main", polar_shmem_prefault_main
 	}
 	/* POLAR end */
 };
@@ -166,6 +170,12 @@ BackgroundWorkerShmemSize(void)
 								   sizeof(BackgroundWorkerSlot)));
 
 	return size;
+}
+
+static void
+BackgroundWorkerShmemExit(int code, Datum arg)
+{
+	BackgroundWorkerData = NULL;
 }
 
 /*
@@ -224,6 +234,8 @@ BackgroundWorkerShmemInit(void)
 	}
 	else
 		Assert(found);
+
+	on_shmem_exit(BackgroundWorkerShmemExit, 0);
 }
 
 /*
@@ -875,7 +887,15 @@ void
 RegisterBackgroundWorker(BackgroundWorker *worker)
 {
 	RegisteredBgWorker *rw;
-	static int	numworkers = 0;
+	slist_iter	siter;
+	int			numworkers = 0;
+
+	/*
+	 * Count live registrations rather than all registrations since postmaster
+	 * start: one-shot internal workers are registered again after a crash.
+	 */
+	slist_foreach(siter, &BackgroundWorkerList)
+		numworkers++;
 
 	/*
 	 * Static background workers can only be registered in the postmaster
@@ -904,8 +924,8 @@ RegisterBackgroundWorker(BackgroundWorker *worker)
 	}
 
 	/*
-	 * Cannot register static background workers after calling
-	 * BackgroundWorkerShmemInit().
+	 * Cannot register static background workers between
+	 * BackgroundWorkerShmemInit() and shmem_exit().
 	 */
 	if (BackgroundWorkerData != NULL)
 		elog(ERROR, "cannot register background worker \"%s\" after shmem init",

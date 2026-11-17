@@ -572,6 +572,7 @@ PostmasterMain(int argc, char *argv[])
 	char	   *userDoption = NULL;
 	bool		listen_addr_saved = false;
 	char	   *output_config_variable = NULL;
+	bool		runtime_computed_variable = false;
 
 	InitProcessGlobals();
 
@@ -841,10 +842,36 @@ PostmasterMain(int argc, char *argv[])
 	}
 
 	/*
+	 * Decide up front whether "-C guc" names a runtime-computed GUC: ordinary
+	 * GUCs print and exit right after SelectConfigFiles() and never touch
+	 * shared storage, but a runtime-computed one reaches ReadControlFile(),
+	 * which reads pg_control from shared storage.  For those the VFS gets
+	 * mounted, read-only.  GetConfigOptionFlags() is safe this early: it only
+	 * consults the GUC table built by InitializeGUCOptions() above.
+	 */
+	if (output_config_variable != NULL)
+		runtime_computed_variable =
+			(GetConfigOptionFlags(output_config_variable, true) & GUC_RUNTIME_COMPUTED) != 0;
+	polar_vfs_force_readonly_mount = runtime_computed_variable;
+
+	/*
+	 * A runtime-computed GUC will be printed later on.  As we initialize a
+	 * server startup sequence, silence any log messages that may show up in
+	 * the output generated.  FATAL and more severe messages are useful to
+	 * show, even if one would only expect at least PANIC.  LOG entries are
+	 * hidden.  Do it before SelectConfigFiles(), which mounts shared storage
+	 * and logs about it; the override wins over postgresql.conf.
+	 */
+	if (runtime_computed_variable)
+		SetConfigOption("log_min_messages", "FATAL", PGC_SUSET,
+						PGC_S_OVERRIDE);
+
+	/*
 	 * Locate the proper configuration files and data directory, and read
 	 * postgresql.conf for the first time.
 	 */
-	if (!SelectConfigFiles(userDoption, progname, output_config_variable != NULL))
+	if (!SelectConfigFiles(userDoption, progname,
+						   output_config_variable != NULL && !runtime_computed_variable))
 		ExitPostmaster(2);
 
 	if (output_config_variable != NULL)
@@ -860,9 +887,7 @@ PostmasterMain(int argc, char *argv[])
 		 * on running servers for those GUCs, but using this option now would
 		 * lead to incorrect results for them.
 		 */
-		int			flags = GetConfigOptionFlags(output_config_variable, true);
-
-		if ((flags & GUC_RUNTIME_COMPUTED) == 0)
+		if (!runtime_computed_variable)
 		{
 			/*
 			 * "-C guc" was specified, so print GUC's value and exit.  No
@@ -875,16 +900,6 @@ PostmasterMain(int argc, char *argv[])
 			puts(config_val ? config_val : "");
 			ExitPostmaster(0);
 		}
-
-		/*
-		 * A runtime-computed GUC will be printed later on.  As we initialize
-		 * a server startup sequence, silence any log messages that may show
-		 * up in the output generated.  FATAL and more severe messages are
-		 * useful to show, even if one would only expect at least PANIC.  LOG
-		 * entries are hidden.
-		 */
-		SetConfigOption("log_min_messages", "FATAL", PGC_SUSET,
-						PGC_S_OVERRIDE);
 	}
 
 	/* Verify that DataDir looks reasonable */
@@ -2920,11 +2935,16 @@ process_pm_child_exit(void)
 			continue;
 		}
 
+		/*
+		 * The WAL pipeliner should exit normally only after we ask it to stop
+		 * following the shutdown checkpoint.  Any other exit is a crash.
+		 */
 		if (pid == PolarWalPipelinerPID)
 		{
 			PolarWalPipelinerPID = 0;
-			HandleChildCrash(pid, exitstatus,
-							 _("WAL pipeliner process"));
+			if (!EXIT_STATUS_0(exitstatus) || pmState != PM_SHUTDOWN_2)
+				HandleChildCrash(pid, exitstatus,
+								 _("WAL pipeliner process"));
 			continue;
 		}
 
@@ -4217,6 +4237,7 @@ process_pm_pmsignal(void)
 		}
 
 		pmState = PM_RECOVERY;
+		StartWorkerNeeded = true;
 	}
 
 	if (CheckPostmasterSignal(PMSIGNAL_BEGIN_HOT_STANDBY) &&

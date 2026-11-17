@@ -3260,6 +3260,7 @@ XLogRecordBlockImageHeader
 XLogRecordBuffer
 XLogRecoveryCtlData
 XLogRedoAction
+XLogReserveCounter
 XLogSegNo
 XLogSource
 XLogStats
@@ -3756,6 +3757,7 @@ pending_label
 pfsd_mount_arg_t
 pgParameterStatus
 pg_atomic_flag
+pg_atomic_uint128
 pg_atomic_uint32
 pg_atomic_uint64
 pg_be_sasl_mech
@@ -4310,6 +4312,7 @@ xl_xact_xinfo
 xlhp_freeze_plan
 xlhp_freeze_plans
 xlhp_prune_items
+xlog_queue_slot_info
 xmlBuffer
 xmlBufferPtr
 xmlChar

@@ -75,6 +75,7 @@
 #include "storage/bufmgr.h"
 #include "storage/fd.h"
 #include "storage/large_object.h"
+#include "storage/lwlock.h"
 #include "storage/pg_shmem.h"
 #include "storage/predicate.h"
 #include "storage/standby.h"
@@ -109,6 +110,7 @@
 #include "storage/enc_common.h"
 #include "storage/kmgr.h"
 #include "storage/polar_rsc.h"
+#include "storage/polar_shmem_tune.h"
 #include "storage/polar_zc.h"
 #include "storage/polar_xlogbuf.h"
 /* POLAR end */
@@ -1311,6 +1313,37 @@ struct config_bool ConfigureNamesBool[] =
 			GUC_NO_RESET_ALL | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_CHANGABLE
 		},
 		&polar_enable_zero_copy,
+		true,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"polar_shmem_numa_interleave", PGC_POSTMASTER, POLAR_STORAGE,
+			gettext_noop("Enables NUMA interleaving of the main shared-memory segment."),
+			gettext_noop("Spreads the segment's pages across NUMA nodes with CPUs instead of "
+						 "leaving each on the node that first touches it. Memory-only nodes "
+						 "are excluded. Has no effect with fewer than two nodes with CPUs, "
+						 "or when the postmaster runs under an explicit memory policy such as "
+						 "numactl."),
+			GUC_NO_RESET_ALL | POLAR_GUC_IS_VISIBLE | POLAR_GUC_IS_CHANGABLE
+		},
+		&polar_shmem_numa_interleave,
+		true,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"polar_shmem_prefault", PGC_POSTMASTER, POLAR_STORAGE,
+			gettext_noop("Enables prefaulting of the shared-memory segment at startup."),
+			gettext_noop("Faults in the whole shared-memory segment in a background worker "
+						 "at startup, under its inherited NUMA policy. This reduces "
+						 "huge-page allocation and zeroing during queries without "
+						 "blocking the postmaster. Pages not yet prefaulted are still "
+						 "faulted on demand. Only has effect when shared memory uses "
+						 "huge pages."),
+			GUC_NO_RESET_ALL | POLAR_GUC_IS_VISIBLE | POLAR_GUC_IS_CHANGABLE
+		},
+		&polar_shmem_prefault,
 		true,
 		NULL, NULL, NULL
 	},
@@ -3188,10 +3221,15 @@ struct config_int ConfigureNamesInt[] =
 		{"polar_wal_buffer_insert_locks", PGC_POSTMASTER, WAL_SETTINGS,
 			gettext_noop("Set the number of locks for wal buffer insert."),
 			NULL,
-			POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_CHANGEABLE
+			POLAR_GUC_IS_VISIBLE | POLAR_GUC_IS_CHANGEABLE
 		},
 		&polar_wal_buffer_insert_locks,
-		8, 1, INT_MAX,
+
+		/*
+		 * Keep below MAX_SIMUL_LWLOCKS: WALInsertLockAcquireExclusive() takes
+		 * them all at once.
+		 */
+		256, 1, MAX_SIMUL_LWLOCKS / 2,
 		NULL, NULL, NULL
 	},
 
@@ -3820,7 +3858,8 @@ struct config_int ConfigureNamesInt[] =
 			GUC_UNIT_BYTE | POLAR_GUC_IS_INVISIBLE | POLAR_GUC_IS_CHANGEABLE
 		},
 		&polar_send_xlog_meta_size,
-		1024, 0, 16 * 1024 * 1024,
+		/* MAX_SEND_SIZE, spelled out because walsender.c keeps it private */
+		XLOG_BLCKSZ * 16, 0, 16 * 1024 * 1024,
 		NULL, NULL, NULL
 	},
 

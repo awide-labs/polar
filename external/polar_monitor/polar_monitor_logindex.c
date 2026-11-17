@@ -44,7 +44,19 @@
 #define XLOG_QUEUE_INFO_COLUMN_SIZE 3
 #define XLOG_QUEUE_STAT_DETIAL_COL_SIZE 5
 #define XLOG_QUEUE_SLOTS_INFO_COLUMN_SIZE 4
-static polar_ringbuf_slot_t *slots_info = NULL;
+/*
+ * Snapshot of a polar_ringbuf_slot_t.  The slot's pread is atomic, so it
+ * cannot be copied out with a plain struct copy.
+ */
+typedef struct xlog_queue_slot_info
+{
+	char		ref_name[POLAR_RINGBUF_MAX_REF_NAME + 1];
+	uint64		pread;
+	bool		strong;
+	uint64		ref_num;
+} xlog_queue_slot_info;
+
+static xlog_queue_slot_info *slots_info = NULL;
 static uint64 rbuf_occupied;
 
 /* Get logindex mem table size */
@@ -269,16 +281,20 @@ polar_get_xlog_queue_ref_info_func(PG_FUNCTION_ARGS)
 
 		mctx = MemoryContextSwitchTo(fctx->multi_call_memory_ctx);
 		queue = polar_logindex_redo_instance->xlog_queue;
-		slots_info = (polar_ringbuf_slot_t *) palloc0(sizeof(polar_ringbuf_slot_t) * POLAR_RINGBUF_MAX_SLOT);
+		slots_info = (xlog_queue_slot_info *) palloc0(sizeof(xlog_queue_slot_info) * POLAR_RINGBUF_MAX_SLOT);
 
 		LWLockAcquire(&queue->lock.lock, LW_SHARED);
 		rbuf_occupied = queue->occupied;
-		memcpy(slots_info, queue->slot, sizeof(polar_ringbuf_slot_t) * POLAR_RINGBUF_MAX_SLOT);
-		LWLockRelease(&queue->lock.lock);
-
-		/* report as physical positions in [0, size) */
 		for (i = 0; i < POLAR_RINGBUF_MAX_SLOT; i++)
-			slots_info[i].pread %= queue->size;
+		{
+			strlcpy(slots_info[i].ref_name, queue->slot[i].ref_name,
+					sizeof(slots_info[i].ref_name));
+			/* report as physical positions in [0, size) */
+			slots_info[i].pread = pg_atomic_read_u64(&queue->slot[i].pread) % queue->size;
+			slots_info[i].strong = queue->slot[i].strong;
+			slots_info[i].ref_num = queue->slot[i].ref_num;
+		}
+		LWLockRelease(&queue->lock.lock);
 
 		fctx->max_calls = POLAR_RINGBUF_MAX_SLOT;
 		MemoryContextSwitchTo(mctx);

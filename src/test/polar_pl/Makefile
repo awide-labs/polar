@@ -15,6 +15,7 @@ EXTRA_INSTALL += contrib/bloom
 EXTRA_INSTALL += contrib/pg_stat_statements
 EXTRA_INSTALL += external/polar_monitor
 EXTRA_INSTALL += external/polar_worker
+EXTRA_INSTALL += src/test/modules/injection_points
 
 ifeq ($(enable_fault_injector),yes)
 EXTRA_INSTALL += external/faultinjector
