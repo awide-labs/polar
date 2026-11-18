@@ -25,14 +25,16 @@ use PostgreSQL::Test::Utils;
 use Test::More;
 use threads;
 
+# Count only the audit log: a statement slower than log_min_duration_statement
+# is logged once more, with its text, to the slow log.
 sub wait_for_log_count {
 	my ($log_dir, $pattern, $expected_count) = @_;
 	for (my $i = 0; $i < 30; $i++) {
-		my $result = int(qx{/bin/bash -c 'grep -wrn "$pattern" $log_dir 2>/dev/null | wc -l'});
+		my $result = int(qx{/bin/bash -c 'grep -wrn --include="*_audit.log" "$pattern" $log_dir 2>/dev/null | wc -l'});
 		return $result if $result == $expected_count;
 		sleep(1);
 	}
-	return int(qx{/bin/bash -c 'grep -wrn "$pattern" $log_dir 2>/dev/null | wc -l'});
+	return int(qx{/bin/bash -c 'grep -wrn --include="*_audit.log" "$pattern" $log_dir 2>/dev/null | wc -l'});
 }
 
 my $node_primary = PostgreSQL::Test::Cluster->new('primary');
