@@ -98,7 +98,9 @@ or introduces a scope not previously used in the repository.
 In addition to the mandatory `Refs:` footer, you may include other optional
 footers following the Conventional Commits specification. Common examples
 include:
-- `Skip-changelog: true` - Skip changelog requirement (see Changelog section)
+- `Skip-changelog: true` - Skip changelog requirement (see Changelog section).
+  It must be in the footer block at the end of the commit message, e.g. next
+  to `Refs:`; a mention in the body does not count
 - `See: <URL>` - Reference to external documentation, RFCs, or related
   resources
 - `Discussion: <URL>` - Link to a discussion related to this commit, e.g., a mailing list thread

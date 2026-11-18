@@ -493,7 +493,7 @@ main() {
     # Uses Conventional Commits footer format: skip-changelog: true
     # Breaking changes cannot be skipped.
     if [ "${is_breaking}" = "false" ] && \
-       echo "${full_msg}" | grep -qiE "^skip-changelog:[[:space:]]*true"; then
+       has_true_footer "${commit_sha}" "skip-changelog"; then
       commits_skip_changelog+=("${commit_sha:0:8} - ${commit_msg}")
       log_success "  ✓ ${commit_sha:0:8} - ${commit_msg} " \
                   "(skip-changelog)"

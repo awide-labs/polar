@@ -82,6 +82,49 @@ get_commit_body() {
   git log -1 --format="%B" "${commit_sha}" 2>/dev/null
 }
 
+# Check if a commit message has a "KEY: true" footer, case-insensitively.
+# The line counts only if it is in the footer block: every paragraph after
+# its own consists of "Token: value" footers alone. Prose that mentions the
+# footer mid-message does not trigger it, while a prose line next to the
+# footer ("..., so\nSkip-changelog: true") or a separate "Refs:" paragraph
+# after it still work. Not "git log --format=%(trailers)": git ignores a
+# last paragraph that has a prose line among the footers.
+# Usage: has_true_footer COMMIT_SHA KEY
+# Returns: 0 if the footer is present, 1 otherwise
+has_true_footer() {
+  local commit_sha="${1:-}"
+  local key="${2:-}"
+  if [ -z "${commit_sha}" ] || [ -z "${key}" ]; then
+    return 1
+  fi
+  get_commit_body "${commit_sha}" |
+    awk -v key="${key}" '
+      BEGIN { npara = 0; blank = 1 }
+      NF {
+        if (blank)
+          npara++
+        blank = 0
+        lines[npara] = lines[npara] $0 "\n"
+        if ($0 !~ /^([A-Za-z][A-Za-z0-9-]*|BREAKING CHANGE):[[:space:]]/)
+          prose[npara] = 1
+        next
+      }
+      { blank = 1 }
+      END {
+        want = "^" tolower(key) ":[[:space:]]*true[[:space:]]*$"
+        for (p = npara; p >= 1; p--) {
+          n = split(lines[p], l, "\n")
+          for (i = 1; i <= n; i++)
+            if (tolower(l[i]) ~ want)
+              exit 0
+          if (prose[p])
+            exit 1
+        }
+        exit 1
+      }
+    '
+}
+
 # Extract commit type from Conventional Commits format
 # Usage: extract_commit_type COMMIT_MESSAGE
 # Returns: commit type via stdout (empty if not found)
