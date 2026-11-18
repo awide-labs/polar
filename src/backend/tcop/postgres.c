@@ -68,6 +68,7 @@
 #include "storage/pmsignal.h"
 #include "storage/kmgr.h"
 #include "storage/proc.h"
+#include "storage/procarray.h"
 #include "storage/procsignal.h"
 #include "storage/sinval.h"
 #include "tcop/fastpath.h"
@@ -463,6 +464,7 @@ SocketBackend(StringInfo inBuf)
 		case PqMsg_Describe:
 		case PqMsg_Execute:
 		case PqMsg_Flush:
+		case PqMsg_PolarProxyWait:	/* PolarDB proxy LSN wait */
 			maxmsglen = PQ_SMALL_MESSAGE_LIMIT;
 			doing_extended_query_message = true;
 			break;
@@ -5084,6 +5086,69 @@ PostgresMain(const char *dbname, const char *username)
 
 		switch (firstchar)
 		{
+			case PqMsg_PolarProxyWait:
+				{
+					int			version;
+					int			consistency_mode;
+					int			flags;
+					uint32		timeout_ms;
+					XLogRecPtr	target_lsn;
+
+					forbidden_in_wal_sender(firstchar);
+
+					version = pq_getmsgint(&input_message, 1);
+					consistency_mode = pq_getmsgint(&input_message, 1);
+					flags = pq_getmsgint(&input_message, 2);
+					timeout_ms = (uint32) pq_getmsgint(&input_message, 4);
+					target_lsn = (XLogRecPtr) pq_getmsgint64(&input_message);
+					pq_getmsgend(&input_message);
+
+					if (!MyProcPort->polar_proxy_wait_v1)
+						ereport(ERROR,
+								(errcode(ERRCODE_PROTOCOL_VIOLATION),
+								 errmsg("PolarDB proxy LSN wait protocol was not negotiated")));
+					if (version != 1 || flags != 0 ||
+						(consistency_mode != POLAR_CONSISTENCY_BEST_EFFORT &&
+						 consistency_mode != POLAR_CONSISTENCY_STRICT) ||
+						XLogRecPtrIsInvalid(target_lsn))
+						ereport(ERROR,
+								(errcode(ERRCODE_PROTOCOL_VIOLATION),
+								 errmsg("invalid PolarDB proxy LSN wait message")));
+					if (!polar_is_replica())
+						ereport(ERROR,
+								(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+								 errmsg("PolarDB proxy LSN wait is only valid on a replica")));
+
+					/*
+					 * Treat W as the beginning of the extended statement so
+					 * statement_timeout covers both replay wait and
+					 * execution.
+					 */
+					SetCurrentStatementStartTimestamp();
+					start_xact_command();
+
+					if (IsAbortedTransactionBlockState())
+						ereport(ERROR,
+								(errcode(ERRCODE_IN_FAILED_SQL_TRANSACTION),
+								 errmsg("current transaction is aborted, "
+										"commands ignored until end of transaction block"),
+								 errdetail_abort()));
+
+					if (HaveRegisteredOrActiveSnapshot() ||
+						(IsolationUsesXactSnapshot() && FirstSnapshotSet))
+						ereport(ERROR,
+								(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+								 errmsg("PolarDB proxy LSN wait requires a fresh snapshot"),
+								 errhint("Send W before Bind; close existing portals and end transactions with an established transaction snapshot.")));
+
+					debug_query_string = "POLAR PROXY LSN WAIT";
+					pgstat_report_activity(STATE_RUNNING, debug_query_string);
+					set_ps_display("POLAR PROXY LSN WAIT");
+
+					polar_proxy_wait_for_lsn(target_lsn, timeout_ms, consistency_mode);
+				}
+				break;
+
 			case PqMsg_Query:
 				{
 					const char *query_string;

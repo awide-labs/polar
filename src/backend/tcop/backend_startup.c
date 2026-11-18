@@ -177,6 +177,7 @@ BackendInitialize(ClientSocket *client_sock, CAC_state cac)
 	port->polar_proxy_session_id = 0;
 	port->polar_proxy_cancel_key = 0;
 	port->polar_proxy_send_lsn = false;
+	port->polar_proxy_wait_v1 = false;
 	port->polar_proxy_ssl_in_use = false;
 	port->polar_proxy_ssl_cipher_name = NULL;
 	port->polar_proxy_ssl_version = NULL;
@@ -789,6 +790,16 @@ retry:
 									valptr),
 							 errhint("Valid values are: \"false\", 0, \"true\", 1, \"database\".")));
 			}
+			else if (strcmp(nameptr, "_pq_.polar_proxy_wait_v1") == 0)
+			{
+				if (strcmp(valptr, "1") != 0)
+					ereport(FATAL,
+							(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+							 errmsg("invalid value for protocol option \"%s\": \"%s\"",
+									nameptr, valptr),
+							 errhint("The only supported value is \"1\".")));
+				port->polar_proxy_wait_v1 = true;
+			}
 			else if (strncmp(nameptr, "_pq_.", 5) == 0)
 			{
 				/*
@@ -939,11 +950,13 @@ retry:
 				ereport(FATAL, (errmsg("[Proxy] Should set both session id and cancel key.")));
 		}
 
-		if (!port->polar_proxy && (port->polar_proxy_send_lsn || port->polar_proxy_ssl_in_use))
+		if (!port->polar_proxy &&
+			(port->polar_proxy_send_lsn || port->polar_proxy_wait_v1 ||
+			 port->polar_proxy_ssl_in_use))
 		{
 			ereport(FATAL,
 					(errcode(ERRCODE_PROTOCOL_VIOLATION),
-					 errmsg("[Proxy] Proxy is disabled, unable to use lsn or ssl")));
+					 errmsg("[Proxy] Proxy is disabled, unable to use lsn, wait, or ssl")));
 		}
 
 		/*

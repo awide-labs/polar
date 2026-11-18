@@ -2615,18 +2615,18 @@ polar_proxy_lsn_wait_start(uint64 initial_gap_bytes)
 }
 
 /*
- * polar_split_wait_for_lsn — busy-wait until replay LSN >= target.
+ * polar_proxy_wait_for_lsn — busy-wait until replay LSN >= target.
  * Exponential backoff with timeout; on timeout ERROR in strict mode,
  * WARNING in best-effort mode.
  */
-static void
-polar_split_wait_for_lsn(XLogRecPtr target_lsn)
+void
+polar_proxy_wait_for_lsn(XLogRecPtr target_lsn, uint32 timeout_ms, int consistency_mode)
 {
 	volatile PolarProxyLsnWaitOutcome outcome = POLAR_PROXY_LSN_WAIT_INTERRUPTED;
 	volatile XLogRecPtr current_lsn;
 	volatile uint64 actual_wait_us = 0;
 	uint64		initial_gap_bytes;
-	uint64		timeout_us = (uint64) polar_proxy_wait_timeout_ms * 1000;
+	uint64		timeout_us = (uint64) timeout_ms * 1000;
 	uint64		elapsed_us = 0;
 	int			max_delay = polar_proxy_wait_max_delay_us;
 	int			delay = Min(max_delay, 10);
@@ -2634,10 +2634,10 @@ polar_split_wait_for_lsn(XLogRecPtr target_lsn)
 	current_lsn = polar_get_xlog_replay_recptr_nolock();
 
 	if (unlikely(polar_enable_xact_split_debug))
-		elog(LOG, "PROXY: LSN wait start: target=%X/%X, current=%X/%X, timeout_ms=%d",
+		elog(LOG, "PROXY: LSN wait start: target=%X/%X, current=%X/%X, timeout_ms=%u",
 			 (uint32) (target_lsn >> 32), (uint32) target_lsn,
 			 (uint32) (current_lsn >> 32), (uint32) current_lsn,
-			 polar_proxy_wait_timeout_ms);
+			 timeout_ms);
 
 	if (current_lsn >= target_lsn)
 	{
@@ -2680,7 +2680,7 @@ polar_split_wait_for_lsn(XLogRecPtr target_lsn)
 		}
 
 		if (timeout_us && elapsed_us >= timeout_us)
-			outcome = (polar_consistency_mode == POLAR_CONSISTENCY_STRICT) ?
+			outcome = (consistency_mode == POLAR_CONSISTENCY_STRICT) ?
 				POLAR_PROXY_LSN_WAIT_STRICT_TIMEOUT :
 				POLAR_PROXY_LSN_WAIT_BEST_EFFORT_TIMEOUT;
 		else
@@ -2696,14 +2696,12 @@ polar_split_wait_for_lsn(XLogRecPtr target_lsn)
 	if (outcome == POLAR_PROXY_LSN_WAIT_STRICT_TIMEOUT)
 		ereport(ERROR,
 				(errcode(ERRCODE_SNAPSHOT_TOO_OLD),
-				 errmsg("LSN wait timeout after %d ms",
-						polar_proxy_wait_timeout_ms),
+				 errmsg("LSN wait timeout after %u ms", timeout_ms),
 				 errdetail_internal("%s", POLAR_PROXY_LSN_WAIT_TIMEOUT_DETAIL),
 				 errhint("Replica lag exceeded threshold. Retry or use primary.")));
 	else if (outcome == POLAR_PROXY_LSN_WAIT_BEST_EFFORT_TIMEOUT)
 		ereport(WARNING,
-				(errmsg("LSN wait timeout after %d ms",
-						polar_proxy_wait_timeout_ms),
+				(errmsg("LSN wait timeout after %u ms", timeout_ms),
 				 errdetail_internal("%s", POLAR_PROXY_LSN_WAIT_TIMEOUT_DETAIL)));
 
 	if (unlikely(polar_enable_xact_split_debug))
@@ -2784,7 +2782,7 @@ GetSnapshotData(Snapshot snapshot)
 	 *   - and after the statement, the target is still set, so a subsequent
 	 *     unrelated straight read on this session waits again.
 	 *
-	 * Clearing the in-memory global right after polar_split_wait_for_lsn()
+	 * Clearing the in-memory global right after polar_proxy_wait_for_lsn()
 	 * returns satisfies the target exactly once per read.
 	 *
 	 * Correctness:
@@ -2792,7 +2790,7 @@ GetSnapshotData(Snapshot snapshot)
 	 *     snapshots see at least as much WAL as the target required.
 	 *   - On best_effort timeout, the user has explicitly accepted stale
 	 *     reads; re-waiting subsequent snapshots rarely closes the gap.
-	 *   - On strict timeout, polar_split_wait_for_lsn() ereport(ERROR)s and
+	 *   - On strict timeout, polar_proxy_wait_for_lsn() ereport(ERROR)s and
 	 *     never returns to the clear. Transaction abort rolls back the GUC
 	 *     via the assign hook, re-syncing the in-memory global.
 	 *   - The string GUC value (polar_xact_split_wait_lsn) is not touched
@@ -2803,7 +2801,9 @@ GetSnapshotData(Snapshot snapshot)
 	if (polar_is_replica() &&
 		!XLogRecPtrIsInvalid(polar_xact_split_wait_lsn))
 	{
-		polar_split_wait_for_lsn(polar_xact_split_wait_lsn);
+		polar_proxy_wait_for_lsn(polar_xact_split_wait_lsn,
+								 polar_proxy_wait_timeout_ms,
+								 polar_consistency_mode);
 
 		polar_xact_split_wait_lsn = InvalidXLogRecPtr;
 	}

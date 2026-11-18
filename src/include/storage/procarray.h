@@ -122,6 +122,8 @@ extern void polar_get_all_backendid_memstatm(PolarProcStatm *allprocs, Size *pro
 extern PGPROC *polar_search_proc(pid_t pid);
 extern XLogRecPtr polar_get_backend_min_replay_lsn(void);
 extern XLogRecPtr polar_get_read_min_lsn(XLogRecPtr primary_consist_ptr);
+extern void polar_proxy_wait_for_lsn(XLogRecPtr target_lsn,
+									 uint32 timeout_ms, int consistency_mode);
 
 /* POLAR end */
 
