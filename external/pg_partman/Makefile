@@ -1,10 +1,13 @@
 EXTENSION = pg_partman
 EXTVERSION = $(shell grep default_version $(EXTENSION).control | \
                sed -e "s/default_version[[:space:]]*=[[:space:]]*'\([^']*\)'/\1/")
-OLDPATH = $(shell echo ${PATH})
 
 DOCS = $(wildcard doc/*.md)
 MODULES = src/pg_partman_bgw
+
+# The suites in test/ are pgTAP scripts that produce their own TAP output, so
+# there is no expected/ output for pg_regress to compare.
+TAP_TESTS = 1
 
 # If user does not want the background worker, run: make NO_BGW=1
 ifneq ($(NO_BGW),)
@@ -33,12 +36,6 @@ include $(top_builddir)/src/Makefile.global
 include $(top_srcdir)/contrib/contrib-global.mk
 PG_CONFIG = $(DESTDIR)$(bindir)/pg_config
 endif
-
-installcheck:
-	$(MAKE) -C $(top_builddir)/external/pgtap install
-	PATH=$(DESTDIR)$(bindir):$(OLDPATH) ./regress_test.sh
-
-check: installcheck
 
 .PHONY: lint # Lint the project
 lint: .pre-commit-config.yaml
