@@ -237,6 +237,7 @@ typedef struct Port
 	int32		polar_proxy_cancel_key;
 	bool		polar_proxy_send_lsn;
 	bool		polar_proxy_send_xact;
+	bool		polar_proxy_wait_v1;
 	bool		polar_proxy_ssl_in_use;
 	char	   *polar_proxy_ssl_cipher_name;
 	char	   *polar_proxy_ssl_version;

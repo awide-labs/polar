@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Add the negotiated `W` extended-protocol message (used by proxies for
+  LSN consistency replay). (XCOM-250)
 - Add `polar_stat_proxy_lsn_wait()` function in `polar_monitor` (1.4 -> 1.5)
   exposing replay wait counts, outcomes, durations, and initial WAL gaps.
   (XCOM-250)

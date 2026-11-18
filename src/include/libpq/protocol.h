@@ -32,6 +32,9 @@
 #define PqMsg_SASLInitialResponse	'p'
 #define PqMsg_SASLResponse			'p'
 
+/* proxy LSN wait, negotiated via _pq_.polar_proxy_wait_v1 */
+#define PqMsg_PolarProxyWait		'W'
+
 
 /* These are the response codes sent by the backend. */
 

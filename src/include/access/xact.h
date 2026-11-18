@@ -555,11 +555,17 @@ extern XLogRecPtr polar_xact_split_wait_lsn;
 extern int	polar_proxy_wait_timeout_ms;
 extern int	polar_proxy_wait_max_delay_us;
 
-/* POLAR: consistency wait mode */
+/*
+ * LSN consistency wait mode
+ *
+ * Be aware: enum values are used in the wire protocol and must not
+ * be renumbered without corresponding measures.
+ */
 typedef enum
 {
-	POLAR_CONSISTENCY_BEST_EFFORT,	/* WARNING on timeout, return stale data */
-	POLAR_CONSISTENCY_STRICT	/* ERROR on timeout, abort query */
+	POLAR_CONSISTENCY_BEST_EFFORT = 0,	/* WARNING on timeout, return stale
+										 * data */
+	POLAR_CONSISTENCY_STRICT = 1	/* ERROR on timeout, abort query */
 } PolarConsistencyMode;
 
 extern int	polar_consistency_mode;
