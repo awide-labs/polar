@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- The pg_partman extension has been re-enabled (XCOM-251)
+
 ### Fixed
 
 - `polar_tools datamax-get-wal` now refuses to run while the datamax node

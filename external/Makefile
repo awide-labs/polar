@@ -32,7 +32,7 @@ ifeq ($(enable_minimal),no)
 SUBDIRS += pg_bulkload
 SUBDIRS += pg_cron
 #SUBDIRS += pg_jieba
-#SUBDIRS += pg_partman
+SUBDIRS += pg_partman
 SUBDIRS += pg_profile
 SUBDIRS += pg_repack
 SUBDIRS += pg_similarity
