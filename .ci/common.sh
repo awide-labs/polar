@@ -27,18 +27,25 @@ readonly CC_SED_HEADER="^([a-z]+)${CC_HEADER_SUFFIX}:"
 readonly CC_SED_TYPE_EXTRACT="${CC_SED_HEADER}.*"
 readonly CC_SED_DESC_EXTRACT="${CC_SED_HEADER}[[:space:]]+"
 
+# ANSI color escapes used by the log_* helpers. Raw bytes (via $'...') so
+# they can also be embedded in other output unchanged.
+readonly LOG_ERROR_COLOR=$'\033[0;31m'
+readonly LOG_SUCCESS_COLOR=$'\033[0;32m'
+readonly LOG_WARNING_COLOR=$'\033[1;33m'
+readonly LOG_RESET_COLOR=$'\033[0m'
+
 log_error() {
-  echo -e "\033[0;31m$*\033[0m"
+  echo -e "${LOG_ERROR_COLOR}$*${LOG_RESET_COLOR}"
 }
 
 log_success() {
-  echo -e "\033[0;32m$*\033[0m"
+  echo -e "${LOG_SUCCESS_COLOR}$*${LOG_RESET_COLOR}"
 }
 
 # Log-only warning: colored on the job log, but never routed to on_warning_hook.
 # Use for expected, non-actionable notices that would otherwise spam PRs.
 log_warning_local() {
-  echo -e "\033[1;33m$*\033[0m"
+  echo -e "${LOG_WARNING_COLOR}$*${LOG_RESET_COLOR}"
 }
 
 log_warning() {

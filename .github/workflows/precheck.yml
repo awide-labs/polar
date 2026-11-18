@@ -90,6 +90,25 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: .ci/check_changelog.sh origin/${{ github.base_ref }}
 
+  check-trailing-whitespace:
+    name: Check Trailing Whitespace
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+      - name: Check trailing whitespace
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: .ci/check_trailing_whitespace.sh origin/${{ github.base_ref }}
+
   # Warnings only: they never fail, but reach the pull request as comments.
   review-warnings:
     name: Review Warnings

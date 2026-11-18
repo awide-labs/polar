@@ -101,6 +101,8 @@ include:
 - `Skip-changelog: true` - Skip changelog requirement (see Changelog section).
   It must be in the footer block at the end of the commit message, e.g. next
   to `Refs:`; a mention in the body does not count
+- `Skip-trailing-whitespace: true` - Skip the trailing whitespace check (see
+  [Trailing Whitespace](#trailing-whitespace))
 - `See: <URL>` - Reference to external documentation, RFCs, or related
   resources
 - `Discussion: <URL>` - Link to a discussion related to this commit, e.g., a mailing list thread
@@ -316,6 +318,31 @@ installed to `/usr/local/polarstore`, to build with `--with-pfsd`.
 
 - Shell programs can follow [Google code conventions](https://google.github.io/styleguide/shellguide.html)
 - Perl programs can follow the official [Perl style](https://perldoc.perl.org/perlstyle)
+
+### Trailing Whitespace
+
+Lines must not end in spaces or tabs: in code, documentation (including
+`CHANGELOG.md`) and tests alike. Pull request diffs do not show trailing
+whitespace, so **CI checks every line added by the commits of a pull request**
+(including conflict resolutions in merge commits) and fails if any of them
+ends in whitespace. The one exception is a Markdown hard line break: in
+`*.md` files, a line may end in exactly two spaces after text.
+
+Files where trailing whitespace is legitimate are exempt through their
+`whitespace` attribute in [`.gitattributes`](.gitattributes), e.g. expected
+test outputs (`*.out`). These are the same files `git diff --check` skips, so
+you can run it before pushing:
+
+```bash
+git diff --check origin/POLARDB_17_STABLE
+```
+
+`git rebase --whitespace=fix origin/POLARDB_17_STABLE` strips trailing
+whitespace from the commits of a branch (except merge commits). A commit that
+must keep trailing whitespace, such as a verbatim import of third-party code,
+can skip the check with the `Skip-trailing-whitespace: true` footer. It must
+be in the footer block at the end of the commit message, e.g. next to `Refs:`;
+a mention in the body does not count.
 
 ### Code Design and Review
 
