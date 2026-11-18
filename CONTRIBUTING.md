@@ -187,6 +187,15 @@ We follow the [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) format. A
 - **Security** - in case of vulnerabilities
 - **Performance**: performance improvements (our extension to Keep a Changelog)
 
+New entries must be added under `## [Unreleased]`, not under an existing
+numbered release; CI rejects them otherwise.
+
+To correct changelog entries post-factum, use a `docs:` or `docs(scope):`
+commit. Documentation-only commits may edit entries in any release and are
+exempt from entry placement and Jira-reference format checks. Release heading
+and URL structure checks still apply. Documentation commits marked as breaking
+are not exempt.
+
 ### Entry Format
 
 Each changelog entry (paragraph starting with `- ` at the first column) must end with a Jira issue reference in the format `(PROJ-NNNN)`, optionally followed by `.` or `:`. This is enforced by CI checks.
