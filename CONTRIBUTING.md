@@ -98,7 +98,9 @@ or introduces a scope not previously used in the repository.
 In addition to the mandatory `Refs:` footer, you may include other optional
 footers following the Conventional Commits specification. Common examples
 include:
-- `Skip-changelog: true` - Skip changelog requirement (see Changelog section)
+- `Skip-changelog: true` - Skip changelog requirement (see Changelog section).
+  It must be in the footer block at the end of the commit message, e.g. next
+  to `Refs:`; a mention in the body does not count
 - `See: <URL>` - Reference to external documentation, RFCs, or related
   resources
 - `Discussion: <URL>` - Link to a discussion related to this commit, e.g., a mailing list thread
@@ -186,6 +188,15 @@ We follow the [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) format. A
 - **Fixed** - for any bug fixes
 - **Security** - in case of vulnerabilities
 - **Performance**: performance improvements (our extension to Keep a Changelog)
+
+New entries must be added under `## [Unreleased]`, not under an existing
+numbered release; CI rejects them otherwise.
+
+To correct changelog entries post-factum, use a `docs:` or `docs(scope):`
+commit. Documentation-only commits may edit entries in any release and are
+exempt from entry placement and Jira-reference format checks. Release heading
+and URL structure checks still apply. Documentation commits marked as breaking
+are not exempt.
 
 ### Entry Format
 

@@ -284,11 +284,11 @@ check_url_definitions_at_end() {
 }
 
 # Check if a commit adds changelog entries (lines starting with "- ") under a
-# past release section instead of [Unreleased]. Such additions are discouraged
+# past release section instead of [Unreleased]. Such additions are rejected
 # because they rewrite history of an already-released version.
 # Usage: check_entries_added_to_past_release COMMIT_SHA
-# Output: warning lines to stdout (one per offending entry), nothing if none
-# Returns: 0 if no such entries, 1 if any (warnings still printed to stdout)
+# Output: offending entry lines to stdout (one per entry), nothing if none
+# Returns: 0 if no such entries, 1 if any (entry lines still printed to stdout)
 check_entries_added_to_past_release() {
   local commit_sha="${1:-}"
   local diff_output
@@ -296,6 +296,7 @@ check_entries_added_to_past_release() {
   local current_section=""
   local line
   local added_list_file
+  local found_offender=false
 
   if [ -z "${commit_sha}" ]; then
     return 0
@@ -325,7 +326,7 @@ check_entries_added_to_past_release() {
     return 0
   }
 
-  # Walk content and emit a warning for each added "- " line under a past release
+  # Walk content and report each added "- " line under a past release
   current_section=""
   while IFS= read -r line || [ -n "${line}" ]; do
     if [[ "${line}" =~ ^##\ \[.+\] ]]; then
@@ -334,11 +335,16 @@ check_entries_added_to_past_release() {
       if [ "${current_section}" != "Unreleased" ] && [ -n "${current_section}" ]; then
         if grep -qF -- "${line}" "${added_list_file}" 2>/dev/null; then
           echo "- ${commit_sha:0:8}: entry under \`[${current_section}]\`: ${line}"
+          found_offender=true
         fi
       fi
     fi
   done <<< "${content_after}"
   rm -f "${added_list_file}"
+
+  if [ "${found_offender}" = "true" ]; then
+    return 1
+  fi
   return 0
 }
 
@@ -443,15 +449,10 @@ main() {
       continue
     fi
 
-    # If this commit touches CHANGELOG, check for entries added under a past release
-    if commit_modifies_changelog "${commit_sha}"; then
-      local warn_line
-      while IFS= read -r warn_line || [ -n "${warn_line}" ]; do
-        if [ -n "${warn_line}" ]; then
-          entries_in_past_release+=("${warn_line}")
-        fi
-      done < <(check_entries_added_to_past_release "${commit_sha}" 2>/dev/null || true)
-    fi
+    # Extract commit type from Conventional Commits format
+    # Format: <type>[optional scope][optional !]: <description>
+    local commit_type
+    commit_type=$(extract_commit_type "${commit_msg}")
 
     # Get full commit message body
     local full_msg
@@ -471,21 +472,33 @@ main() {
       is_breaking=true
     fi
 
+    # Documentation-only commits may correct entries in existing releases.
+    local validate_changelog_entries=true
+    if [ "${commit_type}" = "docs" ] && [ "${is_breaking}" = "false" ]; then
+      validate_changelog_entries=false
+    fi
+
+    # If this commit touches CHANGELOG, check for entries added under a past release
+    if [ "${validate_changelog_entries}" = "true" ] && \
+       commit_modifies_changelog "${commit_sha}"; then
+      local entry_line
+      while IFS= read -r entry_line || [ -n "${entry_line}" ]; do
+        if [ -n "${entry_line}" ]; then
+          entries_in_past_release+=("${entry_line}")
+        fi
+      done < <(check_entries_added_to_past_release "${commit_sha}" 2>/dev/null || true)
+    fi
+
     # Check if commit explicitly skips changelog update
     # Uses Conventional Commits footer format: skip-changelog: true
     # Breaking changes cannot be skipped.
     if [ "${is_breaking}" = "false" ] && \
-       echo "${full_msg}" | grep -qiE "^skip-changelog:[[:space:]]*true"; then
+       has_true_footer "${commit_sha}" "skip-changelog"; then
       commits_skip_changelog+=("${commit_sha:0:8} - ${commit_msg}")
       log_success "  ✓ ${commit_sha:0:8} - ${commit_msg} " \
                   "(skip-changelog)"
       continue
     fi
-
-    # Extract commit type from Conventional Commits format
-    # Format: <type>[optional scope][optional !]: <description>
-    local commit_type
-    commit_type=$(extract_commit_type "${commit_msg}")
 
     # Check if this commit has user-visible changes requiring changelog
     # feat, fix, perf, or breaking changes require changelog updates
@@ -507,10 +520,10 @@ main() {
       changelog_in_commit=true
     fi
 
-    # Validate format whenever this commit touches the changelog, even when
-    # an update is not required for the commit type.
+    # Documentation-only commits may edit entries without format validation.
     local format_valid=true
-    if [ "${changelog_in_commit}" = "true" ]; then
+    if [ "${changelog_in_commit}" = "true" ] && \
+       [ "${validate_changelog_entries}" = "true" ]; then
       if ! check_changelog_entry_format "${commit_sha}"; then
         format_valid=false
         local format_entry="${commit_type:-other}: ${commit_msg} "
@@ -542,7 +555,10 @@ main() {
                   "(${CHANGELOG} format error)"
       fi
     elif [ "${changelog_in_commit}" = "true" ]; then
-      if [ "${format_valid}" = "true" ]; then
+      if [ "${validate_changelog_entries}" = "false" ]; then
+        log_success "  ✓ ${commit_sha:0:8} - ${commit_msg} " \
+                    "(documentation-only ${CHANGELOG} edit)"
+      elif [ "${format_valid}" = "true" ]; then
         log_success "  ✓ ${commit_sha:0:8} - ${commit_msg} " \
                     "(no changelog needed, ${CHANGELOG} format OK)"
       else
@@ -566,22 +582,23 @@ main() {
     log_warning "${combined_msg}"
   fi
 
-  # Warn if any changelog entries were added under a past release instead of Unreleased
+  local has_errors=false
+
+  # Reject changelog entries added under a past release instead of Unreleased
   if [ ${#entries_in_past_release[@]} -gt 0 ]; then
+    has_errors=true
     local past_release_msg
-    past_release_msg="Changelog entries should be added under **\[Unreleased\]**, not under a past release. The following entries were added under a released version:"
+    past_release_msg="Changelog entries must be added under **\[Unreleased\]**, not under a past release. The following entries were added under a released version:"
     past_release_msg+=$'\n\n'
     local entry
     for entry in "${entries_in_past_release[@]}"; do
       past_release_msg+=$'\n'"${entry}"
     done
-    past_release_msg+=$'\n\n'"Consider moving these to the **\[Unreleased\]** section."
-    log_warning "${past_release_msg}"
+    past_release_msg+=$'\n\n'"Move these entries to the **\[Unreleased\]** section."
+    log_error "${past_release_msg}"
   fi
 
   echo "---"
-
-  local has_errors=false
 
   # Check release heading format (## [<version>] - YYYY-MM-DD)
   if ! check_release_headings; then
