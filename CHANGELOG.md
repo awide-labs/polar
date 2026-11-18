@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [17.12.0] - 2026-11-18
+
 ### Changed
 
 - Rebased on PostgreSQL 17.12, which includes fixes for several security
@@ -390,5 +392,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   partitions (currently 64), with each partition having its own lock, control
   structure and statistics (XCOM-38)
 
-[unreleased]: https://github.com/awide-labs/polar/compare/v17.11.2..POLARDB_17_STABLE
+[unreleased]: https://github.com/awide-labs/polar/compare/v17.12.0..POLARDB_17_STABLE
+[17.12.0]: https://github.com/awide-labs/polar/compare/v17.11.2..v17.12.0
 [17.11.2]: https://github.com/awide-labs/polar/compare/248cd221718..v17.11.2
