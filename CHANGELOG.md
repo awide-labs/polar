@@ -17,6 +17,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Fixed the `polar_monitor` view `polar_stat_io_info` showing I/O under
+  the wrong file type when the file path contained the name of a Polar
+  internal subdirectory, for example `base` in `/srv/database`.
+  Compression accounting in `polar_worker` also counted system tables by
+  same mistake when the path to the data directory contained `base/`.
+  (XCOM-252)
 - Fixed replica LSN waits for Polar Proxy lasting longer than
   polar_proxy_wait_timeout_ms when the backend is delayed by the OS scheduler.
   (XCOM-250)

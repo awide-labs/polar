@@ -429,6 +429,30 @@ polar_validate_dir(char *path)
 	}
 }
 
+const char *
+polar_relative_path(const char *path)
+{
+	size_t		dirlen;
+
+	if (POLAR_DATA_DIR() == NULL)
+		return path;
+
+	dirlen = strlen(POLAR_DATA_DIR());
+
+	if (strncmp(path, POLAR_DATA_DIR(), dirlen) != 0)
+		return path;
+
+	switch (path[dirlen])
+	{
+		case '/':
+			return path + dirlen + 1;
+		case '\0':
+			return path + dirlen;
+		default:
+			return path;
+	}
+}
+
 ssize_t
 polar_read_line(int fd, void *buffer, size_t n)
 {

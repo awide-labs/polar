@@ -456,33 +456,43 @@ polar_collect_io_stat(polar_collect_io_stat_t * io_stat_info, int backendid)
 	return 0;
 }
 
+#define VFS_PATH_STARTS_WITH(path, prefix) \
+	(strncmp((path), (prefix), sizeof(prefix) - 1) == 0 && \
+     (path[sizeof(prefix) - 1] == '/' || path[sizeof(prefix) - 1] == '\0'))
+
 /* Determine if the datatype is data ,xlog , clog ... and so on*/
 static inline int
 vfs_data_type(const char *path)
 {
-	if (strstr(path, "base"))
+	const char *rel = polar_relative_path(path);
+
+	if (VFS_PATH_STARTS_WITH(rel, "base"))
 		return POLAR_IO_DATA;
-	else if (strstr(path, "pg_wal"))
+	else if (VFS_PATH_STARTS_WITH(rel, "pg_wal") ||
+			 VFS_PATH_STARTS_WITH(rel, POLAR_DATAMAX_WAL_DIR))
 		return POLAR_IO_WAL;
-	else if (strstr(path, "pg_xact"))
+	else if (VFS_PATH_STARTS_WITH(rel, "pg_xact"))
 		return POLAR_IO_CLOG;
-	else if (strstr(path, "global"))
+	else if (VFS_PATH_STARTS_WITH(rel, "global"))
 		return POLAR_IO_GLOBAL;
-	else if (strstr(path, "logindex"))
+	else if (VFS_PATH_STARTS_WITH(rel, "pg_logindex"))
 		return POLAR_IO_LOGINDEX;
-	else if (strstr(path, "multixact"))
+	else if (VFS_PATH_STARTS_WITH(rel, "pg_multixact"))
 		return POLAR_IO_MULTIXACT;
-	else if (strstr(path, "subtrans"))
+	else if (VFS_PATH_STARTS_WITH(rel, "pg_subtrans"))
 		return POLAR_IO_SUBTRANS;
-	else if (strstr(path, "twophase"))
+	else if (VFS_PATH_STARTS_WITH(rel, "pg_twophase"))
 		return POLAR_IO_TWOPHASE;
-	else if (strstr(path, "replslot"))
+	else if (VFS_PATH_STARTS_WITH(rel, "pg_replslot"))
 		return POLAR_IO_REPLSOT;
-	else if (strstr(path, "snapshots"))
+	else if (VFS_PATH_STARTS_WITH(rel, "pg_snapshots") ||
+			 VFS_PATH_STARTS_WITH(rel, "pg_logical/snapshots"))
 		return POLAR_IO_SNAPSHOTS;
 	else
 		return POLAR_IO_OTHER;
 }
+
+#undef VFS_PATH_STARTS_WITH
 
 static inline void
 polar_vfs_timer_begin_iostat(void)

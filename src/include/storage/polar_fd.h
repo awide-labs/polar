@@ -209,6 +209,10 @@ extern int	polar_copy_file(char *fromfile, char *tofile, bool skiperr);
 extern void polar_copydir(char *fromdir, char *todir, bool recurse, bool clean, bool skip_file_err);
 extern struct dirent *polar_read_dir_ext(DIR *dir, const char *dirname, int elevel, int *err);
 
+#ifndef FRONTEND
+extern const char *polar_relative_path(const char *path);
+#endif
+
 extern void polar_register_tls_cleanup(void);
 extern void polar_validate_dir(char *path);
 extern void polar_init_node_type(void);

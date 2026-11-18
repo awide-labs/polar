@@ -1141,11 +1141,12 @@ polar_calculate_directory_compression_info(char *path, compression_calculate_arg
 	DIR		   *dirdesc;
 	Oid			dboid = InvalidOid;
 	Oid			oid = InvalidOid;
-	char	   *base;
+	const char *rel = polar_relative_path(path);
+	bool		base_dir = !strncmp(rel, "base/", 5);
 
-	if ((base = strstr(path, "base/")))
+	if (base_dir)
 	{
-		if (sscanf(base, "base/%d", &dboid) != 1)
+		if (sscanf(rel, "base/%d", &dboid) != 1)
 			dboid = InvalidOid;
 	}
 
@@ -1163,7 +1164,7 @@ polar_calculate_directory_compression_info(char *path, compression_calculate_arg
 			strcmp(direntry->d_name, "..") == 0)
 			continue;
 
-		if (strstr(path, "base/"))
+		if (base_dir)
 		{
 			char	   *endptr;
 			bool		pure_oid = false;
