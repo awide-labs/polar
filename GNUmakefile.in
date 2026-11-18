@@ -194,6 +194,11 @@ dccheck: | temp-install
 	# dccheck must run serially
 	$(MAKE) -C src/test/polar_consistency check-all PROVE_FLAGS="--timer --failures"
 
+# dccheck for CI: runs the suite in groups that make can run concurrently,
+# with the PROVE_FLAGS of the caller.
+dccheck-parallel: | temp-install
+	$(MAKE) -C src/test/polar_consistency check-all-parallel
+
 # Datamax TAP suite. datamax-check-lite runs the smoke subset
 # (001..003) for quick CI; datamax-check runs the full set.
 datamax-check-lite: | temp-install
@@ -214,7 +219,7 @@ polar-check: | temp-install
 # make -jN they then start first instead of queueing behind every check-world
 # subdirectory and ending up on the critical path. They must be .PHONY: make
 # defers the non-phony ones until after check-world anyway.
-ci-full: plcheck dccheck datamax-check check-world polar-check
+ci-full: plcheck dccheck-parallel datamax-check check-world polar-check
 
 ci-quick: plcheck dccheck-lite datamax-check-lite check-world polar-check
 
@@ -224,7 +229,8 @@ ci-quick: plcheck dccheck-lite datamax-check-lite check-world polar-check
 # ci-full keeps direct I/O.
 ci-quick: export PG_TEST_POLAR_VFS_PROTOCOL = file
 
-.PHONY: plcheck dccheck-lite datamax-check datamax-check-lite ci-full ci-quick
+.PHONY: plcheck dccheck-lite dccheck-parallel datamax-check datamax-check-lite \
+	ci-full ci-quick
 
 #
 # POLAR end

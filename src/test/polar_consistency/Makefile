@@ -31,6 +31,42 @@ installcheck:
 installcheck-all: all
 	export with_pgbench=1 && export DCCHECK_ALL=1 && $(prove_installcheck)
 
+# check-all split into groups that make can run concurrently: the tests that
+# replay the schedules prepared by 100_prepare_consistency_test_cases depend
+# on it, the others run alongside it. The groups share tmp_check, which is
+# cleaned once up front, and write their own JUnit files.
+DC_BASIC_TESTS = $(patsubst $(srcdir)/%,%,$(wildcard $(srcdir)/t/0*.pl))
+DC_PREPARE_TESTS = t/100_prepare_consistency_test_cases.pl
+DC_REPLAY_TESTS = $(filter-out $(DC_PREPARE_TESTS),\
+	$(patsubst $(srcdir)/%,%,$(wildcard $(srcdir)/t/1*.pl)))
+
+define dc_prove_group
+echo "# +++ tap check in $(subdir) ($(1)) +++" && \
+cd $(srcdir) && \
+   export with_pgbench=1 DCCHECK_ALL=1 JUNIT_OUTPUT_FILE=junit_output_$(1).xml && \
+   TESTLOGDIR='$(CURDIR)/tmp_check/log' \
+   TESTDATADIR='$(CURDIR)/tmp_check' \
+   $(with_temp_install) \
+   PGPORT='6$(DEF_PGPORT)' top_builddir='$(CURDIR)/$(top_builddir)' \
+   PG_REGRESS='$(CURDIR)/$(top_builddir)/src/test/regress/pg_regress' \
+   $(PROVE) $(PG_PROVE_FLAGS) $(PROVE_FLAGS) $(2)
+endef
+
+check-all-parallel: check-all-basic check-all-replay
+
+check-all-clean: | temp-install
+	rm -rf '$(CURDIR)'/tmp_check
+	$(MKDIR_P) '$(CURDIR)'/tmp_check
+
+check-all-basic: check-all-clean
+	$(call dc_prove_group,basic,$(DC_BASIC_TESTS))
+
+check-all-prepare: check-all-clean
+	$(call dc_prove_group,prepare,$(DC_PREPARE_TESTS))
+
+check-all-replay: check-all-prepare
+	$(call dc_prove_group,replay,$(DC_REPLAY_TESTS))
+
 else
 
 check: | temp-install
@@ -45,7 +81,12 @@ installcheck:
 installcheck-all: all
 	$(prove_installcheck)
 
+check-all-parallel: check-all
+
 endif
+
+.PHONY: check-all-parallel check-all-clean check-all-basic check-all-prepare \
+	check-all-replay
 
 clean:
 	rm -rf tmp_check
