@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- Rebased on PostgreSQL 17.12, which includes fixes for several security
+  vulnerabilities (XCOM-241)
 - Increase the default value of `polar_wal_buffer_insert_locks` from 8 to
   256. A higher number of WAL insertion locks can improve throughput when
   many sessions commit at once, particularly with WAL pipelining enabled and
@@ -15,6 +17,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Fixed Patroni discarding valid PolarDB settings supplied through its
+  distributed configuration. Exposed 59 operational and diagnostic
+  parameters to configuration discovery, including connection limits,
+  log retention, and replication controls (XCOM-242).
+- A transaction that imports a snapshot with `SET TRANSACTION SNAPSHOT`,
+  such as a parallel `pg_dump` worker, now sees the data as of the export.
+  Before, with `polar_csn_enable` on, it also saw transactions committed
+  between the export and the import (XCOM-242)
 - Fixed WAL streaming failures after a crash for clients that start from
   a replication slot's position. This could occur if the slot was created
   and advanced during the same checkpoint. For example, `pg_receivewal`

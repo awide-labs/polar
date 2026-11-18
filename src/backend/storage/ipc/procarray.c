@@ -3268,12 +3268,13 @@ ProcArrayInstallImportedXmin(TransactionId xmin,
 	if (!sourcevxid)
 		return false;
 
-	/* Get lock so source xact can't end while we're doing this */
-	if (polar_csn_enable)
-		LWLockAcquire(ProcArrayLock, LW_EXCLUSIVE); /* In csn mode, we should
-													 * use exclusive lock */
-	else
-		LWLockAcquire(ProcArrayLock, LW_SHARED);
+	/*
+	 * Take the lock in exclusive mode to ensure that installing xmin is
+	 * atomic with our check that the source transaction is still running.
+	 * (Using shared mode risks a concurrent VACUUM whose ComputeXidHorizons()
+	 * call fails to observe the xmin in either the source proc or our own.)
+	 */
+	LWLockAcquire(ProcArrayLock, LW_EXCLUSIVE);
 
 	/*
 	 * Find the PGPROC entry of the source transaction. (This could use
