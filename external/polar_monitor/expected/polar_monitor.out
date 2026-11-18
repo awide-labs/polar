@@ -245,5 +245,11 @@ select COUNT(*)  >= 0 AS result from polar_wal_pipeline_stats;
  t
 (1 row)
 
+select count(*) = 26 AS result from polar_stat_proxy_lsn_wait();
+ result 
+--------
+ t
+(1 row)
+
 --cleanup
 drop extension polar_monitor;

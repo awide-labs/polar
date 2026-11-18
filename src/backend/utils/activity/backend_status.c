@@ -24,6 +24,7 @@
 #include "storage/proc.h"		/* for MyProc */
 #include "storage/procarray.h"	/* for BackendPidGetProc */
 #include "storage/sinvaladt.h"
+#include "storage/spin.h"
 #include "utils/ascii.h"
 #include "utils/guc.h"			/* for application_name */
 #include "utils/memutils.h"
@@ -63,6 +64,26 @@ bool		polar_stat_need_update_proxy_info;
 
 /* POLAR: stats for logindex applier (startup process writes, SQL reads) */
 PolarStat_LogindexApplier *polar_stat_logindex_applier = NULL;
+
+typedef struct PolarProxyLsnWaitStatsData
+{
+	slock_t		mutex;
+	PolarProxyLsnWaitStats stats;
+} PolarProxyLsnWaitStatsData;
+
+typedef union PolarProxyLsnWaitStatsSlot
+{
+	PolarProxyLsnWaitStatsData data;
+#ifdef pg_attribute_aligned
+				pg_attribute_aligned(PG_CACHE_LINE_SIZE)
+#endif
+	char		padding[CACHELINEALIGN(sizeof(PolarProxyLsnWaitStatsData))];
+} PolarProxyLsnWaitStatsSlot;
+
+StaticAssertDecl(sizeof(PolarProxyLsnWaitStatsSlot) % PG_CACHE_LINE_SIZE == 0,
+				 "proxy LSN wait stat slots must be cache-line separated");
+
+static PolarProxyLsnWaitStatsSlot *polar_proxy_lsn_wait_stats = NULL;
 
 /* exposed so that backend_progress.c can access it */
 PgBackendStatus *MyBEEntry = NULL;
@@ -126,6 +147,8 @@ BackendStatusShmemSize(void)
 #endif
 	size = add_size(size, sizeof(PolarStat_Proxy));
 	size = add_size(size, sizeof(PolarStat_LogindexApplier));
+	size = add_size(size,
+					mul_size(sizeof(PolarProxyLsnWaitStatsSlot), MaxBackends));
 	return size;
 }
 
@@ -270,6 +293,17 @@ CreateSharedBackendStatus(void)
 
 	if (!found)
 		MemSet(polar_stat_logindex_applier, 0, size);
+
+	size = mul_size(sizeof(PolarProxyLsnWaitStatsSlot), MaxBackends);
+	polar_proxy_lsn_wait_stats = (PolarProxyLsnWaitStatsSlot *)
+		ShmemInitStruct("Proxy LSN Wait Stats Buffer", size, &found);
+
+	if (!found)
+	{
+		MemSet(polar_proxy_lsn_wait_stats, 0, size);
+		for (i = 0; i < MaxBackends; i++)
+			SpinLockInit(&polar_proxy_lsn_wait_stats[i].data.mutex);
+	}
 }
 
 /*
@@ -1228,6 +1262,147 @@ pgstat_fetch_stat_numbackends(void)
 	pgstat_read_current_status();
 
 	return localNumBackends;
+}
+
+static PolarProxyLsnWaitStatsSlot *
+polar_pgstat_proxy_lsn_wait_my_slot(void)
+{
+	Assert(MyProcNumber >= 0 && MyProcNumber < MaxBackends);
+
+	return &polar_proxy_lsn_wait_stats[MyProcNumber];
+}
+
+static void
+polar_pgstat_proxy_lsn_wait_gap_histogram(PolarProxyLsnWaitStats *stats,
+										  uint64 initial_gap_bytes)
+{
+	if (initial_gap_bytes <= UINT64CONST(4096))
+		stats->gap_bytes_le_4kb++;
+	else if (initial_gap_bytes <= UINT64CONST(65536))
+		stats->gap_bytes_4_64kb++;
+	else if (initial_gap_bytes <= UINT64CONST(1048576))
+		stats->gap_bytes_64kb_1mb++;
+	else if (initial_gap_bytes <= UINT64CONST(8388608))
+		stats->gap_bytes_1_8mb++;
+	else
+		stats->gap_bytes_gt_8mb++;
+}
+
+static void
+polar_pgstat_proxy_lsn_wait_time_histogram(PolarProxyLsnWaitStats *stats,
+										   uint64 actual_wait_us)
+{
+	if (actual_wait_us <= UINT64CONST(100))
+		stats->wait_us_le_100++;
+	else if (actual_wait_us <= UINT64CONST(1000))
+		stats->wait_us_100_1ms++;
+	else if (actual_wait_us <= UINT64CONST(2000))
+		stats->wait_us_1_2ms++;
+	else if (actual_wait_us <= UINT64CONST(5000))
+		stats->wait_us_2_5ms++;
+	else if (actual_wait_us <= UINT64CONST(10000))
+		stats->wait_us_5_10ms++;
+	else if (actual_wait_us <= UINT64CONST(50000))
+		stats->wait_us_10_50ms++;
+	else if (actual_wait_us <= UINT64CONST(100000))
+		stats->wait_us_50_100ms++;
+	else if (actual_wait_us <= UINT64CONST(1000000))
+		stats->wait_us_100ms_1s++;
+	else
+		stats->wait_us_gt_1s++;
+}
+
+void
+polar_pgstat_report_proxy_lsn_wait_ready(uint64 initial_gap_bytes)
+{
+	PolarProxyLsnWaitStatsSlot *slot = polar_pgstat_proxy_lsn_wait_my_slot();
+	PolarProxyLsnWaitStats *stats;
+
+	SpinLockAcquire(&slot->data.mutex);
+	stats = &slot->data.stats;
+	stats->calls_total++;
+	stats->ready_immediately_total++;
+	stats->initial_gap_bytes_total += initial_gap_bytes;
+	polar_pgstat_proxy_lsn_wait_gap_histogram(stats, initial_gap_bytes);
+	SpinLockRelease(&slot->data.mutex);
+}
+
+void
+polar_pgstat_report_proxy_lsn_wait_start(uint64 initial_gap_bytes)
+{
+	PolarProxyLsnWaitStatsSlot *slot = polar_pgstat_proxy_lsn_wait_my_slot();
+	PolarProxyLsnWaitStats *stats;
+
+	SpinLockAcquire(&slot->data.mutex);
+	stats = &slot->data.stats;
+	stats->calls_total++;
+	stats->waited_total++;
+	stats->waiters_current++;
+	stats->initial_gap_bytes_total += initial_gap_bytes;
+	polar_pgstat_proxy_lsn_wait_gap_histogram(stats, initial_gap_bytes);
+	SpinLockRelease(&slot->data.mutex);
+}
+
+void
+polar_pgstat_report_proxy_lsn_wait_end(PolarProxyLsnWaitOutcome outcome,
+									   uint64 sleep_loops,
+									   uint64 requested_sleep_us,
+									   uint64 actual_wait_us)
+{
+	PolarProxyLsnWaitStatsSlot *slot = polar_pgstat_proxy_lsn_wait_my_slot();
+	PolarProxyLsnWaitStats *stats;
+
+	SpinLockAcquire(&slot->data.mutex);
+	stats = &slot->data.stats;
+
+	switch (outcome)
+	{
+		case POLAR_PROXY_LSN_WAIT_COMPLETED:
+			stats->completed_after_wait_total++;
+			break;
+		case POLAR_PROXY_LSN_WAIT_STRICT_TIMEOUT:
+			stats->strict_timeout_total++;
+			break;
+		case POLAR_PROXY_LSN_WAIT_BEST_EFFORT_TIMEOUT:
+			stats->best_effort_timeout_total++;
+			break;
+		case POLAR_PROXY_LSN_WAIT_INTERRUPTED:
+			stats->interrupted_total++;
+			break;
+	}
+
+	Assert(stats->waiters_current > 0);
+	stats->waiters_current--;
+	stats->sleep_loops_total += sleep_loops;
+	stats->requested_sleep_us_total += requested_sleep_us;
+	stats->actual_wait_us_total += actual_wait_us;
+	polar_pgstat_proxy_lsn_wait_time_histogram(stats, actual_wait_us);
+	SpinLockRelease(&slot->data.mutex);
+}
+
+void
+polar_pgstat_get_proxy_lsn_wait_stats(PolarProxyLsnWaitStats *out)
+{
+	int			i;
+
+	MemSet(out, 0, sizeof(*out));
+
+	if (polar_proxy_lsn_wait_stats == NULL)
+		return;
+
+	for (i = 0; i < MaxBackends; i++)
+	{
+		PolarProxyLsnWaitStats snapshot;
+		PolarProxyLsnWaitStatsSlot *slot = &polar_proxy_lsn_wait_stats[i];
+
+		SpinLockAcquire(&slot->data.mutex);
+		snapshot = slot->data.stats;
+		SpinLockRelease(&slot->data.mutex);
+
+#define POLAR_PROXY_LSN_METRIC(field) out->field += snapshot.field;
+		GEN_POLAR_PROXY_LSN_METRICS
+#undef POLAR_PROXY_LSN_METRIC
+	}
 }
 
 /* ----------

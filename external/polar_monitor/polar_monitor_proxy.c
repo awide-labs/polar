@@ -44,6 +44,20 @@ static char *polar_stat_proxy_infos[] = {
 	"readafterwrite",
 };
 
+typedef struct PolarProxyLsnWaitMetric
+{
+	const char *name;
+	Size		idx;
+} PolarProxyLsnWaitMetric;
+
+static const PolarProxyLsnWaitMetric polar_proxy_lsn_wait_metrics[] = {
+#define POLAR_PROXY_LSN_METRIC(field) \
+	{#field, offsetof(PolarProxyLsnWaitStats, field) / sizeof(uint64)},
+
+	GEN_POLAR_PROXY_LSN_METRICS
+#undef POLAR_PROXY_LSN_METRIC
+};
+
 /*
  * POLAR: return the proxy stat info
  */
@@ -99,6 +113,50 @@ polar_stat_reset_proxy_info(PG_FUNCTION_ARGS)
 {
 	MemSet(polar_stat_proxy, 0, sizeof(PolarStat_Proxy));
 	PG_RETURN_NULL();
+}
+
+/*
+ * return cumulative replay-wait statistics for ProxySQL profiling.
+ */
+PG_FUNCTION_INFO_V1(polar_stat_proxy_lsn_wait);
+Datum
+polar_stat_proxy_lsn_wait(PG_FUNCTION_ARGS)
+{
+#define POLAR_PROXY_LSN_WAIT_COLUMNS 2
+	ReturnSetInfo *rsinfo = (ReturnSetInfo *) fcinfo->resultinfo;
+	PolarProxyLsnWaitStats stats;
+	Tuplestorestate *tupstore;
+	MemoryContext oldcontext;
+	TupleDesc	tupdesc;
+
+	polar_pgstat_get_proxy_lsn_wait_stats(&stats);
+
+	tupdesc = CreateTemplateTupleDesc(POLAR_PROXY_LSN_WAIT_COLUMNS);
+	TupleDescInitEntry(tupdesc, (AttrNumber) 1, "metric", TEXTOID, -1, 0);
+	TupleDescInitEntry(tupdesc, (AttrNumber) 2, "value", INT8OID, -1, 0);
+
+	oldcontext = MemoryContextSwitchTo(rsinfo->econtext->ecxt_per_query_memory);
+
+	tupstore = tuplestore_begin_heap(true, false, work_mem);
+	rsinfo->returnMode = SFRM_Materialize;
+	rsinfo->setResult = tupstore;
+	rsinfo->setDesc = tupdesc;
+
+	MemoryContextSwitchTo(oldcontext);
+
+	for (int i = 0; i < lengthof(polar_proxy_lsn_wait_metrics); i++)
+	{
+		const PolarProxyLsnWaitMetric *metric = &polar_proxy_lsn_wait_metrics[i];
+		uint64		value = ((uint64 *) &stats)[metric->idx];
+		Datum		values[POLAR_PROXY_LSN_WAIT_COLUMNS];
+		bool		nulls[POLAR_PROXY_LSN_WAIT_COLUMNS] = {};
+
+		values[0] = CStringGetTextDatum(metric->name);
+		values[1] = UInt64GetDatum(value);
+		tuplestore_putvalues(tupstore, tupdesc, values, nulls);
+	}
+
+	return (Datum) 0;
 }
 
 /*

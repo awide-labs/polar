@@ -168,6 +168,7 @@ LOGINDEX_CHECK_INVALID_PAGE	"Waiting for parallel replay workers to check invali
 PARALLEL_REPLAY_BROADCAST	"Waiting for parallel replay workers to finish broadcasted tasks."
 WAL_PIPELINE_WAIT_RECENT_WRITTEN_SPACE	"Waiting for free space in the WAL pipeline recent written array."
 WAL_PIPELINE_WAIT_UNFLUSHED_XLOG_SLOT	"Waiting for an unflushed WAL pipeline xlog slot."
+POLAR_PROXY_LSN_WAIT	"Waiting for WAL replay to reach the ProxySQL session-consistency target."
 
 ABI_compatibility:
 WAL_RECEIVER_UPSTREAM_CATCHUP	"Waiting for upstream server WAL flush position to catch up to requested start point."

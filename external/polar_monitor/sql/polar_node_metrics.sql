@@ -34,3 +34,25 @@ FROM polar_stat_node_metrics();
 -- Regression: polar_stat_proxy_info_rt previously NULL-derefed because
 -- the shmem allocation was missing. It must now run to completion.
 SELECT count(*) >= 0 AS ok FROM polar_stat_proxy_info_rt;
+
+-- Replay-wait metrics are exposed as a stable, extensible metric/value set.
+SELECT count(*) = 26 AS ok FROM polar_stat_proxy_lsn_wait();
+SELECT count(*) = count(DISTINCT metric) AS ok
+FROM polar_stat_proxy_lsn_wait();
+SELECT bool_and(value >= 0) AS ok FROM polar_stat_proxy_lsn_wait();
+
+-- Every call is in exactly one terminal state or is currently waiting.
+WITH metrics AS
+(
+	SELECT metric, value
+	FROM polar_stat_proxy_lsn_wait()
+)
+SELECT
+	(SELECT value FROM metrics WHERE metric = 'calls_total') =
+	(SELECT sum(value) FROM metrics
+	 WHERE metric IN ('ready_immediately_total',
+					  'completed_after_wait_total',
+					  'strict_timeout_total',
+					  'best_effort_timeout_total',
+					  'interrupted_total',
+					  'waiters_current')) AS ok;
