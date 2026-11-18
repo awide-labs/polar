@@ -59,9 +59,12 @@
 #include "miscadmin.h"
 #include "pgstat.h"
 #include "port/pg_lfind.h"
+#include "portability/instr_time.h"
+#include "storage/ipc.h"
 #include "storage/proc.h"
 #include "storage/procarray.h"
 #include "utils/acl.h"
+#include "utils/backend_status.h"
 #include "utils/builtins.h"
 #include "utils/rel.h"
 #include "utils/snapmgr.h"
@@ -2543,6 +2546,74 @@ GetSnapshotDataReuse(Snapshot snapshot)
 #define POLAR_PROXY_LSN_WAIT_TIMEOUT_DETAIL \
 	"polar_proxy_lsn_wait_timeout"
 
+typedef struct PolarProxyLsnWaitLocalState
+{
+	bool		callback_registered;
+	bool		active;
+	instr_time	wait_started;
+	uint64		sleep_loops;
+	uint64		requested_sleep_us;
+} PolarProxyLsnWaitLocalState;
+
+static PolarProxyLsnWaitLocalState polar_proxy_lsn_wait_local;
+
+static uint64
+polar_proxy_lsn_wait_elapsed_us(void)
+{
+	instr_time	wait_ended;
+
+	INSTR_TIME_SET_CURRENT(wait_ended);
+	INSTR_TIME_SUBTRACT(wait_ended, polar_proxy_lsn_wait_local.wait_started);
+	return INSTR_TIME_GET_MICROSEC(wait_ended);
+}
+
+static uint64
+polar_proxy_lsn_wait_finish(PolarProxyLsnWaitOutcome outcome)
+{
+	uint64		actual_wait_us;
+
+	Assert(polar_proxy_lsn_wait_local.active);
+
+	actual_wait_us = polar_proxy_lsn_wait_elapsed_us();
+	polar_proxy_lsn_wait_local.active = false;
+
+	pgstat_report_wait_end();
+	polar_pgstat_report_proxy_lsn_wait_end(outcome,
+										   polar_proxy_lsn_wait_local.sleep_loops,
+										   polar_proxy_lsn_wait_local.requested_sleep_us,
+										   actual_wait_us);
+
+	return actual_wait_us;
+}
+
+static void
+polar_proxy_lsn_wait_on_shmem_exit(int code, Datum arg)
+{
+	if (!polar_proxy_lsn_wait_local.active)
+		return;
+
+	polar_proxy_lsn_wait_finish(POLAR_PROXY_LSN_WAIT_INTERRUPTED);
+}
+
+static void
+polar_proxy_lsn_wait_start(uint64 initial_gap_bytes)
+{
+	if (!polar_proxy_lsn_wait_local.callback_registered)
+	{
+		on_shmem_exit(polar_proxy_lsn_wait_on_shmem_exit, 0);
+		polar_proxy_lsn_wait_local.callback_registered = true;
+	}
+
+	Assert(!polar_proxy_lsn_wait_local.active);
+
+	polar_proxy_lsn_wait_local.sleep_loops = 0;
+	polar_proxy_lsn_wait_local.requested_sleep_us = 0;
+	polar_pgstat_report_proxy_lsn_wait_start(initial_gap_bytes);
+	pgstat_report_wait_start(WAIT_EVENT_POLAR_PROXY_LSN_WAIT);
+	INSTR_TIME_SET_CURRENT(polar_proxy_lsn_wait_local.wait_started);
+	polar_proxy_lsn_wait_local.active = true;
+}
+
 /*
  * polar_split_wait_for_lsn — busy-wait until replay LSN >= target.
  * Exponential backoff with timeout; on timeout ERROR in strict mode,
@@ -2551,15 +2622,15 @@ GetSnapshotDataReuse(Snapshot snapshot)
 static void
 polar_split_wait_for_lsn(XLogRecPtr target_lsn)
 {
-	XLogRecPtr	current_lsn;
-
-	/* All time units are in usec */
+	volatile PolarProxyLsnWaitOutcome outcome = POLAR_PROXY_LSN_WAIT_INTERRUPTED;
+	volatile XLogRecPtr current_lsn;
+	uint64		initial_gap_bytes;
+	volatile int64 total_wait_us = 0;
+	int64		timeout_us = (int64) polar_proxy_wait_timeout_ms * 1000;
 	int			max_delay = polar_proxy_wait_max_delay_us;
-	int			delay = 10;
-	int64		total_wait = 0;
-	int64		timeout = (int64) polar_proxy_wait_timeout_ms * 1000;
+	int			delay = Min(max_delay, 10);
 
-	current_lsn = GetXLogReplayRecPtr(NULL);
+	current_lsn = polar_get_xlog_replay_recptr_nolock();
 
 	if (unlikely(polar_enable_xact_split_debug))
 		elog(LOG, "PROXY: LSN wait start: target=%X/%X, current=%X/%X, timeout_ms=%d",
@@ -2567,41 +2638,79 @@ polar_split_wait_for_lsn(XLogRecPtr target_lsn)
 			 (uint32) (current_lsn >> 32), (uint32) current_lsn,
 			 polar_proxy_wait_timeout_ms);
 
-	while (current_lsn < target_lsn)
+	if (current_lsn >= target_lsn)
 	{
-		if (timeout && total_wait >= timeout)
+		polar_pgstat_report_proxy_lsn_wait_ready(0);
+
+		if (unlikely(polar_enable_xact_split_debug))
+			elog(LOG, "PROXY: LSN wait done: replay=%X/%X, waited_us=0",
+				 (uint32) (current_lsn >> 32), (uint32) current_lsn);
+		return;
+	}
+
+	initial_gap_bytes = target_lsn - current_lsn;
+	polar_proxy_lsn_wait_start(initial_gap_bytes);
+
+	PG_TRY();
+	{
+		while (current_lsn < target_lsn)
 		{
-			if (polar_consistency_mode == POLAR_CONSISTENCY_STRICT)
+			pg_usleep(delay);
+			polar_proxy_lsn_wait_local.sleep_loops++;
+			polar_proxy_lsn_wait_local.requested_sleep_us += delay;
+			total_wait_us += delay;
+
+			if (timeout_us > 0 && total_wait_us >= timeout_us)
 			{
-				ereport(ERROR,
-						(errcode(ERRCODE_SNAPSHOT_TOO_OLD),
-						 errmsg("LSN wait timeout after %d ms",
-								polar_proxy_wait_timeout_ms),
-						 errdetail_internal("%s", POLAR_PROXY_LSN_WAIT_TIMEOUT_DETAIL),
-						 errhint("Replica lag exceeded threshold. Retry or use primary.")));
+				if (polar_consistency_mode == POLAR_CONSISTENCY_STRICT)
+					outcome = POLAR_PROXY_LSN_WAIT_STRICT_TIMEOUT;
+				else
+					outcome = POLAR_PROXY_LSN_WAIT_BEST_EFFORT_TIMEOUT;
+				break;
 			}
-			else
+
+			if (delay < max_delay)
 			{
-				ereport(WARNING,
-						(errmsg("LSN wait timeout after %d ms",
-								polar_proxy_wait_timeout_ms),
-						 errdetail_internal("%s", POLAR_PROXY_LSN_WAIT_TIMEOUT_DETAIL)));
+				delay *= 2;
+				if (delay > max_delay)
+					delay = max_delay;
 			}
-			break;
+
+			current_lsn = polar_get_xlog_replay_recptr_nolock();
+			CHECK_FOR_INTERRUPTS();
 		}
 
-		CHECK_FOR_INTERRUPTS();
-		pg_usleep(delay);
-
-		total_wait += delay;
-		delay = Min(2 * delay, max_delay);
-
-		current_lsn = GetXLogReplayRecPtr(NULL);
+		/*
+		 * A normal loop exit means replay reached the target; the
+		 * initial INTERRUPTED is only kept when an error unwinds
+		 * through PG_FINALLY.
+		 */
+		if (outcome == POLAR_PROXY_LSN_WAIT_INTERRUPTED)
+			outcome = POLAR_PROXY_LSN_WAIT_COMPLETED;
 	}
+	PG_FINALLY();
+	{
+		/* Remove waiting even on error */
+		polar_proxy_lsn_wait_finish(outcome);
+	}
+	PG_END_TRY();
+
+	if (outcome == POLAR_PROXY_LSN_WAIT_STRICT_TIMEOUT)
+		ereport(ERROR,
+				(errcode(ERRCODE_SNAPSHOT_TOO_OLD),
+				 errmsg("LSN wait timeout after %d ms",
+						polar_proxy_wait_timeout_ms),
+				 errdetail_internal("%s", POLAR_PROXY_LSN_WAIT_TIMEOUT_DETAIL),
+				 errhint("Replica lag exceeded threshold. Retry or use primary.")));
+	else if (outcome == POLAR_PROXY_LSN_WAIT_BEST_EFFORT_TIMEOUT)
+		ereport(WARNING,
+				(errmsg("LSN wait timeout after %d ms",
+						polar_proxy_wait_timeout_ms),
+				 errdetail_internal("%s", POLAR_PROXY_LSN_WAIT_TIMEOUT_DETAIL)));
 
 	if (unlikely(polar_enable_xact_split_debug))
 		elog(LOG, "PROXY: LSN wait done: replay=%X/%X, waited_us=" INT64_FORMAT ", success=%d",
-			 (uint32) (current_lsn >> 32), (uint32) current_lsn, total_wait, current_lsn >= target_lsn);
+			 (uint32) (current_lsn >> 32), (uint32) current_lsn, total_wait_us, current_lsn >= target_lsn);
 }
 
 Snapshot

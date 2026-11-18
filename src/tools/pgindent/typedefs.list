@@ -2224,6 +2224,12 @@ PolarSettingAction
 PolarSettingWalHeader
 PolarStat_LogindexApplier
 PolarStat_Proxy
+PolarProxyLsnWaitLocalState
+PolarProxyLsnWaitMetric
+PolarProxyLsnWaitOutcome
+PolarProxyLsnWaitStats
+PolarProxyLsnWaitStatsData
+PolarProxyLsnWaitStatsSlot
 PolarTBlockState
 PolarUniqueFeatureUtils
 PolarVFSKind

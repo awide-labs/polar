@@ -105,5 +105,7 @@ SELECT polar_wal_buffer_stat_reset();
 select COUNT(*)  >= 0 AS result from polar_wal_pipeline_info;
 select COUNT(*)  >= 0 AS result from polar_wal_pipeline_stats;
 
+select count(*) = 26 AS result from polar_stat_proxy_lsn_wait();
+
 --cleanup
 drop extension polar_monitor;

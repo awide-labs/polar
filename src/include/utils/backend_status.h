@@ -442,6 +442,71 @@ typedef struct PolarStat_LogindexApplier
 
 extern PolarStat_LogindexApplier *polar_stat_logindex_applier;
 
+typedef enum PolarProxyLsnWaitOutcome
+{
+	POLAR_PROXY_LSN_WAIT_COMPLETED,
+	POLAR_PROXY_LSN_WAIT_STRICT_TIMEOUT,
+	POLAR_PROXY_LSN_WAIT_BEST_EFFORT_TIMEOUT,
+	POLAR_PROXY_LSN_WAIT_INTERRUPTED
+} PolarProxyLsnWaitOutcome;
+
+/*
+ * List of proxy LSN metrics.  This list is used in multiple places,
+ * so defining it via macros seems reasonable for synchronization.
+ */
+#define GEN_POLAR_PROXY_LSN_METRICS						\
+	POLAR_PROXY_LSN_METRIC(calls_total)				\
+	POLAR_PROXY_LSN_METRIC(ready_immediately_total)	\
+	POLAR_PROXY_LSN_METRIC(waited_total)				\
+	POLAR_PROXY_LSN_METRIC(completed_after_wait_total)\
+	POLAR_PROXY_LSN_METRIC(strict_timeout_total)		\
+	POLAR_PROXY_LSN_METRIC(best_effort_timeout_total)	\
+	POLAR_PROXY_LSN_METRIC(interrupted_total)			\
+	POLAR_PROXY_LSN_METRIC(waiters_current)			\
+	POLAR_PROXY_LSN_METRIC(sleep_loops_total)			\
+	POLAR_PROXY_LSN_METRIC(requested_sleep_us_total)	\
+	POLAR_PROXY_LSN_METRIC(actual_wait_us_total)		\
+	POLAR_PROXY_LSN_METRIC(initial_gap_bytes_total)	\
+														\
+	/* Actual wait-time histogram. */					\
+	POLAR_PROXY_LSN_METRIC(wait_us_le_100)			\
+	POLAR_PROXY_LSN_METRIC(wait_us_100_1ms)			\
+	POLAR_PROXY_LSN_METRIC(wait_us_1_2ms)				\
+	POLAR_PROXY_LSN_METRIC(wait_us_2_5ms)				\
+	POLAR_PROXY_LSN_METRIC(wait_us_5_10ms)			\
+	POLAR_PROXY_LSN_METRIC(wait_us_10_50ms)			\
+	POLAR_PROXY_LSN_METRIC(wait_us_50_100ms)			\
+	POLAR_PROXY_LSN_METRIC(wait_us_100ms_1s)			\
+	POLAR_PROXY_LSN_METRIC(wait_us_gt_1s)				\
+														\
+	/* Initial replay-LSN gap histogram. */				\
+	POLAR_PROXY_LSN_METRIC(gap_bytes_le_4kb)			\
+	POLAR_PROXY_LSN_METRIC(gap_bytes_4_64kb)			\
+	POLAR_PROXY_LSN_METRIC(gap_bytes_64kb_1mb)		\
+	POLAR_PROXY_LSN_METRIC(gap_bytes_1_8mb)			\
+	POLAR_PROXY_LSN_METRIC(gap_bytes_gt_8mb)			\
+
+/*
+ * Cumulative proxy replay-wait statistics.  Writers update cache-line
+ * separated per-backend copies; readers aggregate them.
+ *
+ * This struct should be treatable as u64[].
+ */
+typedef struct PolarProxyLsnWaitStats
+{
+#define POLAR_PROXY_LSN_METRIC(name) uint64 name;
+	GEN_POLAR_PROXY_LSN_METRICS
+#undef POLAR_PROXY_LSN_METRIC
+} PolarProxyLsnWaitStats;
+
+extern void polar_pgstat_report_proxy_lsn_wait_ready(uint64 initial_gap_bytes);
+extern void polar_pgstat_report_proxy_lsn_wait_start(uint64 initial_gap_bytes);
+extern void polar_pgstat_report_proxy_lsn_wait_end(PolarProxyLsnWaitOutcome outcome,
+												   uint64 sleep_loops,
+												   uint64 requested_sleep_us,
+												   uint64 actual_wait_us);
+extern void polar_pgstat_get_proxy_lsn_wait_stats(PolarProxyLsnWaitStats *out);
+
 /* POLAR: combined node metrics for external monitoring (e.g. ProxySQL) */
 typedef struct PolarNodeMetrics
 {

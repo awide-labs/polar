@@ -49,3 +49,43 @@ SELECT count(*) >= 0 AS ok FROM polar_stat_proxy_info_rt;
  t
 (1 row)
 
+-- Replay-wait metrics are exposed as a stable, extensible metric/value set.
+SELECT count(*) = 26 AS ok FROM polar_stat_proxy_lsn_wait();
+ ok 
+----
+ t
+(1 row)
+
+SELECT count(*) = count(DISTINCT metric) AS ok
+FROM polar_stat_proxy_lsn_wait();
+ ok 
+----
+ t
+(1 row)
+
+SELECT bool_and(value >= 0) AS ok FROM polar_stat_proxy_lsn_wait();
+ ok 
+----
+ t
+(1 row)
+
+-- Every call is in exactly one terminal state or is currently waiting.
+WITH metrics AS
+(
+	SELECT metric, value
+	FROM polar_stat_proxy_lsn_wait()
+)
+SELECT
+	(SELECT value FROM metrics WHERE metric = 'calls_total') =
+	(SELECT sum(value) FROM metrics
+	 WHERE metric IN ('ready_immediately_total',
+					  'completed_after_wait_total',
+					  'strict_timeout_total',
+					  'best_effort_timeout_total',
+					  'interrupted_total',
+					  'waiters_current')) AS ok;
+ ok 
+----
+ t
+(1 row)
+
