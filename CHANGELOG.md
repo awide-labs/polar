@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [17.12.0] - 2026-11-18
+
 ### Changed
 
 - Rebased on PostgreSQL 17.12, which includes fixes for several security
@@ -72,6 +74,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   2147483 ms (about 35 minutes) made a replica give up on its first
   check instead of waiting, so strict mode raised a spurious "LSN wait
   timeout" error and best-effort mode returned stale data (XCOM-234).
+- The `polar_smgrperf` read and write benchmarks now report a clear error when
+  the I/O size is larger than the block range being tested. Before, they failed
+  with a confusing "floating-point exception" error or read blocks outside the
+  requested range. (XCOM-221)
 
 ### Performance
 
@@ -202,10 +208,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `none`, `cancel_query`, `terminate_idle_backend` and
   `terminate_any_backend` had no effect. Instances using the default
   setting are not affected (XCOM-232)
-- The `polar_smgrperf` read and write benchmarks now report a clear error when
-  the I/O size is larger than the block range being tested. Before, they failed
-  with a confusing "floating-point exception" error or read blocks outside the
-  requested range. (XCOM-221)
 - Fixed an out-of-memory failure after crash restart with zero-copy
   I/O. The syslogger kept the previous shared-memory generation alive,
   so two full copies stayed resident. The fix requires PolarFS 3.2.0
@@ -390,5 +392,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   partitions (currently 64), with each partition having its own lock, control
   structure and statistics (XCOM-38)
 
-[unreleased]: https://github.com/awide-labs/polar/compare/v17.11.2..POLARDB_17_STABLE
+[unreleased]: https://github.com/awide-labs/polar/compare/v17.12.0..POLARDB_17_STABLE
+[17.12.0]: https://github.com/awide-labs/polar/compare/v17.11.2..v17.12.0
 [17.11.2]: https://github.com/awide-labs/polar/compare/248cd221718..v17.11.2
