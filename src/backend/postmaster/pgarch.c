@@ -849,14 +849,8 @@ pgarch_archiveDone(char *xlog)
 	char		rlogready[MAXPGPATH];
 	char		rlogdone[MAXPGPATH];
 
-	const char *pure_rlogready;
-	const char *pure_rlogdone;
-
 	StatusFilePath(rlogready, xlog, ".ready");
 	StatusFilePath(rlogdone, xlog, ".done");
-
-	pure_rlogready = polar_path_remove_protocol(rlogready);
-	pure_rlogdone = polar_path_remove_protocol(rlogdone);
 
 	/*
 	 * To avoid extra overhead, we don't durably rename the .ready file to
@@ -865,11 +859,11 @@ pgarch_archiveDone(char *xlog)
 	 * function is called), so it should be okay if the .ready file reappears
 	 * after a crash.
 	 */
-	if (rename(pure_rlogready, pure_rlogdone) < 0)
+	if (polar_rename(rlogready, rlogdone) < 0)
 		ereport(WARNING,
 				(errcode_for_file_access(),
 				 errmsg("could not rename file \"%s\" to \"%s\": %m",
-						pure_rlogready, pure_rlogdone)));
+						rlogready, rlogdone)));
 }
 
 

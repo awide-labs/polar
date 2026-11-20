@@ -17,6 +17,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Fixed a hang on clean shutdown with `archive_mode = on` and the shared
+  data directory on PolarFS. The archiver never marked archived WAL
+  segments as done, kept archiving the same segment and did not exit.
+  (XCOM-252)
 - Fixed the `polar_monitor` view `polar_stat_io_info` showing I/O under
   the wrong file type when the file path contained the name of a Polar
   internal subdirectory, for example `base` in `/srv/database`.
